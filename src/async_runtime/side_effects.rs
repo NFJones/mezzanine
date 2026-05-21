@@ -52,7 +52,7 @@ impl Default for AsyncRuntimeSideEffectServiceConfig {
         Self {
             max_polls: u64::MAX,
             drain_limit: 64,
-            idle_interval: Duration::from_millis(16),
+            idle_interval: Duration::from_millis(100),
         }
     }
 }
@@ -919,21 +919,12 @@ async fn wait_for_side_effects_or_bounded_idle(
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
     config: AsyncRuntimeSideEffectServiceConfig,
 ) {
-    if config.max_polls == u64::MAX {
-        tokio::select! {
-            _ = handle.wait_for_runtime_side_effects() => {}
-            result = lifecycle_watcher.changed() => {
-                let _ = result;
-            }
+    tokio::select! {
+        _ = handle.wait_for_runtime_side_effects() => {}
+        result = lifecycle_watcher.changed() => {
+            let _ = result;
         }
-    } else {
-        tokio::select! {
-            _ = handle.wait_for_runtime_side_effects() => {}
-            result = lifecycle_watcher.changed() => {
-                let _ = result;
-            }
-            _ = sleep(config.idle_interval) => {}
-        }
+        _ = sleep(config.idle_interval) => {}
     }
 }
 

@@ -7,7 +7,7 @@
 use super::{
     AgentId, Arc, AsyncRuntimeRequest, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
-    DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, EventAudience, FanoutBatch, HashMap, HashSet,
+    DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, EventAudience, FanoutBatch, HashMap, HashSet,
     MessageConnection, MezError, Notify, Result, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeSideEffect, RuntimeTimerKey, UnixListener, VecDeque, current_effective_uid, mpsc, watch,
 };
@@ -380,6 +380,12 @@ pub struct AsyncAgentProviderServiceConfig {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub max_tasks_per_poll: usize,
+    /// Bounded idle interval before the service probes actor state again.
+    ///
+    /// The provider worker normally wakes from side-effect notifications. This
+    /// interval is a liveness backstop for missed retained notification permits
+    /// on slower systems and should stay large enough to avoid idle churn.
+    pub idle_interval: Duration,
 }
 
 impl AsyncAgentProviderServiceConfig {
@@ -389,9 +395,27 @@ impl AsyncAgentProviderServiceConfig {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn new(max_tasks_per_poll: usize) -> Result<Self> {
-        let config = Self { max_tasks_per_poll };
+        let config = Self {
+            max_tasks_per_poll,
+            ..Self::default()
+        };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Returns this config with a caller-selected idle probe interval.
+    ///
+    /// # Parameters
+    /// - `idle_interval`: The bounded delay before the provider worker probes
+    ///   actor state again while otherwise idle.
+    ///
+    /// # Errors
+    /// Returns an error when the interval is zero or another config invariant
+    /// no longer holds after the update.
+    pub fn with_idle_interval(mut self, idle_interval: Duration) -> Result<Self> {
+        self.idle_interval = idle_interval;
+        self.validate()?;
+        Ok(self)
     }
 
     /// Runs the validate operation for this subsystem.
@@ -403,6 +427,11 @@ impl AsyncAgentProviderServiceConfig {
         if self.max_tasks_per_poll == 0 {
             return Err(MezError::invalid_args(
                 "async agent provider max tasks per poll must be greater than zero",
+            ));
+        }
+        if self.idle_interval.is_zero() {
+            return Err(MezError::invalid_args(
+                "async agent provider idle interval must be greater than zero",
             ));
         }
         Ok(())
@@ -418,6 +447,7 @@ impl Default for AsyncAgentProviderServiceConfig {
     fn default() -> Self {
         Self {
             max_tasks_per_poll: 1,
+            idle_interval: Duration::from_millis(100),
         }
     }
 }

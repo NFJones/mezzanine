@@ -16,7 +16,7 @@ use super::{
     TerminalClientLoopAction, empty_attached_terminal_loop_report,
     is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
     run_async_attached_terminal_client_loop,
-    run_async_attached_terminal_client_loop_deferred_pane_io,
+    run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
 use crate::agent::AsyncModelProvider;
 use crate::error::MezErrorKind;
@@ -665,6 +665,7 @@ where
                         return Ok(report);
                     }
                 }
+                _ = sleep(config.idle_interval) => {}
             }
         } else {
             let executions = dispatch_agent_provider_side_effects(handle, dispatches).await?;

@@ -3173,10 +3173,62 @@ async fn async_side_effect_service_exits_after_final_empty_poll_without_sleep() 
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies that an unbounded side-effect worker still performs a bounded idle
+/// actor-state probe. Runtime side-effect notifications are the fast path, but
+/// this probe prevents a missed retained notification permit from stranding
+/// queued side effects in a long-lived daemon.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_side_effect_service_uses_bounded_idle_probe_when_unbounded() {
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+
+    let worker_handle = handle.clone();
+    let shutdown_handle = handle.clone();
+    let client = async move {
+        let worker = tokio::spawn(async move {
+            run_async_runtime_side_effect_service(
+                &worker_handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: u64::MAX,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(10),
+                },
+                |_| Ok(()),
+                |polls, _| polls >= 2,
+            )
+            .await
+            .unwrap()
+        });
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(9)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !worker.is_finished(),
+            "side-effect service should wait until its configured idle probe interval"
+        );
+        tokio::time::advance(Duration::from_millis(11)).await;
+        tokio::task::yield_now().await;
+
+        let report = worker.await.unwrap();
+        assert_eq!(
+            shutdown_handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        report
+    };
+
+    let (report, mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(report.polls, 2);
+    assert_eq!(report.drained, 0);
+    assert_eq!(report.applied, 0);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that the side-effect worker wakes from actor notifications instead
-/// of relying on its idle polling interval. This keeps idle async runtimes from
-/// burning periodic CPU while still allowing queued render or pane I/O work to
-/// be applied promptly.
+/// of relying on its bounded idle probe. This keeps queued render or pane I/O
+/// work responsive on the normal notification path while the probe remains only
+/// a liveness backstop.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_side_effect_service_wakes_when_actor_queues_effects() {
     let mut service = test_service();
@@ -3198,7 +3250,7 @@ async fn async_side_effect_service_wakes_when_actor_queues_effects() {
                 AsyncRuntimeSideEffectServiceConfig {
                     max_polls: u64::MAX,
                     drain_limit: 8,
-                    idle_interval: Duration::from_millis(1),
+                    idle_interval: Duration::from_secs(60),
                 },
                 |effect| {
                     worker_applied.lock().unwrap().push(effect);
@@ -5771,8 +5823,8 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies that an idle persistence worker waits on actor lifecycle
-/// notifications instead of relying on its fallback idle interval. This covers
+/// Verifies that an idle persistence worker wakes on actor lifecycle
+/// notifications before its bounded idle probe interval elapses. This covers
 /// the shared side-effect worker wait primitive used by persistence, hooks,
 /// render, client-output flushing, and generic side-effect drains.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
@@ -5789,7 +5841,7 @@ async fn async_persistence_side_effect_service_wakes_on_lifecycle_change_without
                 AsyncRuntimeSideEffectServiceConfig {
                     max_polls: u64::MAX,
                     drain_limit: 8,
-                    idle_interval: Duration::from_millis(1),
+                    idle_interval: Duration::from_secs(60),
                 },
                 |_, state| {
                     matches!(
@@ -5808,7 +5860,7 @@ async fn async_persistence_side_effect_service_wakes_on_lifecycle_change_without
         tokio::time::advance(Duration::from_secs(10)).await;
         assert!(
             !worker.is_finished(),
-            "idle persistence worker should not wake from elapsed time alone"
+            "idle persistence worker should not wake before its idle probe interval"
         );
 
         let mut batch = RuntimeEventBatch::new();
@@ -6642,50 +6694,35 @@ async fn async_agent_provider_service_polls_runtime_queue() {
     assert!(exit.commands_processed >= 3);
 }
 
-/// Verifies that an idle provider service waits on actor notifications and
-/// lifecycle changes rather than waking from a fixed fallback sleep. Advancing
-/// Tokio time alone must not produce another poll while no provider work, side
-/// effect, or lifecycle transition exists.
+/// Verifies that an idle provider service performs a bounded actor-state probe
+/// even when no notification arrives. This protects prompt submission on slow
+/// systems from a missed side-effect notification permit: ordinary prompt work
+/// still wakes the service immediately, while the bounded probe keeps queued
+/// turns from staying stranded forever.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn async_agent_provider_service_has_no_idle_poll_timer() {
+async fn async_agent_provider_service_uses_bounded_idle_probe() {
     let (handle, actor) =
         AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
 
-    let service_handle = handle.clone();
-    let shutdown_handle = handle.clone();
-    let client = async move {
-        let service = tokio::spawn(async move {
-            run_async_agent_provider_service(
-                &service_handle,
-                AsyncAgentProviderServiceConfig::new(1).unwrap(),
-                |_, state| {
-                    matches!(
-                        state,
-                        RuntimeLifecycleState::Stopping
-                            | RuntimeLifecycleState::Killed
-                            | RuntimeLifecycleState::Failed
-                    )
-                },
-            )
-            .await
+    let client = async {
+        let config = AsyncAgentProviderServiceConfig::new(1)
             .unwrap()
-        });
-
-        tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_secs(60)).await;
-        tokio::task::yield_now().await;
-        assert!(
-            !service.is_finished(),
-            "idle provider service should not wake from elapsed time alone"
-        );
-
-        let _ = shutdown_handle.shutdown().await.unwrap();
-        service.await.unwrap()
+            .with_idle_interval(Duration::from_millis(10))
+            .unwrap();
+        let report = tokio::time::timeout(
+            Duration::from_millis(50),
+            run_async_agent_provider_service(&handle, config, |polls, _| polls >= 2),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let _ = handle.shutdown().await.unwrap();
+        report
     };
 
     let (report, exit) = tokio::join!(client, actor.run());
-    assert_eq!(report.polls, 1);
-    assert_eq!(report.idle_polls, 1);
+    assert_eq!(report.polls, 2);
+    assert_eq!(report.idle_polls, 2);
     assert_eq!(report.executions, 0);
     assert!(exit.commands_processed >= 1);
 }
