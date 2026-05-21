@@ -1034,7 +1034,6 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         let row = index.saturating_add(1);
         frame.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
         frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
-        frame.extend_from_slice(b"\x1b[K");
     }
     frame.extend_from_slice(b"\x1b[0m");
     frame.extend_from_slice(cursor_presentation_sequence(lines, modes).as_bytes());

@@ -2354,7 +2354,9 @@ fn attached_terminal_output_frame_honors_cursor_blink_interval_phase() {
 /// Verifies that stable-size attached-terminal redraws are encoded as row
 /// updates instead of clearing the full viewport. This reduces foreground TTY
 /// flicker while still allowing the first draw and resizes to invalidate the
-/// whole surface.
+/// whole surface. Changed rows are already full-width, so the update must not
+/// append erase-to-end-of-line after the row text because that can clear a
+/// freshly drawn final-column cell while host autowrap is pending.
 #[test]
 fn attached_terminal_output_update_redraws_only_changed_rows() {
     let previous_lines = vec!["one    ".to_string(), "two    ".to_string()];
@@ -2374,7 +2376,8 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[2;1Hchanged\x1b[K"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[2;1Hchanged"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[K"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
 }
 

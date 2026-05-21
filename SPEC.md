@@ -1034,6 +1034,10 @@ replace any host-terminal cursor that would otherwise leak through the drawn
 muxxer surface, clear or redraw the full visible viewport after attach and
 resize, and clear the full visible viewport while restoring host-terminal modes
 and cursor visibility on detach, shutdown, or error.
+Differential attached-client redraws MUST preserve cells in the terminal's final
+column; when a redraw writes a full-width row, it MUST NOT immediately follow
+that row with an erase-to-end-of-line control sequence that could clear the
+freshly written edge cell.
 Foreground attached clients MUST reset coordinate-affecting host-terminal state
 before each presentation frame, including origin mode, scrolling margins, and
 left/right margin mode where supported, so cursor placement remains absolute to
