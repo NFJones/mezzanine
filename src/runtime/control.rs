@@ -3,6 +3,7 @@
 //! This module owns the runtime control boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
+use rand::RngExt;
 
 use super::{
     AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentShellVisibility, AgentTurnLedger,

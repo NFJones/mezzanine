@@ -165,12 +165,12 @@ fn command_theme_definition_from_text(
 fn command_config_value_from_text(format: ConfigFormat, text: &str) -> Result<Value> {
     match format {
         ConfigFormat::Toml => {
-            let value = toml::from_str::<toml::Value>(text)
+            let value = toml::from_str::<toml::Table>(text)
                 .map_err(|error| MezError::config(error.to_string()))?;
             serde_json::to_value(value).map_err(|error| MezError::config(error.to_string()))
         }
         ConfigFormat::Yaml => {
-            let value = serde_yml::from_str::<serde_yml::Value>(text)
+            let value = serde_norway::from_str::<serde_norway::Value>(text)
                 .map_err(|error| MezError::config(error.to_string()))?;
             serde_json::to_value(value).map_err(|error| MezError::config(error.to_string()))
         }

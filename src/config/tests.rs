@@ -302,6 +302,41 @@ fn validate_config_text_rejects_malformed_supported_formats() {
     assert!(!yaml.valid);
     assert!(yaml.diagnostics[0].message.contains("invalid YAML"));
 }
+/// Verifies YAML config parsing preserves mapping and root-shape behavior.
+///
+/// This regression scenario covers the maintained YAML parser replacement so
+/// empty documents, mapping roots, and scalar roots keep the same user-visible
+/// validation contract.
+#[test]
+fn yaml_config_parser_preserves_mapping_and_root_shape_behavior() {
+    let empty = validate_config_text(ConfigFormat::Yaml, "  \n", ConfigScope::Primary);
+    assert!(empty.valid, "{:?}", empty.diagnostics);
+
+    let mapping = validate_config_text(
+        ConfigFormat::Yaml,
+        "history:\n  lines: 200\n  persist: true\n",
+        ConfigScope::Primary,
+    );
+    assert!(mapping.valid, "{:?}", mapping.diagnostics);
+    let values = extract_config_values(
+        ConfigFormat::Yaml,
+        "history:\n  lines: 200\n  persist: true\n",
+    );
+    assert_eq!(values.get("history.lines").map(String::as_str), Some("200"));
+    assert_eq!(
+        values.get("history.persist").map(String::as_str),
+        Some("true")
+    );
+
+    let scalar = validate_config_text(ConfigFormat::Yaml, "42\n", ConfigScope::Primary);
+    assert!(!scalar.valid);
+    assert_eq!(scalar.diagnostics[0].path, "$".to_string());
+    assert!(
+        scalar.diagnostics[0]
+            .message
+            .contains("YAML configuration root must be a mapping")
+    );
+}
 
 /// Verifies validate config file reports syntax errors with file context.
 ///

@@ -480,7 +480,7 @@ fn read_skill_summary(
     let text = fs::read_to_string(skill_path)
         .map_err(|error| format!("failed to read SKILL.md: {error}"))?;
     let (front_matter, _body) = split_skill_front_matter(&text)?;
-    let front_matter: SkillFrontMatter = serde_yml::from_str(front_matter)
+    let front_matter: SkillFrontMatter = serde_norway::from_str(front_matter)
         .map_err(|error| format!("failed to parse SKILL.md front matter: {error}"))?;
     if !is_valid_skill_name(&front_matter.name) {
         return Err(format!("skill name {:?} is invalid", front_matter.name));
@@ -624,6 +624,28 @@ mod tests {
         let overridden = catalog.get("ship-it").unwrap();
         assert_eq!(overridden.description, "Project workflow");
         assert_eq!(overridden.source, SkillSource::Project);
+    }
+    /// Verifies skill front matter parsing still accepts YAML quoted scalars.
+    ///
+    /// This regression scenario covers the maintained YAML parser replacement
+    /// at the skill catalog boundary so descriptions containing punctuation are
+    /// preserved when catalog entries are discovered.
+    #[test]
+    fn skill_catalog_parses_yaml_front_matter_with_replacement_parser() {
+        let root = test_temp_root("yaml-front-matter");
+        let user_root = root.join("user");
+        let directory = user_root.join("skills/review");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("SKILL.md"),
+            "---\nname: review\ndescription: \"Review workflow: parser coverage\"\n---\n\nReview body.\n",
+        )
+        .unwrap();
+
+        let catalog = discover_skill_catalog(Some(&user_root), None);
+        let summary = catalog.get("review").unwrap();
+        assert_eq!(summary.description, "Review workflow: parser coverage");
+        assert_eq!(summary.source, SkillSource::User);
     }
 
     /// Verifies built-in workflow references are always discoverable

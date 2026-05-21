@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::Digest;

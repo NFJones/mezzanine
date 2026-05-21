@@ -956,10 +956,10 @@ pub(super) fn config_text_to_json_value(
 ) -> Option<serde_json::Value> {
     match format {
         ConfigFormat::Toml => text
-            .parse::<toml::Value>()
+            .parse::<toml::Table>()
             .ok()
             .and_then(|value| serde_json::to_value(value).ok()),
-        ConfigFormat::Yaml => serde_yml::from_str::<serde_yml::Value>(text)
+        ConfigFormat::Yaml => serde_norway::from_str::<serde_norway::Value>(text)
             .ok()
             .and_then(|value| serde_json::to_value(value).ok()),
         ConfigFormat::Json => serde_json::from_str::<serde_json::Value>(text).ok(),

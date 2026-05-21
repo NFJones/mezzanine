@@ -1117,12 +1117,12 @@ pub fn runtime_effective_config_value(layers: &[ConfigLayer]) -> Result<Value> {
 pub(super) fn runtime_config_layer_value(layer: &ConfigLayer) -> Result<Value> {
     match layer.format {
         ConfigFormat::Toml => {
-            let value = toml::from_str::<toml::Value>(&layer.text)
+            let value = toml::from_str::<toml::Table>(&layer.text)
                 .map_err(|error| MezError::config(error.to_string()))?;
             serde_json::to_value(value).map_err(|error| MezError::config(error.to_string()))
         }
         ConfigFormat::Yaml => {
-            let value = serde_yml::from_str::<serde_yml::Value>(&layer.text)
+            let value = serde_norway::from_str::<serde_norway::Value>(&layer.text)
                 .map_err(|error| MezError::config(error.to_string()))?;
             serde_json::to_value(value).map_err(|error| MezError::config(error.to_string()))
         }

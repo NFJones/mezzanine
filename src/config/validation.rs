@@ -551,20 +551,16 @@ pub fn compose_effective_config(layers: &[ConfigLayer]) -> Result<EffectiveConfi
 /// on duplicated control-flow logic.
 pub(super) fn validate_config_syntax(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
     match format {
-        ConfigFormat::Toml => match text.parse::<toml::Value>() {
-            Ok(toml::Value::Table(_)) => Vec::new(),
-            Ok(_) => vec![ConfigDiagnostic {
-                path: "$".to_string(),
-                message: "TOML configuration root must be a table".to_string(),
-            }],
+        ConfigFormat::Toml => match text.parse::<toml::Table>() {
+            Ok(_) => Vec::new(),
             Err(error) => vec![ConfigDiagnostic {
                 path: "$".to_string(),
                 message: format!("invalid TOML configuration syntax: {error}"),
             }],
         },
-        ConfigFormat::Yaml => match serde_yml::from_str::<serde_yml::Value>(text) {
-            Ok(serde_yml::Value::Mapping(_)) => Vec::new(),
-            Ok(serde_yml::Value::Null) if text.trim().is_empty() => Vec::new(),
+        ConfigFormat::Yaml => match serde_norway::from_str::<serde_norway::Value>(text) {
+            Ok(serde_norway::Value::Mapping(_)) => Vec::new(),
+            Ok(serde_norway::Value::Null) if text.trim().is_empty() => Vec::new(),
             Ok(_) => vec![ConfigDiagnostic {
                 path: "$".to_string(),
                 message: "YAML configuration root must be a mapping".to_string(),
