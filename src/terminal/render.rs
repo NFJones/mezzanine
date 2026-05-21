@@ -66,6 +66,9 @@ pub const DEFAULT_WINDOW_FRAME_TEMPLATE: &str = "#{window.list}";
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE: &str = "#{pane.pwd} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}";
+
+/// Number of cells left blank after the right-aligned window status.
+const WINDOW_RIGHT_STATUS_TRAILING_GUTTER: usize = 2;
 /// Defines the DEFAULT WINDOW FRAME VISIBLE FIELDS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -4403,11 +4406,12 @@ fn window_right_status_layout(
     }
     let rendered = render_window_status_template(frame_context, status);
     let text = rendered.text.trim_end().to_string();
-    let status_width = fitted_text_width(&text, width);
+    let status_limit = width.saturating_sub(WINDOW_RIGHT_STATUS_TRAILING_GUTTER);
+    let status_width = fitted_text_width(&text, status_limit);
     if status_width == 0 {
         return None;
     }
-    let start = width.saturating_sub(status_width);
+    let start = status_limit.saturating_sub(status_width);
     let segments = rendered
         .segments
         .into_iter()

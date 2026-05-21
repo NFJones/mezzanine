@@ -844,6 +844,8 @@ The default window frame MUST support a configurable right-aligned status line.
 The generated default configuration MUST display padded window command buttons,
 `system.uptime`, and `datetime.local` in that status line with distinguishable
 themed color spans.
+The right-aligned window status line MUST reserve two trailing terminal cells
+so status templates are fitted before the host-terminal edge.
 
 When one or more observer attach requests are pending, Mezzanine MUST surface
 that state to the primary client through the pane frame, window frame, message
