@@ -267,7 +267,8 @@ Default workflow keys follow conventional multiplexer placement:
 | `Ctrl+A (` / `Ctrl+A )` | Previous or next group. |
 
 The command prompt accepts Mezzanine commands such as `new-window`,
-`split-window`, `select-pane`, `set-theme`, `list-keys`, and `show-options`.
+`split-window`, `select-pane`, `set-theme`, `list-keys`, `show-options`, and
+`refresh-provider-info`.
 Commands are parsed by Mezzanine, not by the pane shell. Semicolon-separated
 command sequences stop at the first failure.
 

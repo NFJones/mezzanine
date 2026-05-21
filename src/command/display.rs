@@ -515,9 +515,13 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 /// Returns the help category for one terminal command.
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
-        "agent-shell" | "auth-login" | "auth-status" | "mcp-add" | "mcp-remove" | "mcp-retry" => {
-            "agent and integrations"
-        }
+        "agent-shell"
+        | "auth-login"
+        | "auth-status"
+        | "mcp-add"
+        | "mcp-remove"
+        | "mcp-retry"
+        | "refresh-provider-info" => "agent and integrations",
         "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
         | "unbind-key" | "list-themes" => "configuration",
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
@@ -594,6 +598,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "previous-window" => "focus the previous window.",
         "rebalance-window" => "reapply the active window layout.",
         "refresh-client" => "redraw the client.",
+        "refresh-provider-info" => "refresh cached provider model and quota information.",
         "reject-observer" => "reject a pending observer.",
         "rename-group" => "rename a window group.",
         "rename-session" => "rename the current or target session.",

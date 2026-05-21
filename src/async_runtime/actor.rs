@@ -583,9 +583,6 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
-                self.service
-                    .prefetch_model_catalog_for_terminal_step(&step)
-                    .await;
                 let result = self
                     .service
                     .apply_attached_terminal_step_plan_deferred_pane_io(&primary_client_id, &step)
@@ -607,9 +604,6 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
-                self.service
-                    .prefetch_model_catalog_for_terminal_step(&step)
-                    .await;
                 let result = self
                     .service
                     .apply_attached_terminal_step_plan(&primary_client_id, &step)

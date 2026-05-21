@@ -382,6 +382,9 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_refresh_client_command(service)?,
         })),
+        "refresh-provider-info" => Err(MezError::invalid_state(
+            "refresh-provider-info requires the async runtime command path",
+        )),
         "kill-pane" | "killp" => Ok(Some(runtime_kill_pane_command(
             service,
             primary_client_id,
@@ -1441,6 +1444,10 @@ pub(super) async fn execute_runtime_live_terminal_command_async(
             command: invocation.name.clone(),
             body: runtime_mcp_retry_command_async(service, invocation).await?,
         })),
+        "refresh-provider-info" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_refresh_provider_info_command_async(service, invocation).await?,
+        })),
         _ => execute_runtime_live_terminal_command(service, primary_client_id, invocation),
     }
 }
@@ -2133,6 +2140,24 @@ pub(super) fn runtime_mcp_add_command(
         "server={server_id}:transport={transport}:target={}:changed={changed}:reload_required={reload_required}:status={status}:tools={tool_count}:source=runtime-config:layer={TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER}",
         json_escape(&target)
     ))
+}
+
+/// Refreshes provider information through the async runtime command path.
+///
+/// The command intentionally owns live provider discovery so ordinary pane
+/// creation, selector opening, and `/model list` rendering can use cached or
+/// configured information without making provider calls on the hot path.
+async fn runtime_refresh_provider_info_command_async(
+    service: &mut RuntimeSessionService,
+    invocation: &CommandInvocation,
+) -> Result<String> {
+    let args = runtime_positional_args(invocation);
+    if !args.is_empty() {
+        return Err(MezError::invalid_args(
+            "refresh-provider-info does not accept positional arguments",
+        ));
+    }
+    service.refresh_provider_info_async().await
 }
 
 /// Runs the runtime mcp add command async operation for this subsystem.

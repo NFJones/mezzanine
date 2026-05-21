@@ -25,13 +25,21 @@ use std::future::Future;
 use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::pin::Pin;
+use std::time::{Duration, Instant};
 use tokio::io::unix::AsyncFd;
 
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, read as rustix_read, write as rustix_write};
 
 /// Default maximum attached-terminal output bytes written in one flush pass.
-pub const DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES: usize = 16 * 1024;
+pub const DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES: usize = 64 * 1024;
+
+/// Minimum attached-terminal output write budget after backpressure is observed.
+const MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES: usize = 8 * 1024;
+/// Completed flushes required before a reduced write budget grows again.
+const ATTACHED_TERMINAL_OUTPUT_WRITE_RECOVERY_FLUSHES: u8 = 3;
+/// Flush duration that indicates the current output budget is too large.
+const ATTACHED_TERMINAL_OUTPUT_SLOW_FLUSH_THRESHOLD: Duration = Duration::from_millis(25);
 
 /// Boxed future returned by async terminal I/O trait methods.
 pub type AsyncTerminalIoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -298,6 +306,10 @@ pub struct AsyncAttachedTerminalFdLoopIo {
     /// Whether a full redraw was requested while a pending frame was still
     /// being written.
     pending_output_invalidates_next_frame: bool,
+    /// Current adaptive upper bound for one terminal output flush pass.
+    output_write_limit_bytes: usize,
+    /// Consecutive completed flushes since the last output short write.
+    completed_output_flushes_since_short_write: u8,
     /// Stores the presentation active value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -328,6 +340,8 @@ impl AsyncAttachedTerminalFdLoopIo {
             previous_output_frame: None,
             pending_output_frame: None,
             pending_output_invalidates_next_frame: false,
+            output_write_limit_bytes: DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+            completed_output_flushes_since_short_write: 0,
             presentation_active: false,
         })
     }
@@ -389,19 +403,23 @@ impl AsyncAttachedTerminalFdLoopIo {
     }
 
     /// Flushes retained output bytes up to `max_bytes`.
-    async fn flush_pending_output_bounded(
+    async fn flush_pending_output_bounded_attempt(
         &mut self,
         max_bytes: usize,
-    ) -> Result<AsyncTerminalOutputWriteReport> {
+    ) -> Result<AttachedTerminalOutputFlushAttempt> {
         if max_bytes == 0 {
             return Err(MezError::invalid_args(
                 "async attached terminal output write limit must be greater than zero",
             ));
         }
         let mut bytes_written = 0usize;
+        let mut short_write_observed = false;
         while bytes_written < max_bytes {
             let Some(pending) = self.pending_output_frame.as_ref() else {
-                return Ok(AsyncTerminalOutputWriteReport::completed(bytes_written));
+                return Ok(AttachedTerminalOutputFlushAttempt {
+                    report: AsyncTerminalOutputWriteReport::completed(bytes_written),
+                    short_write_observed,
+                });
             };
             if pending.remaining_bytes() == 0 {
                 self.commit_completed_pending_output_frame();
@@ -413,7 +431,11 @@ impl AsyncAttachedTerminalFdLoopIo {
                 .saturating_add(pending.remaining_bytes().min(remaining_budget));
             let write_start = pending.written;
             let bytes = pending.bytes[write_start..write_end].to_vec();
+            let attempted_bytes = bytes.len();
             let count = write_some_async_fd(&self.output, &bytes).await?;
+            if count < attempted_bytes {
+                short_write_observed = true;
+            }
             let Some(pending) = self.pending_output_frame.as_mut() else {
                 return Err(MezError::invalid_state(
                     "pending attached terminal output disappeared during write",
@@ -423,14 +445,47 @@ impl AsyncAttachedTerminalFdLoopIo {
             bytes_written = bytes_written.saturating_add(count);
             if pending.remaining_bytes() == 0 {
                 self.commit_completed_pending_output_frame();
-                return Ok(AsyncTerminalOutputWriteReport::completed(bytes_written));
+                return Ok(AttachedTerminalOutputFlushAttempt {
+                    report: AsyncTerminalOutputWriteReport::completed(bytes_written),
+                    short_write_observed,
+                });
             }
         }
-        Ok(AsyncTerminalOutputWriteReport {
-            bytes_written,
-            completed: false,
-            pending_bytes: self.pending_output_bytes(),
+        Ok(AttachedTerminalOutputFlushAttempt {
+            report: AsyncTerminalOutputWriteReport {
+                bytes_written,
+                completed: false,
+                pending_bytes: self.pending_output_bytes(),
+            },
+            short_write_observed,
         })
+    }
+
+    /// Flushes retained output bytes using the adaptive write budget.
+    async fn flush_pending_output_bounded(
+        &mut self,
+        max_bytes: usize,
+    ) -> Result<AsyncTerminalOutputWriteReport> {
+        let effective_limit = max_bytes.min(self.output_write_limit_bytes);
+        let started_at = Instant::now();
+        let attempt = self
+            .flush_pending_output_bounded_attempt(effective_limit)
+            .await?;
+        let backpressure_observed = attempt.short_write_observed
+            || started_at.elapsed() >= ATTACHED_TERMINAL_OUTPUT_SLOW_FLUSH_THRESHOLD;
+        let budget = adapt_attached_terminal_output_write_budget(
+            AttachedTerminalOutputWriteBudget {
+                limit_bytes: self.output_write_limit_bytes,
+                completed_flushes_since_short_write: self
+                    .completed_output_flushes_since_short_write,
+            },
+            attempt.report,
+            backpressure_observed,
+        );
+        self.output_write_limit_bytes = budget.limit_bytes;
+        self.completed_output_flushes_since_short_write =
+            budget.completed_flushes_since_short_write;
+        Ok(attempt.report)
     }
 
     /// Commits and clears a fully written pending output frame.
@@ -444,6 +499,60 @@ impl AsyncAttachedTerminalFdLoopIo {
         } else {
             self.previous_output_frame = Some(pending.next_state);
         }
+    }
+}
+
+/// Result of one internal output flush plus backpressure observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AttachedTerminalOutputFlushAttempt {
+    /// Public write report for the flush pass.
+    report: AsyncTerminalOutputWriteReport,
+    /// Whether any nonblocking write accepted less than the requested chunk.
+    short_write_observed: bool,
+}
+
+/// Adaptive attached-terminal output write budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AttachedTerminalOutputWriteBudget {
+    /// Maximum bytes to attempt in one output flush pass.
+    limit_bytes: usize,
+    /// Consecutive completed flushes since the last short write.
+    completed_flushes_since_short_write: u8,
+}
+
+/// Adapts the terminal output budget from the last flush observation.
+fn adapt_attached_terminal_output_write_budget(
+    budget: AttachedTerminalOutputWriteBudget,
+    report: AsyncTerminalOutputWriteReport,
+    backpressure_observed: bool,
+) -> AttachedTerminalOutputWriteBudget {
+    if backpressure_observed {
+        return AttachedTerminalOutputWriteBudget {
+            limit_bytes: (budget.limit_bytes / 2)
+                .max(MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES),
+            completed_flushes_since_short_write: 0,
+        };
+    }
+    if report.is_partial() {
+        return AttachedTerminalOutputWriteBudget {
+            limit_bytes: budget.limit_bytes,
+            completed_flushes_since_short_write: 0,
+        };
+    }
+    let completed_flushes_since_short_write =
+        budget.completed_flushes_since_short_write.saturating_add(1);
+    if completed_flushes_since_short_write < ATTACHED_TERMINAL_OUTPUT_WRITE_RECOVERY_FLUSHES {
+        return AttachedTerminalOutputWriteBudget {
+            limit_bytes: budget.limit_bytes,
+            completed_flushes_since_short_write,
+        };
+    }
+    AttachedTerminalOutputWriteBudget {
+        limit_bytes: budget
+            .limit_bytes
+            .saturating_mul(2)
+            .min(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES),
+        completed_flushes_since_short_write: 0,
     }
 }
 
@@ -1081,5 +1190,103 @@ impl AsyncAttachedTerminalIo for AsyncFakeAttachedTerminalIo {
             self.presentation_restores = self.presentation_restores.saturating_add(1);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that the attached-terminal output budget starts above the old
+    /// small-frame cap while preserving a lower bound for slow clients.
+    ///
+    /// SSH sessions pay for each split frame, so the default should be large
+    /// enough for common full redraws while still allowing adaptive reduction
+    /// when writes start reporting backpressure.
+    #[test]
+    fn attached_terminal_output_default_budget_is_high_enough_to_reduce_later() {
+        let default_limit =
+            std::hint::black_box(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES);
+        let minimum_limit = std::hint::black_box(MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES);
+
+        assert_eq!(default_limit, 64 * 1024);
+        assert!(default_limit > 16 * 1024);
+        assert!(minimum_limit < default_limit);
+    }
+
+    /// Verifies that a short nonblocking terminal write reduces the next flush
+    /// budget and clears recovery progress.
+    ///
+    /// A short write is the direct signal that the output side could not accept
+    /// the full chunk, so the next pass should attempt less terminal traffic.
+    #[test]
+    fn attached_terminal_output_budget_reduces_after_short_write() {
+        let budget = adapt_attached_terminal_output_write_budget(
+            AttachedTerminalOutputWriteBudget {
+                limit_bytes: DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+                completed_flushes_since_short_write: 2,
+            },
+            AsyncTerminalOutputWriteReport::completed(1024),
+            true,
+        );
+
+        assert_eq!(
+            budget.limit_bytes,
+            DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES / 2
+        );
+        assert_eq!(budget.completed_flushes_since_short_write, 0);
+    }
+
+    /// Verifies that repeated clean output flushes restore a reduced budget
+    /// toward the default value.
+    ///
+    /// This protects slow links from permanent degradation after temporary
+    /// congestion, while still requiring several clean flushes before growth.
+    #[test]
+    fn attached_terminal_output_budget_recovers_after_clean_flushes() {
+        let mut budget = AttachedTerminalOutputWriteBudget {
+            limit_bytes: MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+            completed_flushes_since_short_write: 0,
+        };
+        for _ in 0..ATTACHED_TERMINAL_OUTPUT_WRITE_RECOVERY_FLUSHES {
+            budget = adapt_attached_terminal_output_write_budget(
+                budget,
+                AsyncTerminalOutputWriteReport::completed(1024),
+                false,
+            );
+        }
+
+        assert_eq!(
+            budget.limit_bytes,
+            MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES * 2
+        );
+        assert_eq!(budget.completed_flushes_since_short_write, 0);
+    }
+
+    /// Verifies that a budget-limited partial flush does not increase the
+    /// output budget before the frame has completed.
+    ///
+    /// Large frames can exceed the current cap without proving that the
+    /// connection has recovered, so only completed flushes count toward growth.
+    #[test]
+    fn attached_terminal_output_budget_does_not_grow_on_partial_flush() {
+        let budget = adapt_attached_terminal_output_write_budget(
+            AttachedTerminalOutputWriteBudget {
+                limit_bytes: MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+                completed_flushes_since_short_write: 2,
+            },
+            AsyncTerminalOutputWriteReport {
+                bytes_written: MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+                completed: false,
+                pending_bytes: 1024,
+            },
+            false,
+        );
+
+        assert_eq!(
+            budget.limit_bytes,
+            MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES
+        );
+        assert_eq!(budget.completed_flushes_since_short_write, 0);
     }
 }

@@ -1120,6 +1120,7 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("set-option:status=store-required"));
     assert!(body.contains("source-file:status=store-required"));
     assert!(body.contains("refresh-client:status=runtime-required"));
+    assert!(body.contains("refresh-provider-info:status=runtime-required"));
     assert!(body.contains("agent-shell:status=runtime-required"));
     assert!(body.contains("auth-login:status=store-required"));
     assert!(body.contains("auth-status:status=store-required"));

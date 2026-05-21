@@ -1393,6 +1393,7 @@ The command language MUST include commands equivalent to:
 - `set-option`
 - `source-file`
 - `refresh-client`
+- `refresh-provider-info`
 - `agent-shell`
 - `auth-login`
 - `auth-status`
@@ -1476,6 +1477,7 @@ The baseline commands MUST have the following semantics:
 | `set-option` | Set a live-mutable option. Persisted changes MUST identify the target configuration layer. |
 | `source-file` | Parse and apply a configuration file according to configuration trust and precedence rules. Untrusted project files MUST block until trust is decided. |
 | `refresh-client` | Redraw the invoking client and recompute client-local display state without changing pane pty sizes unless the invoking client is the primary client and its terminal size changed. |
+| `refresh-provider-info` | Refresh cached provider model and quota information for all configured providers. Ordinary pane creation, pane-frame rendering, and model-list displays MUST NOT trigger provider catalog network refreshes; they MUST use cached provider information or configured fallback models. |
 | `agent-shell` | Show, hide, or toggle the agent shell for the target pane. Hiding MUST request `/stop` for any in-progress pane-local agent task before the shell is hidden. |
 | `auth-login` | Start provider authentication using the configured provider profile and persist credentials only through the auth storage rules. |
 | `auth-status` | Show non-secret provider authentication status and selected model profile. |
@@ -2506,6 +2508,11 @@ OpenAI provider model list SHOULD include only coding-agent harness models:
 `gpt-5.3-codex-spark`, and `gpt-5.2`. When a provider configuration leaves
 `models` empty, Mezzanine MUST load the provider's built-in code-defined model
 list instead of treating the provider as having no selectable models.
+Mezzanine SHOULD attempt live provider model-catalog refresh once during daemon
+startup after configuration and authentication stores are available. After
+startup, live provider catalog refresh MUST be explicit through a user or
+control action such as `refresh-provider-info`; pane creation, pane selection,
+and model selector rendering MUST NOT independently prefetch provider catalogs.
 
 The `message_protocol` table MUST support `enabled`, `endpoint`,
 `retention_messages`, `retention_bytes`, and `allow_remote_bridges`.

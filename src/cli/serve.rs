@@ -36,6 +36,8 @@ use tokio::process::Child;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 static LIVE_SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+/// Maximum time the daemon spends on best-effort startup provider discovery.
+const STARTUP_PROVIDER_INFO_REFRESH_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 
 /// Runs the run new operation for this subsystem.
 ///
@@ -827,6 +829,11 @@ pub(super) async fn run_foreground_control_daemon(
     );
     let snapshot_repository = SnapshotRepository::new(config.root.join("snapshots"));
     service.replace_config_layers_async(config.layers).await?;
+    let _ = tokio::time::timeout(
+        STARTUP_PROVIDER_INFO_REFRESH_TIMEOUT,
+        service.refresh_provider_info_async(),
+    )
+    .await;
     match startup {
         RuntimeDaemonStartup::Initial { explicit_command } => {
             service.start_initial_pane_process(explicit_command.as_deref())?;

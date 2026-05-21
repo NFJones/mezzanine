@@ -1090,6 +1090,10 @@ pub fn execute_command(
         "refresh-client" | "refresh" => Ok(CommandOutcome::Noop {
             command: invocation.name.clone(),
         }),
+        "refresh-provider-info" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: "refreshed=false:reason=async-runtime-required".to_string(),
+        }),
         "agent-shell" => Ok(CommandOutcome::Noop {
             command: invocation.name.clone(),
         }),

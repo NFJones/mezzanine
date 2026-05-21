@@ -3856,6 +3856,50 @@ async fn runtime_terminal_command_mcp_add_and_remove_update_runtime_registry() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies that live provider information refresh is an explicit terminal
+/// command and that the result is cached for later model-list displays.
+///
+/// Ordinary pane interaction should not fetch provider catalogs on demand; this
+/// command is the user-visible refresh path after daemon startup has completed.
+#[tokio::test]
+async fn runtime_terminal_refresh_provider_info_populates_model_catalog_cache() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\", \"gpt-5.4\"]\ndefault_model = \"gpt-5.5\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+
+    let output = service
+        .execute_terminal_command_async(&primary, "refresh-provider-info")
+        .await
+        .unwrap();
+
+    assert!(
+        output.contains(r#""command":"refresh-provider-info""#),
+        "{output}"
+    );
+    assert!(
+        output.contains("providers=1 refreshed=1 failed=0"),
+        "{output}"
+    );
+    assert!(output.contains("openai source=config"), "{output}");
+    assert!(
+        output.contains("provider_error=auth-unavailable"),
+        "{output}"
+    );
+    assert!(service.provider_model_catalog_cache.contains_key("openai"));
+}
+
 /// Verifies that user-visible MCP retry surfaces clear session blacklisting,
 /// drop stale transport state, and rediscover the configured server. This is
 /// the recovery path promised by the MCP prompt restriction: blacklisted

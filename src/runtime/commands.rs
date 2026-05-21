@@ -46,7 +46,6 @@ use crate::readline::ReadlineEdit;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };
-use crate::terminal::{AttachedTerminalClientStepPlan, MouseAction, TerminalClientLoopAction};
 use base64::Engine;
 
 // Live terminal and agent shell command execution.
@@ -1480,9 +1479,7 @@ impl RuntimeSessionService {
             });
         }
         if args.list {
-            let catalog = self
-                .runtime_model_catalog_for_provider_async(&active_profile.provider)
-                .await?;
+            let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
             self.record_agent_provider_quota_usage(pane_id, &catalog.quota_usage);
             return Ok(AgentShellCommandOutcome::Display {
                 command: "model".to_string(),
@@ -1508,9 +1505,7 @@ impl RuntimeSessionService {
         {
             requested.to_string()
         } else {
-            let catalog = self
-                .runtime_model_catalog_for_provider_async(&active_profile.provider)
-                .await?;
+            let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
             self.runtime_generated_profile_for_provider_model(
                 &active_profile.provider,
                 requested,
@@ -1622,9 +1617,7 @@ impl RuntimeSessionService {
             );
         }
         if args.list {
-            let catalog = self
-                .runtime_model_catalog_for_provider_async(&active_profile.provider)
-                .await?;
+            let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
             self.record_agent_provider_quota_usage(pane_id, &catalog.quota_usage);
             return Ok(AgentShellCommandOutcome::Display {
                 command: "model".to_string(),
@@ -1649,9 +1642,7 @@ impl RuntimeSessionService {
         {
             requested.to_string()
         } else {
-            let catalog = self
-                .runtime_model_catalog_for_provider_async(&active_profile.provider)
-                .await?;
+            let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
             self.runtime_generated_profile_for_provider_model(
                 &active_profile.provider,
                 requested,
@@ -1871,9 +1862,21 @@ impl RuntimeSessionService {
             &provider_config,
             &self.provider_registry,
         );
+        if let Some(provider_error) =
+            self.runtime_cached_model_catalog_miss_reason(&provider_config)
+        {
+            return Ok(RuntimeModelCatalog {
+                provider: fallback.provider,
+                source: fallback.source,
+                provider_error: Some(provider_error),
+                models: fallback.models,
+                reasoning_levels: fallback.reasoning_levels,
+                quota_usage: fallback.quota_usage,
+            });
+        }
         if provider_config.kind.as_str() == "openai" && fallback.models.is_empty() {
             return Err(MezError::invalid_state(
-                "OpenAI model listing requires the async runtime command path",
+                "OpenAI model listing requires cached provider information or configured fallback models",
             ));
         }
         Ok(fallback)
@@ -1928,6 +1931,93 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Explains why a cached provider catalog is not currently available
+    /// without attempting network provider discovery.
+    fn runtime_cached_model_catalog_miss_reason(
+        &self,
+        provider_config: &crate::runtime::RuntimeProviderConfig,
+    ) -> Option<String> {
+        if provider_config.kind.as_str() != "openai" {
+            return None;
+        }
+        let Some(auth_store) = self.auth_store.as_ref() else {
+            return Some("OpenAI model listing requires an attached auth store".to_string());
+        };
+        let metadata = match auth_store.read_metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => return Some(error.message().to_string()),
+        };
+        let Some(metadata) = metadata else {
+            return Some("OpenAI model listing requires an authenticated provider".to_string());
+        };
+        if metadata.credential_kind == AuthCredentialKind::ChatGpt {
+            return Some(
+                "ChatGPT browser credentials do not expose an OpenAI-compatible model catalog"
+                    .to_string(),
+            );
+        }
+        Some("OpenAI model catalog has not been refreshed; run :refresh-provider-info".to_string())
+    }
+
+    /// Refreshes cached provider information for every configured provider.
+    pub(crate) async fn refresh_provider_info_async(&mut self) -> Result<String> {
+        let provider_ids = self
+            .provider_registry
+            .providers()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut refreshed = 0usize;
+        let mut failed = 0usize;
+        let mut lines = Vec::new();
+        for provider_id in &provider_ids {
+            self.provider_model_catalog_cache.remove(provider_id);
+            match self
+                .runtime_model_catalog_for_provider_async(provider_id)
+                .await
+            {
+                Ok(catalog) => {
+                    refreshed = refreshed.saturating_add(1);
+                    self.provider_model_catalog_cache
+                        .insert(provider_id.clone(), catalog.clone());
+                    let provider_error = catalog
+                        .provider_error
+                        .as_deref()
+                        .map(runtime_model_catalog_unavailable_reason)
+                        .unwrap_or_else(|| "none".to_string());
+                    lines.push(format!(
+                        "{} source={} models={} reasoning_levels={} quota_entries={} provider_error={}",
+                        json_escape(provider_id),
+                        json_escape(&catalog.source),
+                        catalog.models.len(),
+                        catalog.reasoning_levels.len(),
+                        catalog.quota_usage.len(),
+                        provider_error
+                    ));
+                }
+                Err(error) => {
+                    failed = failed.saturating_add(1);
+                    lines.push(format!(
+                        "{} refresh=failed error={}",
+                        json_escape(provider_id),
+                        json_escape(error.message())
+                    ));
+                }
+            }
+        }
+        let mut body = format!(
+            "providers={} refreshed={} failed={}",
+            provider_ids.len(),
+            refreshed,
+            failed
+        );
+        if !lines.is_empty() {
+            body.push('\n');
+            body.push_str(&lines.join("\n"));
+        }
+        Ok(body)
+    }
+
     /// Seeds the live model catalog cache for focused runtime tests.
     #[cfg(test)]
     pub(super) fn cache_provider_model_catalog_for_tests(
@@ -1947,106 +2037,6 @@ impl RuntimeSessionService {
                 quota_usage: Vec::new(),
             },
         );
-    }
-
-    /// Refreshes the live model catalog before opening a pane-frame selector.
-    pub(crate) async fn prefetch_model_catalog_for_terminal_step(
-        &mut self,
-        step: &AttachedTerminalClientStepPlan,
-    ) {
-        if self.terminal_step_submits_model_list_command(step) {
-            if let Ok(pane_id) = self.active_pane_id() {
-                self.prefetch_model_catalog_for_pane(&pane_id).await;
-            }
-            return;
-        }
-        let Some((pane_index, _field)) = step.actions.iter().find_map(|action| match action {
-            TerminalClientLoopAction::HandleMouse(MouseAction::OpenPaneAgentStatusSelector {
-                pane_index,
-                field,
-            }) => Some((*pane_index, *field)),
-            _ => None,
-        }) else {
-            return;
-        };
-        let Some(window) = self.session.active_window() else {
-            return;
-        };
-        let Some(pane) = window.panes().iter().find(|pane| pane.index == pane_index) else {
-            return;
-        };
-        let pane_id = pane.id.to_string();
-        self.prefetch_model_catalog_for_pane(&pane_id).await;
-    }
-
-    /// Prefetches the active provider model catalog for one pane when available.
-    async fn prefetch_model_catalog_for_pane(&mut self, pane_id: &str) {
-        let agent_id = format!("agent-{pane_id}");
-        let Ok((_active_name, active_profile)) =
-            self.active_model_profile_for_pane(pane_id, &agent_id, None)
-        else {
-            return;
-        };
-        if self
-            .provider_model_catalog_cache
-            .contains_key(&active_profile.provider)
-        {
-            return;
-        }
-        let Ok(catalog) = self
-            .runtime_model_catalog_for_provider_async(&active_profile.provider)
-            .await
-        else {
-            return;
-        };
-        self.record_agent_provider_quota_usage(pane_id, &catalog.quota_usage);
-    }
-
-    /// Detects a submitted agent prompt `/model list` command in a terminal step.
-    fn terminal_step_submits_model_list_command(
-        &self,
-        step: &AttachedTerminalClientStepPlan,
-    ) -> bool {
-        let Ok(pane_id) = self.active_pane_id() else {
-            return false;
-        };
-        if !self
-            .agent_shell_store
-            .get(&pane_id)
-            .is_some_and(|session| session.visibility == AgentShellVisibility::Visible)
-        {
-            return false;
-        }
-        let mut command = self
-            .agent_prompt_inputs
-            .get(&pane_id)
-            .map(|state| state.prompt.buffer.line().to_string())
-            .unwrap_or_default();
-        for action in &step.actions {
-            let TerminalClientLoopAction::ForwardToPane(input) = action else {
-                continue;
-            };
-            if let Some(submit_at) = input
-                .iter()
-                .position(|byte| *byte == b'\r' || *byte == b'\n')
-            {
-                if let Ok(prefix) = std::str::from_utf8(&input[..submit_at]) {
-                    command.push_str(prefix);
-                }
-                return parse_slash_command(&command)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|invocation| {
-                        invocation.name == "model"
-                            && runtime_model_command_args(&invocation.args)
-                                .is_ok_and(|args| args.list)
-                    });
-            }
-            if let Ok(text) = std::str::from_utf8(input) {
-                command.push_str(text);
-            }
-        }
-        false
     }
 
     /// Runs the runtime openai model catalog async operation for this subsystem.
@@ -5376,6 +5366,8 @@ fn runtime_model_catalog_unavailable_reason(error: &str) -> String {
         "missing-model-read-scope".to_string()
     } else if error.contains("attached auth store") || error.contains("authenticated provider") {
         "auth-unavailable".to_string()
+    } else if error.contains("has not been refreshed") {
+        "provider-info-not-refreshed".to_string()
     } else if error.contains("Models API returned status")
         || error.contains("model catalog")
         || error.contains("provider HTTP request failed")
