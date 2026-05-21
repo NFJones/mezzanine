@@ -1,0 +1,184 @@
+//! Terminal-state primitives.
+//!
+//! The full terminal parser and renderer are still pending. This module provides
+//! bounded history behavior, alternate-screen history exclusion, TERM fallback
+//! selection, and a small xterm-compatible screen core for common line-oriented
+//! output and control sequences.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::os::fd::RawFd;
+#[cfg(test)]
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rustix::fd::BorrowedFd;
+use rustix::fs::fcntl_getfl;
+use rustix::io::Errno;
+#[cfg(test)]
+use rustix::io::{read as rustix_read, write as rustix_write};
+use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::error::{MezError, Result};
+use crate::layout::{PaneGeometry, Size, Window};
+use crate::readline::ReadlinePrompt;
+
+/// Exposes the client loop module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod client_loop;
+/// Exposes the copy module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod copy;
+/// Exposes the fd module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod fd;
+/// Exposes the history module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod history;
+/// Exposes the keys module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod keys;
+/// Exposes the mouse module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod mouse;
+/// Exposes the paste module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod paste;
+/// Exposes the profile module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod profile;
+/// Exposes the render module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod render;
+/// Exposes the screen module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod screen;
+/// Exposes the theme module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod theme;
+
+pub(crate) use client_loop::plan_attached_terminal_client_step_with_host_paste_buffer;
+pub(crate) use client_loop::route_client_input_actions;
+pub use client_loop::{
+    AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
+    AttachedTerminalClientStepPlan, AttachedTerminalOutputModes, ClientStatusKind,
+    ClientStatusLine, ClientViewRole, ReadlinePromptClientPresentation, ReadlinePromptRegion,
+    ReadlinePromptStatusRow, RenderedClientView, TerminalClientLoopAction,
+    attached_terminal_output_disconnected, plan_attached_terminal_client_step, route_client_input,
+};
+#[cfg(test)]
+pub use client_loop::{
+    AttachedTerminalClientLoopIo, AttachedTerminalFdLoopIo, run_attached_terminal_client_loop,
+};
+pub(crate) use client_loop::{
+    AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
+    attached_terminal_restore_presentation_frame,
+    encode_attached_terminal_output_update_frame_with_styles,
+};
+pub(crate) use copy::AGENT_COPY_SKIP_LINE;
+pub use copy::{CopyMode, CopyPosition, SearchDirection};
+#[cfg(test)]
+pub use fd::poll_attached_terminal_fd_readiness;
+pub use fd::{
+    AttachedTerminalFd, AttachedTerminalFdReadiness, AttachedTerminalFdRole, PaneRenderInput,
+    TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
+    TerminalFramePosition, TerminalFrameStyle, TerminalPaneFrameContext, TerminalRawModeGuard,
+    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+    read_attached_terminal_size,
+};
+pub use history::HistoryBuffer;
+pub(crate) use keys::classify_terminal_input_with_command_bindings;
+pub use keys::{
+    DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MEZZANINE_TERMINFO,
+    DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, DEFAULT_TERMINAL_PROFILE_NAME,
+    GroupFocusTarget, KeyBindings, KeyChord, KeyCode, KeyModifiers, MEZZANINE_TERMINFO_NAMES,
+    MuxAction, PaneFocusDirection, PasteBufferTarget, TERMINFO_FALLBACK_ORDER,
+    TerminalInputClassification, WindowFocusTarget, classify_terminal_input, key_chord_input_bytes,
+    parse_key_chord_notation,
+};
+pub use mouse::{
+    CopyModeKeyAction, MouseAction, MouseBorderCell, MouseButton, MouseEvent, MouseEventKind,
+    MouseModifiers, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MousePaneRegion,
+    MousePolicy, MouseWindowActionFrameCell, MouseWindowFrameCell, MouseWindowGroupFrameCell,
+    PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
+    parse_sgr_mouse,
+};
+pub use paste::{HostClipboard, HostClipboardCommand, PasteBuffer, PasteBuffers};
+pub use profile::{
+    CapabilitySupport, DecPrivateModeCapabilities, MEZZANINE_TERMINFO_PROFILES,
+    SaveRestoreCapabilities, SgrCapabilities, TERMINFO_FALLBACK_PROFILES, TerminalCapabilities,
+    TerminalCompatibilityProfile, TerminalDiagnostic, TerminalDiagnosticSeverity, TerminalProfile,
+    TerminfoCapabilityProfile, TerminfoSelection, TerminfoSource, select_installed_terminfo,
+    select_terminfo, terminal_profile_named,
+};
+#[cfg(test)]
+pub(crate) use render::pane_divider_glyph_for_test;
+pub use render::{
+    DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
+    DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,
+    DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS, TerminalFrameRenderOptions,
+    agent_prompt_reserved_line_count, apply_client_view_offset, compose_client_presentation,
+    compose_client_presentation_with_styles, compose_display_overlay_line_style_spans,
+    compose_display_overlay_lines, compose_display_region_overlay_line_style_spans,
+    compose_display_region_overlay_lines, compose_modal_display_overlay_line_style_spans,
+    compose_modal_display_overlay_lines, compose_prompt_overlay_lines,
+    compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
+    compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
+    draw_window_from_screens, max_viewport_column, max_viewport_row,
+    modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
+    pane_border_cells_for_geometries, pane_content_size_for_geometry,
+    pane_frame_agent_status_pillbox_cells, pane_frame_merges_into_divider,
+    pane_render_region_size_for_geometry, render_attached_client_view,
+    render_readline_prompt_status_row, render_window, render_window_with_pane_frame_template,
+    rendered_pane_geometries, rendered_window_body_size, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells, window_group_frame_pillbox_cells,
+};
+pub(crate) use screen::parse_mez_shell_transaction_osc;
+pub use screen::{
+    AlternateScreenState, GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
+    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalScreen,
+    TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
+};
+pub use theme::{
+    BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
+    UiThemeColors, UiThemeDefinition, builtin_ui_theme_definition, deepforest_ui_theme,
+    default_ui_theme, is_builtin_ui_theme, parse_hex_color, resolve_ui_theme,
+    valid_color_alias_name,
+};
+
+use client_loop::borrow_raw_fd;
+use keys::{MAX_OSC_STRING_BYTES, parse_key_chord_bytes};
+use render::{
+    blank_cells, blank_row, char_count, line_slice, normalize_selection, search_backward,
+    search_forward, terminal_char_width, trim_row, validate_copy_position,
+};
+pub(crate) use render::{terminal_grapheme_width, terminal_graphemes, terminal_text_width};
+
+/// Exposes the tests module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+#[cfg(test)]
+mod tests;

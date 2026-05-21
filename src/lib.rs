@@ -1,0 +1,173 @@
+//! Core library for Mezzanine.
+//!
+//! The crate is organized around the logical subsystems defined by
+//! `SPEC.md`. Implementation logic lives in testable subsystem modules
+//! rather than the binary entry point.
+
+/// Exposes the agent module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod agent;
+/// Exposes the async runtime module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod async_runtime;
+/// Exposes the audit module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod audit;
+/// Exposes the auth module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod auth;
+/// Exposes the cli module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod cli;
+/// Exposes the command module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod command;
+/// Exposes the config module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod config;
+/// Exposes the control module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod control;
+/// Exposes the error module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod error;
+/// Exposes the event module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod event;
+/// Exposes the framing module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod framing;
+/// Exposes the hooks module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod hooks;
+/// Exposes the ids module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod ids;
+/// Exposes the instructions module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod instructions;
+/// Exposes the layout module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod layout;
+/// Exposes the mcp module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod mcp;
+/// Exposes the memory module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod memory;
+/// Exposes the message module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod message;
+/// Exposes the permissions module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod permissions;
+/// Exposes the process module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod process;
+/// Exposes the project module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod project;
+/// Exposes the readline module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod readline;
+/// Exposes the registry module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod registry;
+/// Exposes the runtime module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod runtime;
+/// Exposes the scheduler module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod scheduler;
+/// Exposes the selector module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod selector;
+/// Exposes the session module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod session;
+/// Exposes the shell module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod shell;
+/// Exposes the skills module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod skills;
+/// Exposes the snapshot module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod snapshot;
+/// Exposes the subagent module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod subagent;
+/// Exposes the terminal module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod terminal;
+/// Exposes the transcript module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+pub mod transcript;
+
+pub use error::{MezError, MezErrorKind, Result};

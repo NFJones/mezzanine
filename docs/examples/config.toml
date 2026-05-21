@@ -1,0 +1,378 @@
+# Mezzanine default configuration.
+version = 1
+
+[session]
+detach_behavior = "keep-running"
+reattach_behavior = "default-session"
+empty_session_behavior = "keep-open"
+restore_strategy = "live-first"
+
+[terminal]
+profile = "xterm-compatible"
+term = "screen-256color"
+true_color = true
+mouse = true
+bracketed_paste = true
+clipboard = "external"
+# Optional explicit host clipboard commands. Copy commands receive content on
+# stdin; paste commands return clipboard text on stdout.
+# clipboard_copy_command = "xclip -selection clipboard"
+# clipboard_paste_command = "xclip -selection clipboard -out"
+alternate_screen = true
+focus_events = true
+nested_muxxer = "auto"
+passthrough = false
+resize_debounce_ms = 200
+cursor_style = "block"
+cursor_blink = false
+cursor_blink_interval_ms = 500
+
+[shell]
+login = false
+interactive = true
+integration = true
+integration_mode = "passive"
+default_working_directory = "."
+env = {}
+tool_discovery = true
+tool_cache = true
+fallback_behavior = "bin-sh"
+
+# `escape` is the prefix key. Direct key settings below are convenience
+# accelerators and do not replace the prefix binding table.
+[keys]
+escape = "C-a"
+split_vertical = "A-\\"
+split_horizontal = "A--"
+new_window = "A-="
+new_group = "A-S-="
+agent_shell = "A-]"
+focus_up = "C-A-Up"
+focus_down = "C-A-Down"
+focus_left = "C-A-Left"
+focus_right = "C-A-Right"
+focus_previous_window = "C-A-PageUp"
+focus_next_window = "C-A-PageDown"
+focus_previous_group = "C-A-S-PageUp"
+focus_next_group = "C-A-S-PageDown"
+
+[keys.command_bindings]
+
+[layout]
+default = "tiled"
+resize_policy = "relative"
+close_policy = "rebalance"
+min_pane_columns = 8
+min_pane_rows = 3
+
+[frames.window]
+enabled = true
+position = "bottom"
+template = "#{window.list}"
+right_status = "#{pane.pwd} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"
+style = "default"
+visible_fields = ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local"]
+
+[frames.pane]
+enabled = true
+position = "border"
+template = " #{pane.index} #{pane.title} "
+style = "default"
+visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+
+[theme]
+active = "kanagawa"
+
+[theme.aliases]
+primary = "#7e9cd8"
+secondary = "#7aa89f"
+tertiary = "#e6c384"
+thinking = "#938aa9"
+danger = "#e82424"
+
+[theme.colors]
+window_frame_fg = "primary"
+window_frame_bg = "#1f1f28"
+window_active_fg = "#1f1f28"
+window_active_bg = "primary"
+window_inactive_fg = "#dcd7ba"
+window_inactive_bg = "secondary"
+pane_frame_active_fg = "#dcd7ba"
+pane_frame_active_bg = "secondary"
+pane_frame_inactive_fg = "#727169"
+pane_frame_inactive_bg = "#1f1f28"
+pane_border_active_fg = "primary"
+pane_border_active_bg = "#1f1f28"
+pane_border_inactive_fg = "#727169"
+pane_border_inactive_bg = "#1f1f28"
+pane_divider_fg = "tertiary"
+pane_divider_bg = "#1f1f28"
+frame_fill_fg = "#dcd7ba"
+frame_fill_bg = "#1f1f28"
+scroll_indicator_fg = "#1f1f28"
+scroll_indicator_bg = "tertiary"
+pane_pwd_fg = "#1f1f28"
+pane_pwd_bg = "#727169"
+window_status_uptime_fg = "#1f1f28"
+window_status_uptime_bg = "secondary"
+window_status_datetime_fg = "#1f1f28"
+window_status_datetime_bg = "tertiary"
+prompt_fg = "primary"
+prompt_bg = "#1f1f28"
+agent_prompt_fg = "#ffffff"
+agent_prompt_bg = "#2a2a37"
+agent_transcript_user_fg = "primary"
+agent_transcript_user_bg = "#1f1f28"
+agent_transcript_assistant_fg = "secondary"
+agent_transcript_assistant_bg = "#1f1f28"
+agent_transcript_status_fg = "thinking"
+agent_transcript_status_bg = "#1f1f28"
+agent_transcript_error_fg = "danger"
+agent_transcript_error_bg = "#1f1f28"
+agent_transcript_command_fg = "tertiary"
+agent_transcript_command_bg = "#1f1f28"
+agent_model_fg = "#1f1f28"
+agent_model_bg = "secondary"
+agent_reasoning_fg = "#1f1f28"
+agent_reasoning_bg = "tertiary"
+agent_status_idle_fg = "#1f1f28"
+agent_status_idle_bg = "#727169"
+agent_status_running_fg = "#1f1f28"
+agent_status_running_bg = "primary"
+agent_status_blocked_fg = "#1f1f28"
+agent_status_blocked_bg = "tertiary"
+agent_status_failed_fg = "#1f1f28"
+agent_status_failed_bg = "danger"
+display_overlay_fg = "secondary"
+display_overlay_bg = "#1f1f28"
+copy_selection_fg = "#1f1f28"
+copy_selection_bg = "tertiary"
+syntax_plain_fg = "#dcd7ba"
+syntax_plain_bg = "#1f1f28"
+syntax_keyword_fg = "primary"
+syntax_keyword_bg = "#1f1f28"
+syntax_string_fg = "tertiary"
+syntax_string_bg = "#1f1f28"
+syntax_comment_fg = "thinking"
+syntax_comment_bg = "#1f1f28"
+syntax_type_fg = "secondary"
+syntax_type_bg = "#1f1f28"
+syntax_function_fg = "primary"
+syntax_function_bg = "#1f1f28"
+syntax_number_fg = "tertiary"
+syntax_number_bg = "#1f1f28"
+syntax_operator_fg = "#727169"
+syntax_operator_bg = "#1f1f28"
+
+[history]
+lines = 10000
+rotate_lines = 1000
+persist = true
+search_mode = "literal"
+
+[agents]
+default_provider = "openai"
+default_model_profile = "default"
+shell_only = true
+auto_compact = true
+auto_compact_threshold = 0.95
+compaction_raw_retention_percent = 10
+auto_reasoning = false
+action_failure_retry_limit = 5
+custom_system_prompt = ""
+default_personality = ""
+subagent_placement = "new-window"
+max_concurrent_agents = 4
+max_root_subagents = 4
+max_subagents_per_subagent = 2
+max_subagent_panes_per_window = 4
+subagent_wait_policy = "join"
+max_depth = 2
+prompt_profile = "default"
+default_agent_role = "default"
+
+[agents.auto_sizing]
+router_model_profile = "auto-size-router"
+small_model_profile = "auto-size-small"
+medium_model_profile = "auto-size-medium"
+large_model_profile = "auto-size-large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+fallback_policy = "use-default-profile"
+
+[subagents]
+
+[personalities]
+
+[providers.openai]
+kind = "openai"
+auth_profile = "default"
+# Optional API base URL, such as "https://api.openai.com/v1".
+# Mezzanine derives /responses and /models endpoints from this base.
+base_url = ""
+# OpenAI model IDs supported by the default coding-agent harness profile.
+models = [
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+]
+default_model = "gpt-5.5"
+
+[providers.openai.options]
+# Optional documented OpenAI routing headers for multi-organization/project API keys.
+# organization_id = "org_..."
+# project_id = "proj_..."
+
+[model_profiles.default]
+provider = "openai"
+model = "gpt-5.5"
+reasoning_profile = "medium"
+latency_preference = "balanced"
+multimodal_required = false
+context_window_tokens = 1050000
+# Optional provider output-token cap. Mezzanine may temporarily raise this for
+# one output-limit recovery retry when the provider returns max_output_tokens.
+# max_output_tokens = 16384
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.default.provider_options]
+reasoning_effort = "medium"
+# Optional for OpenAI Responses models. Most supported models default to
+# "in_memory"; gpt-5.5 and newer default to "24h" and do not support
+# explicit "in_memory".
+# prompt_cache_retention = "24h"
+
+[model_profiles.auto-size-router]
+provider = "openai"
+model = "gpt-5.4-mini"
+reasoning_profile = "low"
+latency_preference = "fast"
+multimodal_required = false
+context_window_tokens = 400000
+# max_output_tokens = 8192
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.auto-size-router.provider_options]
+reasoning_effort = "low"
+
+[model_profiles.auto-size-small]
+provider = "openai"
+model = "gpt-5.3-codex"
+reasoning_profile = "medium"
+latency_preference = "fast"
+multimodal_required = false
+context_window_tokens = 400000
+# max_output_tokens = 16384
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.auto-size-small.provider_options]
+reasoning_effort = "medium"
+
+[model_profiles.auto-size-medium]
+provider = "openai"
+model = "gpt-5.4"
+reasoning_profile = "medium"
+latency_preference = "balanced"
+multimodal_required = false
+context_window_tokens = 1050000
+# max_output_tokens = 16384
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.auto-size-medium.provider_options]
+reasoning_effort = "medium"
+
+[model_profiles.auto-size-large]
+provider = "openai"
+model = "gpt-5.5"
+reasoning_profile = "high"
+latency_preference = "quality"
+multimodal_required = false
+context_window_tokens = 1050000
+# max_output_tokens = 32768
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.auto-size-large.provider_options]
+reasoning_effort = "high"
+
+[permissions]
+approval_policy = "ask"
+trusted_directories = []
+trusted_projects = []
+command_rules = []
+session_command_rules = []
+global_command_rules = []
+network_policy = "prompt"
+destructive_action_policy = "prompt"
+bypass_mode = false
+
+[message_protocol]
+enabled = true
+endpoint = "local"
+retention_messages = 1000
+retention_bytes = 1048576
+allow_remote_bridges = false
+
+[control]
+endpoint = "unix"
+socket_path = ""
+tcp_bind = "127.0.0.1:0"
+tcp_enabled = false
+auth_token_file = ""
+observer_policy = "primary-approval"
+
+[mcp_servers]
+
+[auth]
+auth_file = "auth.toml"
+credential_store = "auto"
+default_profile = "default"
+
+[instructions]
+global_files = []
+project_filenames = ["AGENTS.md"]
+max_bytes = 32768
+include_hidden_directories = false
+on_truncation = "summarize"
+
+[hooks]
+
+[snapshots]
+enabled = true
+path = "snapshots"
+on_detach = false
+on_interval_seconds = 0
+on_agent_turn = false
+retention_count = 10
+
+[audit]
+enabled = true
+path = "audit.jsonl"
+format = "jsonl"
+retention_days = 30
+redact_secrets = true
+hash_chain = false
+required = false
+
+[extensions]

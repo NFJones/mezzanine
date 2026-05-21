@@ -1,0 +1,77 @@
+//! MCP integration state.
+//!
+//! MCP servers are external integrations from the agent perspective. This module
+//! models configured server state, availability checks, startup planning,
+//! permission-gated tool call planning, session blacklisting, exposed tool
+//! visibility, bounded stdio transport execution for local MCP subprocesses,
+//! and streamable HTTP execution through a crate-backed HTTP client.
+
+/// Exposes the audit module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod audit;
+/// Exposes the protocol module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod protocol;
+/// Exposes the registry module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod registry;
+/// Exposes the stdio module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod stdio;
+/// Exposes the streamable http module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod streamable_http;
+/// Exposes the types module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod types;
+
+pub use audit::{
+    McpToolAuditCallContext, call_stdio_mcp_tool_with_audit,
+    call_streamable_http_mcp_tool_with_audit,
+};
+pub use protocol::{
+    build_mcp_default_initialize_request, build_mcp_initialize_request,
+    build_mcp_initialized_notification, build_mcp_tools_call_request, build_mcp_tools_list_request,
+    parse_mcp_initialize_response, parse_mcp_tools_call_response, parse_mcp_tools_list_response,
+};
+pub use registry::McpRegistry;
+pub use stdio::{
+    McpStdioConnection, discover_stdio_mcp_server, discover_stdio_mcp_server_into_registry,
+    spawn_stdio_mcp_connection, spawn_stdio_mcp_connection_with_limit,
+};
+pub use streamable_http::{
+    call_streamable_http_mcp_tool, discover_streamable_http_mcp_server,
+    discover_streamable_http_mcp_server_into_registry, execute_streamable_http_exchange,
+    initialize_streamable_http_mcp_server,
+};
+pub use types::{
+    DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, DEFAULT_MCP_STARTUP_TIMEOUT_MS,
+    DEFAULT_MCP_TOOL_TIMEOUT_MS, McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan,
+    McpExternalCapability, McpInitializeResponse, McpPromptSummary, McpPromptTool,
+    McpPromptUnavailableServer, McpServerConfig, McpServerKind, McpServerState, McpServerStatus,
+    McpStartupPlan, McpStartupTransportPlan, McpStdioDiscovery, McpStreamableHttpDiscovery,
+    McpStreamableHttpResponse, McpToolCallPlan, McpToolCallRequest, McpToolCallResponse,
+    McpToolEffects, McpToolState, McpToolsListResponse,
+};
+
+#[cfg(test)]
+use stdio::read_bounded_protocol_line;
+
+/// Exposes the tests module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+#[cfg(test)]
+mod tests;
