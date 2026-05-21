@@ -7232,6 +7232,7 @@ fn render_default_window_frame_uses_window_pillbox_context() {
 fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
     let mut ids = IdFactory::default();
     let window = Window::new(&mut ids, 0, "shell", Size::new(80, 3).unwrap());
+    let horizontal_split_action = WindowFrameAction::terminal_button("-", "split-window -h");
     let new_window_action = WindowFrameAction::terminal_button("□", "new-window");
     let frame_context = TerminalFrameContext {
         pressed_window_action: Some(new_window_action.clone()),
@@ -7269,10 +7270,20 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
     .unwrap()
     .unwrap();
 
-    assert!(view.lines[2].contains("+   □   ⊕   λ"), "{}", view.lines[2]);
+    assert!(
+        view.lines[2].contains("-   +   □   ⊕   λ"),
+        "{}",
+        view.lines[2]
+    );
     assert!(!view.lines[2].contains(" Δ"), "{}", view.lines[2]);
     assert_ne!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let cells = window_frame_action_pillbox_cells(&frame_context, 2, window.size.columns);
+    assert!(
+        cells
+            .iter()
+            .any(|cell| cell.row == 2 && cell.action == horizontal_split_action),
+        "horizontal split action pill should expose clickable cells"
+    );
     let new_window_start = cells
         .iter()
         .filter(|cell| cell.row == 2 && cell.action == new_window_action)
@@ -7407,7 +7418,7 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     .unwrap();
 
     assert!(view.lines[2].contains("1 work"));
-    assert!(view.lines[2].contains("+   □   ⊕   λ"));
+    assert!(view.lines[2].contains("-   +   □   ⊕   λ"));
     assert!(!view.lines[2].contains(" Δ"));
     assert!(view.lines[2].contains(" ~/repo "));
     assert!(view.lines[2].find(" ~/repo ").unwrap() < view.lines[2].find(" + ").unwrap());

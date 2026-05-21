@@ -841,9 +841,10 @@ edge cell when doing so would be vulnerable to host-terminal autowrap
 truncation.
 
 The default window frame MUST support a configurable right-aligned status line.
-The generated default configuration MUST display padded window command buttons,
-`system.uptime`, and `datetime.local` in that status line with distinguishable
-themed color spans.
+The generated default configuration MUST display padded window command buttons
+for `split-window -h`, `split-window`, `new-window`, `new-group`, and
+`agent-shell`, followed by `system.uptime` and `datetime.local`, in that status
+line with distinguishable themed color spans.
 
 When one or more observer attach requests are pending, Mezzanine MUST surface
 that state to the primary client through the pane frame, window frame, message
