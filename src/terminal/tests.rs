@@ -7466,8 +7466,8 @@ fn render_active_pane_border_glyphs_are_foreground_only() {
 
 /// Verifies that pane status rows merged into divider rows keep backgrounds
 /// only on title/status pills. The horizontal divider itself and its boundary
-/// junctions remain foreground-only box drawing cells so split lines do not
-/// become filled status bars.
+/// junctions remain foreground-only connected box-drawing cells so split lines
+/// do not become filled status bars or lose their interior tee glyphs.
 #[test]
 fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators() {
     let mut ids = IdFactory::default();
@@ -7536,7 +7536,7 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
     let junction_column = title_span.start.saturating_sub(1);
     assert_eq!(
         view.lines[merged_row].chars().nth(junction_column),
-        Some('\u{2502}')
+        Some('\u{251c}')
     );
     let junction_span = view.line_style_spans[merged_row]
         .iter()
@@ -7566,6 +7566,72 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
         })
         .expect("vertical separator should be styled");
     assert_eq!(vertical_span.rendition.background, None);
+}
+
+/// Verifies merged pane-frame rows preserve right-side tee intersections when
+/// the pane status region ends at a full-height neighboring pane's divider.
+#[test]
+fn render_merged_pane_frame_preserves_right_side_tee_junction() {
+    let window = window_from_test_geometries(
+        Size::new(28, 6).unwrap(),
+        vec![
+            PaneGeometry {
+                index: 0,
+                column: 0,
+                row: 0,
+                columns: 14,
+                rows: 3,
+            },
+            PaneGeometry {
+                index: 1,
+                column: 0,
+                row: 3,
+                columns: 14,
+                rows: 3,
+            },
+            PaneGeometry {
+                index: 2,
+                column: 14,
+                row: 0,
+                columns: 14,
+                rows: 6,
+            },
+        ],
+    );
+    let config = TerminalClientLoopConfig {
+        window_frames_enabled: false,
+        pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+
+    let merged_row = 2;
+    let junction_column = 13;
+    assert_eq!(
+        view.lines[merged_row].chars().nth(junction_column),
+        Some('\u{2524}'),
+        "{:?}",
+        view.lines[merged_row]
+    );
+    let junction_span = view.line_style_spans[merged_row]
+        .iter()
+        .rev()
+        .find(|span| {
+            junction_column >= span.start
+                && junction_column < span.start.saturating_add(span.length)
+        })
+        .expect("right-side tee junction should be styled");
+
+    assert_eq!(junction_span.rendition.background, None);
 }
 
 /// Verifies that configured frame positions can place pane and window frame

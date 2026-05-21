@@ -5270,7 +5270,6 @@ fn write_merged_pane_frames_on_dividers(
             frame_context,
             pane_frame.template,
         );
-        write_merged_pane_frame_boundary_cells(line, geometries, row, column_start, width);
     }
 }
 
@@ -5324,7 +5323,6 @@ fn write_styled_merged_pane_frames_on_dividers(
             frame_context,
             pane_frame.template,
         );
-        write_merged_pane_frame_boundary_cells(line, geometries, row, column_start, width);
         if let Some(spans) = style_canvas.get_mut(usize::from(row)) {
             if layout.left_text_width > 0 {
                 spans.push(TerminalStyleSpan {
@@ -5371,25 +5369,6 @@ fn write_pane_frame_layout_cells(
     );
     write_frame_text_cells(row, column_start, max_columns, &layout.text);
     layout
-}
-
-/// Replaces non-vertical divider junctions that bound a merged pane-frame
-/// status row with a straight vertical glyph.
-fn write_merged_pane_frame_boundary_cells(
-    row: &mut [char],
-    geometries: &[PaneGeometry],
-    terminal_row: u16,
-    column_start: usize,
-    width: usize,
-) {
-    for cell in pane_divider_cells(geometries, true) {
-        if cell.row == terminal_row && merged_pane_frame_boundary_cell(cell, column_start, width) {
-            let column = usize::from(cell.column);
-            if column < row.len() {
-                row[column] = '\u{2502}';
-            }
-        }
-    }
 }
 
 /// Builds style spans for divider junctions that bound a merged pane status row.
