@@ -3432,13 +3432,22 @@ The baseline action types are:
   For compatibility with common diff-shaped model output, a Mezzanine update
   hunk MAY include unified-diff range metadata between the opening `@@` and a
   closing `@@`, such as `@@ -10,7 +10,8 @@` or
-  `@@ -10,7 +10,8 @@ fn method`; implementations MUST ignore the range numbers
-  and MUST NOT treat them as hunk-header anchors.
+  `@@ -10,7 +10,8 @@ fn method`; implementations MUST NOT treat the range
+  numbers as hunk-header anchors or standalone placement authority. The old-line
+  number MAY be used only as a conservative disambiguation hint after the hunk
+  body identifies multiple valid current-file locations. The hint MUST NOT
+  override hunk-header anchors, MUST NOT override body context, and MUST be
+  rejected when candidates are tied, nearly tied, or distant from the hinted old
+  line.
   Hunk-header anchors MUST be matched as ordered literal substring constraints
   against the current target file; they MUST NOT replace the required hunk body
-  context. Hunk body lines MUST begin with exactly one prefix character: space
-  for context, `-` for removed text, or `+` for added text. A `*** End of File`
-  line inside an update hunk marks that the final file has no trailing newline.
+  context. Implementations MAY use distinctive Rust-like hunk-header anchors as
+  structural search scopes when a bounded block can be derived conservatively;
+  unresolved or ambiguous structural scopes MUST fail closed to ordinary anchor
+  constraints or ambiguity diagnostics. Hunk body lines MUST begin with exactly
+  one prefix character: space for context, `-` for removed text, or `+` for
+  added text. A `*** End of File` line inside an update hunk marks that the final
+  file has no trailing newline.
   Hunk placement MUST first attempt exact old-context matching and MAY then
   attempt Mezzanine-compatible fallback matching in deterministic order:
   trailing-whitespace-insensitive, surrounding-whitespace-insensitive, and
@@ -3455,10 +3464,12 @@ The baseline action types are:
   lines as explicit context instead of relying on fallback matching. If the
   accepted old-context matching mode matches more than one current-file location
   and hunk-header anchors do not disambiguate it, the action MUST fail with a
-  model-correctable ambiguity diagnostic instead of choosing a location. Raw
-  unified diffs MUST NOT be accepted by this semantic action; agents that truly
-  need a raw unified diff MUST use `shell_command` with an explicit tool such as
-  `git apply`.
+  model-correctable ambiguity diagnostic instead of choosing a location. The
+  diagnostic SHOULD identify the search scope, candidate spans, useful
+  hunk-header anchor state, and range-hint rejection details when available.
+  Raw unified diffs MUST NOT be accepted by this semantic action; agents that
+  truly need a raw unified diff MUST use `shell_command` with an explicit tool
+  such as `git apply`.
   Canonical paths in Mezzanine patch headers MUST be relative to the pane
   current working directory and MUST NOT be empty, absolute, contain empty path
   segments, or contain `..` traversal segments. Models SHOULD omit `./`,

@@ -1433,6 +1433,38 @@ fn run_apply_patch_action(cwd: &Path, patch: &str) -> Output {
         .unwrap()
 }
 
+/// Returns the write-phase error message for one semantic patch action.
+///
+/// Tests use this helper for matcher failures that should be reported before
+/// any generated write command is emitted.
+fn apply_patch_write_error(cwd: &Path, patch: &str) -> String {
+    let action = AgentAction {
+        id: "patch-error".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: patch.to_string(),
+            strip: None,
+        },
+    };
+    let read_plan = local_action_plan(&action).unwrap().unwrap();
+    let read_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&read_plan.command)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        read_output.status.success(),
+        "read phase failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&read_output.stdout),
+        String::from_utf8_lossy(&read_output.stderr)
+    );
+    apply_patch_write_plan_from_read_output(patch, &String::from_utf8_lossy(&read_output.stdout))
+        .unwrap_err()
+        .message()
+        .to_string()
+}
+
 /// Runs the mcp plan operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -5360,6 +5392,80 @@ fn semantic_apply_patch_unified_range_disambiguates_repeated_unanchored_hunk() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
+/// Verifies unified hunk line ranges are only conservative tie-breakers.
+///
+/// Repeated candidate bodies are common in generated patches. A line hint may
+/// select a candidate only when one text match is clearly nearest to the hinted
+/// old line; otherwise the patch must fail as ambiguous instead of guessing.
+#[test]
+fn semantic_apply_patch_unified_range_rejects_tied_candidates() {
+    let temp = test_temp_dir("semantic-codex-patch-unified-range-tie");
+    std::fs::write(
+        temp.join("note.rs"),
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nold();\nline 11\nold();\n",
+    )
+    .unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ -11,1 +11,1 @@\n-old();\n+new();\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("exact hunk context is ambiguous in the current file"),
+        "{error}"
+    );
+    assert!(error.contains("matching_scope=full_file"), "{error}");
+    assert!(error.contains("candidate match span(s): 10, 12"), "{error}");
+    assert!(
+        error.contains("range_hint_disambiguation=rejected reason=tie hint_line=11"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies near range-hint wins are still rejected as ambiguous.
+///
+/// The range hint should not silently select one of several very close text
+/// matches because a stale line number can easily drift by a couple of lines.
+#[test]
+fn semantic_apply_patch_unified_range_rejects_near_tie_candidates() {
+    let temp = test_temp_dir("semantic-codex-patch-unified-range-near-tie");
+    std::fs::write(
+        temp.join("note.rs"),
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nold();\nline 11\nold();\n",
+    )
+    .unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ -10,1 +10,1 @@\n-old();\n+new();\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("range_hint_disambiguation=rejected reason=near_tie hint_line=10"),
+        "{error}"
+    );
+    assert!(error.contains("nearest_distance=0"), "{error}");
+    assert!(error.contains("next_distance=2"), "{error}");
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies stale line ranges cannot choose distant repeated candidates.
+///
+/// A line hint far away from every real text match is treated as unreliable
+/// placement data and leaves the repeated hunk body ambiguous.
+#[test]
+fn semantic_apply_patch_unified_range_rejects_distant_candidates() {
+    let temp = test_temp_dir("semantic-codex-patch-unified-range-distant");
+    std::fs::write(temp.join("note.rs"), "old();\nold();\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ -80,1 +80,1 @@\n-old();\n+new();\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("range_hint_disambiguation=rejected reason=distant hint_line=80"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
 /// Verifies insertion hunks tolerate an omitted blank separator line between
 /// copied context blocks.
 ///
@@ -5772,7 +5878,7 @@ fn semantic_apply_patch_omitted_blank_separator_context_rejects_nonblank_gap() {
 ///
 /// Codex applies update hunks with no old lines at the end of the current
 /// file. Matching that behavior makes append-like patches predictable while
-/// still allowing explicit anchors or range hints for insertions elsewhere.
+/// still allowing explicit anchors for insertions elsewhere.
 #[test]
 fn semantic_apply_patch_unanchored_pure_addition_appends_like_codex() {
     let temp = test_temp_dir("semantic-codex-patch-pure-addition-append");
@@ -6172,6 +6278,95 @@ fn semantic_apply_patch_hunk_header_selects_repeated_context() {
         std::fs::read_to_string(temp.join("note.rs")).unwrap(),
         "fn first() {\n    println!(\"old\");\n}\n\nfn second() {\n    println!(\"new\");\n}\n"
     );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies Rust-like header anchors bound matching to a structural scope.
+///
+/// A repeated old-context body can appear again after the anchored function.
+/// The patcher should use the function block as the first search scope and
+/// apply only when that scope contains one deterministic candidate.
+#[test]
+fn semantic_apply_patch_structural_anchor_scope_selects_candidate() {
+    let temp = test_temp_dir("semantic-codex-patch-structural-anchor");
+    std::fs::write(
+        temp.join("note.rs"),
+        "fn target() {\n    println!(\"old\");\n}\n\nfn later() {\n    println!(\"old\");\n}\n",
+    )
+    .unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ fn target() {\n-    println!(\"old\");\n+    println!(\"new\");\n*** End Patch";
+
+    let output = run_apply_patch_action(&temp, patch);
+
+    assert!(
+        output.status.success(),
+        "command failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("note.rs")).unwrap(),
+        "fn target() {\n    println!(\"new\");\n}\n\nfn later() {\n    println!(\"old\");\n}\n"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies structural anchor scopes do not hide internal ambiguity.
+///
+/// If a resolved function block still contains multiple valid old-context
+/// candidates, the patch must fail rather than falling back to a broader range
+/// or using the first match inside the block.
+#[test]
+fn semantic_apply_patch_structural_anchor_scope_rejects_internal_ambiguity() {
+    let temp = test_temp_dir("semantic-codex-patch-structural-anchor-ambiguous");
+    std::fs::write(
+        temp.join("note.rs"),
+        "fn target() {\n    println!(\"old\");\n    println!(\"old\");\n}\n\nfn later() {\n    println!(\"old\");\n}\n",
+    )
+    .unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ fn target() {\n-    println!(\"old\");\n+    println!(\"new\");\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("exact hunk context is ambiguous in the current file"),
+        "{error}"
+    );
+    assert!(
+        error.contains("matching_scope=structural_anchor_scope"),
+        "{error}"
+    );
+    assert!(error.contains("candidate match span(s): 2, 3"), "{error}");
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies line-range hints do not override anchored ambiguity.
+///
+/// Header anchors are stronger placement constraints than unified old-line
+/// ranges. If the anchored structural scope still contains multiple valid
+/// candidates, the patch should fail even when a range hint points at one of
+/// them.
+#[test]
+fn semantic_apply_patch_anchor_scope_rejects_range_hint_override() {
+    let temp = test_temp_dir("semantic-codex-patch-anchor-range-override");
+    std::fs::write(
+        temp.join("note.rs"),
+        "fn target() {\n    println!(\"old\");\n    println!(\"old\");\n}\n",
+    )
+    .unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@ -2,1 +2,1 @@ fn target() {\n-    println!(\"old\");\n+    println!(\"new\");\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("exact hunk context is ambiguous in the current file"),
+        "{error}"
+    );
+    assert!(
+        error.contains("matching_scope=structural_anchor_scope"),
+        "{error}"
+    );
+    assert!(!error.contains("range_hint_disambiguation="), "{error}");
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
@@ -9972,7 +10167,11 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
-        description.contains("old-line number is used only as a placement hint"),
+        description.contains("old-line number is only a conservative tie-breaker"),
+        "{description}"
+    );
+    assert!(
+        description.contains("rejected for ties, near-ties, distant candidates"),
         "{description}"
     );
     assert!(
@@ -9983,6 +10182,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         description.contains("Header anchors constrain old-context placement"),
         "{description}"
     );
+    assert!(description.contains("structural scope"), "{description}");
     assert!(
         description.contains("tries exact old-context matching first"),
         "{description}"

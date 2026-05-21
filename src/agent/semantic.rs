@@ -1286,51 +1286,72 @@ fn apply_patch_hunk_mismatch_error(
     hunk: &MezPatchHunk,
     problem: ApplyPatchHunkMatchProblem,
 ) -> super::MezError {
-    let (failure_code, reason, candidate_lines, context_center, missing_anchor, mode, attempts) =
-        match problem {
-            ApplyPatchHunkMatchProblem::Missing {
-                context_center,
-                missing_anchor,
-                attempts,
-            } => (
-                "HUNK_CONTEXT_MISMATCH",
-                "hunk context was not found in the current file",
-                Vec::new(),
-                context_center,
-                missing_anchor,
+    let (
+        failure_code,
+        reason,
+        candidate_spans,
+        context_center,
+        missing_anchor,
+        mode,
+        attempts,
+        scope,
+        range_rejection,
+    ) = match problem {
+        ApplyPatchHunkMatchProblem::Missing {
+            context_center,
+            missing_anchor,
+            attempts,
+            scope,
+            range_rejection,
+        } => (
+            "HUNK_CONTEXT_MISMATCH",
+            "hunk context was not found in the current file",
+            Vec::new(),
+            context_center,
+            missing_anchor,
+            None,
+            attempts,
+            scope,
+            range_rejection,
+        ),
+        ApplyPatchHunkMatchProblem::Ambiguous {
+            candidate_spans,
+            mode,
+            attempts,
+            scope,
+            range_rejection,
+        } => {
+            let reason = match mode {
+                Some(ApplyPatchMatchMode::Exact) | None => {
+                    "exact hunk context is ambiguous in the current file"
+                }
+                Some(ApplyPatchMatchMode::TrimEnd) => {
+                    "trim_end hunk context is ambiguous in the current file"
+                }
+                Some(ApplyPatchMatchMode::Trim) => {
+                    "trim hunk context is ambiguous in the current file"
+                }
+                Some(ApplyPatchMatchMode::Normalized) => {
+                    "normalized hunk context is ambiguous in the current file"
+                }
+            };
+            (
+                "HUNK_CONTEXT_AMBIGUOUS",
+                reason,
+                candidate_spans,
                 None,
-                attempts,
-            ),
-            ApplyPatchHunkMatchProblem::Ambiguous {
-                candidate_lines,
+                None,
                 mode,
                 attempts,
-            } => {
-                let reason = match mode {
-                    Some(ApplyPatchMatchMode::Exact) | None => {
-                        "exact hunk context is ambiguous in the current file"
-                    }
-                    Some(ApplyPatchMatchMode::TrimEnd) => {
-                        "trim_end hunk context is ambiguous in the current file"
-                    }
-                    Some(ApplyPatchMatchMode::Trim) => {
-                        "trim hunk context is ambiguous in the current file"
-                    }
-                    Some(ApplyPatchMatchMode::Normalized) => {
-                        "normalized hunk context is ambiguous in the current file"
-                    }
-                };
-                (
-                    "HUNK_CONTEXT_AMBIGUOUS",
-                    reason,
-                    candidate_lines,
-                    None,
-                    None,
-                    mode,
-                    attempts,
-                )
-            }
-        };
+                scope,
+                range_rejection,
+            )
+        }
+    };
+    let candidate_lines = candidate_spans
+        .iter()
+        .map(|span| span.start_line)
+        .collect::<Vec<_>>();
     let mut message = format!(
         "apply_patch: hunk did not match: {path}\n\
          apply_patch: {reason}\n\
@@ -1351,6 +1372,7 @@ fn apply_patch_hunk_mismatch_error(
             mode.as_str()
         ));
     }
+    message.push_str(&format!("\napply_patch: matching_scope={}", scope.as_str()));
     if !hunk.anchors.is_empty() {
         message.push_str(&format!(
             "\napply_patch: hunk header anchor(s): {}",
@@ -1378,6 +1400,35 @@ fn apply_patch_hunk_mismatch_error(
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    }
+    if !candidate_spans.is_empty() {
+        message.push_str(&format!(
+            "\napply_patch: candidate match span(s): {}",
+            candidate_spans
+                .iter()
+                .map(|span| {
+                    if span.start_line == span.end_line {
+                        span.start_line.to_string()
+                    } else {
+                        format!("{}-{}", span.start_line, span.end_line)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if let Some(rejection) = range_rejection {
+        message.push_str(&format!(
+            "\napply_patch: range_hint_disambiguation=rejected reason={} hint_line={}",
+            rejection.reason.as_str(),
+            rejection.hint_line
+        ));
+        if let Some(distance) = rejection.nearest_distance {
+            message.push_str(&format!(" nearest_distance={distance}"));
+        }
+        if let Some(distance) = rejection.next_distance {
+            message.push_str(&format!(" next_distance={distance}"));
+        }
     }
     if let Some(first_line) = hunk.old.first() {
         let anchor_lines = apply_patch_anchor_line_numbers(&file.lines, first_line);
@@ -1504,14 +1555,6 @@ struct ApplyPatchHunkMatch {
 }
 
 impl ApplyPatchHunkMatch {
-    fn exact(position: usize, old_line_count: usize, mode: ApplyPatchMatchMode) -> Self {
-        Self {
-            position,
-            mode,
-            old_line_offsets: (0..old_line_count).collect(),
-        }
-    }
-
     fn span_len(&self) -> usize {
         self.old_line_offsets
             .last()
@@ -1524,6 +1567,34 @@ impl ApplyPatchHunkMatch {
 struct ApplyPatchLineSequenceMatch {
     position: usize,
     old_line_offsets: Vec<usize>,
+}
+
+impl ApplyPatchLineSequenceMatch {
+    fn exact(position: usize, old_line_count: usize) -> Self {
+        Self {
+            position,
+            old_line_offsets: (0..old_line_count).collect(),
+        }
+    }
+
+    fn into_hunk_match(self, mode: ApplyPatchMatchMode) -> ApplyPatchHunkMatch {
+        ApplyPatchHunkMatch {
+            position: self.position,
+            mode,
+            old_line_offsets: self.old_line_offsets,
+        }
+    }
+
+    fn span_len(&self) -> usize {
+        self.old_line_offsets
+            .last()
+            .map(|offset| offset.saturating_add(1))
+            .unwrap_or(0)
+    }
+
+    fn span(&self) -> ApplyPatchCandidateSpan {
+        ApplyPatchCandidateSpan::from_position_and_len(self.position, self.span_len())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1545,17 +1616,82 @@ struct ApplyPatchLineSequenceMatches {
     capped: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyPatchSearchScope {
+    FullFile,
+    OrderedAnchorRange,
+    StructuralAnchorScope,
+}
+
+impl ApplyPatchSearchScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApplyPatchSearchScope::FullFile => "full_file",
+            ApplyPatchSearchScope::OrderedAnchorRange => "ordered_anchor_range",
+            ApplyPatchSearchScope::StructuralAnchorScope => "structural_anchor_scope",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ApplyPatchCandidateSpan {
+    start_line: usize,
+    end_line: usize,
+}
+
+impl ApplyPatchCandidateSpan {
+    fn from_position_and_len(position: usize, len: usize) -> Self {
+        let start_line = position + 1;
+        let end_line = position + len.max(1);
+        Self {
+            start_line,
+            end_line,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyPatchRangeHintRejectionReason {
+    CandidateListCapped,
+    Tie,
+    NearTie,
+    Distant,
+}
+
+impl ApplyPatchRangeHintRejectionReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApplyPatchRangeHintRejectionReason::CandidateListCapped => "candidate_list_capped",
+            ApplyPatchRangeHintRejectionReason::Tie => "tie",
+            ApplyPatchRangeHintRejectionReason::NearTie => "near_tie",
+            ApplyPatchRangeHintRejectionReason::Distant => "distant",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ApplyPatchRangeHintRejection {
+    hint_line: usize,
+    nearest_distance: Option<usize>,
+    next_distance: Option<usize>,
+    reason: ApplyPatchRangeHintRejectionReason,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ApplyPatchHunkMatchProblem {
     Missing {
         context_center: Option<usize>,
         missing_anchor: Option<String>,
         attempts: Vec<ApplyPatchMatchAttempt>,
+        scope: ApplyPatchSearchScope,
+        range_rejection: Option<ApplyPatchRangeHintRejection>,
     },
     Ambiguous {
-        candidate_lines: Vec<usize>,
+        candidate_spans: Vec<ApplyPatchCandidateSpan>,
         mode: Option<ApplyPatchMatchMode>,
         attempts: Vec<ApplyPatchMatchAttempt>,
+        scope: ApplyPatchSearchScope,
+        range_rejection: Option<ApplyPatchRangeHintRejection>,
     },
 }
 
@@ -1580,6 +1716,8 @@ fn find_hunk_position(
             context_center: None,
             missing_anchor: first_missing_ordered_anchor(&file.lines, &hunk.anchors, cursor),
             attempts: Vec::new(),
+            scope: ApplyPatchSearchScope::OrderedAnchorRange,
+            range_rejection: None,
         });
     }
 
@@ -1596,51 +1734,101 @@ fn find_hunk_position(
             });
         }
         return Err(ApplyPatchHunkMatchProblem::Ambiguous {
-            candidate_lines: chains
+            candidate_spans: chains
                 .iter()
                 .filter_map(|chain| chain.last())
-                .map(|line| line + 2)
+                .map(|line| ApplyPatchCandidateSpan::from_position_and_len(line + 1, 0))
                 .take(APPLY_PATCH_MATCH_CANDIDATE_LIMIT)
                 .collect(),
             mode: None,
             attempts: Vec::new(),
+            scope: ApplyPatchSearchScope::OrderedAnchorRange,
+            range_rejection: None,
         });
     }
 
-    let mut ranges = Vec::new();
-    for (chain_index, chain) in chains.iter().enumerate() {
-        let search_start = chain.first().copied().unwrap_or(cursor);
-        let search_end = chains
-            .get(chain_index + 1)
-            .and_then(|next| next.first().copied())
-            .unwrap_or(file.lines.len());
-        ranges.push((search_start, search_end));
+    let structural_ranges = structural_anchor_ranges(&file.lines, &chains);
+    if !structural_ranges.is_empty() {
+        match find_hunk_position_in_ranges(
+            &file.lines,
+            &hunk.old,
+            &hunk.old_line_gap_policies(),
+            &structural_ranges,
+            hunk.range_hint,
+            ApplyPatchSearchScope::StructuralAnchorScope,
+        ) {
+            Ok(hunk_match) => return Ok(hunk_match),
+            Err(ApplyPatchLineSequenceFailure::Ambiguous {
+                candidate_spans,
+                mode,
+                attempts,
+                scope,
+                range_rejection,
+            }) => {
+                return Err(ApplyPatchHunkMatchProblem::Ambiguous {
+                    candidate_spans,
+                    mode: Some(mode),
+                    attempts,
+                    scope,
+                    range_rejection,
+                });
+            }
+            Err(ApplyPatchLineSequenceFailure::Missing { .. }) => {}
+        }
     }
+
+    let ranges = ordered_anchor_search_ranges(&file.lines, &chains, cursor);
     find_hunk_position_in_ranges(
         &file.lines,
         &hunk.old,
         &hunk.old_line_gap_policies(),
         &ranges,
         hunk.range_hint,
+        ApplyPatchSearchScope::OrderedAnchorRange,
     )
     .map_err(|failure| match failure {
-        ApplyPatchLineSequenceFailure::Missing { attempts } => {
-            ApplyPatchHunkMatchProblem::Missing {
-                context_center: chains.first().and_then(|chain| chain.last()).copied(),
-                missing_anchor: None,
-                attempts,
-            }
-        }
+        ApplyPatchLineSequenceFailure::Missing {
+            attempts,
+            range_rejection,
+            ..
+        } => ApplyPatchHunkMatchProblem::Missing {
+            context_center: chains.first().and_then(|chain| chain.last()).copied(),
+            missing_anchor: None,
+            attempts,
+            scope: ApplyPatchSearchScope::OrderedAnchorRange,
+            range_rejection,
+        },
         ApplyPatchLineSequenceFailure::Ambiguous {
-            candidate_lines,
+            candidate_spans,
             mode,
             attempts,
+            scope,
+            range_rejection,
         } => ApplyPatchHunkMatchProblem::Ambiguous {
-            candidate_lines,
+            candidate_spans,
             mode: Some(mode),
             attempts,
+            scope,
+            range_rejection,
         },
     })
+}
+
+fn ordered_anchor_search_ranges(
+    lines: &[String],
+    chains: &[Vec<usize>],
+    cursor: usize,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for (chain_index, chain) in chains.iter().enumerate() {
+        let search_start = chain.first().copied().unwrap_or(cursor);
+        let search_end = chains
+            .get(chain_index + 1)
+            .and_then(|next| next.first().copied())
+            .unwrap_or(lines.len());
+        ranges.push((search_start, search_end));
+    }
+    ranges
 }
 
 fn find_unanchored_hunk_position(
@@ -1660,25 +1848,33 @@ fn find_unanchored_hunk_position(
     }
     find_unanchored_hunk_position_layered(lines, old, blank_gap_policies, cursor, range_hint)
         .map_err(|failure| match failure {
-            ApplyPatchLineSequenceFailure::Missing { attempts } => {
-                ApplyPatchHunkMatchProblem::Missing {
-                    context_center: old.first().and_then(|line| {
-                        apply_patch_anchor_line_numbers(lines, line)
-                            .first()
-                            .and_then(|line| line.checked_sub(1))
-                    }),
-                    missing_anchor: None,
-                    attempts,
-                }
-            }
+            ApplyPatchLineSequenceFailure::Missing {
+                attempts,
+                range_rejection,
+                ..
+            } => ApplyPatchHunkMatchProblem::Missing {
+                context_center: old.first().and_then(|line| {
+                    apply_patch_anchor_line_numbers(lines, line)
+                        .first()
+                        .and_then(|line| line.checked_sub(1))
+                }),
+                missing_anchor: None,
+                attempts,
+                scope: ApplyPatchSearchScope::FullFile,
+                range_rejection,
+            },
             ApplyPatchLineSequenceFailure::Ambiguous {
-                candidate_lines,
+                candidate_spans,
                 mode,
                 attempts,
+                scope,
+                range_rejection,
             } => ApplyPatchHunkMatchProblem::Ambiguous {
-                candidate_lines,
+                candidate_spans,
                 mode: Some(mode),
                 attempts,
+                scope,
+                range_rejection,
             },
         })
 }
@@ -1687,11 +1883,15 @@ fn find_unanchored_hunk_position(
 enum ApplyPatchLineSequenceFailure {
     Missing {
         attempts: Vec<ApplyPatchMatchAttempt>,
+        scope: ApplyPatchSearchScope,
+        range_rejection: Option<ApplyPatchRangeHintRejection>,
     },
     Ambiguous {
-        candidate_lines: Vec<usize>,
+        candidate_spans: Vec<ApplyPatchCandidateSpan>,
         mode: ApplyPatchMatchMode,
         attempts: Vec<ApplyPatchMatchAttempt>,
+        scope: ApplyPatchSearchScope,
+        range_rejection: Option<ApplyPatchRangeHintRejection>,
     },
 }
 
@@ -1701,53 +1901,21 @@ fn find_hunk_position_in_ranges(
     blank_gap_policies: &[ApplyPatchBlankGapPolicy],
     ranges: &[(usize, usize)],
     range_hint: Option<MezPatchRangeHint>,
+    scope: ApplyPatchSearchScope,
 ) -> std::result::Result<ApplyPatchHunkMatch, ApplyPatchLineSequenceFailure> {
     let mut attempts = Vec::new();
-    let preferred = apply_patch_preferred_position(range_hint, lines.len());
     for mode in APPLY_PATCH_MATCH_MODES {
-        if let Some(position) = preferred {
-            let position_matches_range = ranges.iter().any(|(start, end)| {
-                position >= *start
-                    && old
-                        .len()
-                        .checked_add(position)
-                        .is_some_and(|needle_end| needle_end <= *end)
-            });
-            if position_matches_range
-                && old
-                    .len()
-                    .checked_add(position)
-                    .is_some_and(|needle_end| needle_end <= lines.len())
-                && line_sequence_matches(&lines[position..position + old.len()], old, *mode)
-            {
-                return Ok(ApplyPatchHunkMatch::exact(position, old.len(), *mode));
-            }
-            for (start, end) in ranges {
-                if position >= *start
-                    && position < *end
-                    && let Some(match_result) = line_sequence_match_omitting_blank_context_at(
-                        lines,
-                        old,
-                        blank_gap_policies,
-                        position,
-                        *end,
-                        *mode,
-                    )
-                {
-                    return Ok(ApplyPatchHunkMatch {
-                        position: match_result.position,
-                        mode: *mode,
-                        old_line_offsets: match_result.old_line_offsets,
-                    });
-                }
-            }
-        }
         let mut candidates = Vec::new();
         let mut capped = false;
         for (start, end) in ranges {
             let matches = find_line_sequence_matches(lines, old, *start, *end, *mode);
             capped |= matches.capped;
-            candidates.extend(matches.lines);
+            candidates.extend(
+                matches
+                    .lines
+                    .into_iter()
+                    .map(|line| ApplyPatchLineSequenceMatch::exact(line, old.len())),
+            );
             if candidates.len() >= APPLY_PATCH_MATCH_CANDIDATE_LIMIT {
                 candidates.truncate(APPLY_PATCH_MATCH_CANDIDATE_LIMIT);
                 capped = true;
@@ -1759,18 +1927,10 @@ fn find_hunk_position_in_ranges(
             candidate_count: candidates.len(),
             capped,
         });
-        match candidates.len() {
-            0 => {}
-            1 => {
-                return Ok(ApplyPatchHunkMatch::exact(candidates[0], old.len(), *mode));
-            }
-            _ => {
-                return Err(ApplyPatchLineSequenceFailure::Ambiguous {
-                    candidate_lines: candidates.iter().map(|line| line + 1).collect(),
-                    mode: *mode,
-                    attempts,
-                });
-            }
+        if let Some(hunk_match) =
+            resolve_hunk_candidates(candidates, capped, *mode, range_hint, &attempts, scope)?
+        {
+            return Ok(hunk_match);
         }
         let tolerant_matches = find_line_sequence_matches_omitting_blank_context(
             lines,
@@ -1786,30 +1946,22 @@ fn find_hunk_position_in_ranges(
                 capped: tolerant_matches.capped,
             });
         }
-        match tolerant_matches.lines.len() {
-            0 => {}
-            1 => {
-                let match_result = tolerant_matches.lines.into_iter().next().unwrap();
-                return Ok(ApplyPatchHunkMatch {
-                    position: match_result.position,
-                    mode: *mode,
-                    old_line_offsets: match_result.old_line_offsets,
-                });
-            }
-            _ => {
-                return Err(ApplyPatchLineSequenceFailure::Ambiguous {
-                    candidate_lines: tolerant_matches
-                        .lines
-                        .iter()
-                        .map(|match_result| match_result.position + 1)
-                        .collect(),
-                    mode: *mode,
-                    attempts,
-                });
-            }
+        if let Some(hunk_match) = resolve_hunk_candidates(
+            tolerant_matches.lines,
+            tolerant_matches.capped,
+            *mode,
+            range_hint,
+            &attempts,
+            scope,
+        )? {
+            return Ok(hunk_match);
         }
     }
-    Err(ApplyPatchLineSequenceFailure::Missing { attempts })
+    Err(ApplyPatchLineSequenceFailure::Missing {
+        attempts,
+        scope,
+        range_rejection: None,
+    })
 }
 
 fn find_unanchored_hunk_position_layered(
@@ -1820,59 +1972,31 @@ fn find_unanchored_hunk_position_layered(
     range_hint: Option<MezPatchRangeHint>,
 ) -> std::result::Result<ApplyPatchHunkMatch, ApplyPatchLineSequenceFailure> {
     let mut attempts = Vec::new();
-    let preferred = apply_patch_preferred_position(range_hint, lines.len())
-        .filter(|position| *position >= cursor.min(lines.len()));
+    let scope = ApplyPatchSearchScope::FullFile;
     for mode in APPLY_PATCH_MATCH_MODES {
-        if let Some(position) = preferred
-            && old
-                .len()
-                .checked_add(position)
-                .is_some_and(|needle_end| needle_end <= lines.len())
-            && line_sequence_matches(&lines[position..position + old.len()], old, *mode)
-        {
-            return Ok(ApplyPatchHunkMatch::exact(position, old.len(), *mode));
-        }
-        if let Some(position) = preferred
-            && let Some(match_result) = line_sequence_match_omitting_blank_context_at(
-                lines,
-                old,
-                blank_gap_policies,
-                position,
-                lines.len(),
-                *mode,
-            )
-        {
-            return Ok(ApplyPatchHunkMatch {
-                position: match_result.position,
-                mode: *mode,
-                old_line_offsets: match_result.old_line_offsets,
-            });
-        }
         let mut matches = find_line_sequence_matches(lines, old, cursor, lines.len(), *mode);
         if matches.lines.is_empty() && cursor > 0 {
             matches = find_line_sequence_matches(lines, old, 0, lines.len(), *mode);
         }
+        let candidates = matches
+            .lines
+            .into_iter()
+            .map(|line| ApplyPatchLineSequenceMatch::exact(line, old.len()))
+            .collect::<Vec<_>>();
         attempts.push(ApplyPatchMatchAttempt {
             mode: *mode,
-            candidate_count: matches.lines.len(),
+            candidate_count: candidates.len(),
             capped: matches.capped,
         });
-        match matches.lines.len() {
-            0 => {}
-            1 => {
-                return Ok(ApplyPatchHunkMatch::exact(
-                    matches.lines[0],
-                    old.len(),
-                    *mode,
-                ));
-            }
-            _ => {
-                return Err(ApplyPatchLineSequenceFailure::Ambiguous {
-                    candidate_lines: matches.lines.iter().map(|line| line + 1).collect(),
-                    mode: *mode,
-                    attempts,
-                });
-            }
+        if let Some(hunk_match) = resolve_hunk_candidates(
+            candidates,
+            matches.capped,
+            *mode,
+            range_hint,
+            &attempts,
+            scope,
+        )? {
+            return Ok(hunk_match);
         }
         let tolerant_matches = find_line_sequence_matches_omitting_blank_context(
             lines,
@@ -1888,30 +2012,165 @@ fn find_unanchored_hunk_position_layered(
                 capped: tolerant_matches.capped,
             });
         }
-        match tolerant_matches.lines.len() {
-            0 => {}
-            1 => {
-                let match_result = tolerant_matches.lines.into_iter().next().unwrap();
-                return Ok(ApplyPatchHunkMatch {
-                    position: match_result.position,
-                    mode: *mode,
-                    old_line_offsets: match_result.old_line_offsets,
-                });
-            }
-            _ => {
-                return Err(ApplyPatchLineSequenceFailure::Ambiguous {
-                    candidate_lines: tolerant_matches
-                        .lines
-                        .iter()
-                        .map(|match_result| match_result.position + 1)
-                        .collect(),
-                    mode: *mode,
-                    attempts,
-                });
-            }
+        if let Some(hunk_match) = resolve_hunk_candidates(
+            tolerant_matches.lines,
+            tolerant_matches.capped,
+            *mode,
+            range_hint,
+            &attempts,
+            scope,
+        )? {
+            return Ok(hunk_match);
         }
     }
-    Err(ApplyPatchLineSequenceFailure::Missing { attempts })
+    Err(ApplyPatchLineSequenceFailure::Missing {
+        attempts,
+        scope,
+        range_rejection: None,
+    })
+}
+
+const APPLY_PATCH_RANGE_HINT_MAX_DISTANCE: usize = 20;
+const APPLY_PATCH_RANGE_HINT_MIN_DISTANCE_GAP: usize = 3;
+
+fn resolve_hunk_candidates(
+    candidates: Vec<ApplyPatchLineSequenceMatch>,
+    capped: bool,
+    mode: ApplyPatchMatchMode,
+    range_hint: Option<MezPatchRangeHint>,
+    attempts: &[ApplyPatchMatchAttempt],
+    scope: ApplyPatchSearchScope,
+) -> std::result::Result<Option<ApplyPatchHunkMatch>, ApplyPatchLineSequenceFailure> {
+    match candidates.len() {
+        0 => Ok(None),
+        1 => Ok(candidates
+            .into_iter()
+            .next()
+            .map(|candidate| candidate.into_hunk_match(mode))),
+        _ => match range_hint_candidate(
+            &candidates,
+            capped,
+            if scope == ApplyPatchSearchScope::FullFile {
+                range_hint
+            } else {
+                None
+            },
+        ) {
+            ApplyPatchRangeHintSelection::Selected(index) => Ok(Some(
+                candidates
+                    .into_iter()
+                    .nth(index)
+                    .expect("selected candidate index should be valid")
+                    .into_hunk_match(mode),
+            )),
+            ApplyPatchRangeHintSelection::Unavailable { rejection } => {
+                Err(ApplyPatchLineSequenceFailure::Ambiguous {
+                    candidate_spans: candidates
+                        .iter()
+                        .map(ApplyPatchLineSequenceMatch::span)
+                        .collect(),
+                    mode,
+                    attempts: attempts.to_vec(),
+                    scope,
+                    range_rejection: rejection,
+                })
+            }
+        },
+    }
+}
+
+enum ApplyPatchRangeHintSelection {
+    Selected(usize),
+    Unavailable {
+        rejection: Option<ApplyPatchRangeHintRejection>,
+    },
+}
+
+fn range_hint_candidate(
+    candidates: &[ApplyPatchLineSequenceMatch],
+    capped: bool,
+    range_hint: Option<MezPatchRangeHint>,
+) -> ApplyPatchRangeHintSelection {
+    let Some(range_hint) = range_hint else {
+        return ApplyPatchRangeHintSelection::Unavailable { rejection: None };
+    };
+    if capped {
+        return ApplyPatchRangeHintSelection::Unavailable {
+            rejection: Some(ApplyPatchRangeHintRejection {
+                hint_line: range_hint.old_start,
+                nearest_distance: None,
+                next_distance: None,
+                reason: ApplyPatchRangeHintRejectionReason::CandidateListCapped,
+            }),
+        };
+    }
+    let hint_position = range_hint.old_start.saturating_sub(1);
+    let mut distances = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            (
+                index,
+                range_hint_distance_to_candidate(hint_position, candidate),
+            )
+        })
+        .collect::<Vec<_>>();
+    distances.sort_by_key(|(_, distance)| *distance);
+    let Some((nearest_index, nearest_distance)) = distances.first().copied() else {
+        return ApplyPatchRangeHintSelection::Unavailable { rejection: None };
+    };
+    let next_distance = distances.get(1).map(|(_, distance)| *distance);
+    if nearest_distance > APPLY_PATCH_RANGE_HINT_MAX_DISTANCE {
+        return ApplyPatchRangeHintSelection::Unavailable {
+            rejection: Some(ApplyPatchRangeHintRejection {
+                hint_line: range_hint.old_start,
+                nearest_distance: Some(nearest_distance),
+                next_distance,
+                reason: ApplyPatchRangeHintRejectionReason::Distant,
+            }),
+        };
+    }
+    if next_distance == Some(nearest_distance) {
+        return ApplyPatchRangeHintSelection::Unavailable {
+            rejection: Some(ApplyPatchRangeHintRejection {
+                hint_line: range_hint.old_start,
+                nearest_distance: Some(nearest_distance),
+                next_distance,
+                reason: ApplyPatchRangeHintRejectionReason::Tie,
+            }),
+        };
+    }
+    if let Some(next_distance) = next_distance
+        && next_distance.saturating_sub(nearest_distance) < APPLY_PATCH_RANGE_HINT_MIN_DISTANCE_GAP
+    {
+        return ApplyPatchRangeHintSelection::Unavailable {
+            rejection: Some(ApplyPatchRangeHintRejection {
+                hint_line: range_hint.old_start,
+                nearest_distance: Some(nearest_distance),
+                next_distance: Some(next_distance),
+                reason: ApplyPatchRangeHintRejectionReason::NearTie,
+            }),
+        };
+    }
+    ApplyPatchRangeHintSelection::Selected(nearest_index)
+}
+
+fn range_hint_distance_to_candidate(
+    hint_position: usize,
+    candidate: &ApplyPatchLineSequenceMatch,
+) -> usize {
+    let start = candidate.position;
+    let end = candidate
+        .span_len()
+        .saturating_sub(1)
+        .saturating_add(candidate.position);
+    if hint_position < start {
+        start - hint_position
+    } else if hint_position > end {
+        hint_position.saturating_sub(end)
+    } else {
+        0
+    }
 }
 
 fn apply_patch_preferred_position(
@@ -1919,6 +2178,129 @@ fn apply_patch_preferred_position(
     line_count: usize,
 ) -> Option<usize> {
     range_hint.map(|hint| hint.old_start.saturating_sub(1).min(line_count))
+}
+
+fn structural_anchor_ranges(lines: &[String], chains: &[Vec<usize>]) -> Vec<(usize, usize)> {
+    chains
+        .iter()
+        .filter_map(|chain| {
+            let anchor_line = chain.last().copied()?;
+            rust_like_block_scope(lines, anchor_line)
+        })
+        .collect()
+}
+
+fn rust_like_block_scope(lines: &[String], anchor_line: usize) -> Option<(usize, usize)> {
+    let anchor_text = lines.get(anchor_line)?;
+    if !looks_like_rust_structural_anchor(anchor_text) {
+        return None;
+    }
+    let mut depth = 0isize;
+    let mut saw_open = false;
+    let mut in_block_comment = false;
+    for (line_index, line) in lines
+        .iter()
+        .enumerate()
+        .skip(anchor_line)
+        .take(APPLY_PATCH_STRUCTURAL_ANCHOR_SCAN_LINES)
+    {
+        let (opens, closes) = rust_like_brace_counts(line, &mut in_block_comment)?;
+        if opens > 0 {
+            saw_open = true;
+        }
+        depth += opens as isize;
+        depth -= closes as isize;
+        if depth < 0 {
+            return None;
+        }
+        if saw_open && depth == 0 {
+            return Some((anchor_line, line_index + 1));
+        }
+    }
+    None
+}
+
+const APPLY_PATCH_STRUCTURAL_ANCHOR_SCAN_LINES: usize = 400;
+
+fn looks_like_rust_structural_anchor(line: &str) -> bool {
+    let line = line.trim_start();
+    RUST_STRUCTURAL_ANCHOR_PREFIXES
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
+const RUST_STRUCTURAL_ANCHOR_PREFIXES: &[&str] = &[
+    "fn ",
+    "pub fn ",
+    "pub(crate) fn ",
+    "pub(super) fn ",
+    "async fn ",
+    "pub async fn ",
+    "const fn ",
+    "pub const fn ",
+    "impl ",
+    "trait ",
+    "pub trait ",
+    "struct ",
+    "pub struct ",
+    "enum ",
+    "pub enum ",
+    "mod ",
+    "pub mod ",
+];
+
+fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(usize, usize)> {
+    if line.contains("r#\"") || line.contains("r\"") {
+        return None;
+    }
+    let mut opens = 0usize;
+    let mut closes = 0usize;
+    let mut chars = line.chars().peekable();
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut escaped = false;
+    while let Some(character) = chars.next() {
+        if *in_block_comment {
+            if character == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                *in_block_comment = false;
+            }
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if in_char {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '\'' {
+                in_char = false;
+            }
+            continue;
+        }
+        match character {
+            '/' if chars.peek() == Some(&'/') => break,
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                *in_block_comment = true;
+            }
+            '"' => in_string = true,
+            '\'' => in_char = true,
+            '{' => opens += 1,
+            '}' => closes += 1,
+            _ => {}
+        }
+    }
+    Some((opens, closes))
 }
 
 fn ordered_anchor_chains(lines: &[String], anchors: &[String], cursor: usize) -> Vec<Vec<usize>> {
