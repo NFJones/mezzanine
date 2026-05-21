@@ -1442,7 +1442,7 @@ The baseline commands MUST have the following semantics:
 | `list-sessions` | Return resumable sessions, including identity, name, creation time, last attach time, window count, attached client count, and primary availability. |
 | `rename-session` | Rename the target session. Repeating the command with the same target and name MUST be idempotent. |
 | `kill-session` | Terminate the target session and all panes after confirmation or an explicit force flag unless policy permits destructive session termination without prompting. |
-| `help` | Render a command guide for the Mezzanine command set in the interactive command-output overlay. |
+| `help` | Render a command guide for the Mezzanine command set in the interactive command-output overlay, with a key binding list section at the bottom. |
 | `copy-mode` | Enter pane-local copy mode for scrolling visible and historical terminal content, moving a selection cursor, selecting text, and copying text without sending input to the pane process or opening a command-output view. |
 | `copy-selection` | Copy the active copy-mode selection to the active or named paste buffer and to the host clipboard when host clipboard integration is available. |
 | `paste-clipboard` | Paste host clipboard text into the active pane, falling back to the most recent paste buffer when host clipboard text is unavailable. It MUST use bracketed paste when bracketed paste is enabled by the pane application. |

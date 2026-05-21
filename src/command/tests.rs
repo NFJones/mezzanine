@@ -1176,6 +1176,19 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("set-theme"), "{help}");
     assert!(help.contains("agent-shell"), "{help}");
     assert!(help.contains("snapshot-session"), "{help}");
+    assert!(help.contains("\nkey bindings\n"), "{help}");
+    assert!(
+        help.contains("A-\\:source=default:command=split-window"),
+        "{help}"
+    );
+    assert!(
+        help.contains("C-a ?:source=default:command=list-keys"),
+        "{help}"
+    );
+    assert!(
+        help.contains("C-a [:source=default:command=copy-mode"),
+        "{help}"
+    );
     assert!(!help.contains("auth-logout"), "{help}");
     assert!(!help.contains("mcp-list"), "{help}");
     assert!(!help.contains("trust-project"), "{help}");
@@ -1194,6 +1207,15 @@ fn help_command_describes_mezzanine_command_set() {
     );
     assert!(
         help.find("set-option").unwrap() < help.find("select-window").unwrap(),
+        "{help}"
+    );
+    assert!(
+        help.find("windows, groups, and panes").unwrap() < help.find("\nkey bindings\n").unwrap(),
+        "{help}"
+    );
+    assert!(
+        help.trim_end()
+            .ends_with("C-a ~:source=default:command=show-messages"),
         "{help}"
     );
 }

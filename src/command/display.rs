@@ -493,6 +493,9 @@ pub(super) fn command_help_display() -> String {
         }
         lines.push(format!("  {name:<name_width$}  {description}"));
     }
+    lines.push(String::new());
+    lines.push("key bindings".to_string());
+    lines.extend(list_default_key_bindings().lines().map(str::to_string));
     lines.join("\n")
 }
 
