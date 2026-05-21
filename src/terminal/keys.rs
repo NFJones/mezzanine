@@ -380,16 +380,16 @@ impl Default for KeyBindings {
             split_vertical: None,
             split_horizontal: None,
             new_window: None,
-            new_group: Some(KeyChord::alt_shift(KeyCode::Char('='))),
-            agent_shell: Some(KeyChord::alt(KeyCode::Char(']'))),
+            new_group: None,
+            agent_shell: None,
             focus_up: None,
             focus_down: None,
             focus_left: None,
             focus_right: None,
             focus_previous_window: None,
             focus_next_window: None,
-            focus_previous_group: Some(KeyChord::ctrl_alt_shift(KeyCode::PageUp)),
-            focus_next_group: Some(KeyChord::ctrl_alt_shift(KeyCode::PageDown)),
+            focus_previous_group: None,
+            focus_next_group: None,
         }
     }
 }
@@ -1166,7 +1166,11 @@ pub(super) fn classify_prefix_binding(
         KeyCode::Char('d') => Some(MuxAction::DetachPrimaryClient),
         KeyCode::Char('D') => Some(MuxAction::ChooseClientOrObserverToDetach),
         KeyCode::Char('G') => Some(MuxAction::FocusGroup(GroupFocusTarget::ChooseInteractively)),
+        KeyCode::Char('C') => Some(MuxAction::NewGroup),
+        KeyCode::Char('(') => Some(MuxAction::FocusGroup(GroupFocusTarget::Previous)),
+        KeyCode::Char(')') => Some(MuxAction::FocusGroup(GroupFocusTarget::Next)),
         KeyCode::Char('c') => Some(MuxAction::NewWindow),
+        KeyCode::Char('a') => Some(MuxAction::ToggleAgentShell),
         KeyCode::Char(',') => Some(MuxAction::RenameWindow),
         KeyCode::Char('&') => Some(MuxAction::KillWindowAfterConfirmation),
         KeyCode::Char('w') => Some(MuxAction::FocusWindow(

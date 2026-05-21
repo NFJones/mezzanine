@@ -374,11 +374,11 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 Some("terminal.cursor_style must be block, underline, or bar".to_string())
             }
         }
-        "terminal.cursor_blink" => {
+        "terminal.cursor_blink" | "terminal.reduced_motion" => {
             if matches!(value, "true" | "false") {
                 None
             } else {
-                Some("terminal.cursor_blink must be true or false".to_string())
+                Some(format!("{path} must be true or false"))
             }
         }
         "terminal.cursor_blink_interval_ms" | "terminal.resize_debounce_ms" => {

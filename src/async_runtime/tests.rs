@@ -8721,6 +8721,25 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             first_seen.contains("AGENT_ASYNC_FIRST_COMMAND"),
             "{first_seen}"
         );
+        let mut first_shell_transaction_settled = false;
+        for _ in 0..200 {
+            let timer_effects = client_handle.drain_timer_side_effects(16).await.unwrap();
+            if timer_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::CancelTimer { key }
+                        if key.kind == RuntimeTimerKind::ShellTransaction
+                )
+            }) {
+                first_shell_transaction_settled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            first_shell_transaction_settled,
+            "first shell transaction should settle before submitting continuation"
+        );
 
         let mut next_task = None;
         for _ in 0..200 {
@@ -10509,7 +10528,7 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
                 },
             ],
         ],
-        input_batches: vec![b"\x1b]".to_vec(), b"/status\r".to_vec()],
+        input_batches: vec![b"\x01a".to_vec(), b"/status\r".to_vec()],
         written_batches: Vec::new(),
         write_error_kinds: Vec::new(),
     };

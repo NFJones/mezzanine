@@ -34,6 +34,7 @@ alternate_screen = true
 focus_events = true
 nested_multiplexer = "auto"
 passthrough = false
+reduced_motion = false
 resize_debounce_ms = 200
 cursor_style = "block"
 cursor_blink = false
@@ -54,10 +55,6 @@ fallback_behavior = "bin-sh"
 # without generated default prefix equivalents.
 [keys]
 escape = "C-a"
-new_group = "A-S-="
-agent_shell = "A-]"
-focus_previous_group = "C-A-S-PageUp"
-focus_next_group = "C-A-S-PageDown"
 
 [keys.command_bindings]
 

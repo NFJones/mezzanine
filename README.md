@@ -88,8 +88,6 @@ transactions.
   terminal commands, slash commands, and explicit skills.
 - [docs/configuration-reference.md](docs/configuration-reference.md): exact
   configuration fields, defaults, and layer behavior.
-- [docs/terminal-compatibility.md](docs/terminal-compatibility.md): terminal
-  compatibility coverage summary.
 - [docs/examples/config.toml](docs/examples/config.toml): generated baseline
   configuration example.
 

@@ -1291,7 +1291,7 @@ fn rejects_invalid_terminal_term_and_profile_values() {
 fn rejects_invalid_terminal_presentation_values() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\n",
+        "[terminal]\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nreduced_motion = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\n",
         ConfigScope::Primary,
     );
 
@@ -1303,6 +1303,10 @@ fn rejects_invalid_terminal_presentation_values() {
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.cursor_blink"
             && diagnostic.message == "terminal.cursor_blink must be true or false"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "terminal.reduced_motion"
+            && diagnostic.message == "terminal.reduced_motion must be true or false"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.cursor_blink_interval_ms"

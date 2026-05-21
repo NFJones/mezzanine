@@ -31,7 +31,7 @@ use super::{
     runtime_mezzanine_error_code, runtime_paste_bytes, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells,
 };
-use std::{str::FromStr, sync::LazyLock};
+use std::{collections::BTreeSet, str::FromStr, sync::LazyLock};
 
 use crate::agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, AgentAction, AgentActionPayload,
@@ -313,6 +313,7 @@ fn runtime_agent_shell_markdown_overlay_content(
         selections: Vec::new(),
     };
     let hidden_links = agent_command_links_in_markdown(markdown);
+    let mut linked_hidden_commands = BTreeSet::new();
     for rendered in render_command_markdown_body_lines(markdown, ui_theme) {
         let line_index = content.lines.len();
         for (start_column, width, command) in agent_command_links_in_line(&rendered.display) {
@@ -325,6 +326,9 @@ fn runtime_agent_shell_markdown_overlay_content(
             });
         }
         for (label, command) in &hidden_links {
+            if linked_hidden_commands.contains(command) {
+                continue;
+            }
             if let Some(byte_start) = rendered.display.find(label) {
                 let start_column = UnicodeWidthStr::width(&rendered.display[..byte_start]);
                 let width = UnicodeWidthStr::width(label.as_str());
@@ -342,6 +346,7 @@ fn runtime_agent_shell_markdown_overlay_content(
                         command: command.clone(),
                         kind: RuntimeDisplayOverlaySelectionKind::Primary,
                     });
+                    linked_hidden_commands.insert(command.clone());
                 }
             }
         }
@@ -7870,6 +7875,7 @@ impl RuntimeSessionService {
             pending_observer_count,
             pressed_window_action: self.pressed_window_action.clone(),
             animation_tick_ms: current_unix_millis(),
+            reduced_motion: self.terminal_reduced_motion,
             window_status: (!self.window_frame_right_status_template.trim().is_empty()).then(
                 || TerminalWindowStatusContext {
                     template: self.window_frame_right_status_template.clone(),
@@ -10405,6 +10411,36 @@ mod tests {
             1,
             "{content:?}"
         );
+    }
+
+    /// Verifies `/list-sessions` only linkifies the first visible occurrence of
+    /// a saved conversation id.
+    ///
+    /// The markdown source keeps a hidden `mez-agent:` resume link on the
+    /// session row. If the same UUID-like id appears again in explanatory text,
+    /// that later occurrence should remain plain text so keyboard and mouse
+    /// navigation expose one selection per logical session.
+    #[test]
+    fn agent_shell_markdown_overlay_linkifies_each_session_id_once() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("list-sessions".to_string()),
+            "- [`018f6b3a-1b2c-7000-9000-cafebabefeed`](mez-agent:%2Fresume%20018f6b3a-1b2c-7000-9000-cafebabefeed)\n  - Resume: `/resume 018f6b3a-1b2c-7000-9000-cafebabefeed`",
+            &ui_theme,
+        );
+
+        assert_eq!(
+            content
+                .selections
+                .iter()
+                .filter(|selection| {
+                    selection.command == "/resume 018f6b3a-1b2c-7000-9000-cafebabefeed"
+                })
+                .count(),
+            1,
+            "{content:?}"
+        );
+        assert_eq!(content.selections[0].line_index, 0);
     }
 
     /// Verifies compact colon-delimited command display records render as

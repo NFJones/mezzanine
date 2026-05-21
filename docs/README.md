@@ -11,9 +11,6 @@ reference documentation.
   [Agent skills and commands](agent-skills-and-commands.md) for the command
   surfaces and [Configuration reference](configuration-reference.md) for exact
   configuration fields and defaults.
-- **People validating terminal behavior**: use
-  [Terminal compatibility coverage](terminal-compatibility.md) together with
-  [SPEC.md Section 25](../SPEC.md#25-terminal-compatibility-test-suite).
 - **Contributors**: use [AGENTS.md](../AGENTS.md) for repository workflow,
   testing, and handoff requirements.
 - **Specification readers**: use [SPEC.md](../SPEC.md) as the normative source
@@ -27,8 +24,6 @@ reference documentation.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
-- [terminal-compatibility.md](terminal-compatibility.md): coverage summary for
-  the xterm-compatible terminal profile.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.
 

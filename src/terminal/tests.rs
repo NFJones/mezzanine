@@ -707,18 +707,10 @@ fn parses_key_binding_notation_for_default_surface() {
         KeyChord::parse("C-A-PageDown").unwrap(),
         KeyChord::ctrl_alt(KeyCode::PageDown)
     );
-    assert_eq!(
-        Some(KeyChord::parse("A-S-=").unwrap()),
-        KeyBindings::default().new_group
-    );
-    assert_eq!(
-        Some(KeyChord::parse("C-A-S-PageUp").unwrap()),
-        KeyBindings::default().focus_previous_group
-    );
-    assert_eq!(
-        Some(KeyChord::parse("C-A-S-PageDown").unwrap()),
-        KeyBindings::default().focus_next_group
-    );
+    assert_eq!(KeyBindings::default().new_group, None);
+    assert_eq!(KeyBindings::default().agent_shell, None);
+    assert_eq!(KeyBindings::default().focus_previous_group, None);
+    assert_eq!(KeyBindings::default().focus_next_group, None);
     assert_eq!(
         KeyChord::parse("Ctrl+Alt+Up").unwrap(),
         KeyChord::ctrl_alt(KeyCode::Up)
@@ -789,11 +781,11 @@ fn classifies_default_direct_mux_key_bindings() {
     );
     assert_eq!(
         classify_terminal_input(b"\x1b+", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::NewGroup)
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b]", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::ToggleAgentShell)
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[1;7A", &bindings).unwrap(),
@@ -821,11 +813,11 @@ fn classifies_default_direct_mux_key_bindings() {
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[5;8~", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusGroup(GroupFocusTarget::Previous))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[6;8~", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusGroup(GroupFocusTarget::Next))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"ordinary input", &bindings).unwrap(),
@@ -873,6 +865,10 @@ fn classifies_default_prefix_key_bindings() {
         b"\x01G",
         MuxAction::FocusGroup(GroupFocusTarget::ChooseInteractively),
     );
+    assert_prefix(b"\x01C", MuxAction::NewGroup);
+    assert_prefix(b"\x01(", MuxAction::FocusGroup(GroupFocusTarget::Previous));
+    assert_prefix(b"\x01)", MuxAction::FocusGroup(GroupFocusTarget::Next));
+    assert_prefix(b"\x01a", MuxAction::ToggleAgentShell);
     assert_prefix(b"\x01n", MuxAction::FocusWindow(WindowFocusTarget::Next));
     assert_prefix(
         b"\x01p",
@@ -5474,6 +5470,77 @@ fn render_window_clips_wide_glyph_that_overlaps_divider() {
     assert_eq!(rendered[0], "abc \u{2502}right");
 }
 
+/// Verifies emoji-presentation warning signs keep their two-cell width before a
+/// pane divider.
+///
+/// This protects the render path for grapheme clusters such as `⚠️`, where the
+/// leading scalar alone is one cell but the rendered grapheme is two cells.
+/// Dropping the variation selector during pane composition makes the divider
+/// appear one column too far left on affected rows.
+#[test]
+fn render_window_keeps_divider_fixed_after_warning_sign_grapheme() {
+    let mut ids = IdFactory::default();
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    window
+        .split_active(&mut ids, SplitDirection::Vertical)
+        .unwrap();
+    let pane_ids = window
+        .panes()
+        .iter()
+        .map(|pane| pane.id.to_string())
+        .collect::<Vec<_>>();
+    let inputs = vec![
+        PaneRenderInput {
+            pane_id: pane_ids[0].clone(),
+            lines: vec!["ab⚠️".to_string()],
+        },
+        PaneRenderInput {
+            pane_id: pane_ids[1].clone(),
+            lines: vec!["right".to_string()],
+        },
+    ];
+
+    let rendered = render_window(&window, &inputs, false).unwrap();
+
+    assert_eq!(UnicodeWidthStr::width(rendered[0].as_str()), 10);
+    assert_eq!(rendered[0], "ab⚠️\u{2502}right");
+}
+
+/// Verifies a warning-sign grapheme clipped by a pane divider clears the full
+/// wide-cell footprint.
+///
+/// When the divider overwrites the continuation half of `⚠️`, the leading
+/// scalar must be cleared too. Otherwise only rows containing that grapheme
+/// report a mismatched terminal width and the adjacent pane appears shifted.
+#[test]
+fn render_window_clips_warning_sign_grapheme_that_overlaps_divider() {
+    let mut ids = IdFactory::default();
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    window
+        .split_active(&mut ids, SplitDirection::Vertical)
+        .unwrap();
+    let pane_ids = window
+        .panes()
+        .iter()
+        .map(|pane| pane.id.to_string())
+        .collect::<Vec<_>>();
+    let inputs = vec![
+        PaneRenderInput {
+            pane_id: pane_ids[0].clone(),
+            lines: vec!["abc⚠️".to_string()],
+        },
+        PaneRenderInput {
+            pane_id: pane_ids[1].clone(),
+            lines: vec!["right".to_string()],
+        },
+    ];
+
+    let rendered = render_window(&window, &inputs, false).unwrap();
+
+    assert_eq!(UnicodeWidthStr::width(rendered[0].as_str()), 10);
+    assert_eq!(rendered[0], "abc \u{2502}right");
+}
+
 /// Verifies render window composes horizontal split stacked.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -6566,6 +6633,70 @@ fn render_active_agent_status_gradient_uses_theme_relative_harmony() {
             "{name} should not reuse the reasoning pill accent as the running scan highlight"
         );
     }
+}
+
+/// Verifies reduced-motion mode keeps active agent statuses static while
+/// preserving the ordinary running-status color category.
+///
+/// Users on slow terminals or who prefer no animation should still see the
+/// active status pill, but its style should not vary per cell or per frame
+/// tick.
+#[test]
+fn render_reduced_motion_agent_status_uses_static_running_style() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(62, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let mut frame_context = TerminalFrameContext {
+        reduced_motion: true,
+        animation_tick_ms: 1440,
+        ..TerminalFrameContext::default()
+    };
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_status: Some("running".to_string()),
+            agent_model: Some("gpt-5.5".to_string()),
+            agent_reasoning: Some("high".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let config = TerminalClientLoopConfig {
+        frame_context,
+        window_frames_enabled: false,
+        pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+    let status_start = display_column_for_fragment(&view.lines[0], "running");
+    let status_end = status_start + "running".len();
+    let unique_backgrounds = view.line_style_spans[0]
+        .iter()
+        .filter(|span| {
+            span.start < status_end && span.start.saturating_add(span.length) > status_start
+        })
+        .filter(|span| span.length < usize::from(window.size.columns))
+        .filter_map(|span| span.rendition.background)
+        .fold(Vec::<TerminalColor>::new(), |mut colors, background| {
+            if !colors.contains(&background) {
+                colors.push(background);
+            }
+            colors
+        });
+
+    assert_eq!(
+        unique_backgrounds,
+        vec![config.ui_theme.colors.agent_status_running.background]
+    );
 }
 
 /// Verifies that a parent agent waiting on joined child agents renders an

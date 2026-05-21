@@ -2618,7 +2618,10 @@ fn pane_frame_right_status_segment_style_spans(
     frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyleSpan> {
-    if segment.field == "agent.status" && pane_frame_agent_status_is_active(&segment.value) {
+    if segment.field == "agent.status"
+        && pane_frame_agent_status_is_active(&segment.value)
+        && !frame_context.reduced_motion
+    {
         return pane_frame_agent_status_scan_spans(
             column_offset.saturating_add(segment.start),
             segment.width,
@@ -6154,9 +6157,26 @@ fn write_text_cells(row: &mut [char], column_start: usize, max_columns: usize, t
 /// Collects display cells into terminal text while omitting internal wide-cell
 /// continuation sentinels.
 fn collect_text_cells(row: Vec<char>) -> String {
-    row.into_iter()
-        .filter(|ch| *ch != TERMINAL_WIDE_CONTINUATION_CELL)
-        .collect()
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < row.len() {
+        let ch = row[index];
+        if ch == TERMINAL_WIDE_CONTINUATION_CELL {
+            index = index.saturating_add(1);
+            continue;
+        }
+        output.push(ch);
+        if row
+            .get(index.saturating_add(1))
+            .is_some_and(|next| *next == TERMINAL_WIDE_CONTINUATION_CELL)
+            && UnicodeWidthChar::width(ch).unwrap_or(0) == 1
+            && terminal_char_width(ch) == 2
+        {
+            output.push('\u{FE0F}');
+        }
+        index = index.saturating_add(1);
+    }
+    output
 }
 
 /// Runs the blank cells operation for this subsystem.

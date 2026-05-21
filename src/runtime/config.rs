@@ -1311,6 +1311,19 @@ pub(super) fn runtime_terminal_resize_debounce_ms_from_config(root: &Value) -> R
     Ok(interval)
 }
 
+/// Returns whether optional terminal animations should render as static UI.
+pub(super) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Result<bool> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(false);
+    };
+    let Some(value) = terminal.get("reduced_motion") else {
+        return Ok(false);
+    };
+    value
+        .as_bool()
+        .ok_or_else(|| MezError::config("terminal.reduced_motion must be true or false"))
+}
+
 /// Runs the runtime terminal clipboard from config operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

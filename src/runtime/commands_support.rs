@@ -4190,6 +4190,7 @@ pub(super) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "terminal.cursor_style"
                 | "terminal.cursor_blink"
                 | "terminal.cursor_blink_interval_ms"
+                | "terminal.reduced_motion"
                 | "terminal.resize_debounce_ms"
                 | "terminal.true_color"
                 | "terminal.mouse"

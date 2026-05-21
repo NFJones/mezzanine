@@ -19,8 +19,75 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 
 - Commands entered there are parsed by Mezzanine, not by the pane shell.
 - Use this surface for session, window, pane, and presentation control.
-- Common commands include `new-window`, `split-window`, `select-pane`,
-  `set-theme`, `list-keys`, and `show-options`.
+- Terminal commands:
+
+| Command | Use it for |
+| --- | --- |
+| `new-window` | Create a window with one pane. |
+| `rename-window` | Rename a window. |
+| `kill-window` | Close a window. |
+| `select-window` | Focus a window. |
+| `next-window` | Focus the next window. |
+| `previous-window` | Focus the previous window. |
+| `last-window` | Focus the previously active window. |
+| `new-group` | Create a window group with one landing window. |
+| `rename-group` | Rename a window group. |
+| `kill-group` | Close a window group and its windows. |
+| `select-group` | Focus a window group. |
+| `next-group` | Focus the next window group. |
+| `previous-group` | Focus the previous window group. |
+| `last-group` | Focus the previously active window group. |
+| `split-window` | Split the active or target pane. |
+| `kill-pane` | Close a pane. |
+| `select-pane` | Focus a pane. |
+| `resize-pane` | Resize a pane. |
+| `rebalance-window` | Reapply the active window layout. |
+| `swap-pane` | Exchange two panes. |
+| `break-pane` | Move a pane into a new window. |
+| `join-pane` | Move a pane into another window or split. |
+| `display-panes` | Show temporary pane identifiers for selection. |
+| `list-windows` | Show window identities, names, active state, and sizes. |
+| `list-groups` | Show window group identities, names, and active state. |
+| `choose-group` | Open an interactive group picker. |
+| `list-panes` | Show pane identities, active state, size, pid, and agent data. |
+| `list-clients` | Show attached clients and pending observers. |
+| `detach-client` | Detach a client. |
+| `attach-session` | Attach to a resumable session. |
+| `list-sessions` | Show resumable sessions. |
+| `rename-session` | Rename the current or target session. |
+| `kill-session` | Terminate a session and all panes. |
+| `help` | Show the terminal command guide. |
+| `copy-mode` | Enter pane-local copy mode. |
+| `copy-selection` | Copy the active selection to a buffer and clipboard when available. |
+| `paste-clipboard` | Paste host clipboard text into the active pane. |
+| `paste-buffer` | Paste a named or recent paste buffer. |
+| `create-buffer` | Create a named internal paste buffer. |
+| `list-buffers` | Show paste buffers. |
+| `choose-buffer` | Open an interactive paste buffer picker. |
+| `delete-buffer` | Delete a paste buffer. |
+| `show-messages` | Show diagnostics, pending approvals, and observer requests. |
+| `list-keys` | Show effective key bindings. |
+| `list-themes` | Show built-in and configured UI themes. |
+| `set-theme` | Switch the active UI theme by name. |
+| `bind-key` | Add or replace a live key binding. |
+| `unbind-key` | Remove a live key binding. |
+| `show-options` | Show effective options. |
+| `set-option` | Set a live-mutable option. |
+| `source-file` | Load a configuration file. |
+| `refresh-client` | Redraw the client. |
+| `agent-shell` | Show, hide, or toggle the agent shell for a pane. |
+| `snapshot-session` | Create a structured session snapshot. |
+| `save-buffer` | Save a paste buffer. |
+| `clear-history` | Clear bounded pane history. |
+| `search-history` | Search pane history. |
+| `export-history` | Export bounded pane history. |
+| `pipe-pane` | Pipe future pane output to a file or command. |
+| `mark-pane-ready` | Temporarily mark a pane as ready after risk acknowledgement. |
+| `list-observers` | Show observer requests and approved observers. |
+| `choose-observer` | Open an interactive observer picker. |
+| `approve-observer` | Approve a pending observer. |
+| `reject-observer` | Reject a pending observer. |
+| `revoke-observer` | Revoke an approved observer. |
 
 Use terminal commands when you want to control the multiplexer itself.
 
