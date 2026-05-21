@@ -4805,6 +4805,10 @@ async fn async_pane_io_side_effect_service_executes_pane_effects() {
 #[test]
 fn async_pane_io_default_drain_limits_interleave_paste_with_output() {
     assert_eq!(AsyncPaneIoSideEffectServiceConfig::default().drain_limit, 1);
+    assert_eq!(
+        AsyncPaneProcessServiceConfig::default().output_drain_limit,
+        4
+    );
     assert_eq!(AsyncPaneProcessServiceConfig::default().drain_limit, 1);
 }
 
@@ -4846,6 +4850,7 @@ async fn async_pane_process_service_defers_large_input_remainders() {
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: 2,
+                output_drain_limit: 1,
                 drain_limit: 1,
                 idle_interval: Duration::from_millis(1),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -4922,6 +4927,7 @@ async fn async_pane_process_service_retries_partial_input_remainders() {
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: 2,
+                output_drain_limit: 1,
                 drain_limit: 1,
                 idle_interval: Duration::from_millis(1),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -5148,6 +5154,7 @@ async fn async_pane_process_service_serializes_output_and_side_effects() {
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: 1,
+                output_drain_limit: 1,
                 drain_limit: 8,
                 idle_interval: Duration::from_millis(1),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -5186,6 +5193,106 @@ async fn async_pane_process_service_serializes_output_and_side_effects() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies bursty pane output is submitted to the actor as one event batch.
+///
+/// SSH sessions are sensitive to event-loop and render invalidation churn. A
+/// bounded output burst should therefore cross the actor boundary as one
+/// ordered pane-output event with coalesced bytes.
+#[tokio::test(flavor = "current_thread")]
+async fn async_pane_process_service_batches_bursty_output_events() {
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+    let mut backend = AsyncFakePaneProcessIo::default();
+    backend.push_output(b"one".to_vec());
+    backend.push_output(b"two".to_vec());
+    backend.push_output(b"three".to_vec());
+    let mut driver =
+        AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
+            .unwrap();
+
+    let service_handle = handle.clone();
+    let service = async move {
+        let report = run_async_pane_process_service(
+            &service_handle,
+            &mut driver,
+            AsyncPaneProcessServiceConfig {
+                max_polls: 1,
+                output_drain_limit: 8,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                foreground_metadata_interval: Duration::from_secs(60),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        service_handle.shutdown().await.unwrap();
+        report
+    };
+
+    let (report, mut exit) = tokio::join!(service, actor.run());
+
+    assert_eq!(report.output_events, 3);
+    assert_eq!(report.submitted_events, 1);
+    assert_eq!(exit.metrics.runtime_event_batches, 1);
+    assert_eq!(exit.metrics.pane_output_chunks, 1);
+    assert_eq!(exit.metrics.pane_output_bytes, 11);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies foreground process metadata is not polled again for every output
+/// chunk before its refresh interval elapses. Pane output should remain cheap
+/// during bursty redraws, while process-title metadata still refreshes on its
+/// own cadence.
+#[tokio::test(flavor = "current_thread")]
+async fn async_pane_process_service_throttles_metadata_during_output_bursts() {
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+    let mut backend = AsyncFakePaneProcessIo::default();
+    backend.push_output(b"first".to_vec());
+    backend.push_output(b"second".to_vec());
+    backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+        process_name: "vim".to_string(),
+        process_group_id: 42,
+        current_working_directory: Some(std::path::PathBuf::from("/tmp/project")),
+    })));
+    backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+        process_name: "sh".to_string(),
+        process_group_id: 43,
+        current_working_directory: Some(std::path::PathBuf::from("/tmp/other")),
+    })));
+    let mut driver =
+        AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
+            .unwrap();
+
+    let service_handle = handle.clone();
+    let service = async move {
+        let report = run_async_pane_process_service(
+            &service_handle,
+            &mut driver,
+            AsyncPaneProcessServiceConfig {
+                max_polls: 2,
+                output_drain_limit: 1,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                foreground_metadata_interval: Duration::from_secs(60),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        service_handle.shutdown().await.unwrap();
+        report
+    };
+
+    let (report, mut exit) = tokio::join!(service, actor.run());
+
+    assert_eq!(report.output_events, 2);
+    assert_eq!(report.submitted_events, 3);
+    assert_eq!(exit.metrics.pane_output_chunks, 2);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that the combined pane process service wakes for queued pane I/O
 /// side effects even when no PTY output is available. A live pane task must not
 /// wait for its fallback interval before delivering user input, resize, or
@@ -5210,6 +5317,7 @@ async fn async_pane_process_service_wakes_for_pane_side_effects() {
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: 2,
+                output_drain_limit: 1,
                 drain_limit: 8,
                 idle_interval: Duration::from_secs(60),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -5268,6 +5376,7 @@ async fn async_pane_process_service_uses_metadata_deadline_for_quiet_panes() {
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: 2,
+                output_drain_limit: 1,
                 drain_limit: 8,
                 idle_interval: Duration::from_millis(1),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -5323,6 +5432,7 @@ async fn async_pane_process_service_wakes_on_terminal_lifecycle_and_terminates_b
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: u64::MAX,
+                output_drain_limit: 1,
                 drain_limit: 8,
                 idle_interval: Duration::from_secs(60),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -5390,6 +5500,7 @@ async fn async_pane_process_service_reports_exit_after_output_turn() {
             &mut driver,
             AsyncPaneProcessServiceConfig {
                 max_polls: 2,
+                output_drain_limit: 1,
                 drain_limit: 8,
                 idle_interval: Duration::from_millis(1),
                 foreground_metadata_interval: Duration::from_secs(60),
@@ -5445,6 +5556,7 @@ async fn async_pane_process_service_waits_for_live_output_before_exit() {
                 &mut driver,
                 AsyncPaneProcessServiceConfig {
                     max_polls: 20,
+                    output_drain_limit: 1,
                     drain_limit: 8,
                     idle_interval: Duration::from_secs(60),
                     foreground_metadata_interval: Duration::from_secs(60),
@@ -5496,6 +5608,7 @@ async fn async_pane_process_supervisor_claims_live_manager_panes() {
                 idle_interval: Duration::from_millis(1),
                 pane_service: AsyncPaneProcessServiceConfig {
                     max_polls: u64::MAX,
+                    output_drain_limit: 1,
                     drain_limit: 8,
                     idle_interval: Duration::from_millis(1),
                     foreground_metadata_interval: Duration::from_secs(60),
@@ -5548,6 +5661,7 @@ async fn async_pane_process_supervisor_wakes_on_worker_completion() {
                     idle_interval: Duration::from_secs(60),
                     pane_service: AsyncPaneProcessServiceConfig {
                         max_polls: u64::MAX,
+                        output_drain_limit: 1,
                         drain_limit: 8,
                         idle_interval: Duration::from_secs(60),
                         foreground_metadata_interval: Duration::from_secs(60),
@@ -8219,6 +8333,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 idle_interval: Duration::from_millis(1),
                 pane_service: AsyncPaneProcessServiceConfig {
                     max_polls: u64::MAX,
+                    output_drain_limit: 1,
                     drain_limit: 8,
                     idle_interval: Duration::from_millis(1),
                     foreground_metadata_interval: Duration::from_secs(60),

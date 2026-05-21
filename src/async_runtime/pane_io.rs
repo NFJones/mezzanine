@@ -809,6 +809,8 @@ pub struct AsyncPaneIoSideEffectServiceReport {
 pub struct AsyncPaneProcessServiceConfig {
     /// Maximum service polls before returning.
     pub max_polls: u64,
+    /// Maximum PTY output chunks coalesced into one actor submission per poll.
+    pub output_drain_limit: usize,
     /// Maximum pane I/O side effects drained per poll.
     pub drain_limit: usize,
     /// Sleep interval used when neither output nor side effects are ready.
@@ -826,6 +828,7 @@ impl Default for AsyncPaneProcessServiceConfig {
     fn default() -> Self {
         Self {
             max_polls: u64::MAX,
+            output_drain_limit: 4,
             drain_limit: 1,
             idle_interval: Duration::from_millis(16),
             foreground_metadata_interval: Duration::from_secs(1),
@@ -844,6 +847,11 @@ impl AsyncPaneProcessServiceConfig {
         if self.drain_limit == 0 {
             return Err(MezError::invalid_args(
                 "async pane process service drain_limit must be greater than zero",
+            ));
+        }
+        if self.output_drain_limit == 0 {
+            return Err(MezError::invalid_args(
+                "async pane process service output_drain_limit must be greater than zero",
             ));
         }
         if self.idle_interval.is_zero() {
@@ -983,10 +991,11 @@ impl AsyncPaneProcessSupervisorServiceReport {
 
 /// Runs one combined pane process worker until stopped.
 ///
-/// The worker first drains at most one PTY output chunk, then drains pending
+/// The worker first drains a bounded burst of PTY output, then drains pending
 /// pane I/O side effects for the same pane. This keeps the future live
 /// ownership path from racing write, resize, terminate, and output handling
-/// across independent tasks.
+/// across independent tasks while avoiding one actor round trip per output
+/// chunk during bursty pane redraws.
 pub async fn run_async_pane_process_service<B, F>(
     handle: &AsyncRuntimeSessionHandle,
     driver: &mut AsyncPaneProcessDriver<B>,
@@ -1021,22 +1030,22 @@ where
         let mut observed_output = false;
         let mut pane_exited = false;
 
-        if let Some(event) = driver.poll_output_event().await? {
-            report.output_events = report.output_events.saturating_add(1);
-            submit_pane_runtime_event(
-                handle,
-                event,
-                &mut report.submitted_events,
-                &mut report.applied_events,
-            )
-            .await?;
+        if drain_pane_output_events(
+            handle,
+            driver,
+            config.output_drain_limit,
+            &mut report.output_events,
+            &mut report.submitted_events,
+            &mut report.applied_events,
+        )
+        .await?
+        {
             made_progress = true;
             observed_output = true;
         }
 
-        let foreground_metadata_due = observed_output
-            || last_foreground_metadata_poll
-                .is_none_or(|last_poll| last_poll.elapsed() >= config.foreground_metadata_interval);
+        let foreground_metadata_due = last_foreground_metadata_poll
+            .is_none_or(|last_poll| last_poll.elapsed() >= config.foreground_metadata_interval);
         if foreground_metadata_due {
             last_foreground_metadata_poll = Some(Instant::now());
             if let Some(event) = driver.poll_foreground_process_event().await? {
@@ -1130,6 +1139,67 @@ where
 
     report.terminal_state = *lifecycle_watcher.borrow();
     Ok(report)
+}
+
+/// Drains currently available pane output chunks into one actor submission.
+///
+/// PTY output often arrives in bursts. Submitting a bounded burst as one actor
+/// batch reduces event-loop hops and lets render invalidation coalescing happen
+/// before the attached terminal is asked to repaint.
+async fn drain_pane_output_events<B>(
+    handle: &AsyncRuntimeSessionHandle,
+    driver: &mut AsyncPaneProcessDriver<B>,
+    limit: usize,
+    output_events: &mut u64,
+    submitted_events: &mut usize,
+    applied_events: &mut usize,
+) -> Result<bool>
+where
+    B: AsyncPaneProcessIo,
+{
+    let pane_id = driver.pane_id().to_string();
+    let mut bytes = Vec::new();
+    for _ in 0..limit {
+        match driver.poll_output_event().await {
+            Ok(Some(event)) => {
+                let RuntimeEvent::Pane(PaneEvent::Output {
+                    bytes: output_bytes,
+                    ..
+                }) = event
+                else {
+                    continue;
+                };
+                *output_events = output_events.saturating_add(1);
+                bytes.extend(output_bytes);
+            }
+            Ok(None) => break,
+            Err(error) if !bytes.is_empty() => {
+                let ingress = submit_batched_pane_output_event(handle, pane_id, bytes).await?;
+                *submitted_events = submitted_events.saturating_add(ingress.accepted);
+                *applied_events = applied_events.saturating_add(ingress.applied);
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if bytes.is_empty() {
+        return Ok(false);
+    }
+    let ingress = submit_batched_pane_output_event(handle, pane_id, bytes).await?;
+    *submitted_events = submitted_events.saturating_add(ingress.accepted);
+    *applied_events = applied_events.saturating_add(ingress.applied);
+    Ok(true)
+}
+
+/// Submits coalesced pane output bytes as one ordered runtime event.
+async fn submit_batched_pane_output_event(
+    handle: &AsyncRuntimeSessionHandle,
+    pane_id: String,
+    bytes: Vec<u8>,
+) -> Result<super::RuntimeEventIngressReport> {
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
+    handle.submit_runtime_events(batch).await
 }
 
 /// Runs the terminate pane process for terminal state operation for this subsystem.

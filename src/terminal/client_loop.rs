@@ -1005,9 +1005,11 @@ pub(crate) fn encode_attached_terminal_output_frame_with_styles(
 
 /// Encodes either a full redraw or a row-differential update for an attached TTY.
 ///
-/// The first frame, dimension changes, and keypad transitions that accompany a
-/// resized surface still get a full redraw. Stable-size updates rewrite only the
-/// rows whose text or SGR spans changed before restoring Mezzanine's cursor.
+/// The first frame and row-count changes still get a full redraw. Stable-row
+/// updates rewrite only the rows whose text or SGR spans changed before
+/// restoring Mezzanine's cursor. Rows that shrink are cleared before their new
+/// content is written, avoiding a full-screen clear without relying on
+/// erase-after-text behavior at the final terminal column.
 pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
     lines: &[String],
     line_style_spans: &[Vec<TerminalStyleSpan>],
@@ -1023,7 +1025,7 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             modes,
         );
     };
-    if output_dimensions_changed(previous, lines) {
+    if output_row_count_changed(previous, lines) {
         return encode_attached_terminal_output_frame_with_styles(
             lines,
             line_style_spans,
@@ -1060,6 +1062,9 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         }
         let row = index.saturating_add(1);
         frame.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
+        if terminal_line_width(line) < terminal_line_width(previous_line) {
+            frame.extend_from_slice(b"\x1b[2K");
+        }
         frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
         changed_rows = changed_rows.saturating_add(1);
     }
@@ -1087,19 +1092,13 @@ fn normalized_style_span_rows(
         .collect()
 }
 
-/// Runs the output dimensions changed operation for this subsystem.
+/// Runs the output row count changed operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn output_dimensions_changed(
-    previous: &AttachedTerminalOutputFrameState,
-    lines: &[String],
-) -> bool {
+fn output_row_count_changed(previous: &AttachedTerminalOutputFrameState, lines: &[String]) -> bool {
     previous.lines.len() != lines.len()
-        || previous.lines.iter().zip(lines).any(|(previous, current)| {
-            previous != current && terminal_line_width(previous) != terminal_line_width(current)
-        })
 }
 
 /// Runs the terminal line width operation for this subsystem.

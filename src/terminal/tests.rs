@@ -2420,6 +2420,33 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
 }
 
+/// Verifies stable-row attached-terminal updates clear only rows that shrink
+/// instead of falling back to a full-screen redraw. This avoids stale trailing
+/// cells over remote terminal links while keeping the update bounded to the
+/// changed row.
+#[test]
+fn attached_terminal_output_update_clears_shrinking_rows_without_full_redraw() {
+    let previous_lines = vec!["wide text".to_string(), "steady".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &["short".to_string(), "steady".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: true,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H\x1b[2Kshort"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[2;1Hsteady"), "{rendered:?}");
+}
+
 /// Verifies stable-size attached-terminal updates avoid sending any bytes when
 /// the rendered rows, style spans, bracketed-paste mode, and cursor
 /// presentation are unchanged. This keeps idle status refreshes cheap over
