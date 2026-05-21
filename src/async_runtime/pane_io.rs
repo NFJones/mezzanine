@@ -667,6 +667,7 @@ where
     F: FnMut(u64) -> bool,
 {
     config.validate()?;
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncPaneProcessDriverServiceReport {
         polls: 0,
         submitted_events: 0,
@@ -682,13 +683,18 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
+            if should_stop(report.polls) {
+                return Ok(report);
+            }
             let bounded_idle = (config.max_polls != u64::MAX).then_some(config.idle_interval);
             match (driver.output_activity(), bounded_idle) {
                 (Some(output_activity), Some(idle_interval)) => {
                     tokio::select! {
                         result = output_activity => result?,
                         _ = handle.wait_for_event_delivery() => {}
-                        _ = handle.wait_for_runtime_side_effects() => {}
+                        result = side_effect_watcher.changed() => {
+                            let _ = result;
+                        }
                         _ = sleep(idle_interval) => {}
                     }
                 }
@@ -696,20 +702,26 @@ where
                     tokio::select! {
                         result = output_activity => result?,
                         _ = handle.wait_for_event_delivery() => {}
-                        _ = handle.wait_for_runtime_side_effects() => {}
+                        result = side_effect_watcher.changed() => {
+                            let _ = result;
+                        }
                     }
                 }
                 (None, Some(idle_interval)) => {
                     tokio::select! {
                         _ = handle.wait_for_event_delivery() => {}
-                        _ = handle.wait_for_runtime_side_effects() => {}
+                        result = side_effect_watcher.changed() => {
+                            let _ = result;
+                        }
                         _ = sleep(idle_interval) => {}
                     }
                 }
                 (None, None) => {
                     tokio::select! {
                         _ = handle.wait_for_event_delivery() => {}
-                        _ = handle.wait_for_runtime_side_effects() => {}
+                        result = side_effect_watcher.changed() => {
+                            let _ = result;
+                        }
                     }
                 }
             }
@@ -987,6 +999,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncPaneProcessServiceReport::new(*lifecycle_watcher.borrow());
     let mut last_foreground_metadata_poll: Option<Instant> = None;
     let mut pending_pane_io_side_effects = VecDeque::new();
@@ -1092,7 +1105,9 @@ where
                 tokio::select! {
                     result = output_activity => result?,
                     _ = handle.wait_for_event_delivery() => {}
-                    _ = handle.wait_for_runtime_side_effects() => {}
+                    result = side_effect_watcher.changed() => {
+                        let _ = result;
+                    }
                     result = lifecycle_watcher.changed() => {
                         let _ = result;
                     }
@@ -1101,7 +1116,9 @@ where
             } else {
                 tokio::select! {
                     _ = handle.wait_for_event_delivery() => {}
-                    _ = handle.wait_for_runtime_side_effects() => {}
+                    result = side_effect_watcher.changed() => {
+                        let _ = result;
+                    }
                     result = lifecycle_watcher.changed() => {
                         let _ = result;
                     }
@@ -1220,6 +1237,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncPaneProcessSupervisorServiceReport::new(*lifecycle_watcher.borrow());
     let mut active_panes = HashSet::<String>::new();
     let mut workers = JoinSet::new();
@@ -1288,6 +1306,7 @@ where
                 &handle,
                 &mut workers,
                 &mut lifecycle_watcher,
+                &mut side_effect_watcher,
                 bounded_idle,
             )
             .await
@@ -1344,6 +1363,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut pending_pane_io_side_effects = VecDeque::new();
     let mut report = AsyncPaneIoSideEffectServiceReport {
         polls: 0,
@@ -1375,8 +1395,15 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            wait_for_pane_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config)
-                .await;
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_pane_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
             continue;
         }
 
@@ -1405,20 +1432,24 @@ where
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 async fn wait_for_pane_side_effects_or_bounded_idle(
-    handle: &AsyncRuntimeSessionHandle,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
+    side_effect_watcher: &mut watch::Receiver<u64>,
     config: AsyncPaneIoSideEffectServiceConfig,
 ) {
     if config.max_polls == u64::MAX {
         tokio::select! {
-            _ = handle.wait_for_runtime_side_effects() => {}
+            result = side_effect_watcher.changed() => {
+                let _ = result;
+            }
             result = lifecycle_watcher.changed() => {
                 let _ = result;
             }
         }
     } else {
         tokio::select! {
-            _ = handle.wait_for_runtime_side_effects() => {}
+            result = side_effect_watcher.changed() => {
+                let _ = result;
+            }
             result = lifecycle_watcher.changed() => {
                 let _ = result;
             }
@@ -1567,6 +1598,7 @@ async fn wait_for_pane_process_supervisor_wakeup(
     handle: &AsyncRuntimeSessionHandle,
     workers: &mut JoinSet<Result<(String, AsyncPaneProcessServiceReport)>>,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
+    side_effect_watcher: &mut watch::Receiver<u64>,
     bounded_idle: Option<Duration>,
 ) -> Option<
     std::result::Result<Result<(String, AsyncPaneProcessServiceReport)>, tokio::task::JoinError>,
@@ -1575,7 +1607,10 @@ async fn wait_for_pane_process_supervisor_wakeup(
         (true, Some(idle_interval)) => {
             tokio::select! {
                 _ = handle.wait_for_event_delivery() => None,
-                _ = handle.wait_for_runtime_side_effects() => None,
+                result = side_effect_watcher.changed() => {
+                    let _ = result;
+                    None
+                },
                 result = lifecycle_watcher.changed() => {
                     let _ = result;
                     None
@@ -1586,7 +1621,10 @@ async fn wait_for_pane_process_supervisor_wakeup(
         (true, None) => {
             tokio::select! {
                 _ = handle.wait_for_event_delivery() => None,
-                _ = handle.wait_for_runtime_side_effects() => None,
+                result = side_effect_watcher.changed() => {
+                    let _ = result;
+                    None
+                },
                 result = lifecycle_watcher.changed() => {
                     let _ = result;
                     None
@@ -1598,7 +1636,10 @@ async fn wait_for_pane_process_supervisor_wakeup(
                 biased;
                 joined = workers.join_next() => joined,
                 _ = handle.wait_for_event_delivery() => None,
-                _ = handle.wait_for_runtime_side_effects() => None,
+                result = side_effect_watcher.changed() => {
+                    let _ = result;
+                    None
+                },
                 result = lifecycle_watcher.changed() => {
                     let _ = result;
                     None
@@ -1611,7 +1652,10 @@ async fn wait_for_pane_process_supervisor_wakeup(
                 biased;
                 joined = workers.join_next() => joined,
                 _ = handle.wait_for_event_delivery() => None,
-                _ = handle.wait_for_runtime_side_effects() => None,
+                result = side_effect_watcher.changed() => {
+                    let _ = result;
+                    None
+                },
                 result = lifecycle_watcher.changed() => {
                     let _ = result;
                     None

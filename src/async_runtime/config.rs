@@ -124,6 +124,11 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effect_delivery_notify: Arc<Notify>,
+    /// Stores the side effect delivery revision tx value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) side_effect_delivery_tx: watch::Sender<u64>,
     /// Stores the lifecycle state tx value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -237,6 +242,11 @@ pub struct AsyncRuntimeSessionHandle {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effect_delivery_notify: Arc<Notify>,
+    /// Stores the side effect delivery revision rx value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) side_effect_delivery_rx: watch::Receiver<u64>,
     /// Stores the lifecycle state rx value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

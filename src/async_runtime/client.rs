@@ -357,6 +357,7 @@ where
         ]));
     }
 
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     loop {
         let render_effects = handle
             .drain_render_side_effects_for_client(client_id.clone(), 8)
@@ -385,7 +386,8 @@ where
                 }
                 return Ok(AttachedTerminalBatchWake::StateChanged);
             }
-            _ = handle.wait_for_runtime_side_effects() => {
+            result = side_effect_watcher.changed() => {
+                let _ = result;
                 let render_effects = handle
                     .drain_render_side_effects_for_client(client_id.clone(), 8)
                     .await?;
@@ -629,6 +631,7 @@ where
 {
     config.validate()?;
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncAgentProviderPollReport {
         polls: 0,
         executions: 0,
@@ -659,7 +662,9 @@ where
             }
             tokio::select! {
                 _ = handle.wait_for_event_delivery() => {}
-                _ = handle.wait_for_runtime_side_effects() => {}
+                changed = side_effect_watcher.changed() => {
+                    let _ = changed;
+                }
                 changed = lifecycle.changed() => {
                     if changed.is_err() {
                         return Ok(report);
@@ -773,6 +778,7 @@ async fn await_agent_provider_worker(
     mut task: tokio::task::JoinHandle<Result<super::AgentTurnExecution>>,
 ) -> Result<Option<(RuntimeEvent, bool)>> {
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     if !handle.agent_turn_is_running(&turn_id).await? {
         task.abort();
         let _ = task.await;
@@ -784,7 +790,9 @@ async fn await_agent_provider_worker(
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
             }
             _ = handle.wait_for_event_delivery() => {}
-            _ = handle.wait_for_runtime_side_effects() => {}
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+            }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
                     task.abort();
@@ -811,13 +819,16 @@ async fn await_agent_compaction_worker(
     mut task: tokio::task::JoinHandle<Result<crate::agent::ModelResponse>>,
 ) -> Result<Option<(RuntimeEvent, bool)>> {
     let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     loop {
         tokio::select! {
             result = &mut task => {
                 return Ok(Some(compaction_worker_event(pane_id, result)));
             }
             _ = handle.wait_for_event_delivery() => {}
-            _ = handle.wait_for_runtime_side_effects() => {}
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+            }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
                     task.abort();

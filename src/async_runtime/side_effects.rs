@@ -214,6 +214,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncRuntimeSideEffectServiceReport {
         polls: 0,
         drained: 0,
@@ -236,7 +237,15 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            wait_for_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config).await;
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
             continue;
         }
         report.drained = report
@@ -294,6 +303,7 @@ where
     let start = Instant::now();
     let mut active_timers: BTreeMap<RuntimeTimerKey, Instant> = BTreeMap::new();
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncRuntimeTimerServiceReport {
         polls: 0,
         drained: 0,
@@ -344,16 +354,26 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
             if let Some(delay) = next_timer_delay(&active_timers, Instant::now()) {
                 tokio::select! {
-                    _ = handle.wait_for_runtime_side_effects() => {}
+                    result = side_effect_watcher.changed() => {
+                        let _ = result;
+                    }
                     result = lifecycle_watcher.changed() => {
                         let _ = result;
                     }
                     _ = sleep(delay) => {}
                 }
             } else {
-                wait_for_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config).await;
+                wait_for_side_effects_or_bounded_idle(
+                    &mut lifecycle_watcher,
+                    &mut side_effect_watcher,
+                    config,
+                )
+                .await;
             }
         }
     }
@@ -394,6 +414,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncHookSideEffectServiceReport {
         polls: 0,
         drained: 0,
@@ -417,7 +438,15 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            wait_for_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config).await;
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
             continue;
         }
 
@@ -494,6 +523,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncPersistenceSideEffectServiceReport {
         polls: 0,
         drained: 0,
@@ -520,7 +550,15 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            wait_for_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config).await;
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
             continue;
         }
 
@@ -727,6 +765,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncRuntimeSideEffectServiceReport {
         polls: 0,
         drained: 0,
@@ -747,7 +786,15 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            wait_for_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config).await;
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
             continue;
         }
         report.drained = report
@@ -821,6 +868,7 @@ where
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncClientOutputFlushServiceReport {
         polls: 0,
         drained: 0,
@@ -846,7 +894,15 @@ where
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            wait_for_side_effects_or_bounded_idle(handle, &mut lifecycle_watcher, config).await;
+            if should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
             continue;
         }
         report.drained = report
@@ -915,12 +971,14 @@ where
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 async fn wait_for_side_effects_or_bounded_idle(
-    handle: &AsyncRuntimeSessionHandle,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
+    side_effect_watcher: &mut watch::Receiver<u64>,
     config: AsyncRuntimeSideEffectServiceConfig,
 ) {
     tokio::select! {
-        _ = handle.wait_for_runtime_side_effects() => {}
+        result = side_effect_watcher.changed() => {
+            let _ = result;
+        }
         result = lifecycle_watcher.changed() => {
             let _ = result;
         }

@@ -3225,6 +3225,94 @@ async fn async_side_effect_service_uses_bounded_idle_probe_when_unbounded() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies that a filtered side-effect drain re-notifies retained work for
+/// another worker. Prompt submission can queue timer/persistence/render work
+/// beside provider dispatch work; if one worker consumes the original
+/// notification and retains the provider dispatch, the next worker must be
+/// woken immediately instead of waiting for its idle probe.
+#[tokio::test(flavor = "current_thread")]
+async fn async_filtered_side_effect_drain_renotifies_retained_work() {
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+    let agent_id = AgentId::opaque("agent-%1").unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", 1),
+                    delay_ms: 1,
+                },
+                RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id,
+                    turn_id: "turn-retained".to_string(),
+                },
+            ])
+            .await
+            .unwrap();
+        handle.wait_for_runtime_side_effects().await;
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert_eq!(timers.len(), 1);
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            handle.wait_for_runtime_side_effects(),
+        )
+        .await
+        .expect("retained side-effect work should be re-notified immediately");
+
+        let retained = handle
+            .drain_agent_provider_dispatch_side_effects(8)
+            .await
+            .unwrap();
+        assert_eq!(retained.len(), 1);
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.side_effect_delivery_notifications >= 2);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies that side-effect delivery revisions wake every worker watching the
+/// queue instead of acting like a single consumable permit. Side-effect
+/// families run as independent workers, so a provider dispatch must not wait
+/// for an idle probe merely because another worker observed the same enqueue.
+#[tokio::test(flavor = "current_thread")]
+async fn async_side_effect_delivery_watcher_broadcasts_to_all_workers() {
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+    let mut first_worker = handle.side_effect_delivery_watcher();
+    let mut second_worker = handle.side_effect_delivery_watcher();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", 1),
+                delay_ms: 1,
+            }])
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_millis(50), first_worker.changed())
+            .await
+            .expect("first side-effect worker should observe the delivery revision")
+            .unwrap();
+        tokio::time::timeout(Duration::from_millis(50), second_worker.changed())
+            .await
+            .expect("second side-effect worker should observe the same delivery revision")
+            .unwrap();
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert_eq!(timers.len(), 1);
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.side_effect_delivery_notifications, 1);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that the side-effect worker wakes from actor notifications instead
 /// of relying on its bounded idle probe. This keeps queued render or pane I/O
 /// work responsive on the normal notification path while the probe remains only

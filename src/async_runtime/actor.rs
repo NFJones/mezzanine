@@ -233,6 +233,7 @@ impl AsyncRuntimeSessionActor {
         let message_delivery_notify = Arc::new(Notify::new());
         let event_delivery_notify = Arc::new(Notify::new());
         let side_effect_delivery_notify = Arc::new(Notify::new());
+        let (side_effect_delivery_tx, side_effect_delivery_rx) = watch::channel(0u64);
         let (lifecycle_state_tx, lifecycle_state_rx) = watch::channel(service.lifecycle_state());
         service.set_defer_program_hooks(true);
         service.set_defer_file_pane_pipe_writes(true);
@@ -249,6 +250,7 @@ impl AsyncRuntimeSessionActor {
                 message_delivery_notify: message_delivery_notify.clone(),
                 event_delivery_notify: event_delivery_notify.clone(),
                 side_effect_delivery_notify: side_effect_delivery_notify.clone(),
+                side_effect_delivery_rx,
                 lifecycle_state_rx,
             },
             Self {
@@ -258,6 +260,7 @@ impl AsyncRuntimeSessionActor {
                 message_delivery_notify,
                 event_delivery_notify,
                 side_effect_delivery_notify,
+                side_effect_delivery_tx,
                 lifecycle_state_tx,
                 side_effects: VecDeque::with_capacity(config.side_effect_buffer),
                 scheduled_shell_transaction_timers: Default::default(),
@@ -893,6 +896,9 @@ impl AsyncRuntimeSessionActor {
             .metrics
             .side_effect_delivery_notifications
             .saturating_add(1);
+        let _ = self
+            .side_effect_delivery_tx
+            .send(self.metrics.side_effect_delivery_notifications);
         self.side_effect_delivery_notify.notify_waiters();
         self.side_effect_delivery_notify.notify_one();
     }
@@ -2639,12 +2645,26 @@ impl AsyncRuntimeSessionActor {
         }
         let drain_count = limit.min(self.side_effects.len());
         let effects = self.side_effects.drain(..drain_count).collect();
+        self.record_side_effect_drain(drain_count);
+        Ok(effects)
+    }
+
+    /// Records a side-effect drain and wakes peers when retained work remains.
+    ///
+    /// The side-effect queue is shared by several filtered workers. One worker
+    /// can drain its own work and retain work for another worker, consuming the
+    /// original queue notification in the process. Re-notifying only after real
+    /// drain progress keeps retained work responsive without spinning workers
+    /// that inspected an unrelated non-empty queue.
+    fn record_side_effect_drain(&mut self, drained: usize) {
         self.metrics.runtime_side_effects_drained = self
             .metrics
             .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drain_count).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(drained).unwrap_or(u64::MAX));
         self.metrics.side_effect_queue_depth = self.side_effects.len();
-        Ok(effects)
+        if drained > 0 && !self.side_effects.is_empty() {
+            self.notify_side_effect_delivery();
+        }
     }
 
     /// Runs the drain agent provider dispatch side effects operation for this subsystem.
@@ -2677,11 +2697,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drained.len()).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
 
@@ -2722,15 +2738,11 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(removed).unwrap_or(u64::MAX));
+        self.record_side_effect_drain(removed);
         self.metrics.render_invalidations_coalesced = self
             .metrics
             .render_invalidations_coalesced
             .saturating_add(u64::try_from(coalesced).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
         Ok(drained
             .into_iter()
             .map(|(client_id, reason)| RuntimeSideEffect::RenderClient { client_id, reason })
@@ -2781,15 +2793,11 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(removed).unwrap_or(u64::MAX));
+        self.record_side_effect_drain(removed);
         self.metrics.render_invalidations_coalesced = self
             .metrics
             .render_invalidations_coalesced
             .saturating_add(u64::try_from(coalesced).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
         Ok(drained
             .into_iter()
             .map(|reason| RuntimeSideEffect::RenderClient {
@@ -2832,11 +2840,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drained.len()).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
 
@@ -2861,11 +2865,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drained.len()).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
 
@@ -2900,11 +2900,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drained.len()).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
 
@@ -2929,11 +2925,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drained.len()).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
 
@@ -2967,11 +2959,7 @@ impl AsyncRuntimeSessionActor {
             }
         }
         self.side_effects = retained;
-        self.metrics.runtime_side_effects_drained = self
-            .metrics
-            .runtime_side_effects_drained
-            .saturating_add(u64::try_from(drained.len()).unwrap_or(u64::MAX));
-        self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.record_side_effect_drain(drained.len());
         Ok(drained)
     }
 
@@ -4515,6 +4503,11 @@ impl AsyncRuntimeSessionHandle {
     /// Waits until the actor queues at least one runtime side effect.
     pub async fn wait_for_runtime_side_effects(&self) {
         self.side_effect_delivery_notify.notified().await;
+    }
+
+    /// Returns a non-consuming side-effect delivery revision watcher.
+    pub fn side_effect_delivery_watcher(&self) -> watch::Receiver<u64> {
+        self.side_effect_delivery_rx.clone()
     }
 
     /// Runs the event wakeups operation for this subsystem.
