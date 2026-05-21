@@ -168,6 +168,56 @@ fn upsert_waits_for_exclusive_registry_lock() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies that async registry writes wait for the registry file lock without
+/// blocking a current-thread runtime. This protects the daemon from a
+/// self-deadlock where one task holds the session-registry flock and another
+/// task blocks the only async reactor thread while trying to reacquire it.
+#[test]
+fn async_upsert_waits_for_registry_lock_without_blocking_current_thread_runtime() {
+    let root = test_root("async-locked-upsert");
+    let _ = fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), effective_uid_for_tests());
+    let lock = registry.acquire_exclusive_lock().unwrap();
+    let writer = SessionRegistry::new(root.clone(), effective_uid_for_tests());
+    let (tick_tx, tick_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+
+    let thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let update = tokio::spawn(async move {
+                writer.upsert_async(record("$blocked")).await.unwrap();
+                done_tx.send(()).unwrap();
+            });
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tick_tx.send(()).unwrap();
+            update.await.unwrap();
+        });
+    });
+
+    let reactor_progressed = wait_for_registry_writer(&tick_rx, Duration::from_secs(1));
+    assert!(
+        !wait_for_registry_writer(&done_rx, Duration::from_millis(50)),
+        "registry upsert completed while the registry lock was still held"
+    );
+    drop(lock);
+    assert!(
+        wait_for_registry_writer(&done_rx, Duration::from_secs(2)),
+        "registry upsert did not continue after the lock was released"
+    );
+    thread.join().unwrap();
+    assert!(
+        reactor_progressed,
+        "async registry upsert blocked the current-thread runtime while waiting for the registry lock"
+    );
+    assert_eq!(registry.list().unwrap(), vec![record("$blocked")]);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies upsert replaces existing record.
 ///
 /// This regression scenario documents the behavior being protected so a

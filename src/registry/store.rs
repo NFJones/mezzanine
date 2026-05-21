@@ -4,13 +4,13 @@
 //! private runtime-directory handling.
 
 use super::{
-    BTreeMap, OpenOptions, Path, PathBuf, REGISTRY_FILE_NAME, Read, Result, SessionRecord,
-    SessionRegistry, Write, decode_records, ensure_private_socket_directory, fs,
+    BTreeMap, MezError, OpenOptions, Path, PathBuf, REGISTRY_FILE_NAME, Read, Result,
+    SessionRecord, SessionRegistry, Write, decode_records, ensure_private_socket_directory, fs,
     set_private_file_permissions,
 };
 use rustix::fs::{FlockOperation, flock};
 use tokio::fs as tokio_fs;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 /// Defines the REGISTRY LOCK FILE NAME const used by this subsystem.
 ///
@@ -29,6 +29,24 @@ pub(super) struct SessionRegistryLock {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     _file: fs::File,
+}
+
+/// Runs one blocking registry mutation on Tokio's blocking thread pool.
+///
+/// Registry writes use process-wide advisory file locks. Running the complete
+/// synchronous read-modify-write operation in a blocking task prevents a
+/// current-thread async runtime from parking its only reactor thread while
+/// waiting for another registry lock holder.
+async fn run_blocking_registry_mutation<T, F>(operation: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!("registry persistence task failed: {error}"))
+        })?
 }
 
 impl SessionRegistry {
@@ -169,19 +187,8 @@ impl SessionRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn upsert_async(&self, record: SessionRecord) -> Result<()> {
-        record.validate()?;
-        let _lock = self.acquire_exclusive_lock()?;
-        ensure_private_socket_directory(&self.root, self.owner_uid)?;
-
-        let mut by_id = self
-            .list_async()
-            .await?
-            .into_iter()
-            .map(|record| (record.session_id.clone(), record))
-            .collect::<BTreeMap<_, _>>();
-        by_id.insert(record.session_id.clone(), record);
-        self.write_records_async(by_id.into_values().collect())
-            .await
+        let registry = self.clone();
+        run_blocking_registry_mutation(move || registry.upsert(record)).await
     }
 
     /// Runs the remove operation for this subsystem.
@@ -220,31 +227,9 @@ impl SessionRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn remove_async(&self, session_id: &str) -> Result<bool> {
-        match tokio_fs::metadata(self.registry_file()).await {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error.into()),
-        }
-
-        let _lock = self.acquire_exclusive_lock()?;
-        let mut removed = false;
-        let records = self
-            .list_async()
-            .await?
-            .into_iter()
-            .filter(|record| {
-                let keep = record.session_id != session_id;
-                if !keep {
-                    removed = true;
-                }
-                keep
-            })
-            .collect::<Vec<_>>();
-
-        if removed {
-            self.write_records_async(records).await?;
-        }
-        Ok(removed)
+        let registry = self.clone();
+        let session_id = session_id.to_string();
+        run_blocking_registry_mutation(move || registry.remove(&session_id)).await
     }
 
     /// Runs the acquire exclusive lock operation for this subsystem.
@@ -296,41 +281,6 @@ impl SessionRegistry {
         file.sync_all()?;
         set_private_file_permissions(&temporary)?;
         fs::rename(&temporary, &path)?;
-        set_private_file_permissions(&path)?;
-        Ok(())
-    }
-
-    /// Runs the write records async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    async fn write_records_async(&self, records: Vec<SessionRecord>) -> Result<()> {
-        ensure_private_socket_directory(&self.root, self.owner_uid)?;
-        let path = self.registry_file();
-        let temporary = self.root.join(format!(
-            ".{}.{}.tmp",
-            REGISTRY_FILE_NAME,
-            std::process::id()
-        ));
-
-        let mut data = String::new();
-        for record in records {
-            record.validate()?;
-            data.push_str(&record.encode()?);
-            data.push('\n');
-        }
-
-        let mut file = tokio_fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&temporary)
-            .await?;
-        file.write_all(data.as_bytes()).await?;
-        file.sync_all().await?;
-        set_private_file_permissions(&temporary)?;
-        tokio_fs::rename(&temporary, &path).await?;
         set_private_file_permissions(&path)?;
         Ok(())
     }
