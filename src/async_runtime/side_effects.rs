@@ -868,7 +868,9 @@ where
             {
                 Ok(bytes_written) => {
                     report.bytes_written = report.bytes_written.saturating_add(bytes_written);
-                    report.flushed = report.flushed.saturating_add(1);
+                    if bytes_written > 0 {
+                        report.flushed = report.flushed.saturating_add(1);
+                    }
                 }
                 Err(error) if attached_terminal_output_disconnected(&error) => {
                     report.output_hangups = report.output_hangups.saturating_add(1);

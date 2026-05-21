@@ -355,11 +355,6 @@ where
         report.host_bracketed_paste_active = host_bracketed_paste_active;
         report.host_bracketed_paste_buffer = host_bracketed_paste_buffer.clone();
 
-        let output_line_style_spans = frame
-            .view
-            .as_ref()
-            .map(|view| compose_client_presentation_with_styles(view, status.as_ref()).1)
-            .unwrap_or_default();
         let agent_prompt_input_action = request.role == ClientViewRole::Primary
             && frame
                 .view
@@ -371,6 +366,11 @@ where
                 .iter()
                 .any(|action| matches!(action, TerminalClientLoopAction::ForwardToPane(_)));
         if !step.output_lines.is_empty() && !agent_prompt_input_action {
+            let output_line_style_spans = frame
+                .view
+                .as_ref()
+                .map(|view| compose_client_presentation_with_styles(view, status.as_ref()).1)
+                .unwrap_or_default();
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
                 bracketed_paste: frame.config.pane_bracketed_paste_mode,

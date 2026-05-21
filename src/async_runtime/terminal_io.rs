@@ -511,9 +511,10 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
                 modes,
                 self.previous_output_frame.as_ref(),
             );
-            self.previous_output_frame = Some(AttachedTerminalOutputFrameState::new(
+            self.previous_output_frame = Some(AttachedTerminalOutputFrameState::new_with_modes(
                 lines,
                 line_style_spans,
+                modes,
             ));
             write_all_async_fd(&self.output, &frame).await?;
             Ok(frame.len())

@@ -147,14 +147,12 @@ pub fn render_attached_client_view(
     }
     let render_window = window_with_group_frame_space(window, config)?;
     let styled_lines = draw_styled_window_from_screens(window, screens, config)?;
-    let mut lines = styled_lines
-        .iter()
-        .map(|line| line.text.clone())
-        .collect::<Vec<_>>();
-    let mut line_style_spans = styled_lines
-        .into_iter()
-        .map(|line| line.style_spans)
-        .collect::<Vec<_>>();
+    let mut lines = Vec::with_capacity(styled_lines.len());
+    let mut line_style_spans = Vec::with_capacity(styled_lines.len());
+    for line in styled_lines {
+        lines.push(line.text);
+        line_style_spans.push(line.style_spans);
+    }
     let (cursor_row, cursor_column, cursor_visible) =
         rendered_cursor(&render_window, screens, config, role)?;
     let group_offset = group_frame_top_offset(config);

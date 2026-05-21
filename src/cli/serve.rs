@@ -1007,7 +1007,10 @@ pub(super) fn build_foreground_attached_primary_client_service(
                     primary_client_id: Some(primary_client_id),
                     client_size,
                     terminal_config: TerminalClientLoopConfig::default(),
-                    loop_config: AttachedTerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        ..AttachedTerminalClientLoopConfig::default()
+                    },
                 },
                 AsyncAttachedTerminalClientServiceConfig::default(),
                 |_| Ok(None),

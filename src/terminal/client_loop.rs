@@ -657,6 +657,10 @@ pub(crate) struct AttachedTerminalOutputFrameState {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Whether host bracketed paste was enabled for the retained frame.
+    bracketed_paste: bool,
+    /// Cursor presentation sequence emitted by the retained frame.
+    cursor_presentation: String,
 }
 
 impl AttachedTerminalOutputFrameState {
@@ -665,10 +669,27 @@ impl AttachedTerminalOutputFrameState {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(crate) fn new(lines: &[String], line_style_spans: &[Vec<TerminalStyleSpan>]) -> Self {
+        Self::new_with_modes(
+            lines,
+            line_style_spans,
+            AttachedTerminalOutputModes::default(),
+        )
+    }
+
+    /// Builds retained frame state using the presentation modes emitted with
+    /// the frame.
+    pub(crate) fn new_with_modes(
+        lines: &[String],
+        line_style_spans: &[Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+    ) -> Self {
         Self {
             lines: lines.to_vec(),
             line_style_spans: normalized_style_span_rows(line_style_spans, lines.len()),
+            bracketed_paste: modes.bracketed_paste,
+            cursor_presentation: cursor_presentation_sequence(lines, modes),
         }
     }
 }
@@ -841,9 +862,10 @@ impl AttachedTerminalClientLoopIo for AttachedTerminalFdLoopIo {
             modes,
             self.previous_output_frame.as_ref(),
         );
-        self.previous_output_frame = Some(AttachedTerminalOutputFrameState::new(
+        self.previous_output_frame = Some(AttachedTerminalOutputFrameState::new_with_modes(
             lines,
             line_style_spans,
+            modes,
         ));
         write_all_attached_terminal_fd(self.output_fd, &frame)?;
         Ok(frame.len())
@@ -1010,17 +1032,18 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         );
     }
 
-    let current_spans = normalized_style_span_rows(line_style_spans, lines.len());
     let mut frame = Vec::new();
     match keypad_transition {
         Some(true) => frame.extend_from_slice(b"\x1b="),
         Some(false) => frame.extend_from_slice(b"\x1b>"),
         None => {}
     }
-    frame.extend_from_slice(attached_terminal_enter_presentation_frame());
-    frame.extend_from_slice(attached_terminal_bracketed_paste_frame(
-        modes.bracketed_paste,
-    ));
+    if previous.bracketed_paste != modes.bracketed_paste {
+        frame.extend_from_slice(attached_terminal_bracketed_paste_frame(
+            modes.bracketed_paste,
+        ));
+    }
+    let mut changed_rows = 0usize;
     for (index, line) in lines.iter().enumerate() {
         let previous_line = previous.lines.get(index).map(String::as_str).unwrap_or("");
         let previous_spans = previous
@@ -1028,16 +1051,25 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             .get(index)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let spans = current_spans.get(index).map(Vec::as_slice).unwrap_or(&[]);
+        let spans = line_style_spans
+            .get(index)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if line.as_str() == previous_line && spans == previous_spans {
             continue;
         }
         let row = index.saturating_add(1);
         frame.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
         frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
+        changed_rows = changed_rows.saturating_add(1);
     }
-    frame.extend_from_slice(b"\x1b[0m");
-    frame.extend_from_slice(cursor_presentation_sequence(lines, modes).as_bytes());
+    if changed_rows > 0 {
+        frame.extend_from_slice(b"\x1b[0m");
+    }
+    let cursor_presentation = cursor_presentation_sequence(lines, modes);
+    if changed_rows > 0 || cursor_presentation != previous.cursor_presentation {
+        frame.extend_from_slice(cursor_presentation.as_bytes());
+    }
     frame
 }
 
@@ -1066,7 +1098,7 @@ fn output_dimensions_changed(
 ) -> bool {
     previous.lines.len() != lines.len()
         || previous.lines.iter().zip(lines).any(|(previous, current)| {
-            terminal_line_width(previous) != terminal_line_width(current)
+            previous != current && terminal_line_width(previous) != terminal_line_width(current)
         })
 }
 

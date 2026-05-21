@@ -2420,6 +2420,96 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
 }
 
+/// Verifies stable-size attached-terminal updates avoid sending any bytes when
+/// the rendered rows, style spans, bracketed-paste mode, and cursor
+/// presentation are unchanged. This keeps idle status refreshes cheap over
+/// higher-latency terminal links.
+#[test]
+fn attached_terminal_output_update_omits_unchanged_frame_bytes() {
+    let lines = vec!["one    ".to_string(), "two    ".to_string()];
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: true,
+        cursor_blink: false,
+        cursor_row: 0,
+        cursor_column: 0,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], modes);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &[],
+        None,
+        modes,
+        Some(&previous),
+    );
+
+    assert!(frame.is_empty(), "{:?}", String::from_utf8_lossy(&frame));
+}
+
+/// Verifies stable-size attached-terminal updates emit only cursor bytes when
+/// the visible content is unchanged and the cursor moves. Row-differential
+/// updates should not resend static presentation setup or host bracketed-paste
+/// mode just to reposition the cursor.
+#[test]
+fn attached_terminal_output_update_uses_cursor_only_frame_for_cursor_moves() {
+    let lines = vec!["one    ".to_string(), "two    ".to_string()];
+    let previous_modes = AttachedTerminalOutputModes {
+        cursor_visible: true,
+        cursor_blink: false,
+        cursor_row: 0,
+        cursor_column: 0,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], previous_modes);
+    let next_modes = AttachedTerminalOutputModes {
+        cursor_column: 1,
+        ..previous_modes
+    };
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &[],
+        None,
+        next_modes,
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[?1000;1002;1006h"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[?2004"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
+    assert_eq!(rendered, "\x1b[2 q\x1b[1;2H\x1b[?25h");
+}
+
+/// Verifies stable-size attached-terminal updates emit bracketed-paste mode
+/// changes without resending the rest of the static presentation prologue.
+#[test]
+fn attached_terminal_output_update_emits_only_changed_bracketed_paste_mode() {
+    let lines = vec!["one    ".to_string(), "two    ".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(
+        &lines,
+        &[],
+        AttachedTerminalOutputModes::default(),
+    );
+    let next_modes = AttachedTerminalOutputModes {
+        bracketed_paste: true,
+        ..AttachedTerminalOutputModes::default()
+    };
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &[],
+        None,
+        next_modes,
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert_eq!(rendered, "\x1b[?2004h");
+}
+
 /// Verifies that the presentation restore sequence disables Mezzanine-owned
 /// mouse capture, resets coordinate-affecting terminal modes, clears
 /// Mezzanine's drawn viewport, makes the host cursor visible again, and resets
