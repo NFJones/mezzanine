@@ -37,15 +37,9 @@ pub struct LocalActionPlan {
 /// Timeout for patch application actions.
 ///
 /// Patch actions should either apply quickly or fail with a diagnostic that the
-/// model can repair. Keeping them below the generic shell-action timeout avoids
+/// model can repair. Keeping them below the turn-wide shell-action timeout avoids
 /// making a malformed patch look like an indefinite stalled turn.
 pub(super) const APPLY_PATCH_TIMEOUT_MS: u64 = 30 * 1000;
-/// Default timeout for ordinary model-authored shell commands.
-///
-/// The turn-wide budget remains the outer cap. This default keeps unattended
-/// non-interactive commands from occupying a pane for the full turn when the
-/// model omits an explicit action timeout.
-pub const DEFAULT_SHELL_COMMAND_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// Marker that identifies the shell-backed read phase for `apply_patch`.
 pub(super) const APPLY_PATCH_READ_PHASE_MARKER: &str = "__MEZ_APPLY_PATCH_READ_PHASE__";
 /// Marker that identifies the shell-backed write phase for `apply_patch`.
@@ -95,7 +89,7 @@ pub fn local_action_plan(action: &AgentAction) -> Result<Option<LocalActionPlan>
                 policy_command: command.clone(),
                 interactive: *interactive,
                 stateful: *stateful,
-                timeout_ms: Some(timeout_ms.unwrap_or(DEFAULT_SHELL_COMMAND_TIMEOUT_MS)),
+                timeout_ms: *timeout_ms,
                 display_output_after_completion: false,
             }))
         }

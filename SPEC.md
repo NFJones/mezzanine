@@ -2937,14 +2937,15 @@ running. If a bootstrap probe times out, Mezzanine MUST clear the bootstrap
 attempt and mark readiness degraded instead of retrying the hidden wrapper
 indefinitely. Agent turns MUST have one turn-wide timeout that defaults to
 30 minutes. Shell actions MAY request a positive per-action timeout, and omitted
-values MUST use the implementation's default shell-action timeout. The effective
-shell-action timeout MUST be bounded by the remaining turn-wide timeout budget,
+values MUST inherit the remaining turn-wide timeout budget. The effective
+shell-action timeout MUST be bounded by that remaining turn-wide timeout budget,
 so no shell action can outlive its enclosing turn. Non-stateful shell
-transactions that wait for a deferred command payload receiver MUST also have a
-short implementation-defined start timeout; if the receiver start marker is not
-observed before that timeout, Mezzanine MUST treat the transaction as timed out.
-Readiness probes, bootstrap probes, and other internal health checks MAY use
-shorter implementation-defined probe timeouts.
+transactions that wait for a deferred command payload receiver MUST also use a
+short implementation-defined start timeout as a handoff watchdog, not as the
+normal sequencing mechanism; if the receiver start marker is not observed before
+that timeout, Mezzanine MUST treat the transaction as timed out. Readiness
+probes, bootstrap probes, and other internal health checks MAY use shorter
+implementation-defined probe timeouts.
 
 A marker MUST NOT be accepted as authoritative merely because its marker token
 matches the currently active transaction for the pane.

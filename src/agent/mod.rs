@@ -150,10 +150,9 @@ pub use readiness::{
     readiness_decision,
 };
 pub use semantic::{
-    ApplyPatchTransactionPhase, DEFAULT_SHELL_COMMAND_TIMEOUT_MS, LocalActionPlan,
-    action_is_local_shell_backed, apply_patch_error_plan, apply_patch_touched_paths,
-    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output, local_action_plan,
-    local_action_summary,
+    ApplyPatchTransactionPhase, LocalActionPlan, action_is_local_shell_backed,
+    apply_patch_error_plan, apply_patch_touched_paths, apply_patch_transaction_phase,
+    apply_patch_write_plan_from_read_output, local_action_plan, local_action_summary,
 };
 pub use session::{
     AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnState,

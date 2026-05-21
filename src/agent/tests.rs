@@ -16,16 +16,16 @@ use super::{
     AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
     AgentTurnState, AgentTurnTrigger, AsyncModelProvider, AsyncProviderHttpTransport, BTreeSet,
     CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextCachePolicy,
-    ContextSourceKind, ContextStability, DEFAULT_SHELL_COMMAND_TIMEOUT_MS,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MarkerToken,
-    McpActionExecutor, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
-    ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
-    OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
-    OpenAiResponsesProvider, PaneReadinessOverrideStore, PaneReadinessState, PaneShellExecutor,
-    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTransport, ReadinessOverrideRevocation,
-    Result, ShellClassification, ShellExecutionOutput, ShellExecutionRequest, ShellTransaction,
-    ShellTransactionInput, ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache,
-    ToolInventory, action_result_context_content, agent_subshell_enter_command, append_mcp_context,
+    ContextSourceKind, ContextStability, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,
+    MaapBatch, MarkerToken, McpActionExecutor, ModelMessageRole, ModelProfile,
+    ModelProfileOverrideSource, ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse,
+    ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT,
+    OPENAI_RESPONSES_ENDPOINT, OpenAiResponsesProvider, PaneReadinessOverrideStore,
+    PaneReadinessState, PaneShellExecutor, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderHttpTransport, ReadinessOverrideRevocation, Result, ShellClassification,
+    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
+    ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache, ToolInventory,
+    action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
     append_scheduler_context, apply_patch_write_plan_from_read_output, assemble_model_request,
     baseline_slash_commands, bootstrap_script, bootstrap_script_for_classification,
@@ -7050,13 +7050,13 @@ fn semantic_shell_command_plan_preserves_explicit_timeout() {
     assert_eq!(plan.timeout_ms, Some(1500));
 }
 
-/// Verifies omitted shell command timeouts use a bounded default.
+/// Verifies omitted shell command timeouts inherit the turn-level budget.
 ///
-/// The default keeps ordinary non-interactive commands from inheriting the full
-/// turn budget while still letting models request a longer timeout for known
-/// long-running builds or tests.
+/// The shell protocol uses markers for sequencing; ordinary commands without an
+/// explicit timeout should not get an additional per-action deadline. Runtime
+/// dispatch will cap them with the enclosing turn timeout.
 #[test]
-fn semantic_shell_command_plan_uses_default_timeout_when_omitted() {
+fn semantic_shell_command_plan_leaves_omitted_timeout_unset() {
     let action = AgentAction {
         id: "shell-default-timeout".to_string(),
         rationale: String::new(),
@@ -7071,7 +7071,7 @@ fn semantic_shell_command_plan_uses_default_timeout_when_omitted() {
 
     let plan = local_action_plan(&action).unwrap().unwrap();
 
-    assert_eq!(plan.timeout_ms, Some(DEFAULT_SHELL_COMMAND_TIMEOUT_MS));
+    assert_eq!(plan.timeout_ms, None);
 }
 
 /// Verifies shell action executor maps timeout interrupt and nonzero exit.
