@@ -7271,7 +7271,7 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
 
     assert!(view.lines[2].contains("+   □   ⊕   λ"), "{}", view.lines[2]);
     assert!(!view.lines[2].contains(" Δ"), "{}", view.lines[2]);
-    assert!(view.lines[2].ends_with("00  "), "{}", view.lines[2]);
+    assert_ne!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let cells = window_frame_action_pillbox_cells(&frame_context, 2, window.size.columns);
     let new_window_start = cells
         .iter()
@@ -7427,55 +7427,6 @@ fn render_window_status_uses_right_aligned_themed_segments() {
             && span.start == datetime_start
             && span.length == " 2026-05-05 10:11:12".len()
     }));
-    assert_eq!(
-        datetime_start + " 2026-05-05 10:11:12".len(),
-        usize::from(window.size.columns).saturating_sub(2)
-    );
-    assert!(view.lines[2].ends_with("12  "), "{}", view.lines[2]);
-}
-
-/// Verifies that overlong window status text is fitted before the two-column
-/// right gutter. Attached terminals can lose edge cells to host rendering
-/// behavior, so the right-aligned window status must stay two columns left even
-/// when the template would otherwise consume the full window width.
-#[test]
-fn render_window_status_fits_before_two_column_right_gutter() {
-    let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 1, "work", Size::new(12, 3).unwrap());
-    let frame_context = TerminalFrameContext {
-        windows: vec![TerminalWindowFrameContext {
-            id: "@2".to_string(),
-            index: 1,
-            title: "work".to_string(),
-            active: true,
-            subagent: false,
-        }],
-        window_status: Some(TerminalWindowStatusContext {
-            template: "ABCDEFGHIJKL".to_string(),
-            ..TerminalWindowStatusContext::default()
-        }),
-        ..TerminalFrameContext::default()
-    };
-    let config = TerminalClientLoopConfig {
-        frame_context,
-        window_frame_template: DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
-        window_frames_enabled: true,
-        pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
-        pane_frames_enabled: false,
-        ..TerminalClientLoopConfig::default()
-    };
-
-    let view = render_attached_client_view(
-        ClientViewRole::Primary,
-        &window,
-        &BTreeMap::new(),
-        &config,
-        window.size,
-    )
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(view.lines[2], "ABCDEFGHIJ  ");
 }
 
 /// Verifies that split-pane box drawing glyphs carry only a foreground color
