@@ -69,7 +69,7 @@ mez
 
 ### 4. Open the agent shell in a pane
 
-Press `Alt+]`.
+Press `Ctrl+A a`.
 
 ### 5. Try an exact first prompt
 
@@ -96,7 +96,7 @@ transactions.
 ## Using Mezzanine
 
 - Open a repo in one pane and keep your shell or editor usable.
-- Toggle the pane-local agent prompt with `Alt+]`.
+- Toggle the pane-local agent prompt with `Ctrl+A a`.
 - Ask for inspection, debugging, code edits, or repo-local documentation work.
 - Review approvals when the active permission policy requires them.
 - Detach and reattach later without losing the session layout or pane-local
@@ -132,7 +132,7 @@ transactions.
 
 ### Pane agent harness
 
-- Every pane has an associated agent shell, opened by default with `Alt+]`.
+- Every pane has an associated agent shell, opened by default with `Ctrl+A a`.
 - Agent work is pane-scoped. Normal pane input, other panes, and multiplexer keys
   remain usable while an agent prompt is visible.
 - Agents interact with the local system through pane shell transactions. They
@@ -258,9 +258,9 @@ Default workflow keys follow conventional multiplexer placement:
 | `Ctrl+A n` / `Ctrl+A p` | Next or previous window. |
 | `Ctrl+A [` | Enter copy mode. |
 | `Ctrl+A ]` | Paste the latest buffer. |
-| `Alt+]` | Toggle the focused pane's agent shell. |
-| `Alt+Shift+=` | Create a new window group. |
-| `Ctrl+Alt+Shift+PageUp/PageDown` | Previous or next group. |
+| `Ctrl+A a` | Toggle the focused pane's agent shell. |
+| `Ctrl+A C` | Create a new window group. |
+| `Ctrl+A (` / `Ctrl+A )` | Previous or next group. |
 
 The command prompt accepts Mezzanine commands such as `new-window`,
 `split-window`, `select-pane`, `set-theme`, `list-keys`, and `show-options`.
@@ -269,7 +269,7 @@ command sequences stop at the first failure.
 
 ### 5. Use the agent shell
 
-Press `Alt+]` in a pane and type a request. The prompt is pane-local and
+Press `Ctrl+A a` in a pane and type a request. The prompt is pane-local and
 non-modal: other panes and multiplexer navigation remain available.
 
 Useful slash commands include:
@@ -315,7 +315,7 @@ the command-surface breakdown, explicit skill syntax, and built-in skill usage.
 ### Debug a failing test in the current repository
 
 1. Start or attach to a Mezzanine session in the repo.
-2. Press `Alt+]` in the pane that already has the repo working directory.
+2. Press `Ctrl+A a` in the pane that already has the repo working directory.
 3. Ask:
 
    > Run the smallest relevant test target, explain the failure, fix it with
@@ -336,7 +336,7 @@ This workflow shows that Mezzanine can coordinate multiple pane-local agents
 without collapsing all work into one conversation. Subagent limits, placement,
 and wait behavior are configurable.
 ### See approval and policy boundaries in practice
-1. Start a session in a repository and open the agent shell with `Alt+]`.
+1. Start a session in a repository and open the agent shell with `Ctrl+A a`.
 2. Ask for a task that needs execution, for example:
    > Run the smallest relevant test command, explain the result, and propose a
    > patch if needed.
@@ -431,7 +431,7 @@ configured instructions, compacted prior context, and explicit action results.
 
 ### How do I enter and leave the agent shell?
 
-Press `Alt+]` in the focused pane. Use `/exit`, `Ctrl+D` on an empty prompt, or
+Press `Ctrl+A a` in the focused pane. Use `/exit`, `Ctrl+D` on an empty prompt, or
 Escape to hide it. If a turn is running, hiding the prompt requests `/stop`
 before normal pane input resumes.
 
@@ -492,7 +492,7 @@ Use `mez serve` to start a foreground service, then target it with `mez -S
 <socket>` or `mez -L <name>`. Add `--json` for machine-readable output.
 
 ### What is the simplest first real task for a new user?
-Open a repository in a pane, press `Alt+]`, and ask the agent to inspect one
+Open a repository in a pane, press `Ctrl+A a`, and ask the agent to inspect one
 bounded problem such as a failing test, a suspicious module, or a documentation
 gap. The best first experience is a small request that requires reading local
 files and possibly running one or two focused commands.

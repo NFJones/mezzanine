@@ -26,7 +26,7 @@ Use terminal commands when you want to control the multiplexer itself.
 
 ### 2. Agent shell slash commands
 
-Open the pane-local agent shell with `Alt+]`. The prompt is pane-scoped and
+Open the pane-local agent shell with `Ctrl+A a`. The prompt is pane-scoped and
 non-modal, so other panes and normal multiplexer navigation remain available.
 
 Common slash commands:

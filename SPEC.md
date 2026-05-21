@@ -534,12 +534,12 @@ the source window's group.
 
 Mezzanine MUST support creating a new window group from a live session. Creating
 a group MUST create one landing window in that group. The default prefix
-binding for choosing a window group MUST be `Ctrl+A G`. Mezzanine MAY also
-provide direct convenience bindings for group operations without prefix
-equivalents; the generated default direct key binding for creating a group MUST
-be `Alt+Shift+=`, and the generated default direct key bindings for focusing the
-previous and next group MUST be
-`Ctrl+Alt+Shift+PageUp` and `Ctrl+Alt+Shift+PageDown`.
+binding for choosing a window group MUST be `Ctrl+A G`. The default prefix
+binding for creating a group MUST be `Ctrl+A C`. The default prefix bindings
+for focusing the previous and next group MUST be `Ctrl+A (` and `Ctrl+A )`.
+Mezzanine MAY also provide configured direct convenience bindings for group
+operations, but generated defaults MUST use the prefix bindings for these
+operations.
 
 The visible window bar MUST list windows from the active group. Window
 navigation commands such as next, previous, and last window MUST operate within
@@ -1254,10 +1254,14 @@ default prefix bindings MUST include:
 - `Ctrl+A d`: Detach the primary client.
 - `Ctrl+A D`: Choose a client or observer to detach.
 - `Ctrl+A c`: Create a new window.
+- `Ctrl+A C`: Create a new window group.
+- `Ctrl+A a`: Toggle the focused pane's agent shell.
 - `Ctrl+A ,`: Rename the current window.
 - `Ctrl+A &`: Kill the current window after confirmation.
 - `Ctrl+A w`: Choose a window interactively.
 - `Ctrl+A G`: Choose a window group interactively.
+- `Ctrl+A (`: Focus the previous window group.
+- `Ctrl+A )`: Focus the next window group.
 - `Ctrl+A n`: Focus the next window.
 - `Ctrl+A p`: Focus the previous window.
 - `Ctrl+A l`: Focus the last active window.
@@ -1550,7 +1554,7 @@ command displays.
 Mezzanine MUST provide a key binding that enters the agent shell for the active
 pane.
 
-The default agent shell toggle MUST be `Alt+]`.
+The default agent shell toggle MUST be `Ctrl+A a`.
 
 Using the agent shell toggle when no agent shell is visible MUST show the
 agent shell associated with the active pane.
@@ -2277,8 +2281,12 @@ window creation.
 The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
-`passthrough`, `resize_debounce_ms`, `cursor_style`, `cursor_blink`, and
-`cursor_blink_interval_ms`.
+`passthrough`, `reduced_motion`, `resize_debounce_ms`, `cursor_style`,
+`cursor_blink`, and `cursor_blink_interval_ms`.
+
+`terminal.reduced_motion` MUST default to false. When true, optional
+frame/status animations MUST render as static UI while preserving the same
+semantic status text and color category.
 
 Implementations MAY accept `terminal.nested_muxxer` as a migration alias for
 `terminal.nested_multiplexer`. When accepted, the alias MUST be normalized to
@@ -2300,10 +2308,11 @@ MUST be the resolved shell path.
 
 The `keys` table MUST support `escape`, `split_vertical`, `split_horizontal`,
 `new_window`, `new_group`, `agent_shell`, `focus_up`, `focus_down`, `focus_left`,
-`focus_right`, `focus_previous_window`, `focus_next_window`, and a user-defined
-command binding map. The `escape` setting defines the prefix table entry point.
-Direct key settings in this table are convenience accelerators and MUST NOT
-replace the default prefix table.
+`focus_right`, `focus_previous_window`, `focus_next_window`,
+`focus_previous_group`, `focus_next_group`, and a user-defined command binding
+map. The `escape` setting defines the prefix table entry point. Direct key
+settings in this table are convenience accelerators and MUST NOT replace the
+default prefix table.
 
 The `layout` table MUST support `default`, `resize_policy`, `close_policy`,
 `min_pane_columns`, and `min_pane_rows`.

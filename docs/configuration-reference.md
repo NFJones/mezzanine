@@ -103,6 +103,7 @@ entry is shown.
 | `terminal.focus_events` | boolean | `true` | Enable focus event reporting when supported. |
 | `terminal.nested_multiplexer` | string | `"auto"` | Nested multiplexer handling mode. |
 | `terminal.passthrough` | boolean | `false` | Allow broader terminal passthrough behavior when configured. |
+| `terminal.reduced_motion` | boolean | `false` | Disable optional frame/status animations. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
@@ -138,16 +139,16 @@ The prefix key table remains available even when direct bindings are omitted.
 | `keys.split_vertical` | string | omitted | Optional direct vertical split key. Prefix default is `Ctrl+A %`. |
 | `keys.split_horizontal` | string | omitted | Optional direct horizontal split key. Prefix default is `Ctrl+A "`. |
 | `keys.new_window` | string | omitted | Optional direct new-window key. Prefix default is `Ctrl+A c`. |
-| `keys.new_group` | string | `"A-S-="` | Direct new-group key. |
-| `keys.agent_shell` | string | `"A-]"` | Toggle the focused pane's agent shell. |
+| `keys.new_group` | string | omitted | Optional direct new-group key. Prefix default is `Ctrl+A C`. |
+| `keys.agent_shell` | string | omitted | Optional direct agent-shell key. Prefix default is `Ctrl+A a`. |
 | `keys.focus_up` | string | omitted | Optional direct focus-up key. Prefix default is `Ctrl+A Up`. |
 | `keys.focus_down` | string | omitted | Optional direct focus-down key. Prefix default is `Ctrl+A Down`. |
 | `keys.focus_left` | string | omitted | Optional direct focus-left key. Prefix default is `Ctrl+A Left`. |
 | `keys.focus_right` | string | omitted | Optional direct focus-right key. Prefix default is `Ctrl+A Right`. |
 | `keys.focus_previous_window` | string | omitted | Optional direct previous-window key. Prefix default is `Ctrl+A p`. |
 | `keys.focus_next_window` | string | omitted | Optional direct next-window key. Prefix default is `Ctrl+A n`. |
-| `keys.focus_previous_group` | string | `"C-A-S-PageUp"` | Direct previous-group key. |
-| `keys.focus_next_group` | string | `"C-A-S-PageDown"` | Direct next-group key. |
+| `keys.focus_previous_group` | string | omitted | Optional direct previous-group key. Prefix default is `Ctrl+A (`. |
+| `keys.focus_next_group` | string | omitted | Optional direct next-group key. Prefix default is `Ctrl+A )`. |
 | `keys.command_bindings` | map | `{}` | User-defined key to Mezzanine command bindings. |
 
 ### `layout`
