@@ -2949,6 +2949,14 @@ implementation-defined probe timeouts.
 
 A marker MUST NOT be accepted as authoritative merely because its marker token
 matches the currently active transaction for the pane.
+For runtime-dispatched shell transactions, Mezzanine MUST observe exactly one
+matching transaction start marker before accepting a matching transaction end
+marker. Duplicate start markers, end markers before start markers, and marker
+metadata mismatches for a live transaction MUST be treated as shell protocol
+violations that fail the affected action or readiness/bootstrap operation
+promptly with diagnostic context instead of leaving the turn to wait for a
+timeout. Markers whose tokens do not match a live Mezzanine-owned transaction
+MUST NOT settle or fail that transaction solely by their presence.
 
 If command output emits text or terminal control sequences that resemble a
 marker but do not contain the active marker token, the harness MUST treat them

@@ -2907,6 +2907,8 @@ impl RuntimeSessionService {
         self.subagent_scopes = ScopeRegistry::default();
         self.blocked_agent_approval_refs.clear();
         self.running_shell_transactions.clear();
+        self.shell_transaction_require_start_markers.clear();
+        self.shell_transaction_started_markers.clear();
         self.pane_readiness_states.clear();
         self.pane_readiness_overrides = PaneReadinessOverrideStore::default();
         self.blocked_approvals = Default::default();

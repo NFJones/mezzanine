@@ -9257,6 +9257,8 @@ impl RuntimeSessionService {
                 observed_output_truncated: false,
             },
         );
+        self.shell_transaction_require_start_markers
+            .insert(marker_id.clone());
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

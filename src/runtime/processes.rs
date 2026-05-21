@@ -132,6 +132,29 @@ fn runtime_shell_transaction_effective_timeout_ms(
     }
 }
 
+/// Builds structured terminal observation data for a shell protocol violation.
+fn shell_transaction_protocol_violation_observation(
+    marker: &str,
+    transaction: &RunningShellTransactionRef,
+    boundary_state: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "source": "pty",
+        "stream": "pty_combined",
+        "marker": marker,
+        "exit_code": null,
+        "signal": null,
+        "timed_out": false,
+        "combined_output_bytes": transaction.observed_output_bytes,
+        "combined_output_preview": transaction.observed_output_preview,
+        "boundary_state": boundary_state,
+        "output_truncated": transaction.observed_output_truncated,
+        "protocol_violation": true,
+        "protocol_violation_message": message
+    })
+}
+
 /// Builds model-facing terminal evidence for a pane input write failure.
 fn pane_write_failure_terminal_observation(
     marker: &str,
@@ -1831,6 +1854,119 @@ impl RuntimeSessionService {
         Ok(!active_transactions.is_empty())
     }
 
+    /// Clears strict marker protocol state for one settled shell transaction.
+    pub(super) fn clear_shell_transaction_protocol_state(&mut self, marker: &str) {
+        self.shell_transaction_require_start_markers.remove(marker);
+        self.shell_transaction_started_markers.remove(marker);
+    }
+
+    /// Interrupts a pane after a protocol violation when the process is live.
+    fn interrupt_shell_transaction_pane_if_live(&mut self, pane_id: &str) -> Result<()> {
+        match self.interrupt_shell_transaction_pane(pane_id) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Fails one live shell transaction because its wrapper marker protocol
+    /// reached an impossible state.
+    fn fail_shell_transaction_protocol_violation(
+        &mut self,
+        marker: &str,
+        transaction: RunningShellTransactionRef,
+        boundary_state: &'static str,
+        message: impl Into<String>,
+    ) -> Result<usize> {
+        let message = message.into();
+        self.running_shell_transactions.remove(marker);
+        self.clear_shell_transaction_protocol_state(marker);
+        self.interrupt_shell_transaction_pane_if_live(&transaction.pane_id)?;
+        let previous = self.pane_readiness_state(&transaction.pane_id);
+        self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
+        self.append_agent_trace_turn_event(
+            &transaction.pane_id,
+            &transaction.turn_id,
+            &format!(
+                "pane_readiness {} -> degraded reason=shell_protocol_violation marker={}",
+                runtime_pane_readiness_state_name(previous),
+                marker
+            ),
+        )?;
+        match transaction.kind.clone() {
+            RunningShellTransactionKind::AgentAction { action_id } => {
+                let terminal_observation = shell_transaction_protocol_violation_observation(
+                    marker,
+                    &transaction,
+                    boundary_state,
+                    &message,
+                );
+                self.fail_running_shell_transaction_action(
+                    &transaction,
+                    marker,
+                    RuntimeShellTransactionActionFailure {
+                        action_id,
+                        status: ActionStatus::Failed,
+                        code: "shell_protocol_violation".to_string(),
+                        message,
+                        sent_to_pane: true,
+                        terminal_observation,
+                        trace_reason: "shell_protocol_violation".to_string(),
+                    },
+                )
+            }
+            RunningShellTransactionKind::ReadinessProbe => {
+                self.pane_readiness_overrides
+                    .clear_pending_probe(&transaction.pane_id);
+                if let Some(action_id) = self.pending_shell_action_id_for_turn(&transaction.turn_id)
+                {
+                    let terminal_observation = shell_transaction_protocol_violation_observation(
+                        marker,
+                        &transaction,
+                        boundary_state,
+                        &message,
+                    );
+                    self.fail_running_shell_transaction_action(
+                        &transaction,
+                        marker,
+                        RuntimeShellTransactionActionFailure {
+                            action_id,
+                            status: ActionStatus::Failed,
+                            code: "shell_protocol_violation".to_string(),
+                            message,
+                            sent_to_pane: false,
+                            terminal_observation,
+                            trace_reason: "shell_protocol_violation".to_string(),
+                        },
+                    )
+                } else {
+                    self.append_agent_error_text_to_terminal_buffer(
+                        &transaction.pane_id,
+                        &format!("agent: shell readiness probe protocol violation: {message}"),
+                    )?;
+                    Ok(1)
+                }
+            }
+            RunningShellTransactionKind::Bootstrap => {
+                self.pane_bootstrap_pending.remove(&transaction.pane_id);
+                self.append_agent_error_text_to_terminal_buffer(
+                    &transaction.pane_id,
+                    &format!("agent: shell bootstrap protocol violation: {message}"),
+                )?;
+                self.append_lifecycle_event(
+                    EventKind::AgentStatus,
+                    format!(
+                        r#"{{"pane_id":"{}","bootstrap":"protocol_violation","marker":"{}","state":"degraded","error":"{}"}}"#,
+                        json_escape(&transaction.pane_id),
+                        json_escape(marker),
+                        json_escape(&message)
+                    ),
+                )?;
+                Ok(1)
+            }
+        }
+    }
+
     /// Fails live shell transactions for a pane whose PTY input write failed.
     fn fail_shell_transactions_for_pane_write_failure(
         &mut self,
@@ -1848,6 +1984,7 @@ impl RuntimeSessionService {
             if self.running_shell_transactions.remove(&marker).is_none() {
                 continue;
             }
+            self.clear_shell_transaction_protocol_state(&marker);
             failed_count = failed_count.saturating_add(1);
             match transaction.kind.clone() {
                 RunningShellTransactionKind::AgentAction { action_id } => {
@@ -3074,6 +3211,7 @@ impl RuntimeSessionService {
             if self.running_shell_transactions.remove(&marker).is_none() {
                 continue;
             }
+            self.clear_shell_transaction_protocol_state(&marker);
             expired_count = expired_count.saturating_add(1);
             match transaction.kind.clone() {
                 RunningShellTransactionKind::AgentAction { action_id } => {
@@ -3889,22 +4027,38 @@ impl RuntimeSessionService {
         _agent_id: &str,
         pane_id: &str,
     ) -> Result<usize> {
-        let Some(transaction) = self.running_shell_transactions.get(marker) else {
+        let Some(transaction) = self.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
         if transaction.turn_id != turn_id
             || transaction.pane_id != pane_id
             || output_pane_id != pane_id
         {
-            return Err(MezError::invalid_state(
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "start-marker-metadata-mismatch",
                 "shell transaction start marker metadata does not match runtime dispatch state",
-            ));
+            );
         }
+        if self.shell_transaction_started_markers.contains(marker) {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "duplicate-start-marker",
+                "shell transaction emitted a duplicate start marker",
+            );
+        }
+        self.shell_transaction_started_markers
+            .insert(marker.to_string());
         let kind_name = runtime_running_shell_transaction_kind_name(&transaction.kind).to_string();
         let payload = self
             .running_shell_transactions
             .get_mut(marker)
             .and_then(|transaction| transaction.pending_input_payload.take());
+        if let Some(transaction) = self.running_shell_transactions.get_mut(marker) {
+            transaction.started_at_unix_ms = current_unix_millis();
+        }
         let Some(payload) = payload else {
             return Ok(1);
         };
@@ -3912,9 +4066,6 @@ impl RuntimeSessionService {
         if let Err(error) = self.write_runtime_pane_input_priority(pane_id, &payload) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Ok(1);
-        }
-        if let Some(transaction) = self.running_shell_transactions.get_mut(marker) {
-            transaction.started_at_unix_ms = current_unix_millis();
         }
         self.append_agent_trace_turn_event(
             pane_id,
@@ -3958,13 +4109,29 @@ impl RuntimeSessionService {
             || transaction_ref.pane_id != pane_id
             || output_pane_id != pane_id
         {
-            return Err(MezError::invalid_state(
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction_ref,
+                "end-marker-metadata-mismatch",
                 "shell transaction marker metadata does not match runtime dispatch state",
-            ));
+            );
+        }
+        if self
+            .shell_transaction_require_start_markers
+            .contains(marker)
+            && !self.shell_transaction_started_markers.contains(marker)
+        {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction_ref,
+                "end-marker-before-start-marker",
+                "shell transaction end marker arrived before the start marker",
+            );
         }
         let Some(mut transaction_ref) = self.running_shell_transactions.remove(marker) else {
             return Ok(0);
         };
+        self.clear_shell_transaction_protocol_state(marker);
         if transaction_ref.kind == RunningShellTransactionKind::ReadinessProbe {
             return self.observe_readiness_probe_transaction_end(
                 marker, turn_id, agent_id, pane_id, exit_code,
@@ -4429,6 +4596,8 @@ impl RuntimeSessionService {
                 observed_output_truncated: false,
             },
         );
+        self.shell_transaction_require_start_markers
+            .insert(marker_id.clone());
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
@@ -4599,6 +4768,8 @@ impl RuntimeSessionService {
                 observed_output_truncated: false,
             },
         );
+        self.shell_transaction_require_start_markers
+            .insert(marker_id.clone());
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(

@@ -4488,6 +4488,7 @@ impl RuntimeSessionService {
         let mut interrupted_panes = BTreeSet::new();
         for (marker, pane_id) in &cancelled {
             self.running_shell_transactions.remove(marker);
+            self.clear_shell_transaction_protocol_state(marker);
             if interrupted_panes.insert(pane_id.clone()) {
                 if self.agent_subshell_panes.contains(pane_id) {
                     self.agent_subshell_command_exit_panes

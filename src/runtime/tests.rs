@@ -19907,6 +19907,9 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     transaction.observed_output_preview = encoded_transport;
 
     service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 2)
         .unwrap();
 
@@ -20057,6 +20060,9 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
         .unwrap();
 
     service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 127)
         .unwrap();
 
@@ -20085,14 +20091,89 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
-/// Verifies mismatched shell-transaction markers do not consume the live
-/// transaction before validation fails.
+/// Dispatches a simple shell action and returns its pane and transaction marker.
+///
+/// Protocol-invariant tests need a real runtime-owned shell transaction so the
+/// strict start-marker bookkeeping is populated the same way it is in normal
+/// agent execution.
+fn dispatch_protocol_test_shell_action(
+    service: &mut RuntimeSessionService,
+    primary: &crate::ids::ClientId,
+    action_id: &str,
+) -> (String, String) {
+    mark_test_pane_ready(service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{{"idempotency_key":"agent-protocol-{action_id}","input":"run a shell command"}}}}"#
+        ),
+        primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "shell".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: action_id.to_string(),
+                    rationale: "run a shell command".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Run a command".to_string(),
+                        command: "true".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let marker = service
+        .running_shell_transactions
+        .iter()
+        .find_map(|(marker, transaction)| match &transaction.kind {
+            RunningShellTransactionKind::AgentAction {
+                action_id: candidate,
+            } if candidate == action_id => Some(marker.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        service
+            .shell_transaction_require_start_markers
+            .contains(&marker)
+    );
+    ("%1".to_string(), marker)
+}
+
+/// Verifies mismatched shell-transaction markers fail the live action promptly.
 ///
 /// A terminal OSC marker can be malformed, delayed, or spoofed. The runtime must
-/// validate marker metadata while the transaction is still retained so a bad
-/// marker cannot strand or silently discard the real running action.
+/// validate marker metadata against the retained transaction state and fail the
+/// action instead of leaving the turn to wait for a later timeout.
 #[test]
-fn runtime_shell_transaction_metadata_mismatch_keeps_live_transaction() {
+fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
@@ -20155,12 +20236,132 @@ fn runtime_shell_transaction_metadata_mismatch_keeps_live_transaction() {
         })
         .unwrap();
 
-    let error = service
+    let observed = service
         .observe_agent_shell_transaction_end("%2", &marker, "turn-1", "agent-%1", "%1", 0)
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
-    assert!(service.running_shell_transactions.contains_key(&marker));
+    assert_eq!(observed, 1);
+    assert!(!service.running_shell_transactions.contains_key(&marker));
+    assert!(
+        !service
+            .shell_transaction_require_start_markers
+            .contains(&marker)
+    );
+    assert!(!service.shell_transaction_started_markers.contains(&marker));
+    assert!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text
+            .contains("shell transaction marker metadata does not match runtime dispatch state"),
+        "{pane_text}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies a duplicate start marker fails the live shell action.
+///
+/// The wrapper start marker is the handoff boundary for deferred command
+/// payloads. Seeing it twice for one marker means the in-band control stream is
+/// no longer well framed, so the action should fail instead of waiting for a
+/// later timeout.
+#[test]
+fn runtime_shell_transaction_duplicate_start_marker_fails_live_action() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (pane_id, marker) =
+        dispatch_protocol_test_shell_action(&mut service, &primary, "shell-duplicate-start");
+
+    service
+        .observe_agent_shell_transaction_start(&pane_id, &marker, "turn-1", "agent-%1", &pane_id)
+        .unwrap();
+    assert!(service.shell_transaction_started_markers.contains(&marker));
+    let observed = service
+        .observe_agent_shell_transaction_start(&pane_id, &marker, "turn-1", "agent-%1", &pane_id)
+        .unwrap();
+
+    assert_eq!(observed, 1);
+    assert!(!service.running_shell_transactions.contains_key(&marker));
+    assert!(
+        !service
+            .shell_transaction_require_start_markers
+            .contains(&marker)
+    );
+    assert!(!service.shell_transaction_started_markers.contains(&marker));
+    assert!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("shell transaction emitted a duplicate start marker"),
+        "{pane_text}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies an end marker before the start marker fails the live shell action.
+///
+/// Runtime-dispatched wrappers must emit a start marker before any end marker.
+/// An end marker first means the parser missed a control boundary or command
+/// output spoofed the frame, either of which should fail fast with diagnostics.
+#[test]
+fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (pane_id, marker) =
+        dispatch_protocol_test_shell_action(&mut service, &primary, "shell-end-before-start");
+
+    let observed = service
+        .observe_agent_shell_transaction_end(&pane_id, &marker, "turn-1", "agent-%1", &pane_id, 0)
+        .unwrap();
+
+    assert_eq!(observed, 1);
+    assert!(!service.running_shell_transactions.contains_key(&marker));
+    assert!(
+        !service
+            .shell_transaction_require_start_markers
+            .contains(&marker)
+    );
+    assert!(!service.shell_transaction_started_markers.contains(&marker));
+    assert!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("shell transaction end marker arrived before the start marker"),
+        "{pane_text}"
+    );
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -21135,6 +21336,9 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
             .to_string();
     transaction.observed_output_bytes = transaction.observed_output_preview.len();
 
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
     service
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 1)
         .unwrap();
