@@ -97,6 +97,18 @@ fn runtime_agent_turn_remaining_timeout_ms(turn: &AgentTurnRecord) -> u64 {
         .max(1)
 }
 
+/// Returns the bounded timeout for one shell action.
+///
+/// The action-level timeout is an inner bound. The turn-wide budget remains the
+/// outer cap so no command can outlive the enclosing agent turn.
+fn runtime_shell_action_timeout_ms(turn: &AgentTurnRecord, timeout_ms: Option<u64>) -> u64 {
+    let remaining = runtime_agent_turn_remaining_timeout_ms(turn);
+    timeout_ms
+        .map(|timeout_ms| timeout_ms.min(remaining))
+        .unwrap_or(remaining)
+        .max(1)
+}
+
 /// Formats last observed provider input-token usage for one model profile.
 ///
 /// The display is a bounded status indicator, so accepted provider responses
@@ -6924,9 +6936,13 @@ impl RuntimeSessionService {
                     continue;
                 }
             }
-            if let Err(error) =
-                self.dispatch_shell_action_to_pane(turn, action, command, plan.stateful)
-            {
+            if let Err(error) = self.dispatch_shell_action_to_pane(
+                turn,
+                action,
+                command,
+                plan.stateful,
+                plan.timeout_ms,
+            ) {
                 execution.action_results[index] = self.shell_action_runtime_error_result(
                     turn,
                     action,
@@ -7016,6 +7032,7 @@ impl RuntimeSessionService {
             &action,
             &write_plan.command,
             write_plan.stateful,
+            write_plan.timeout_ms,
         )?;
         Ok(true)
     }
@@ -9122,6 +9139,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         command: &str,
         stateful: bool,
+        timeout_ms: Option<u64>,
     ) -> Result<()> {
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
@@ -9230,7 +9248,7 @@ impl RuntimeSessionService {
                 pane_id: turn.pane_id.clone(),
                 command: command.to_string(),
                 started_at_unix_ms: current_unix_millis(),
-                timeout_ms: Some(runtime_agent_turn_remaining_timeout_ms(turn)),
+                timeout_ms: Some(runtime_shell_action_timeout_ms(turn, timeout_ms)),
                 pending_input_payload: transaction_input.and_then(|input| {
                     (!input.payload.is_empty()).then(|| input.payload.into_bytes())
                 }),

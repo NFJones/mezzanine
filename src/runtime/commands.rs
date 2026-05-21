@@ -1208,6 +1208,7 @@ impl RuntimeSessionService {
         match self.write_runtime_pane_input(pane_id, shell_command.as_bytes()) {
             Ok(()) => {
                 self.agent_subshell_panes.insert(pane_id.to_string());
+                self.agent_subshell_command_exit_panes.remove(pane_id);
                 self.remember_hidden_shell_render_suppression(pane_id);
                 Ok(true)
             }
@@ -1247,11 +1248,17 @@ impl RuntimeSessionService {
         }
         if self.primary_pid_for_live_pane_process(pane_id).is_none() {
             self.agent_subshell_panes.remove(pane_id);
+            self.agent_subshell_command_exit_panes.remove(pane_id);
             self.clear_shell_output_filters_for_foreground_input(pane_id);
             return Ok(false);
         }
         self.clear_shell_output_filters_for_foreground_input(pane_id);
-        match self.write_runtime_pane_input(pane_id, b"\x04") {
+        let input = if self.agent_subshell_command_exit_panes.remove(pane_id) {
+            b"exit\n".as_slice()
+        } else {
+            b"\x04".as_slice()
+        };
+        match self.write_runtime_pane_input(pane_id, input) {
             Ok(()) => {
                 self.agent_subshell_panes.remove(pane_id);
                 Ok(true)
@@ -1264,6 +1271,7 @@ impl RuntimeSessionService {
                     ) =>
             {
                 self.agent_subshell_panes.remove(pane_id);
+                self.agent_subshell_command_exit_panes.remove(pane_id);
                 self.clear_shell_output_filters_for_foreground_input(pane_id);
                 Ok(false)
             }
@@ -4481,6 +4489,10 @@ impl RuntimeSessionService {
         for (marker, pane_id) in &cancelled {
             self.running_shell_transactions.remove(marker);
             if interrupted_panes.insert(pane_id.clone()) {
+                if self.agent_subshell_panes.contains(pane_id) {
+                    self.agent_subshell_command_exit_panes
+                        .insert(pane_id.clone());
+                }
                 match self.write_runtime_pane_input(pane_id, b"\x03") {
                     Ok(_) => {}
                     Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}

@@ -94,6 +94,13 @@ const RUNTIME_FOREGROUND_TITLE_IDLE_SYNC_POLL_INTERVAL: usize = 16;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const RUNTIME_READINESS_PROBE_TIMEOUT_MS: u64 = 5_000;
+/// Maximum time a transaction may wait for its payload receiver start marker.
+///
+/// Non-stateful agent actions stream the command body only after the shell
+/// wrapper emits an OSC start marker. If that marker is lost or the wrapper is
+/// stranded before the receiver loop, waiting for the full command timeout makes
+/// the pane look hung even though no user command has actually started.
+const RUNTIME_SHELL_TRANSACTION_START_TIMEOUT_MS: u64 = 30_000;
 
 /// Runs the runtime running shell transaction kind name operation for this subsystem.
 ///
@@ -105,6 +112,23 @@ fn runtime_running_shell_transaction_kind_name(kind: &RunningShellTransactionKin
         RunningShellTransactionKind::AgentAction { .. } => "agent_action",
         RunningShellTransactionKind::ReadinessProbe => "readiness_probe",
         RunningShellTransactionKind::Bootstrap => "bootstrap",
+    }
+}
+
+/// Returns the next runtime timeout deadline for one shell transaction.
+///
+/// Transactions with deferred payloads have an additional short start deadline:
+/// the shell must reach the receiver loop and emit its start marker before the
+/// command body is sent. Once that happens the pending payload is cleared and
+/// the ordinary command timeout applies.
+fn runtime_shell_transaction_effective_timeout_ms(
+    transaction: &RunningShellTransactionRef,
+) -> Option<u64> {
+    let timeout_ms = transaction.timeout_ms?;
+    if transaction.pending_input_payload.is_some() {
+        Some(timeout_ms.min(RUNTIME_SHELL_TRANSACTION_START_TIMEOUT_MS))
+    } else {
+        Some(timeout_ms)
     }
 }
 
@@ -3007,7 +3031,7 @@ impl RuntimeSessionService {
             .running_shell_transactions
             .iter()
             .filter_map(|(marker, transaction)| {
-                let timeout_ms = transaction.timeout_ms?;
+                let timeout_ms = runtime_shell_transaction_effective_timeout_ms(transaction)?;
                 Some(RuntimeShellTransactionTimerRef {
                     marker: marker.clone(),
                     kind: runtime_shell_transaction_timer_kind(&transaction.kind),
@@ -3039,7 +3063,7 @@ impl RuntimeSessionService {
             .running_shell_transactions
             .iter()
             .filter_map(|(marker, transaction)| {
-                let timeout_ms = transaction.timeout_ms?;
+                let timeout_ms = runtime_shell_transaction_effective_timeout_ms(transaction)?;
                 let elapsed_ms = now_unix_ms.saturating_sub(transaction.started_at_unix_ms);
                 (elapsed_ms >= timeout_ms)
                     .then(|| (marker.clone(), transaction.clone(), timeout_ms, elapsed_ms))
@@ -3888,6 +3912,9 @@ impl RuntimeSessionService {
         if let Err(error) = self.write_runtime_pane_input_priority(pane_id, &payload) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Ok(1);
+        }
+        if let Some(transaction) = self.running_shell_transactions.get_mut(marker) {
+            transaction.started_at_unix_ms = current_unix_millis();
         }
         self.append_agent_trace_turn_event(
             pane_id,
@@ -5335,6 +5362,7 @@ impl RuntimeSessionService {
         force: bool,
     ) -> Result<bool> {
         self.agent_subshell_panes.remove(pane_id);
+        self.agent_subshell_command_exit_panes.remove(pane_id);
         if self.pane_processes.contains_pane(pane_id) {
             return self
                 .pane_processes
@@ -5381,6 +5409,7 @@ impl RuntimeSessionService {
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
         self.agent_shell_store.remove_session(pane_id);
         self.agent_subshell_panes.remove(pane_id);
+        self.agent_subshell_command_exit_panes.remove(pane_id);
         self.agent_prompt_inputs.remove(pane_id);
         self.agent_planning_modes.remove(pane_id);
         self.agent_personality_selections.remove(pane_id);

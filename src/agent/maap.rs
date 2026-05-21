@@ -655,10 +655,18 @@ impl AgentAction {
                 Ok(())
             }
             AgentActionPayload::ShellCommand {
-                summary, command, ..
+                summary,
+                command,
+                timeout_ms,
+                ..
             } => {
                 validate_non_empty("shell command summary", summary)?;
                 validate_non_empty("shell command", command)?;
+                if matches!(timeout_ms, Some(0)) {
+                    return Err(MezError::invalid_args(
+                        "shell command timeout_ms must be greater than zero",
+                    ));
+                }
                 validate_agent_authored_shell_command(command)
             }
             AgentActionPayload::ApplyPatch { patch, .. } => validate_apply_patch_payload(patch),

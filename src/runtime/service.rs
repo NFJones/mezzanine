@@ -251,6 +251,7 @@ impl RuntimeSessionService {
             agent_pane_trace_logs: BTreeMap::new(),
             agent_session_patch_records: BTreeMap::new(),
             agent_subshell_panes: BTreeSet::new(),
+            agent_subshell_command_exit_panes: BTreeSet::new(),
             agent_turn_ledger: AgentTurnLedger::new(false),
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),

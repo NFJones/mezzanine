@@ -16,16 +16,16 @@ use super::{
     AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
     AgentTurnState, AgentTurnTrigger, AsyncModelProvider, AsyncProviderHttpTransport, BTreeSet,
     CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextCachePolicy,
-    ContextSourceKind, ContextStability, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,
-    MaapBatch, MarkerToken, McpActionExecutor, ModelMessageRole, ModelProfile,
-    ModelProfileOverrideSource, ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse,
-    ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT,
-    OPENAI_RESPONSES_ENDPOINT, OpenAiResponsesProvider, PaneReadinessOverrideStore,
-    PaneReadinessState, PaneShellExecutor, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderHttpTransport, ReadinessOverrideRevocation, Result, ShellClassification,
-    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
-    ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache, ToolInventory,
-    action_result_context_content, agent_subshell_enter_command, append_mcp_context,
+    ContextSourceKind, ContextStability, DEFAULT_SHELL_COMMAND_TIMEOUT_MS,
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MarkerToken,
+    McpActionExecutor, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
+    ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
+    OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
+    OpenAiResponsesProvider, PaneReadinessOverrideStore, PaneReadinessState, PaneShellExecutor,
+    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTransport, ReadinessOverrideRevocation,
+    Result, ShellClassification, ShellExecutionOutput, ShellExecutionRequest, ShellTransaction,
+    ShellTransactionInput, ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache,
+    ToolInventory, action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
     append_scheduler_context, apply_patch_write_plan_from_read_output, assemble_model_request,
     baseline_slash_commands, bootstrap_script, bootstrap_script_for_classification,
@@ -4221,6 +4221,36 @@ fn maap_batch_rejects_empty_shell_command_summary() {
     );
 }
 
+/// Verifies shell command timeout validation rejects zero values.
+///
+/// A zero timeout would either expire immediately before the pane shell can
+/// consume the wrapper or accidentally collapse into an unbounded/default path.
+/// The MAAP boundary should require positive timeout values.
+#[test]
+fn maap_batch_rejects_zero_shell_command_timeout() {
+    let mut action = shell_action("a1");
+    if let AgentActionPayload::ShellCommand { timeout_ms, .. } = &mut action.payload {
+        *timeout_ms = Some(0);
+    }
+    let batch = MaapBatch {
+        protocol: "maap/1".to_string(),
+        rationale: "test action batch rationale".to_string(),
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        actions: vec![action],
+        final_turn: false,
+    };
+
+    let error = batch.validate(&turn(), &[], &[]).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error.message().contains("timeout_ms"),
+        "{}",
+        error.message()
+    );
+}
+
 /// Verifies model-authored heredoc shell payloads are rejected at the MAAP
 /// validation boundary.
 ///
@@ -4978,7 +5008,7 @@ fn shell_action_executor_receives_transaction_wrapper_and_succeeds() {
     assert!(!structured.contains("stderr_bytes"), "{structured}");
     assert_eq!(executor.requests.len(), 1);
     assert_eq!(executor.requests[0].action_id, "shell-1");
-    assert_eq!(executor.requests[0].timeout_ms, None);
+    assert_eq!(executor.requests[0].timeout_ms, Some(1000));
     let wrapper = executor.requests[0].transaction.render_posix();
     assert!(wrapper.contains("MEZ_TURN"));
     assert!(wrapper.contains("MEZ_COMMAND_B64"));
@@ -6994,6 +7024,54 @@ fn semantic_apply_patch_command_keeps_encoded_lines_short() {
     );
     assert!(plan.command.contains("base64"), "{}", plan.command);
     std::fs::remove_dir_all(temp).unwrap();
+}
+
+/// Verifies shell command lowering preserves explicit model-provided timeouts.
+///
+/// Runtime shell transactions use the lowered action plan as the source of
+/// execution bounds. Dropping `timeout_ms` here makes slow or stranded commands
+/// occupy the pane until the much larger turn-wide timeout expires.
+#[test]
+fn semantic_shell_command_plan_preserves_explicit_timeout() {
+    let action = AgentAction {
+        id: "shell-timeout".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ShellCommand {
+            summary: "Run bounded grep".to_string(),
+            command: "grep -n needle file.txt".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: Some(1500),
+        },
+    };
+
+    let plan = local_action_plan(&action).unwrap().unwrap();
+
+    assert_eq!(plan.timeout_ms, Some(1500));
+}
+
+/// Verifies omitted shell command timeouts use a bounded default.
+///
+/// The default keeps ordinary non-interactive commands from inheriting the full
+/// turn budget while still letting models request a longer timeout for known
+/// long-running builds or tests.
+#[test]
+fn semantic_shell_command_plan_uses_default_timeout_when_omitted() {
+    let action = AgentAction {
+        id: "shell-default-timeout".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ShellCommand {
+            summary: "List files".to_string(),
+            command: "ls".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+
+    let plan = local_action_plan(&action).unwrap().unwrap();
+
+    assert_eq!(plan.timeout_ms, Some(DEFAULT_SHELL_COMMAND_TIMEOUT_MS));
 }
 
 /// Verifies shell action executor maps timeout interrupt and nonzero exit.

@@ -3466,6 +3466,13 @@ pub struct RuntimeSessionService {
     /// agent mode hides, while keeping prompt and environment mutations away
     /// from the user's original interactive shell.
     pub(super) agent_subshell_panes: BTreeSet<String>,
+    /// Tracks agent subshells that should exit with a command line after an
+    /// interrupted shell transaction.
+    ///
+    /// EOF can be consumed by a transaction wrapper that is still unwinding
+    /// after Ctrl+C. These panes use a line-oriented `exit` command instead so
+    /// the parent shell is restored when the interrupted wrapper returns.
+    pub(super) agent_subshell_command_exit_panes: BTreeSet<String>,
     /// Stores the agent turn ledger value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

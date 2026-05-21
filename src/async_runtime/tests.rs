@@ -8100,7 +8100,9 @@ async fn async_actor_defers_user_config_mutation_to_persistence_worker() {
 /// Verifies that an async provider completion which dispatches a shell command
 /// also queues a runtime-owned shell transaction timer side effect. Without
 /// this timer handoff, shell action timeouts still depend on the compatibility
-/// tick loop instead of the dedicated Tokio timer worker.
+/// tick loop instead of the dedicated Tokio timer worker. The first timer is
+/// the short payload-receiver start deadline because the command body is still
+/// waiting for the shell wrapper start marker.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_queues_shell_transaction_timer_after_provider_completion() {
     let mut service = test_service();
@@ -8224,10 +8226,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             panic!("expected shell transaction timer side effect, got {timers:?}");
         };
         assert_eq!(key.kind, RuntimeTimerKind::ShellTransaction);
-        assert!(
-            (29 * 60 * 1000..=30 * 60 * 1000).contains(delay_ms),
-            "{delay_ms}"
-        );
+        assert!((0..=30 * 1000).contains(delay_ms), "{delay_ms}");
         assert!(!key.owner_id.is_empty());
         let scheduled_key = key.clone();
         let mut output_batch = RuntimeEventBatch::new();

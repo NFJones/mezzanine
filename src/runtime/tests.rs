@@ -2473,10 +2473,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         })
         .expect("apply_patch should dispatch through the pane shell");
     let timeout_ms = action_transaction.timeout_ms.unwrap();
-    assert!(
-        (29 * 60 * 1000..=30 * 60 * 1000).contains(&timeout_ms),
-        "{timeout_ms}"
-    );
+    assert_eq!(timeout_ms, 30 * 1000);
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
@@ -9825,6 +9822,73 @@ fn runtime_agent_shell_slash_exit_stops_running_turn_before_hiding() {
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("Stopped after"), "{pane_text}");
+}
+
+/// Verifies exiting agent mode after interrupting a live shell transaction
+/// closes the nested agent subshell with a line command.
+///
+/// Immediate EOF can be consumed by an interrupted transaction wrapper's read
+/// loop, leaving the user inside the child shell after agent mode hides. After
+/// a live transaction is interrupted, the runtime should queue Ctrl+C followed
+/// by `exit` so the command is read by the shell after the wrapper unwinds.
+#[test]
+fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_async_owner(&pane_id)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    service.agent_subshell_panes.insert(pane_id.clone());
+    let started = service
+        .start_agent_prompt_turn(&pane_id, "search the file")
+        .unwrap();
+    service.running_shell_transactions.insert(
+        "marker-grep".to_string(),
+        RunningShellTransactionRef {
+            turn_id: started.turn_id.clone(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "shell-grep".to_string(),
+            },
+            pane_id: pane_id.clone(),
+            command: "grep -n needle file.txt".to_string(),
+            started_at_unix_ms: 1_000,
+            timeout_ms: Some(10 * 60 * 1000),
+            pending_input_payload: Some(b"payload\n".to_vec()),
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-exit","method":"agent/shell/command","params":{"idempotency_key":"agent-exit-live-shell","input":"/exit"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""visibility":"hidden""#), "{response}");
+    let exit_inputs = service.drain_deferred_pane_inputs();
+    assert_eq!(exit_inputs.len(), 2);
+    assert_eq!(exit_inputs[0].pane_id, pane_id);
+    assert_eq!(exit_inputs[0].bytes, b"\x03");
+    assert_eq!(exit_inputs[1].pane_id, pane_id);
+    assert_eq!(exit_inputs[1].bytes, b"exit\n");
+    assert!(!service.agent_subshell_panes.contains(&pane_id));
+    assert!(!service.agent_subshell_command_exit_panes.contains(&pane_id));
+    let _ = process.terminate(Duration::from_millis(10));
 }
 
 /// Verifies Escape interrupts active agent work instead of exiting agent mode.
@@ -20332,6 +20396,152 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
             .pending_input_payload
             .is_none()
     );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies pending payload handoff uses a short start-marker deadline.
+///
+/// Non-stateful shell actions wait for an OSC start marker before sending the
+/// encoded command body. If that marker is lost or the wrapper never reaches
+/// the receiver loop, the transaction should time out quickly instead of
+/// occupying the pane until the full command timeout expires.
+#[test]
+fn runtime_shell_transaction_pending_payload_uses_short_start_timer() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1".to_string();
+    let mut process = service
+        .take_running_pane_process_for_async_owner(&pane_id)
+        .unwrap();
+    service.running_shell_transactions.insert(
+        "marker-start".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "shell-1".to_string(),
+            },
+            pane_id: pane_id.clone(),
+            command: "grep -n needle file.txt".to_string(),
+            started_at_unix_ms: 1_000,
+            timeout_ms: Some(10 * 60 * 1000),
+            pending_input_payload: Some(b"payload\n".to_vec()),
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    let timer = service
+        .running_shell_transaction_timers()
+        .into_iter()
+        .find(|timer| timer.marker == "marker-start")
+        .unwrap();
+
+    assert_eq!(timer.timeout_ms, 30_000);
+
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            "marker-start",
+            "turn-1",
+            "agent-%1",
+            &pane_id,
+        )
+        .unwrap();
+    let timer = service
+        .running_shell_transaction_timers()
+        .into_iter()
+        .find(|timer| timer.marker == "marker-start")
+        .unwrap();
+    assert_eq!(timer.timeout_ms, 10 * 60 * 1000);
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies runtime shell dispatch honors per-action shell timeouts.
+///
+/// The MAAP parser and semantic lowering preserve `timeout_ms`; the runtime
+/// must carry that bound into the live shell transaction instead of replacing it
+/// with the enclosing turn's full timeout budget.
+#[test]
+fn runtime_shell_command_dispatch_uses_action_timeout() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_async_owner(&pane_id)
+        .unwrap();
+    mark_test_pane_ready(&mut service, &pane_id);
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-timeout","input":"run bounded grep"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "shell action".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "shell-timeout".to_string(),
+                    rationale: "run a bounded command".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Run bounded grep".to_string(),
+                        command: "grep -n needle file.txt".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: Some(1500),
+                    },
+                }],
+                final_turn: false,
+            }),
+        },
+    };
+
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let transaction = service
+        .running_shell_transactions
+        .values()
+        .find(|transaction| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "shell-timeout"
+            )
+        })
+        .unwrap();
+
+    assert_eq!(transaction.timeout_ms, Some(1500));
     let _ = process.terminate(Duration::from_millis(10));
 }
 
