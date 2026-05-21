@@ -8,8 +8,10 @@
 
 use super::attach::{
     run_control_socket_attached_observer_client_loop_async,
-    run_control_socket_attached_primary_client_loop_async, terminal_step_control_request,
-    terminal_step_response_line_style_spans, terminal_step_response_output_modes,
+    run_control_socket_attached_primary_client_loop_async,
+    run_control_socket_attached_primary_client_loop_async_with_runtime_events,
+    terminal_step_control_request, terminal_step_response_line_style_spans,
+    terminal_step_response_output_modes,
 };
 use super::mcp::load_runtime_config_layers_for_directory;
 use super::serve::assign_unique_live_session_id;
@@ -2634,6 +2636,71 @@ async fn control_socket_primary_attach_loop_does_not_repeat_idle_renders() {
     assert_eq!(io.presentation_entries, 1);
     assert_eq!(io.written_frames.len(), 1);
     assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+}
+
+/// Verifies that runtime events wake an otherwise idle primary attach loop for
+/// a fresh terminal view request without restoring fixed-cadence idle renders.
+///
+/// Pane output and lifecycle changes arrive through the daemon event socket, so
+/// this regression protects prompt redraws after the idle-loop optimization
+/// suppresses repeated timeout-driven renders.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        for (expected_id, response_lines) in [
+            ("cli-terminal-view-0", "initial"),
+            ("cli-terminal-view-1", "event redraw"),
+        ] {
+            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                parsed.get("method").and_then(serde_json::Value::as_str),
+                Some("terminal/view")
+            );
+            assert_eq!(
+                parsed.get("id").and_then(serde_json::Value::as_str),
+                Some(expected_id)
+            );
+            server_stream
+                .write_all(&encode_control_body(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"{expected_id}","result":{{"view":{{"lines":["{response_lines}"],"line_style_spans":[[]],"cursor":{{"row":0,"column":12,"visible":true,"style":"bar","blink":false}},"output_modes":{{"application_keypad":false}}}}}}}}"#
+                )))
+                .unwrap();
+            server_stream.flush().unwrap();
+            if expected_id == "cli-terminal-view-0" {
+                event_server_stream.write_all(b"event").unwrap();
+                event_server_stream.flush().unwrap();
+            }
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+    assert_eq!(io.written_frames[1].lines, vec!["event redraw"]);
 }
 
 /// Verifies interactive control-socket attachment exits cleanly when the daemon

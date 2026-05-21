@@ -6,14 +6,14 @@
 
 use super::{
     Args, AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AttachedTerminalOutputModes, CliEnv, CliOutputFormat, ClientId,
+    AttachedTerminalOutputModes, AuxiliarySocketKind, CliEnv, CliOutputFormat, ClientId,
     DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT, GraphicRendition, IsTerminal, MezError, Result,
     SessionRecord, SessionRegistry, Size, SocketSelection, TerminalColor, TerminalCursorStyle,
     TerminalStyleSpan, UnixStream, Write, attached_terminal_output_disconnected,
-    decode_control_frame, encode_control_body, incomplete_control_response_error, io, json_escape,
-    read_control_response_frames, records_to_json, registry_root, resolve_session_record_target,
-    selected_socket_path, terminal_size_from_fd_or_environment, write_control_response,
-    write_json_or_plain,
+    auxiliary_socket_path_for_control_socket, decode_control_frame, encode_control_body,
+    incomplete_control_response_error, io, json_escape, read_control_response_frames,
+    records_to_json, registry_root, resolve_session_record_target, selected_socket_path,
+    terminal_size_from_fd_or_environment, write_control_response, write_json_or_plain,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -96,6 +96,7 @@ pub(super) async fn run_attach<W: Write>(
         let primary_client_id = primary_client_id_from_initialize_response(body.as_str())?;
         return run_control_socket_attached_primary_client(
             &mut stream,
+            socket_path,
             primary_client_id,
             Size::new(columns, rows)?,
         )
@@ -261,6 +262,7 @@ fn attachable_record<'a>(
 /// on duplicated control-flow logic.
 pub(super) async fn run_control_socket_attached_primary_client(
     stream: &mut UnixStream,
+    control_socket_path: &std::path::Path,
     primary_client_id: ClientId,
     client_size: Size,
 ) -> Result<()> {
@@ -269,13 +271,15 @@ pub(super) async fn run_control_socket_attached_primary_client(
     let control_stream = stream.try_clone()?;
     control_stream.set_nonblocking(true)?;
     let mut control_stream = tokio::net::UnixStream::from_std(control_stream)?;
+    let event_stream = optional_control_socket_event_stream(control_socket_path)?;
     let mut terminal_guard =
         AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
-    let run_result = run_control_socket_attached_primary_client_loop_async(
+    let run_result = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
         &mut control_stream,
         terminal_guard.io_mut(),
         primary_client_id,
         client_size,
+        event_stream,
     )
     .await;
     let restore_result = terminal_guard.restore().await;
@@ -294,6 +298,7 @@ pub(super) async fn run_control_socket_attached_primary_client(
 /// Runtime state is still mutated by the daemon-side control handler; this loop
 /// only coordinates foreground terminal bytes, rendered frames, and framed
 /// control requests.
+#[cfg(test)]
 pub(super) async fn run_control_socket_attached_primary_client_loop_async<I>(
     stream: &mut tokio::net::UnixStream,
     terminal_io: &mut I,
@@ -317,6 +322,92 @@ where
         let input = read_attached_client_input_or_timeout(terminal_io, 4096).await?;
         if input.eof {
             break Ok(());
+        }
+        if input.bytes.is_empty() && !render_requested {
+            if control_socket_disconnected_without_pending_response(stream)? {
+                break Ok(());
+            }
+            continue;
+        }
+        let request = if input.bytes.is_empty() {
+            terminal_view_control_request(iteration, client_size)
+        } else {
+            terminal_step_control_request(
+                iteration,
+                &primary_client_id,
+                client_size,
+                input.bytes.as_slice(),
+                true,
+            )
+        };
+        if !write_async_control_body_or_disconnected(stream, &request).await? {
+            break Ok(());
+        }
+        let Some(response) =
+            read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+        else {
+            break Ok(());
+        };
+        let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+        if control_response_forbidden(body.as_str())? {
+            break Ok(());
+        }
+        render_requested = false;
+        let lines = terminal_step_response_lines(body.as_str())?;
+        let line_style_spans = terminal_step_response_line_style_spans(body.as_str())?;
+        if !lines.is_empty() {
+            let modes = control_socket_cursor_blink_elapsed(
+                terminal_step_response_output_modes(body.as_str())?.unwrap_or_default(),
+                cursor_blink_epoch,
+            );
+            if !write_styled_output_or_disconnected_async(
+                terminal_io,
+                &lines,
+                &line_style_spans,
+                modes,
+            )
+            .await?
+            {
+                break Ok(());
+            }
+        }
+        iteration = iteration.saturating_add(1);
+    }
+}
+/// Runs the primary control-socket attach terminal loop with runtime event wakeups.
+///
+/// The event stream is optional so clients can still attach to daemons started
+/// without an auxiliary event socket. When runtime events are available, any
+/// received event wakes the loop for an explicit `terminal/view` request rather
+/// than waiting for the next terminal input timeout.
+pub(super) async fn run_control_socket_attached_primary_client_loop_async_with_runtime_events<I>(
+    stream: &mut tokio::net::UnixStream,
+    terminal_io: &mut I,
+    primary_client_id: ClientId,
+    mut client_size: Size,
+    mut event_stream: Option<tokio::net::UnixStream>,
+) -> Result<()>
+where
+    I: AsyncAttachedTerminalIo,
+{
+    terminal_io.enter_presentation().await?;
+    let mut iteration = 0u64;
+    let cursor_blink_epoch = std::time::Instant::now();
+    let mut render_requested = true;
+    loop {
+        if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
+            terminal_io.invalidate_output_frame().await?;
+            render_requested = true;
+        }
+        let input =
+            read_attached_client_input_or_runtime_event(terminal_io, event_stream.as_mut(), 4096)
+                .await?;
+        if input.eof {
+            break Ok(());
+        }
+        if input.render_requested {
+            terminal_io.invalidate_output_frame().await?;
+            render_requested = true;
         }
         if input.bytes.is_empty() && !render_requested {
             if control_socket_disconnected_without_pending_response(stream)? {
@@ -524,6 +615,11 @@ struct AttachedClientInputPoll {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     eof: bool,
+    /// Stores whether a runtime event requested a fresh render.
+    ///
+    /// The field distinguishes event-driven redraw wakeups from no-input
+    /// terminal timeouts that should stay idle.
+    render_requested: bool,
 }
 
 /// Runs the read attached client input or timeout operation for this subsystem.
@@ -541,14 +637,95 @@ async fn read_attached_client_input_or_timeout<I: AsyncAttachedTerminalIo>(
     )
     .await
     {
-        Ok(Ok(bytes)) if bytes.is_empty() => Ok(AttachedClientInputPoll { bytes, eof: true }),
-        Ok(Ok(bytes)) => Ok(AttachedClientInputPoll { bytes, eof: false }),
+        Ok(Ok(bytes)) if bytes.is_empty() => Ok(AttachedClientInputPoll {
+            bytes,
+            eof: true,
+            render_requested: false,
+        }),
+        Ok(Ok(bytes)) => Ok(AttachedClientInputPoll {
+            bytes,
+            eof: false,
+            render_requested: false,
+        }),
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(AttachedClientInputPoll {
             bytes: Vec::new(),
             eof: false,
+            render_requested: false,
         }),
     }
+}
+/// Reads terminal input while also accepting runtime event redraw wakeups.
+///
+/// # Parameters
+/// - `terminal_io`: The attached terminal input/output boundary.
+/// - `event_stream`: Optional auxiliary runtime event stream.
+/// - `max_bytes`: Maximum terminal input bytes to read.
+async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    event_stream: Option<&mut tokio::net::UnixStream>,
+    max_bytes: usize,
+) -> Result<AttachedClientInputPoll> {
+    let Some(event_stream) = event_stream else {
+        return read_attached_client_input_or_timeout(terminal_io, max_bytes).await;
+    };
+    tokio::select! {
+        input = read_attached_client_input_or_timeout(terminal_io, max_bytes) => input,
+        event_open = read_runtime_event_stream_wakeup(event_stream) => {
+            if event_open? {
+                Ok(AttachedClientInputPoll {
+                    bytes: Vec::new(),
+                    eof: false,
+                    render_requested: true,
+                })
+            } else {
+                Ok(AttachedClientInputPoll {
+                    bytes: Vec::new(),
+                    eof: true,
+                    render_requested: false,
+                })
+            }
+        }
+    }
+}
+
+/// Reads one runtime event stream chunk and reports whether the stream remains open.
+async fn read_runtime_event_stream_wakeup(stream: &mut tokio::net::UnixStream) -> Result<bool> {
+    let mut buffer = [0u8; 8192];
+    match stream.read(&mut buffer).await {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(error) => {
+            let error = MezError::from(error);
+            if attached_terminal_output_disconnected(&error) {
+                Ok(false)
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Connects to the auxiliary event socket for event-driven attach redraws.
+fn optional_control_socket_event_stream(
+    control_socket_path: &std::path::Path,
+) -> Result<Option<tokio::net::UnixStream>> {
+    let event_socket_path =
+        auxiliary_socket_path_for_control_socket(control_socket_path, AuxiliarySocketKind::Event)?;
+    let stream = match UnixStream::connect(event_socket_path) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(MezError::from(error)),
+    };
+    stream.set_nonblocking(true)?;
+    Ok(Some(tokio::net::UnixStream::from_std(stream)?))
 }
 /// Checks whether the control socket has closed while no response is pending.
 ///

@@ -47,3 +47,6 @@ regions, pane frames, and other view data even when nothing visible changed.
 - Implemented the first control-socket primary attach-loop slice: initial or
   resize-driven idle iterations request an explicit `terminal/view`, while later
   terminal-input timeouts do not send repeated render requests.
+- Added an auxiliary event-socket wakeup path for interactive primary attach so
+  runtime events can request a fresh `terminal/view` without restoring periodic
+  idle rendering.
