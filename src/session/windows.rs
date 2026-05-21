@@ -421,7 +421,7 @@ impl Session {
 
     /// Splits the active pane and optionally selects the newly created pane.
     ///
-    /// The default muxxer behavior follows the default mux behavior by moving focus to the newly
+    /// The default multiplexer behavior follows the default mux behavior by moving focus to the newly
     /// spawned pane. Explicit detached/no-select command and control requests
     /// use `select_new = false`.
     pub fn split_active_pane_select(

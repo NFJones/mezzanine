@@ -52,7 +52,7 @@ Automated deterministic coverage currently lives in Rust unit tests under
 
 - DCS, SOS, PM, and APC string controls are consumed as ignored strings. DCS
   reply semantics such as DECRQSS and XTGETTCAP are not implemented. Nested
-  muxxer passthrough payloads are bounded and consumed without rendering their
+  multiplexer passthrough payloads are bounded and consumed without rendering their
   contents.
 - Clipboard control sequences are policy-gated. The xterm-compatible profile
   advertises clipboard capability, OSC 52 payloads are parsed, and runtime

@@ -3942,7 +3942,7 @@ async fn async_actor_applies_pane_io_completion_events_to_event_log() {
 /// Verifies that supervisor shutdown events are applied through typed runtime
 /// ingress even when there is no active primary client. This is the async
 /// supervisor path for forced daemon shutdown, failed critical services, and
-/// signal handling where the muxxer must terminate live panes and remove the
+/// signal handling where the multiplexer must terminate live panes and remove the
 /// registry record without routing through a primary-owned control command.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_forced_shutdown_events_without_primary() {

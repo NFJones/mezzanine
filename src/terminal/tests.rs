@@ -4821,13 +4821,13 @@ fn terminal_screen_documents_combining_mark_boundary_behavior() {
     assert_eq!(screen.cursor_state().column, 2);
 }
 
-/// Verifies terminal screen nested muxxer passthrough payload is bounded and ignored.
+/// Verifies terminal screen nested multiplexer passthrough payload is bounded and ignored.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn terminal_screen_nested_muxxer_passthrough_payload_is_bounded_and_ignored() {
+fn terminal_screen_nested_multiplexer_passthrough_payload_is_bounded_and_ignored() {
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
 
     screen.feed(b"before\x1bPtmux;\x1b\x1b[31mnested\x1b\\after");

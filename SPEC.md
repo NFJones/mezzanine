@@ -81,7 +81,7 @@
 
 ## 1. Status and Scope
 
-This document specifies Mezzanine, a terminal muxxer designed for agentic AI
+This document specifies Mezzanine, a terminal multiplexer designed for agentic AI
 development. It describes observable system behavior, data concepts, user
 interactions, configuration, agent orchestration, and interoperability
 requirements.
@@ -118,7 +118,7 @@ document are to be interpreted as described in RFC 2119.
 ## 3. Terminology
 
 Mezzanine:
-: The complete terminal muxxer and agentic AI development system specified by
+: The complete terminal multiplexer and agentic AI development system specified by
   this document.
 
 Muxxer:
@@ -250,7 +250,7 @@ window. The initial window MUST belong to a single default window group. That
 default group MUST NOT consume a visible group-bar row until at least one
 additional group exists.
 
-The muxxer and the agent harness MUST be separable logical subsystems. An
+The multiplexer and the agent harness MUST be separable logical subsystems. An
 implementation MUST NOT require application code that uses Mezzanine concepts to
 depend on a specific programming language or implementation framework.
 
@@ -335,7 +335,7 @@ Mezzanine MUST provide a way to reattach to a resumable session.
 
 Mezzanine MUST provide a way to terminate a session explicitly.
 
-The executable program name for the muxxer MUST be `mez`.
+The executable program name for the multiplexer MUST be `mez`.
 
 Invoking `mez` without a subcommand MUST create a new session or attach to the
 default resumable session according to configuration.
@@ -494,8 +494,8 @@ Mezzanine MUST launch pane shells on pseudoterminals.
 
 Mezzanine MUST propagate pane size changes to the pane pseudoterminal. The
 propagated size MUST be the visible pane content area after Mezzanine reserves
-muxxer-owned window-frame rows, pane-frame rows, and divider cells. Layout state
-MAY retain larger logical pane rectangles for split ratios, but reserved muxxer
+multiplexer-owned window-frame rows, pane-frame rows, and divider cells. Layout state
+MAY retain larger logical pane rectangles for split ratios, but reserved multiplexer
 cells MUST NOT be exposed as drawable cells to pane primary processes.
 
 Mezzanine MUST place pane shell processes into an appropriate process group so
@@ -748,7 +748,7 @@ assignment replaces them. A window title MAY be derived from the active pane
 title while the window uses a generated or default name; an explicit non-default
 window name MUST remain stable until a later user or agent rename replaces it.
 Mouse clicks on a rendered group bar, window frame, or status bar MUST be
-treated as muxxer UI interactions, such as opening the group/window chooser or
+treated as multiplexer UI interactions, such as opening the group/window chooser or
 focusing the clicked group/window entry, and MUST NOT be forwarded to the pane
 primary process unless an explicit passthrough policy is configured.
 
@@ -987,24 +987,24 @@ keyboard input goes to the pane process.
 Mouse interactions with frames and pane borders MUST NOT be delivered to the
 pane primary process unless explicitly configured.
 
-Mouse interactions with a muxxer-managed window frame or status bar MUST be
-routed to a muxxer control action rather than to copy-mode selection or pane
+Mouse interactions with a multiplexer-managed window frame or status bar MUST be
+routed to a multiplexer control action rather than to copy-mode selection or pane
 application mouse input.
 
-Mouse interactions with a muxxer-managed group bar MUST be routed to group
+Mouse interactions with a multiplexer-managed group bar MUST be routed to group
 focus or group chooser actions rather than to copy-mode selection or pane
 application mouse input.
 
 Mouse clicks or selections inside a pane body MUST focus the targeted pane before
-the muxxer applies copy-mode selection or other pane-local mouse behavior.
+the multiplexer applies copy-mode selection or other pane-local mouse behavior.
 
 Mouse interactions inside a pane body MUST be evaluated against that target
 pane's own terminal mode state, not the previously focused pane's state. When an
 unfocused pane has enabled mouse reporting, the first button press inside that
 pane MUST focus the pane and MUST NOT forward the mouse packet to the previously
 focused pane. Once the pane is focused, pane-application mouse reporting MUST
-take precedence over pane-body muxxer shortcuts such as history scrolling,
-right-click paste, and mouse selection. Active muxxer modes and muxxer-owned
+take precedence over pane-body multiplexer shortcuts such as history scrolling,
+right-click paste, and mouse selection. Active multiplexer modes and multiplexer-owned
 cells still take precedence: an in-progress resize drag, active copy-mode
 selection, pane borders, and window frames remain Mezzanine-owned unless
 explicitly configured otherwise. The active copy-mode selection exception remains
@@ -1041,7 +1041,7 @@ immediately.
 Foreground attached clients MUST take ownership of the terminal presentation
 surface while attached. They MUST enter the configured presentation mode, hide or
 replace any host-terminal cursor that would otherwise leak through the drawn
-muxxer surface, clear or redraw the full visible viewport after attach and
+multiplexer surface, clear or redraw the full visible viewport after attach and
 resize, and clear the full visible viewport while restoring host-terminal modes
 and cursor visibility on detach, shutdown, or error.
 Differential attached-client redraws MUST preserve cells in the terminal's final
@@ -1051,7 +1051,7 @@ freshly written edge cell.
 Foreground attached clients MUST reset coordinate-affecting host-terminal state
 before each presentation frame, including origin mode, scrolling margins, and
 left/right margin mode where supported, so cursor placement remains absolute to
-the rendered muxxer viewport after command dialogs, overlays, or hosted terminal
+the rendered multiplexer viewport after command dialogs, overlays, or hosted terminal
 applications have changed terminal modes.
 
 After the initial draw or another full-surface invalidation, foreground attached
@@ -1081,7 +1081,7 @@ behavior.
 
 Terminal compatibility MUST be represented as a named profile with explicit
 capabilities. The profile abstraction MUST allow future profiles to add, remove,
-or refine terminal capabilities without changing unrelated muxxer or agent
+or refine terminal capabilities without changing unrelated multiplexer or agent
 semantics.
 
 The xterm-compatible profile MUST define behavior for at least C0 controls,
@@ -1176,14 +1176,14 @@ When the active pane application enables bracketed paste, Mezzanine MUST mirror
 that mode into the attached foreground terminal so host clipboard pastes arrive
 with bracketed-paste delimiters. While receiving a host bracketed-paste payload,
 Mezzanine MUST forward the payload bytes opaquely to the pane process, MUST NOT
-interpret muxxer prefixes or mouse reports embedded in the payload, and MUST
+interpret multiplexer prefixes or mouse reports embedded in the payload, and MUST
 preserve the in-paste state across bounded terminal-read chunks. Pasting large
 host clipboard contents into an attached pane MUST NOT crash, detach, or stall
-the muxxer.
+the multiplexer.
 
-Mezzanine SHOULD be operable inside other terminal muxxers.
+Mezzanine SHOULD be operable inside other terminal multiplexers.
 
-When nested inside another muxxer, Mezzanine MUST NOT assume exclusive ownership
+When nested inside another multiplexer, Mezzanine MUST NOT assume exclusive ownership
 of terminal capabilities that are controlled by the outer environment.
 
 Mezzanine MUST NOT emit terminal control sequences that intentionally break
@@ -1290,7 +1290,7 @@ default prefix bindings MUST include:
 Bindings MAY be changed by configuration or command.
 
 Mezzanine MUST NOT silently choose different default key bindings because a
-terminal, desktop environment, or nested muxxer may intercept the defaults. If
+terminal, desktop environment, or nested multiplexer may intercept the defaults. If
 Mezzanine detects that a default binding is unlikely to be delivered, it SHOULD
 warn the user and SHOULD offer configuration guidance.
 
@@ -1321,7 +1321,7 @@ matches MUST take precedence over prefix or glob-like matches.
 
 Invalid or failed commands submitted through an attached foreground command
 prompt MUST NOT crash or detach the terminal. Mezzanine MUST display a single
-prompt-line error and allow any key to return to the normal muxxer surface.
+prompt-line error and allow any key to return to the normal multiplexer surface.
 
 The `new-window`, `new-group`, and `split-window` commands MUST accept an optional
 `shell-command` argument. If `shell-command` is omitted, the new pane MUST start
@@ -2047,7 +2047,7 @@ to the configured mouse policy.
 
 ### 7.7 Messages, Activity, and Bell Notifications
 
-Mezzanine MUST maintain a bounded message log for muxxer notices, command
+Mezzanine MUST maintain a bounded message log for multiplexer notices, command
 errors, agent attention requests, and significant lifecycle events.
 
 Mezzanine MUST provide a command to show recent messages.
@@ -4668,10 +4668,10 @@ Mezzanine MUST provide a local message passing protocol that allows agents to
 discover each other and send messages to each other.
 
 The local message passing protocol and the control endpoint MUST be separate
-services within the muxxer. The message passing protocol MUST handle agent
+services within the multiplexer. The message passing protocol MUST handle agent
 discovery, direct messages, group messages, presence, request-response
 correlation, and task status messages. It MUST NOT be used to create panes,
-resize panes, mutate layout, or perform other muxxer control operations.
+resize panes, mutate layout, or perform other multiplexer control operations.
 
 The protocol MUST be local to the Mezzanine session by default.
 
@@ -4853,7 +4853,7 @@ Mezzanine MUST expose a structured control endpoint for clients, the
 configuration shell, and agent harnesses.
 
 The control endpoint and the local message passing protocol MUST be separate
-services within the muxxer. The control endpoint MUST handle muxxer state
+services within the multiplexer. The control endpoint MUST handle multiplexer state
 inspection and mutation. Agent discovery and agent-to-agent messaging MUST use
 the local message passing protocol.
 
@@ -5342,7 +5342,7 @@ the control endpoint. If no primary client is attached, observer requests MUST
 remain pending and MUST receive no session view until a primary client decides
 them.
 
-Agent harness requests that mutate muxxer state MUST be subject to the active
+Agent harness requests that mutate multiplexer state MUST be subject to the active
 permission policy.
 
 The control endpoint protocol MUST be extensible and MUST reject malformed
@@ -5549,7 +5549,7 @@ reduce ambiguous or unsafe action choice.
 The prompt profile MUST identify a pane-scoped Mezzanine agent and SHOULD
 express behavior as execution rules instead of broad persona prose. It MUST
 nonetheless establish the intended persona as a careful, pragmatic engineering
-collaborator that works inside a pane-scoped terminal muxxer environment.
+collaborator that works inside a pane-scoped terminal multiplexer environment.
 
 The prompt profile MUST state that local system interaction occurs through the
 pane shell and that pane contents enter model context only as explicit action
@@ -5578,7 +5578,7 @@ user, or pre-judge whether a concrete action will be approved.
 
 The prompt profile MUST include Mezzanine-specific instructions for spawning
 agents, choosing panes for spawned agents, communicating through the local
-message passing protocol, and respecting muxxer state.
+message passing protocol, and respecting multiplexer state.
 
 The prompt profile MUST NOT instruct agents to use hidden local tools for local
 system interaction. Configured MCP servers and connectors MUST be described, if
@@ -5629,7 +5629,7 @@ evidence, action/tool, execution-loop, or shell-only requirements.
 
 The prompt MUST identify the agent as a Mezzanine pane agent assigned to a
 specific pane. It MUST describe the intended persona as a careful, pragmatic
-engineering collaborator operating inside a terminal muxxer pane, and it MUST
+engineering collaborator operating inside a terminal multiplexer pane, and it MUST
 instruct that agent to work until the user's requested goal is handled or
 clearly blocked.
 The prompt MUST make the default execution posture explicit before detailed
@@ -5989,7 +5989,7 @@ Mezzanine MAY update the prompt profile to improve task execution, safety,
 validation, cooperation, or clarity.
 
 Prompt profile updates MUST preserve the Mezzanine-specific shell-only,
-terminal-observation, message-passing, and muxxer-integration requirements.
+terminal-observation, message-passing, and multiplexer-integration requirements.
 
 Mezzanine MUST expose the active prompt profile name and version to the user.
 
@@ -7028,7 +7028,7 @@ The test suite MUST cover:
 - Clipboard control sequences when enabled by policy.
 - Application cursor and keypad modes.
 - Terminal wrapping, reflow, and double-width character boundary behavior.
-- Nested muxxer operation and pass-through behavior.
+- Nested multiplexer operation and pass-through behavior.
 - Copy-mode selection and history scrolling.
 
 The test suite MUST include automated tests for deterministic terminal parsing

@@ -3761,7 +3761,7 @@ fn runtime_control_mcp_list_uses_runtime_owned_registry() {
 /// Verifies that agent-scoped operations with slash-command equivalents are no
 /// longer accepted through the live terminal command prompt. These workflows
 /// belong in pane-local agent slash commands, while the terminal command
-/// language remains focused on muxxer/session control.
+/// language remains focused on multiplexer/session control.
 #[test]
 fn runtime_terminal_command_rejects_agent_scoped_slash_duplicates() {
     let mut service = test_runtime_service();
