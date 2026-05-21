@@ -10531,6 +10531,69 @@ async fn async_attached_terminal_service_has_no_idle_batch_timer() {
     assert!(exit.commands_processed >= 4);
 }
 
+/// Verifies that the attached-terminal service treats queued render work as
+/// level-triggered state instead of relying only on a retained notify permit.
+///
+/// A background service can consume the one stored side-effect notification
+/// before the foreground client reaches its idle wait. The render invalidation
+/// itself remains queued in the actor, and the client must drain it before
+/// awaiting fresh input so a quiet terminal cannot strand a repaint forever.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_service_drains_stranded_render_effect_before_waiting() {
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+    let client_id = ClientId::new('c', 9024);
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+    let mut io = IdleAsyncAttachedTerminalLoopIo::new(write_count.clone(), write_notify.clone());
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: client_id.clone(),
+                reason: RenderInvalidationReason::PaneOutput,
+            }])
+            .await
+            .unwrap();
+        handle.wait_for_runtime_side_effects().await;
+
+        let report = tokio::time::timeout(
+            Duration::from_millis(250),
+            run_async_attached_terminal_client_service(
+                &handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Observer,
+                    client_id,
+                    primary_client_id: None,
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
+                },
+                AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+                |_| Ok(None),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(report.batches, 2);
+        assert_eq!(report.loop_report.output_frames, 2);
+        assert_eq!(write_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 7);
+}
+
 /// Verifies that a closed foreground terminal output endpoint is treated as a
 /// normal hangup instead of bubbling a `BrokenPipe` I/O error to the top-level
 /// CLI error handler during clean primary shutdown or terminal teardown.

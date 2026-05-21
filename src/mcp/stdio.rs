@@ -23,7 +23,8 @@ use super::protocol::{
 use super::registry::McpRegistry;
 use super::types::{
     DEFAULT_MCP_MAX_MESSAGE_BYTES, McpInitializeResponse, McpStartupPlan, McpStartupTransportPlan,
-    McpStdioDiscovery, McpToolCallPlan, McpToolCallResponse, McpToolsListResponse,
+    McpStdioDiscovery, McpToolCallPlan, McpToolCallResponse, McpToolListPagination,
+    McpToolsListResponse,
 };
 
 /// Carries Mcp Stdio Read Event state for this subsystem.
@@ -318,12 +319,14 @@ pub async fn discover_stdio_mcp_server(
     let mut tools = Vec::new();
     if initialize.supports_tools {
         let mut cursor = None;
+        let mut pagination = McpToolListPagination::default();
         loop {
             let response = connection
                 .list_tools(cursor.as_deref(), plan.timeout_ms)
                 .await?;
             tools.extend(response.tools);
-            let Some(next_cursor) = response.next_cursor else {
+            let Some(next_cursor) = pagination.advance(&plan.server_id, response.next_cursor)?
+            else {
                 break;
             };
             cursor = Some(next_cursor);

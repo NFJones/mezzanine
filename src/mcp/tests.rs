@@ -1,16 +1,16 @@
 //! Unit tests for MCP registry, protocol parsing, stdio transport, HTTP transport, and audit wrappers.
 
 use super::{
-    DEFAULT_MCP_TOOL_TIMEOUT_MS, McpApprovalSetting, McpRegistry, McpServerConfig, McpServerStatus,
-    McpStartupTransportPlan, McpToolAuditCallContext, McpToolCallPlan, McpToolCallRequest,
-    McpToolEffects, McpToolState, build_mcp_default_initialize_request,
-    build_mcp_initialize_request, build_mcp_tools_call_request, build_mcp_tools_list_request,
-    call_stdio_mcp_tool_with_audit, call_streamable_http_mcp_tool,
-    call_streamable_http_mcp_tool_with_audit, discover_stdio_mcp_server,
-    discover_stdio_mcp_server_into_registry, discover_streamable_http_mcp_server_into_registry,
-    initialize_streamable_http_mcp_server, parse_mcp_initialize_response,
-    parse_mcp_tools_call_response, parse_mcp_tools_list_response, read_bounded_protocol_line,
-    spawn_stdio_mcp_connection,
+    DEFAULT_MCP_MAX_TOOL_LIST_PAGES, DEFAULT_MCP_TOOL_TIMEOUT_MS, McpApprovalSetting, McpRegistry,
+    McpServerConfig, McpServerStatus, McpStartupTransportPlan, McpToolAuditCallContext,
+    McpToolCallPlan, McpToolCallRequest, McpToolEffects, McpToolListPagination, McpToolState,
+    build_mcp_default_initialize_request, build_mcp_initialize_request,
+    build_mcp_tools_call_request, build_mcp_tools_list_request, call_stdio_mcp_tool_with_audit,
+    call_streamable_http_mcp_tool, call_streamable_http_mcp_tool_with_audit,
+    discover_stdio_mcp_server, discover_stdio_mcp_server_into_registry,
+    discover_streamable_http_mcp_server_into_registry, initialize_streamable_http_mcp_server,
+    parse_mcp_initialize_response, parse_mcp_tools_call_response, parse_mcp_tools_list_response,
+    read_bounded_protocol_line, spawn_stdio_mcp_connection,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -426,6 +426,52 @@ fn parses_tools_list_response_with_schema_and_cursor() {
     assert_eq!(response.next_cursor.as_deref(), Some("more"));
 }
 
+/// Verifies MCP tool-list pagination rejects a repeated cursor.
+///
+/// Discovery runs before model work can use a configured MCP server, and it is
+/// actor-owned in the live runtime. A server that repeats a continuation cursor
+/// must fail discovery instead of keeping the actor inside an endless list loop.
+#[test]
+fn mcp_tool_list_pagination_rejects_repeated_cursor() {
+    let mut pagination = McpToolListPagination::default();
+
+    assert_eq!(
+        pagination
+            .advance("fixture", Some("again".to_string()))
+            .unwrap()
+            .as_deref(),
+        Some("again")
+    );
+    let error = pagination
+        .advance("fixture", Some("again".to_string()))
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("repeated tools/list cursor"));
+}
+
+/// Verifies MCP tool-list pagination has a hard page cap.
+///
+/// Even a server that returns a fresh cursor on every response must not be able
+/// to keep startup discovery running forever. The page cap preserves a bounded
+/// actor-owned discovery path while still allowing large tool catalogs.
+#[test]
+fn mcp_tool_list_pagination_rejects_excessive_pages() {
+    let mut pagination = McpToolListPagination::default();
+
+    for index in 0..DEFAULT_MCP_MAX_TOOL_LIST_PAGES {
+        pagination
+            .advance("fixture", Some(format!("cursor-{index}")))
+            .unwrap();
+    }
+    let error = pagination
+        .advance("fixture", Some("cursor-over-limit".to_string()))
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("tools/list page limit"));
+}
+
 /// Verifies parses tools call response content and tool error flag.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -778,6 +824,32 @@ async fn stdio_discovery_into_registry_blacklists_failed_server() {
     );
 }
 
+/// Verifies stdio discovery rejects repeated tool-list cursors.
+///
+/// This exercises the live discovery loop rather than only the pagination
+/// helper. A server that keeps returning the same cursor must fail quickly so
+/// runtime-owned MCP startup cannot monopolize the session actor.
+#[tokio::test]
+async fn stdio_discovery_rejects_repeated_tool_list_cursor() {
+    let mut registry = McpRegistry::default();
+    registry
+        .add_server(McpServerConfig::stdio(
+            "fixture",
+            "fixture",
+            "/bin/sh",
+            vec!["-c".to_string(), stdio_repeated_cursor_script().to_string()],
+        ))
+        .unwrap();
+    let plan = registry.startup_plan("fixture", &BTreeMap::new()).unwrap();
+
+    let error = discover_stdio_mcp_server(&plan, &BTreeMap::new(), "mez", "test")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.message().contains("repeated tools/list cursor"));
+}
+
 /// Verifies stdio tool call writes start and completion audit records.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -1115,6 +1187,27 @@ fn stdio_error_script() -> &'static str {
 case "$line" in
   *initialize*)
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"startup refused"}}'
+;;
+esac
+done"#
+}
+
+/// Runs the stdio repeated cursor script operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn stdio_repeated_cursor_script() -> &'static str {
+    r#"while IFS= read -r line; do
+case "$line" in
+  *initialize*)
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1.0.0"}}}'
+;;
+  *notifications/initialized*)
+;;
+  *tools/list*)
+id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[],"nextCursor":"again"}}\n' "$id"
 ;;
 esac
 done"#

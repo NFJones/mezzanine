@@ -1516,12 +1516,15 @@ impl RuntimeSessionService {
                 let mut tools = Vec::new();
                 if initialize.supports_tools {
                     let mut cursor = None;
+                    let mut pagination = crate::mcp::McpToolListPagination::default();
                     loop {
                         let response = connection
                             .list_tools(cursor.as_deref(), plan.timeout_ms)
                             .await?;
                         tools.extend(response.tools);
-                        let Some(next_cursor) = response.next_cursor else {
+                        let Some(next_cursor) =
+                            pagination.advance(&plan.server_id, response.next_cursor)?
+                        else {
                             break;
                         };
                         cursor = Some(next_cursor);

@@ -3,7 +3,7 @@
 //! These types model configured servers, discovered tools, startup plans, call
 //! plans, prompt summaries, and transport/discovery results without owning I/O.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::{MezError, Result};
 
@@ -29,6 +29,59 @@ pub const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_MCP_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Maximum number of `tools/list` pages accepted during MCP discovery.
+///
+/// Discovery runs on runtime-owned startup paths, so pagination must be bounded
+/// even when an external server repeatedly returns a continuation cursor.
+pub const DEFAULT_MCP_MAX_TOOL_LIST_PAGES: usize = 128;
+
+/// Tracks MCP `tools/list` pagination progress and rejects non-terminating
+/// cursor streams.
+#[derive(Debug, Clone, Default)]
+pub struct McpToolListPagination {
+    /// Number of pages accepted for the current discovery request.
+    pages: usize,
+    /// Continuation cursors already returned by the server.
+    seen_cursors: BTreeSet<String>,
+}
+
+impl McpToolListPagination {
+    /// Records one listed page and returns the next cursor to request.
+    ///
+    /// # Parameters
+    /// - `server_id`: MCP server identifier used in diagnostics.
+    /// - `next_cursor`: Cursor returned by the server for the next page.
+    ///
+    /// # Errors
+    /// Returns an error when the server exceeds the page cap, returns an empty
+    /// cursor, or repeats a cursor that would cause discovery to loop.
+    pub fn advance(
+        &mut self,
+        server_id: &str,
+        next_cursor: Option<String>,
+    ) -> Result<Option<String>> {
+        self.pages = self.pages.saturating_add(1);
+        if self.pages > DEFAULT_MCP_MAX_TOOL_LIST_PAGES {
+            return Err(MezError::invalid_state(format!(
+                "MCP server `{server_id}` exceeded the tools/list page limit of {DEFAULT_MCP_MAX_TOOL_LIST_PAGES}"
+            )));
+        }
+        let Some(cursor) = next_cursor else {
+            return Ok(None);
+        };
+        if cursor.trim().is_empty() {
+            return Err(MezError::invalid_state(format!(
+                "MCP server `{server_id}` returned an empty tools/list cursor"
+            )));
+        }
+        if !self.seen_cursors.insert(cursor.clone()) {
+            return Err(MezError::invalid_state(format!(
+                "MCP server `{server_id}` repeated tools/list cursor `{cursor}`"
+            )));
+        }
+        Ok(Some(cursor))
+    }
+}
 
 /// Carries Mcp Server Kind state for this subsystem.
 ///

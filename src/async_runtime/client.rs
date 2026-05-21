@@ -358,6 +358,15 @@ where
     }
 
     loop {
+        let render_effects = handle
+            .drain_render_side_effects_for_client(client_id.clone(), 8)
+            .await?;
+        if !render_effects.is_empty() {
+            return Ok(AttachedTerminalBatchWake::Readiness(vec![
+                synthetic_output_readiness(),
+            ]));
+        }
+
         tokio::select! {
             biased;
             readiness = io.poll_input_readiness() => {

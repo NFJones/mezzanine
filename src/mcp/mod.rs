@@ -57,13 +57,13 @@ pub use streamable_http::{
     initialize_streamable_http_mcp_server,
 };
 pub use types::{
-    DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, DEFAULT_MCP_STARTUP_TIMEOUT_MS,
-    DEFAULT_MCP_TOOL_TIMEOUT_MS, McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan,
-    McpExternalCapability, McpInitializeResponse, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, McpServerConfig, McpServerKind, McpServerState, McpServerStatus,
-    McpStartupPlan, McpStartupTransportPlan, McpStdioDiscovery, McpStreamableHttpDiscovery,
-    McpStreamableHttpResponse, McpToolCallPlan, McpToolCallRequest, McpToolCallResponse,
-    McpToolEffects, McpToolState, McpToolsListResponse,
+    DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_MAX_TOOL_LIST_PAGES, DEFAULT_MCP_PROTOCOL_VERSION,
+    DEFAULT_MCP_STARTUP_TIMEOUT_MS, DEFAULT_MCP_TOOL_TIMEOUT_MS, McpApprovalSetting,
+    McpDiscoveredTool, McpEnvironmentPlan, McpExternalCapability, McpInitializeResponse,
+    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer, McpServerConfig, McpServerKind,
+    McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpStdioDiscovery,
+    McpStreamableHttpDiscovery, McpStreamableHttpResponse, McpToolCallPlan, McpToolCallRequest,
+    McpToolCallResponse, McpToolEffects, McpToolListPagination, McpToolState, McpToolsListResponse,
 };
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ use super::registry::McpRegistry;
 use super::types::{
     DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, McpInitializeResponse,
     McpStartupPlan, McpStartupTransportPlan, McpStreamableHttpDiscovery, McpStreamableHttpResponse,
-    McpToolCallPlan, McpToolCallResponse,
+    McpToolCallPlan, McpToolCallResponse, McpToolListPagination,
 };
 
 /// Runs the execute streamable http exchange operation for this subsystem.
@@ -159,6 +159,7 @@ pub async fn discover_streamable_http_mcp_server(
     if initialize.supports_tools {
         let mut cursor = None;
         let mut request_id = 2;
+        let mut pagination = McpToolListPagination::default();
         loop {
             let request = build_mcp_tools_list_request(request_id, cursor.as_deref());
             let response = execute_streamable_http_exchange(
@@ -175,7 +176,7 @@ pub async fn discover_streamable_http_mcp_server(
             }
             let listed = parse_mcp_tools_list_response(&response.protocol_body, request_id)?;
             tools.extend(listed.tools);
-            let Some(next_cursor) = listed.next_cursor else {
+            let Some(next_cursor) = pagination.advance(&plan.server_id, listed.next_cursor)? else {
                 break;
             };
             cursor = Some(next_cursor);
