@@ -24,6 +24,9 @@ It is most useful when you want all of the following in one tool:
   copy mode.
 - **Pane-scoped agent context** so one pane can debug a test while another
   stays on logs, a shell, or an editor.
+- **Agentic control of the shell environments you already use** so the agent
+  can inspect and manipulate local panes, container shells, SSH sessions, and
+  other remote command environments through the same pane-scoped workflow.
 - **Action-mediated execution** where models act through explicit shell,
   patch, approval, MCP, and subagent operations instead of passively reading
   terminal state.
@@ -135,6 +138,9 @@ transactions.
   remain usable while an agent prompt is visible.
 - Agents interact with the local system through pane shell transactions. They
   do not receive hidden filesystem or process access outside the shell path.
+- Because the harness lives inside the multiplexer, the same agent workflow can
+  operate on a local shell, a container shell, an SSH session, or another
+  remote command environment already running in that pane.
 - Model context is action-based. Pane screen contents, scrollback, and
   alternate-screen contents are not passively sent to a model by default.
 - Agent turns can inspect files, run bounded shell commands, request approvals,
