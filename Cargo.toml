@@ -8,7 +8,6 @@ name = "mez"
 path = "src/main.rs"
 
 [dependencies]
-mimalloc = "0.1"
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "derive"] }
 futures-util = "0.3"
 base64 = "0.22"

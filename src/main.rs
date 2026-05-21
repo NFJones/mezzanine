@@ -3,13 +3,7 @@
 //! This module owns the main boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
-use mimalloc::MiMalloc;
-
 use std::process::ExitCode;
-
-/// Uses mimalloc as the process-wide allocator for the `mez` binary.
-#[global_allocator]
-static GLOBAL_ALLOCATOR: MiMalloc = MiMalloc;
 
 /// Runs the main operation for this subsystem.
 ///
