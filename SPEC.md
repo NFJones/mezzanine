@@ -2276,9 +2276,13 @@ window creation.
 
 The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
-`clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_muxxer`,
+`clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
 `passthrough`, `resize_debounce_ms`, `cursor_style`, `cursor_blink`, and
 `cursor_blink_interval_ms`.
+
+Implementations MAY accept `terminal.nested_muxxer` as a migration alias for
+`terminal.nested_multiplexer`. When accepted, the alias MUST be normalized to
+the canonical `terminal.nested_multiplexer` setting before layer composition.
 
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with

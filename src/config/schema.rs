@@ -350,7 +350,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "clipboard_paste_command",
     "alternate_screen",
     "focus_events",
-    "nested_muxxer",
+    "nested_multiplexer",
     "passthrough",
     "resize_debounce_ms",
     "cursor_style",

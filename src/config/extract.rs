@@ -57,7 +57,7 @@ pub(super) fn extract_toml_paths(text: &str) -> Vec<String> {
         if let Some((key, _value)) = trimmed.split_once('=') {
             let mut path = section.clone();
             path.push(clean_key_segment(key));
-            paths.push(path.join("."));
+            paths.push(canonical_config_path(&path.join(".")));
         }
     }
 
@@ -93,13 +93,13 @@ pub(super) fn extract_yaml_paths(text: &str) -> Vec<String> {
             stack.pop();
         }
         stack.push((indent, clean_key_segment(key)));
-        paths.push(
-            stack
+        paths.push(canonical_config_path(
+            &stack
                 .iter()
                 .map(|(_, key)| key.as_str())
                 .collect::<Vec<_>>()
                 .join("."),
-        );
+        ));
     }
 
     paths
@@ -112,7 +112,11 @@ pub(super) fn extract_yaml_paths(text: &str) -> Vec<String> {
 /// on duplicated control-flow logic.
 pub(super) fn extract_json_paths(text: &str) -> Vec<String> {
     let mut parser = JsonPathParser::new(text);
-    parser.parse_paths()
+    parser
+        .parse_paths()
+        .into_iter()
+        .map(|path| canonical_config_path(&path))
+        .collect()
 }
 
 /// Runs the extract config values operation for this subsystem.
@@ -121,11 +125,11 @@ pub(super) fn extract_json_paths(text: &str) -> Vec<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn extract_config_values(format: ConfigFormat, text: &str) -> BTreeMap<String, String> {
-    match format {
+    canonical_config_values(match format {
         ConfigFormat::Toml => extract_toml_values(text),
         ConfigFormat::Yaml => extract_yaml_values(text),
         ConfigFormat::Json => extract_json_values(text),
-    }
+    })
 }
 
 /// Runs the extract toml values operation for this subsystem.
@@ -154,7 +158,7 @@ pub(super) fn extract_toml_values(text: &str) -> BTreeMap<String, String> {
         if let Some((key, value)) = trimmed.split_once('=') {
             let mut path = section.clone();
             path.push(clean_key_segment(key));
-            values.insert(path.join("."), clean_value(value));
+            insert_config_value(&mut values, path.join("."), clean_value(value));
         }
     }
 
@@ -191,7 +195,8 @@ pub(super) fn extract_yaml_values(text: &str) -> BTreeMap<String, String> {
         }
         stack.push((indent, clean_key_segment(key)));
         if !value.trim().is_empty() {
-            values.insert(
+            insert_config_value(
+                &mut values,
                 stack
                     .iter()
                     .map(|(_, key)| key.as_str())
@@ -213,6 +218,34 @@ pub(super) fn extract_yaml_values(text: &str) -> BTreeMap<String, String> {
 pub(super) fn extract_json_values(text: &str) -> BTreeMap<String, String> {
     let mut parser = JsonValueParser::new(text);
     parser.parse_values()
+}
+
+/// Returns the canonical spelling for supported historical configuration paths.
+pub(super) fn canonical_config_path(path: &str) -> String {
+    match path {
+        "terminal.nested_muxxer" => "terminal.nested_multiplexer".to_string(),
+        _ => path.to_string(),
+    }
+}
+
+/// Canonicalizes extracted config values while preserving canonical-key
+/// precedence over historical aliases.
+fn canonical_config_values(values: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut canonical = BTreeMap::new();
+    for (path, value) in values {
+        insert_config_value(&mut canonical, path, value);
+    }
+    canonical
+}
+
+/// Inserts one config value after applying historical path aliases.
+fn insert_config_value(values: &mut BTreeMap<String, String>, path: String, value: String) {
+    let canonical_path = canonical_config_path(&path);
+    if canonical_path == path {
+        values.insert(canonical_path, value);
+    } else {
+        values.entry(canonical_path).or_insert(value);
+    }
 }
 
 /// Runs the clean key segment operation for this subsystem.

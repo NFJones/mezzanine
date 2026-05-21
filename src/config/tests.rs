@@ -606,6 +606,41 @@ fn rejects_unknown_nested_schema_keys() {
     }));
 }
 
+/// Verifies that the historical nested-muxer key spelling is accepted only as
+/// a migration alias for the canonical terminal nested-multiplexer setting.
+/// This protects existing primary configuration files written before the
+/// spelling cleanup from blocking daemon launch while keeping the effective
+/// configuration surface canonical.
+#[test]
+fn accepts_legacy_nested_muxxer_alias_as_terminal_migration_key() {
+    let text = "[terminal]\nnested_muxxer = \"auto\"\n";
+    let validation = validate_config_text(ConfigFormat::Toml, text, ConfigScope::Primary);
+
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+    let values = extract_config_values(ConfigFormat::Toml, text);
+    assert_eq!(
+        values.get("terminal.nested_multiplexer"),
+        Some(&"auto".to_string())
+    );
+    assert!(!values.contains_key("terminal.nested_muxxer"));
+}
+
+/// Verifies that the canonical terminal nested-multiplexer key wins if both it
+/// and the historical migration alias are present. Keeping this precedence
+/// deterministic avoids file-order sensitivity during startup config merge.
+#[test]
+fn canonical_nested_multiplexer_key_overrides_legacy_alias() {
+    let values = extract_config_values(
+        ConfigFormat::Toml,
+        "[terminal]\nnested_multiplexer = \"disabled\"\nnested_muxxer = \"auto\"\n",
+    );
+
+    assert_eq!(
+        values.get("terminal.nested_multiplexer"),
+        Some(&"disabled".to_string())
+    );
+}
+
 /// Verifies that custom subagent profiles are part of the baseline config
 /// schema, including nested shell environment overrides, while unknown profile
 /// keys remain rejected.

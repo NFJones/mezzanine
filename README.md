@@ -305,12 +305,15 @@ entry is shown.
 | `terminal.clipboard_paste_command` | string or string array | omitted | Host paste command; writes content to stdout. |
 | `terminal.alternate_screen` | boolean | `true` | Support alternate-screen applications. |
 | `terminal.focus_events` | boolean | `true` | Enable focus event reporting when supported. |
-| `terminal.nested_muxxer` | string | `"auto"` | Nested muxxer handling mode. |
+| `terminal.nested_multiplexer` | string | `"auto"` | Nested multiplexer handling mode. |
 | `terminal.passthrough` | boolean | `false` | Allow broader terminal passthrough behavior when configured. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |
+
+The historical `terminal.nested_muxxer` spelling is accepted as a migration
+alias and is normalized to `terminal.nested_multiplexer` during config loading.
 
 ### `shell`
 
