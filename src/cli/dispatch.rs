@@ -7,8 +7,8 @@
 use super::{
     CliInvocation, ConfigPaths, IsTerminal, MezError, OsString, Parser, PathBuf, Result,
     RuntimeEnv, Write, cli_idempotency_key, io, is_cli_help_request, json_escape, parse_cli_args,
-    print_help, run_attach, run_auth, run_config, run_control_request, run_list, run_mcp,
-    run_memory, run_new, run_serve, run_snapshot,
+    print_help, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
+    run_control_request, run_list, run_mcp, run_memory, run_new, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -103,6 +103,7 @@ pub async fn run_with<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<()> {
     let invocation = CliInvocation::parse(&args, &env.runtime, env.mez.as_ref())?;
+    cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
     let command = invocation.command.as_str();
     let command_args = invocation.args.as_slice();
     let output_format = invocation.output_format;
@@ -245,6 +246,24 @@ pub async fn run_with<W: Write, E: Write>(
     }
 
     Ok(())
+}
+
+/// Removes unserved sockets from Mezzanine-owned runtime directories at CLI
+/// startup.
+///
+/// # Parameters
+/// - `invocation`: The parsed CLI invocation whose socket selection determines
+///   the cleanup scope.
+/// - `owner_uid`: The current effective user id.
+fn cleanup_startup_stale_socket_files(invocation: &CliInvocation, owner_uid: u32) -> Result<()> {
+    match &invocation.socket_selection {
+        super::SocketSelection::Default(_) | super::SocketSelection::Named(_) => {
+            let root = super::registry_root(&invocation.socket_selection)?;
+            let _ = prune_stale_socket_files_in_directory(&root, owner_uid)?;
+            Ok(())
+        }
+        super::SocketSelection::Explicit(_) | super::SocketSelection::InPane(_) => Ok(()),
+    }
 }
 
 /// Typed process CLI arguments for `mez detach`.

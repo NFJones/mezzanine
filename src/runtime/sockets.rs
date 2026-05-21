@@ -211,6 +211,75 @@ fn remove_stale_socket_path(path: &Path) -> Result<()> {
     }
 }
 
+/// Removes stale Mezzanine socket files from a private runtime directory.
+///
+/// Only current-user-owned Unix socket files are eligible. Live same-user
+/// sockets are preserved; refused sockets are removed. Entries that are not
+/// socket files are ignored so arbitrary files in the runtime directory are not
+/// treated as cleanup targets.
+///
+/// # Parameters
+/// - `directory`: The Mezzanine runtime socket directory to scan.
+/// - `owner_uid`: The user id that must own removable socket files.
+pub fn prune_stale_socket_files_in_directory(directory: &Path, owner_uid: u32) -> Result<usize> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return Err(MezError::conflict(format!(
+                "socket directory path exists and is not a directory: {}",
+                directory.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    }
+    ensure_private_socket_directory(directory, owner_uid)?;
+    let mut removed = 0usize;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("sock") {
+            continue;
+        }
+        if remove_stale_socket_file_if_unserved(&path, owner_uid)? {
+            removed = removed.saturating_add(1);
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes one stale socket file when no live current-user server owns it.
+///
+/// # Parameters
+/// - `path`: The candidate Unix socket path.
+/// - `owner_uid`: The user id that must own removable socket files.
+pub fn remove_stale_socket_file_if_unserved(path: &Path, owner_uid: u32) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.uid() != owner_uid || !metadata.file_type().is_socket() {
+        return Ok(false);
+    }
+    match UnixStream::connect(path) {
+        Ok(stream) => match unix_peer_uid(stream.as_raw_fd()) {
+            Ok(peer_uid) if peer_uid == owner_uid => Ok(false),
+            Ok(_) => {
+                remove_stale_socket_path(path)?;
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            remove_stale_socket_path(path)?;
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
+}
+
 /// Runs the apply registry update operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -17,8 +17,9 @@ use super::{
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSubagentLineage,
     RuntimeSubagentPlacement, SenderIdentity, SocketDirectorySource, SplitDirection,
     SubagentWaitPolicy, TrustDecision, UnixStream, authorize_unix_peer, authorize_unix_peer_uid,
-    auxiliary_socket_path_for_control_socket, default_socket_directory, effective_uid,
-    ensure_private_socket_directory, fs, json_escape, pane_environment, pane_environment_with_term,
+    auxiliary_socket_path_for_control_socket, bind_control_socket, default_socket_directory,
+    effective_uid, ensure_private_socket_directory, fs, json_escape, pane_environment,
+    pane_environment_with_term, prune_stale_socket_files_in_directory,
     runtime_hook_event_for_lifecycle, runtime_hook_event_name, runtime_marker_for_action,
     socket_path_for_name,
 };
@@ -1537,6 +1538,38 @@ fn unix_peer_authorization_accepts_same_user_stream() {
     let (_client, server) = UnixStream::pair().unwrap();
 
     authorize_unix_peer(&server, effective_uid()).unwrap();
+}
+
+/// Verifies stale socket cleanup removes only unserved runtime sockets.
+///
+/// This regression scenario protects startup cleanup from deleting live Mez
+/// endpoints while still removing refused socket files left behind by crashed
+/// processes.
+#[test]
+fn prune_stale_socket_files_removes_refused_socket_and_preserves_live_socket() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-runtime-test-stale-sockets-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    ensure_private_socket_directory(&root, effective_uid()).unwrap();
+    let stale = root.join("stale.sock");
+    let live = root.join("live.sock");
+    let non_socket = root.join("not-a-socket.sock");
+
+    let stale_listener = std::os::unix::net::UnixListener::bind(&stale).unwrap();
+    drop(stale_listener);
+    let _live_listener = bind_control_socket(&live, effective_uid()).unwrap();
+    fs::write(&non_socket, "leave this alone").unwrap();
+
+    let removed = prune_stale_socket_files_in_directory(&root, effective_uid()).unwrap();
+
+    assert_eq!(removed, 1);
+    assert!(!stale.exists());
+    assert!(live.exists());
+    assert!(non_socket.exists());
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 /// Verifies pane environment places socket path first.

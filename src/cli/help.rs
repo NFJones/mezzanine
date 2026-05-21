@@ -31,7 +31,7 @@ commands:\n\
                        alias: daemon\n\
   list                 list resumable sessions known to this client\n\
                        alias: list-sessions\n\
-  attach [SESSION_ID|INDEX] [--observer]\n\
+  attach [SESSION_ID|INDEX] [--observer|--observe]\n\
                        reattach primary terminal or request observer access\n\
                        alias: attach-session\n\
   detach [--client-id ID]\n\

@@ -305,67 +305,67 @@ pub struct KeyBindings {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub split_vertical: KeyChord,
+    pub split_vertical: Option<KeyChord>,
     /// Stores the split horizontal value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub split_horizontal: KeyChord,
+    pub split_horizontal: Option<KeyChord>,
     /// Stores the new window value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub new_window: KeyChord,
+    pub new_window: Option<KeyChord>,
     /// Stores the new group value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub new_group: KeyChord,
+    pub new_group: Option<KeyChord>,
     /// Stores the agent shell value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub agent_shell: KeyChord,
+    pub agent_shell: Option<KeyChord>,
     /// Stores the focus up value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_up: KeyChord,
+    pub focus_up: Option<KeyChord>,
     /// Stores the focus down value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_down: KeyChord,
+    pub focus_down: Option<KeyChord>,
     /// Stores the focus left value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_left: KeyChord,
+    pub focus_left: Option<KeyChord>,
     /// Stores the focus right value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_right: KeyChord,
+    pub focus_right: Option<KeyChord>,
     /// Stores the focus previous window value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_previous_window: KeyChord,
+    pub focus_previous_window: Option<KeyChord>,
     /// Stores the focus next window value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_next_window: KeyChord,
+    pub focus_next_window: Option<KeyChord>,
     /// Stores the focus previous group value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_previous_group: KeyChord,
+    pub focus_previous_group: Option<KeyChord>,
     /// Stores the focus next group value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub focus_next_group: KeyChord,
+    pub focus_next_group: Option<KeyChord>,
 }
 
 impl Default for KeyBindings {
@@ -377,19 +377,19 @@ impl Default for KeyBindings {
     fn default() -> Self {
         Self {
             escape: KeyChord::ctrl(KeyCode::Char('a')),
-            split_vertical: KeyChord::alt(KeyCode::Char('\\')),
-            split_horizontal: KeyChord::alt(KeyCode::Char('-')),
-            new_window: KeyChord::alt(KeyCode::Char('=')),
-            new_group: KeyChord::alt_shift(KeyCode::Char('=')),
-            agent_shell: KeyChord::alt(KeyCode::Char(']')),
-            focus_up: KeyChord::ctrl_alt(KeyCode::Up),
-            focus_down: KeyChord::ctrl_alt(KeyCode::Down),
-            focus_left: KeyChord::ctrl_alt(KeyCode::Left),
-            focus_right: KeyChord::ctrl_alt(KeyCode::Right),
-            focus_previous_window: KeyChord::ctrl_alt(KeyCode::PageUp),
-            focus_next_window: KeyChord::ctrl_alt(KeyCode::PageDown),
-            focus_previous_group: KeyChord::ctrl_alt_shift(KeyCode::PageUp),
-            focus_next_group: KeyChord::ctrl_alt_shift(KeyCode::PageDown),
+            split_vertical: None,
+            split_horizontal: None,
+            new_window: None,
+            new_group: Some(KeyChord::alt_shift(KeyCode::Char('='))),
+            agent_shell: Some(KeyChord::alt(KeyCode::Char(']'))),
+            focus_up: None,
+            focus_down: None,
+            focus_left: None,
+            focus_right: None,
+            focus_previous_window: None,
+            focus_next_window: None,
+            focus_previous_group: Some(KeyChord::ctrl_alt_shift(KeyCode::PageUp)),
+            focus_next_group: Some(KeyChord::ctrl_alt_shift(KeyCode::PageDown)),
         }
     }
 }
@@ -1113,31 +1113,31 @@ pub(super) fn classify_direct_binding(
     chord: KeyChord,
     bindings: &KeyBindings,
 ) -> Option<MuxAction> {
-    if chord == bindings.split_vertical {
+    if bindings.split_vertical == Some(chord) {
         Some(MuxAction::SplitPaneVertical)
-    } else if chord == bindings.split_horizontal {
+    } else if bindings.split_horizontal == Some(chord) {
         Some(MuxAction::SplitPaneHorizontal)
-    } else if chord == bindings.new_window {
+    } else if bindings.new_window == Some(chord) {
         Some(MuxAction::NewWindow)
-    } else if chord == bindings.new_group {
+    } else if bindings.new_group == Some(chord) {
         Some(MuxAction::NewGroup)
-    } else if chord == bindings.agent_shell {
+    } else if bindings.agent_shell == Some(chord) {
         Some(MuxAction::ToggleAgentShell)
-    } else if chord == bindings.focus_up {
+    } else if bindings.focus_up == Some(chord) {
         Some(MuxAction::FocusPane(PaneFocusDirection::Up))
-    } else if chord == bindings.focus_down {
+    } else if bindings.focus_down == Some(chord) {
         Some(MuxAction::FocusPane(PaneFocusDirection::Down))
-    } else if chord == bindings.focus_left {
+    } else if bindings.focus_left == Some(chord) {
         Some(MuxAction::FocusPane(PaneFocusDirection::Left))
-    } else if chord == bindings.focus_right {
+    } else if bindings.focus_right == Some(chord) {
         Some(MuxAction::FocusPane(PaneFocusDirection::Right))
-    } else if chord == bindings.focus_previous_window {
+    } else if bindings.focus_previous_window == Some(chord) {
         Some(MuxAction::FocusWindow(WindowFocusTarget::Previous))
-    } else if chord == bindings.focus_next_window {
+    } else if bindings.focus_next_window == Some(chord) {
         Some(MuxAction::FocusWindow(WindowFocusTarget::Next))
-    } else if chord == bindings.focus_previous_group {
+    } else if bindings.focus_previous_group == Some(chord) {
         Some(MuxAction::FocusGroup(GroupFocusTarget::Previous))
-    } else if chord == bindings.focus_next_group {
+    } else if bindings.focus_next_group == Some(chord) {
         Some(MuxAction::FocusGroup(GroupFocusTarget::Next))
     } else {
         None

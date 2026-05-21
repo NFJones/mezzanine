@@ -2536,92 +2536,104 @@ pub(super) fn runtime_validate_config_identifier(value: &str, label: &str) -> Re
 pub(super) fn runtime_list_key_bindings_display(service: &RuntimeSessionService) -> Result<String> {
     let effective = compose_effective_config(&service.config_layers)?;
     let prefix = key_chord_notation(service.key_bindings.escape);
-    let mut lines = vec![
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.split_vertical),
-            runtime_key_source(&effective, "keys.split_vertical"),
-            "split-window",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.split_horizontal),
-            runtime_key_source(&effective, "keys.split_horizontal"),
-            "split-window -h",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.new_window),
-            runtime_key_source(&effective, "keys.new_window"),
-            "new-window",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.new_group),
-            runtime_key_source(&effective, "keys.new_group"),
-            "new-group",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.agent_shell),
-            runtime_key_source(&effective, "keys.agent_shell"),
-            "agent-shell",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_up),
-            runtime_key_source(&effective, "keys.focus_up"),
-            "select-pane -U",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_down),
-            runtime_key_source(&effective, "keys.focus_down"),
-            "select-pane -D",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_left),
-            runtime_key_source(&effective, "keys.focus_left"),
-            "select-pane -L",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_right),
-            runtime_key_source(&effective, "keys.focus_right"),
-            "select-pane -R",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_previous_window),
-            runtime_key_source(&effective, "keys.focus_previous_window"),
-            "previous-window",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_next_window),
-            runtime_key_source(&effective, "keys.focus_next_window"),
-            "next-window",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_previous_group),
-            runtime_key_source(&effective, "keys.focus_previous_group"),
-            "previous-group",
-        ),
-        runtime_key_binding_line(
-            key_chord_notation(service.key_bindings.focus_next_group),
-            runtime_key_source(&effective, "keys.focus_next_group"),
-            "next-group",
-        ),
-    ];
+    let mut rows = Vec::new();
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.split_vertical,
+        runtime_key_source(&effective, "keys.split_vertical"),
+        "split-window",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.split_horizontal,
+        runtime_key_source(&effective, "keys.split_horizontal"),
+        "split-window -h",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.new_window,
+        runtime_key_source(&effective, "keys.new_window"),
+        "new-window",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.new_group,
+        runtime_key_source(&effective, "keys.new_group"),
+        "new-group",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.agent_shell,
+        runtime_key_source(&effective, "keys.agent_shell"),
+        "agent-shell",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_up,
+        runtime_key_source(&effective, "keys.focus_up"),
+        "select-pane -U",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_down,
+        runtime_key_source(&effective, "keys.focus_down"),
+        "select-pane -D",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_left,
+        runtime_key_source(&effective, "keys.focus_left"),
+        "select-pane -L",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_right,
+        runtime_key_source(&effective, "keys.focus_right"),
+        "select-pane -R",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_previous_window,
+        runtime_key_source(&effective, "keys.focus_previous_window"),
+        "previous-window",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_next_window,
+        runtime_key_source(&effective, "keys.focus_next_window"),
+        "next-window",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_previous_group,
+        runtime_key_source(&effective, "keys.focus_previous_group"),
+        "previous-group",
+    );
+    runtime_push_optional_key_binding_row(
+        &mut rows,
+        service.key_bindings.focus_next_group,
+        runtime_key_source(&effective, "keys.focus_next_group"),
+        "next-group",
+    );
 
     for (chord, command) in runtime_default_prefix_bindings(service.key_bindings.escape) {
         if service.command_bindings.contains_key(&chord) {
             continue;
         }
-        lines.push(runtime_key_binding_line(
-            format!("{prefix} {}", key_chord_notation(chord)),
-            runtime_key_source(&effective, "keys.escape"),
-            command,
-        ));
+        rows.push(RuntimeKeyBindingDisplayRow {
+            key: format!("{prefix} {}", key_chord_notation(chord)),
+            source: runtime_key_source(&effective, "keys.escape").to_string(),
+            command: command.to_string(),
+        });
     }
     for binding in service.command_bindings.values() {
-        lines.push(runtime_key_binding_line(
-            format!("{prefix} {}", binding.notation),
-            &binding.source_layer,
-            &binding.command,
-        ));
+        rows.push(RuntimeKeyBindingDisplayRow {
+            key: format!("{prefix} {}", binding.notation),
+            source: binding.source_layer.clone(),
+            command: binding.command.clone(),
+        });
     }
-    Ok(lines.join("\n"))
+    Ok(runtime_key_binding_rows_display(&rows))
 }
 
 /// Runs the runtime bind key command operation for this subsystem.
@@ -2702,17 +2714,72 @@ pub(super) fn runtime_key_source<'a>(
     effective.source_for(path).unwrap_or("default")
 }
 
-/// Runs the runtime key binding line operation for this subsystem.
+/// Carries one effective key binding row before alignment.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_key_binding_line(key: String, source: &str, command: &str) -> String {
-    format!(
-        "{key}:source={}:command={}",
-        json_escape(source),
-        json_escape(command)
-    )
+/// The type keeps display data structured so command output can align columns
+/// without reparsing display strings.
+struct RuntimeKeyBindingDisplayRow {
+    /// The display notation for the key chord or chord sequence.
+    key: String,
+    /// The configuration source for the binding.
+    source: String,
+    /// The command executed by the binding.
+    command: String,
+}
+
+/// Adds an effective direct key binding row when the binding is enabled.
+///
+/// # Parameters
+/// - `rows`: The table rows being constructed.
+/// - `chord`: The optional direct key chord.
+/// - `source`: The source label for the binding.
+/// - `command`: The command executed by the binding.
+fn runtime_push_optional_key_binding_row(
+    rows: &mut Vec<RuntimeKeyBindingDisplayRow>,
+    chord: Option<KeyChord>,
+    source: &str,
+    command: &str,
+) {
+    if let Some(chord) = chord {
+        rows.push(RuntimeKeyBindingDisplayRow {
+            key: key_chord_notation(chord),
+            source: source.to_string(),
+            command: command.to_string(),
+        });
+    }
+}
+
+/// Renders effective key binding rows with aligned columns.
+///
+/// # Parameters
+/// - `rows`: The key binding rows to display.
+fn runtime_key_binding_rows_display(rows: &[RuntimeKeyBindingDisplayRow]) -> String {
+    let key_width = rows
+        .iter()
+        .map(|row| row.key.len())
+        .max()
+        .unwrap_or("key".len())
+        .max("key".len());
+    let source_width = rows
+        .iter()
+        .map(|row| row.source.len())
+        .max()
+        .unwrap_or("source".len())
+        .max("source".len());
+    std::iter::once(format!(
+        "{:<key_width$}  {:<source_width$}  command",
+        "key", "source"
+    ))
+    .chain(rows.iter().map(|row| {
+        format!(
+            "{:<key_width$}  {:<source_width$}  {}",
+            row.key,
+            json_escape(&row.source),
+            json_escape(&row.command)
+        )
+    }))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 /// Runs the runtime default prefix bindings operation for this subsystem.

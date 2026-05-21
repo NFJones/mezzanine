@@ -701,7 +701,7 @@ async fn async_actor_applies_primary_client_input_events() {
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Client(ClientEvent::Input {
             client_id: primary,
-            bytes: b"\x1b\\".to_vec(),
+            bytes: b"\x01%".to_vec(),
         }));
 
         let report = handle.submit_runtime_events(batch).await.unwrap();
@@ -9277,7 +9277,7 @@ async fn async_attached_terminal_step_uses_runtime_rendered_view() {
             Size::new(80, 24).unwrap(),
             TerminalClientLoopConfig::default(),
             &readiness,
-            Some(b"\x1b-"),
+            Some(b"\x01\""),
             Some(&status),
         )
         .await
@@ -9783,7 +9783,7 @@ async fn async_attached_terminal_loop_renders_and_applies_primary_actions() {
                 error: false,
             },
         ]],
-        input_batches: vec![b"\x1b[1;7C".to_vec()],
+        input_batches: vec![b"\x01\x1b[C".to_vec()],
         written_batches: Vec::new(),
         write_error_kinds: Vec::new(),
     };

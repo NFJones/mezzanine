@@ -947,75 +947,52 @@ pub(super) fn show_messages_display() -> String {
 pub(super) fn list_default_key_bindings() -> String {
     let bindings = KeyBindings::default();
     let prefix = key_chord_notation(bindings.escape);
-    let mut lines = vec![
-        key_binding_line(
-            key_chord_notation(bindings.split_vertical),
-            "default",
-            "split-window",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.split_horizontal),
-            "default",
-            "split-window -h",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.new_window),
-            "default",
-            "new-window",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.new_group),
-            "default",
-            "new-group",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.agent_shell),
-            "default",
-            "agent-shell",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_up),
-            "default",
-            "select-pane -U",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_down),
-            "default",
-            "select-pane -D",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_left),
-            "default",
-            "select-pane -L",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_right),
-            "default",
-            "select-pane -R",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_previous_window),
-            "default",
-            "previous-window",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_next_window),
-            "default",
-            "next-window",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_previous_group),
-            "default",
-            "previous-group",
-        ),
-        key_binding_line(
-            key_chord_notation(bindings.focus_next_group),
-            "default",
-            "next-group",
-        ),
-    ];
+    let mut rows = Vec::new();
+    push_optional_key_binding_row(
+        &mut rows,
+        bindings.split_vertical,
+        "default",
+        "split-window",
+    );
+    push_optional_key_binding_row(
+        &mut rows,
+        bindings.split_horizontal,
+        "default",
+        "split-window -h",
+    );
+    push_optional_key_binding_row(&mut rows, bindings.new_window, "default", "new-window");
+    push_optional_key_binding_row(&mut rows, bindings.new_group, "default", "new-group");
+    push_optional_key_binding_row(&mut rows, bindings.agent_shell, "default", "agent-shell");
+    push_optional_key_binding_row(&mut rows, bindings.focus_up, "default", "select-pane -U");
+    push_optional_key_binding_row(&mut rows, bindings.focus_down, "default", "select-pane -D");
+    push_optional_key_binding_row(&mut rows, bindings.focus_left, "default", "select-pane -L");
+    push_optional_key_binding_row(&mut rows, bindings.focus_right, "default", "select-pane -R");
+    push_optional_key_binding_row(
+        &mut rows,
+        bindings.focus_previous_window,
+        "default",
+        "previous-window",
+    );
+    push_optional_key_binding_row(
+        &mut rows,
+        bindings.focus_next_window,
+        "default",
+        "next-window",
+    );
+    push_optional_key_binding_row(
+        &mut rows,
+        bindings.focus_previous_group,
+        "default",
+        "previous-group",
+    );
+    push_optional_key_binding_row(
+        &mut rows,
+        bindings.focus_next_group,
+        "default",
+        "next-group",
+    );
 
-    lines.extend(
+    rows.extend(
         [
             ("C-a", "send-prefix"),
             (":", "command-prompt"),
@@ -1067,19 +1044,80 @@ pub(super) fn list_default_key_bindings() -> String {
             ("~", "show-messages"),
         ]
         .into_iter()
-        .map(|(key, command)| key_binding_line(format!("{prefix} {key}"), "default", command)),
+        .map(|(key, command)| KeyBindingDisplayRow {
+            key: format!("{prefix} {key}"),
+            source: "default".to_string(),
+            command: command.to_string(),
+        }),
     );
 
-    lines.join("\n")
+    key_binding_rows_display(&rows)
 }
 
-/// Runs the key binding line operation for this subsystem.
+/// Carries one rendered key binding row before alignment.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn key_binding_line(key: String, source: &str, command: &str) -> String {
-    format!("{key}:source={source}:command={command}")
+/// The type keeps table data structured so both `help` and `list-keys` can
+/// present aligned columns without reparsing display strings.
+struct KeyBindingDisplayRow {
+    /// The display notation for the key chord or chord sequence.
+    key: String,
+    /// The configuration or generated source for the row.
+    source: String,
+    /// The command executed by the binding.
+    command: String,
+}
+
+/// Adds a row when a direct default key binding is enabled.
+///
+/// # Parameters
+/// - `rows`: The table rows being constructed.
+/// - `chord`: The optional direct key chord.
+/// - `source`: The source label for the binding.
+/// - `command`: The command executed by the binding.
+fn push_optional_key_binding_row(
+    rows: &mut Vec<KeyBindingDisplayRow>,
+    chord: Option<KeyChord>,
+    source: &str,
+    command: &str,
+) {
+    if let Some(chord) = chord {
+        rows.push(KeyBindingDisplayRow {
+            key: key_chord_notation(chord),
+            source: source.to_string(),
+            command: command.to_string(),
+        });
+    }
+}
+
+/// Renders key binding rows with aligned columns.
+///
+/// # Parameters
+/// - `rows`: The key binding rows to display.
+fn key_binding_rows_display(rows: &[KeyBindingDisplayRow]) -> String {
+    let key_width = rows
+        .iter()
+        .map(|row| row.key.len())
+        .max()
+        .unwrap_or("key".len())
+        .max("key".len());
+    let source_width = rows
+        .iter()
+        .map(|row| row.source.len())
+        .max()
+        .unwrap_or("source".len())
+        .max("source".len());
+    std::iter::once(format!(
+        "{:<key_width$}  {:<source_width$}  command",
+        "key", "source"
+    ))
+    .chain(rows.iter().map(|row| {
+        format!(
+            "{:<key_width$}  {:<source_width$}  {}",
+            row.key, row.source, row.command
+        )
+    }))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 /// Runs the key chord notation operation for this subsystem.

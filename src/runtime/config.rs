@@ -1750,35 +1750,39 @@ pub(super) fn runtime_key_bindings_from_config(root: &Value) -> Result<KeyBindin
     let defaults = KeyBindings::default();
     Ok(KeyBindings {
         escape: runtime_key_binding_value(keys, "escape", defaults.escape)?,
-        split_vertical: runtime_key_binding_value(keys, "split_vertical", defaults.split_vertical)?,
-        split_horizontal: runtime_key_binding_value(
+        split_vertical: runtime_optional_key_binding_value(
+            keys,
+            "split_vertical",
+            defaults.split_vertical,
+        )?,
+        split_horizontal: runtime_optional_key_binding_value(
             keys,
             "split_horizontal",
             defaults.split_horizontal,
         )?,
-        new_window: runtime_key_binding_value(keys, "new_window", defaults.new_window)?,
-        new_group: runtime_key_binding_value(keys, "new_group", defaults.new_group)?,
-        agent_shell: runtime_key_binding_value(keys, "agent_shell", defaults.agent_shell)?,
-        focus_up: runtime_key_binding_value(keys, "focus_up", defaults.focus_up)?,
-        focus_down: runtime_key_binding_value(keys, "focus_down", defaults.focus_down)?,
-        focus_left: runtime_key_binding_value(keys, "focus_left", defaults.focus_left)?,
-        focus_right: runtime_key_binding_value(keys, "focus_right", defaults.focus_right)?,
-        focus_previous_window: runtime_key_binding_value(
+        new_window: runtime_optional_key_binding_value(keys, "new_window", defaults.new_window)?,
+        new_group: runtime_optional_key_binding_value(keys, "new_group", defaults.new_group)?,
+        agent_shell: runtime_optional_key_binding_value(keys, "agent_shell", defaults.agent_shell)?,
+        focus_up: runtime_optional_key_binding_value(keys, "focus_up", defaults.focus_up)?,
+        focus_down: runtime_optional_key_binding_value(keys, "focus_down", defaults.focus_down)?,
+        focus_left: runtime_optional_key_binding_value(keys, "focus_left", defaults.focus_left)?,
+        focus_right: runtime_optional_key_binding_value(keys, "focus_right", defaults.focus_right)?,
+        focus_previous_window: runtime_optional_key_binding_value(
             keys,
             "focus_previous_window",
             defaults.focus_previous_window,
         )?,
-        focus_next_window: runtime_key_binding_value(
+        focus_next_window: runtime_optional_key_binding_value(
             keys,
             "focus_next_window",
             defaults.focus_next_window,
         )?,
-        focus_previous_group: runtime_key_binding_value(
+        focus_previous_group: runtime_optional_key_binding_value(
             keys,
             "focus_previous_group",
             defaults.focus_previous_group,
         )?,
-        focus_next_group: runtime_key_binding_value(
+        focus_next_group: runtime_optional_key_binding_value(
             keys,
             "focus_next_group",
             defaults.focus_next_group,
@@ -1803,6 +1807,36 @@ pub(super) fn runtime_key_binding_value(
         return Err(MezError::config(format!("keys.{field} must be a string")));
     };
     KeyChord::parse(notation)
+        .map_err(|error| MezError::config(format!("keys.{field} is invalid: {error}")))
+}
+
+/// Reads an optional direct key binding from effective configuration.
+///
+/// Missing fields keep the generated default. A string configures the direct
+/// binding, while `null` disables it explicitly.
+///
+/// # Parameters
+/// - `keys`: The effective `[keys]` object.
+/// - `field`: The direct binding field name.
+/// - `default`: The generated default binding state.
+pub(super) fn runtime_optional_key_binding_value(
+    keys: &serde_json::Map<String, Value>,
+    field: &str,
+    default: Option<KeyChord>,
+) -> Result<Option<KeyChord>> {
+    let Some(value) = keys.get(field) else {
+        return Ok(default);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(notation) = value.as_str() else {
+        return Err(MezError::config(format!(
+            "keys.{field} must be a string or null"
+        )));
+    };
+    KeyChord::parse(notation)
+        .map(Some)
         .map_err(|error| MezError::config(format!("keys.{field} is invalid: {error}")))
 }
 

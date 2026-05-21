@@ -361,7 +361,8 @@ for:
   socket selector, it MUST resolve an attachable session through the session
   registry rather than assuming the default control socket is active. It MUST
   accept an explicit session identifier and attach to that session's registered
-  control socket.
+  control socket. It MUST accept `--observer` and `--observe` as equivalent
+  flags for requesting pending observer access.
 - `mez list`: List resumable sessions.
 - `mez detach`: Detach the current client when invoked from inside a session.
 - `mez kill-session`: Terminate a session explicitly.
@@ -443,6 +444,12 @@ an equivalent lock-protected server identity check. After binding, Mezzanine
 SHOULD set the socket file permissions to `0600` when the host operating system
 honors Unix socket permissions.
 
+On CLI startup, Mezzanine SHOULD scan its generated current-user runtime socket
+directory and remove stale current-user-owned Mezzanine socket files that are
+not connected to a live server. This cleanup MUST preserve live same-user
+servers, MUST ignore non-socket files, and MUST NOT sweep arbitrary
+user-supplied explicit socket directories.
+
 For local Unix-domain control connections, Mezzanine SHOULD verify peer user
 identity with operating-system peer credential facilities when available. A
 peer whose effective user identity does not match the session owner MUST be
@@ -515,8 +522,9 @@ Each window MUST contain one or more panes.
 
 Mezzanine MUST support creation of a new window from a live session. The
 default prefix binding for creating a new window MUST be
-`Ctrl+A c`. Mezzanine MAY also provide a direct convenience binding; the
-generated default direct binding for creating a new window MUST be `Alt+=`.
+`Ctrl+A c`. Mezzanine MAY also provide a direct convenience binding through
+configuration, but the generated defaults MUST NOT bind a duplicate direct key
+for creating a new window.
 
 Every active window MUST belong to exactly one window group. A session MUST have
 one active group while it contains windows. Creating a new ordinary window MUST
@@ -527,9 +535,10 @@ the source window's group.
 Mezzanine MUST support creating a new window group from a live session. Creating
 a group MUST create one landing window in that group. The default prefix
 binding for choosing a window group MUST be `Ctrl+A G`. Mezzanine MAY also
-provide direct convenience bindings; the generated default direct key binding
-for creating a group MUST be `Alt+Shift+=`, and the generated default direct key
-bindings for focusing the previous and next group MUST be
+provide direct convenience bindings for group operations without prefix
+equivalents; the generated default direct key binding for creating a group MUST
+be `Alt+Shift+=`, and the generated default direct key bindings for focusing the
+previous and next group MUST be
 `Ctrl+Alt+Shift+PageUp` and `Ctrl+Alt+Shift+PageDown`.
 
 The visible window bar MUST list windows from the active group. Window
@@ -559,28 +568,30 @@ Each pane MUST have a rectangular region within its containing window.
 Mezzanine MUST support live pane splitting.
 
 The default prefix binding for vertical splitting MUST be
-`Ctrl+A %`. Mezzanine MAY also provide a direct convenience binding; the
-generated default direct key binding for vertical splitting MUST be `Alt+\`.
+`Ctrl+A %`. Mezzanine MAY also provide a direct convenience binding through
+configuration, but the generated defaults MUST NOT bind a duplicate direct key
+for vertical splitting.
 
 The default prefix binding for horizontal splitting MUST be
-`Ctrl+A "`. Mezzanine MAY also provide a direct convenience binding; the
-generated default direct key binding for horizontal splitting MUST be `Alt+-`.
+`Ctrl+A "`. Mezzanine MAY also provide a direct convenience binding through
+configuration, but the generated defaults MUST NOT bind a duplicate direct key
+for horizontal splitting.
 
 The default prefix bindings for focusing the pane above, below, left,
 or right of the active pane MUST be `Ctrl+A Up`, `Ctrl+A Down`, `Ctrl+A Left`,
 and `Ctrl+A Right`, respectively. Mezzanine MAY also provide direct convenience
-bindings; the generated default direct key bindings MUST be `Ctrl+Alt+Up`,
-`Ctrl+Alt+Down`, `Ctrl+Alt+Left`, and `Ctrl+Alt+Right`, respectively.
+bindings through configuration, but the generated defaults MUST NOT bind
+duplicate direct keys for directional pane focus.
 
 The default prefix binding for focusing the previous window MUST be
-`Ctrl+A p`. Mezzanine MAY also provide a direct convenience binding; the
-generated default direct key binding for focusing the previous window MUST be
-`Ctrl+Alt+PageUp`.
+`Ctrl+A p`. Mezzanine MAY also provide a direct convenience binding through
+configuration, but the generated defaults MUST NOT bind a duplicate direct key
+for focusing the previous window.
 
 The default prefix binding for focusing the next window MUST be
-`Ctrl+A n`. Mezzanine MAY also provide a direct convenience binding; the
-generated default direct key binding for focusing the next window MUST be
-`Ctrl+Alt+PageDown`.
+`Ctrl+A n`. Mezzanine MAY also provide a direct convenience binding through
+configuration, but the generated defaults MUST NOT bind a duplicate direct key
+for focusing the next window.
 
 After a pane is split, Mezzanine MUST allocate usable regions to both resulting
 panes and MUST preserve the primary process and visible buffer of the original
@@ -1442,7 +1453,7 @@ The baseline commands MUST have the following semantics:
 | `list-sessions` | Return resumable sessions, including identity, name, creation time, last attach time, window count, attached client count, and primary availability. |
 | `rename-session` | Rename the target session. Repeating the command with the same target and name MUST be idempotent. |
 | `kill-session` | Terminate the target session and all panes after confirmation or an explicit force flag unless policy permits destructive session termination without prompting. |
-| `help` | Render a command guide for the Mezzanine command set in the interactive command-output overlay, with a key binding list section at the bottom. |
+| `help` | Render a command guide for the Mezzanine command set in the interactive command-output overlay, with a column-aligned key binding list section at the bottom. |
 | `copy-mode` | Enter pane-local copy mode for scrolling visible and historical terminal content, moving a selection cursor, selecting text, and copying text without sending input to the pane process or opening a command-output view. |
 | `copy-selection` | Copy the active copy-mode selection to the active or named paste buffer and to the host clipboard when host clipboard integration is available. |
 | `paste-clipboard` | Paste host clipboard text into the active pane, falling back to the most recent paste buffer when host clipboard text is unavailable. It MUST use bracketed paste when bracketed paste is enabled by the pane application. |
@@ -1452,7 +1463,7 @@ The baseline commands MUST have the following semantics:
 | `choose-buffer` | Present an interactive buffer picker and set the chosen buffer as the active copy/paste buffer or paste it when requested. |
 | `delete-buffer` | Delete the selected or named paste buffer. The command MUST fail with `not_found` for an unknown buffer. |
 | `show-messages` | Display Mezzanine message log entries, including diagnostics, pending observer requests, pending approvals, and hook failures visible to the primary client. |
-| `list-keys` | Return effective key bindings, including source configuration layer and command expansion. |
+| `list-keys` | Return effective key bindings in column-aligned form, including source configuration layer and command expansion. |
 | `list-themes` | Return built-in UI themes and configured custom themes, marking the active theme and whether each entry comes from the built-in registry or configuration. |
 | `set-theme` | Set the active UI theme to a built-in or configured theme name, validate the name against the effective theme registry, materialize the selected aliases and color slots, apply the change to the running client immediately, and persist the selected theme into the primary config. |
 | `bind-key` | Add or replace a key binding in the live configuration or requested persistence target. It MUST validate that the binding is syntactically representable. |

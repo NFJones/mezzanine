@@ -50,21 +50,12 @@ tool_discovery = true
 tool_cache = true
 fallback_behavior = "bin-sh"
 
-# `escape` is the prefix key. Direct key settings below are convenience
-# accelerators and do not replace the prefix binding table.
+# `escape` is the prefix key. Optional direct key settings below cover actions
+# without generated default prefix equivalents.
 [keys]
 escape = "C-a"
-split_vertical = "A-\\"
-split_horizontal = "A--"
-new_window = "A-="
 new_group = "A-S-="
 agent_shell = "A-]"
-focus_up = "C-A-Up"
-focus_down = "C-A-Down"
-focus_left = "C-A-Left"
-focus_right = "C-A-Right"
-focus_previous_window = "C-A-PageUp"
-focus_next_window = "C-A-PageDown"
 focus_previous_group = "C-A-S-PageUp"
 focus_next_group = "C-A-S-PageDown"
 

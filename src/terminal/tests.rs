@@ -695,8 +695,10 @@ fn parses_key_binding_notation_for_default_surface() {
     );
     assert_eq!(
         KeyChord::parse("Alt+\\").unwrap(),
-        KeyBindings::default().split_vertical
+        KeyChord::alt(KeyCode::Char('\\'))
     );
+    assert_eq!(KeyBindings::default().split_vertical, None);
+    assert_eq!(KeyBindings::default().new_window, None);
     assert_eq!(
         KeyChord::parse("A--").unwrap(),
         KeyChord::alt(KeyCode::Char('-'))
@@ -706,15 +708,15 @@ fn parses_key_binding_notation_for_default_surface() {
         KeyChord::ctrl_alt(KeyCode::PageDown)
     );
     assert_eq!(
-        KeyChord::parse("A-S-=").unwrap(),
+        Some(KeyChord::parse("A-S-=").unwrap()),
         KeyBindings::default().new_group
     );
     assert_eq!(
-        KeyChord::parse("C-A-S-PageUp").unwrap(),
+        Some(KeyChord::parse("C-A-S-PageUp").unwrap()),
         KeyBindings::default().focus_previous_group
     );
     assert_eq!(
-        KeyChord::parse("C-A-S-PageDown").unwrap(),
+        Some(KeyChord::parse("C-A-S-PageDown").unwrap()),
         KeyBindings::default().focus_next_group
     );
     assert_eq!(
@@ -775,15 +777,15 @@ fn classifies_default_direct_mux_key_bindings() {
 
     assert_eq!(
         classify_terminal_input(b"\x1b\\", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::SplitPaneVertical)
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b-", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::SplitPaneHorizontal)
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b=", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::NewWindow)
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b+", &bindings).unwrap(),
@@ -795,27 +797,27 @@ fn classifies_default_direct_mux_key_bindings() {
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[1;7A", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusPane(PaneFocusDirection::Up))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[1;7B", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusPane(PaneFocusDirection::Down))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[1;7D", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusPane(PaneFocusDirection::Left))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[1;7C", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusPane(PaneFocusDirection::Right))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[5;7~", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusWindow(WindowFocusTarget::Previous))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[6;7~", &bindings).unwrap(),
-        TerminalInputClassification::Mux(MuxAction::FocusWindow(WindowFocusTarget::Next))
+        TerminalInputClassification::ForwardToPane
     );
     assert_eq!(
         classify_terminal_input(b"\x1b[5;8~", &bindings).unwrap(),
@@ -1201,7 +1203,7 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
         TerminalClientLoopAction::ForwardToPane(b"echo hi".to_vec())
     );
     assert_eq!(
-        route_client_input(b"\x1b\\", &config).unwrap(),
+        route_client_input(b"\x01%", &config).unwrap(),
         TerminalClientLoopAction::ExecuteMux(MuxAction::SplitPaneVertical)
     );
     assert_eq!(
@@ -1885,7 +1887,7 @@ fn attached_terminal_client_step_routes_input_and_composes_output() {
 
     let plan = plan_attached_terminal_client_step(
         &readiness,
-        Some(b"\x1b\\"),
+        Some(b"\x01%"),
         Some(&view),
         Some(&status),
         &config,
@@ -2129,7 +2131,7 @@ fn attached_terminal_client_loop_pumps_input_output_and_stops_on_hangup() {
                 error: false,
             }],
         ],
-        input_batches: vec![b"\x1b=".to_vec()],
+        input_batches: vec![b"\x01c".to_vec()],
         written_batches: Vec::new(),
     };
     let view = RenderedClientView {
@@ -2224,7 +2226,7 @@ fn attached_terminal_client_loop_default_limits_allow_large_paste_reads() {
 fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
     let (mut input_writer, input_reader) = UnixStream::pair().unwrap();
     let (output_writer, mut output_reader) = UnixStream::pair().unwrap();
-    input_writer.write_all(b"\x1b=").unwrap();
+    input_writer.write_all(b"\x01c").unwrap();
     output_reader
         .set_read_timeout(Some(Duration::from_millis(20)))
         .unwrap();

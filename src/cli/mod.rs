@@ -51,8 +51,8 @@ use crate::registry::{
 use crate::runtime::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv,
     RuntimeLifecycleState, RuntimeSessionService, auxiliary_socket_path_for_control_socket,
-    bind_control_socket, default_socket_directory, runtime_effective_config_value,
-    runtime_ui_theme_from_config, socket_path_for_name,
+    bind_control_socket, default_socket_directory, prune_stale_socket_files_in_directory,
+    runtime_effective_config_value, runtime_ui_theme_from_config, socket_path_for_name,
 };
 use crate::session::Session;
 use crate::shell::resolve_shell;

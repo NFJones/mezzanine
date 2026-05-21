@@ -7,6 +7,7 @@
 // CLI module tests.
 
 use super::attach::{
+    run_control_socket_attached_observer_client_loop_async,
     run_control_socket_attached_primary_client_loop_async, terminal_step_control_request,
     terminal_step_response_line_style_spans, terminal_step_response_output_modes,
 };
@@ -1833,7 +1834,7 @@ fn attach_observer_accepts_session_index_alias() {
 
     let request = super::attach::attach_request_from_args(
         &SocketSelection::Default(default_socket),
-        &["--observer".to_string(), "1".to_string()],
+        &["--observe".to_string(), "1".to_string()],
         env.runtime.uid,
     )
     .unwrap();
@@ -1843,6 +1844,39 @@ fn attach_observer_accepts_session_index_alias() {
         selected_socket_path(&request.socket_selection),
         &target_socket
     );
+
+    let _ = fs::remove_dir_all(directory.path);
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies CLI startup removes unserved sockets from the default runtime
+/// directory.
+///
+/// This regression scenario confirms stale endpoint cleanup runs before normal
+/// command dispatch without touching explicit socket paths or requiring a
+/// registry record.
+#[test]
+fn startup_removes_unserved_default_runtime_socket_files() {
+    let (env, home) = test_env("startup-stale-socket-cleanup");
+    let directory = default_socket_directory(&env.runtime).unwrap();
+    crate::runtime::ensure_private_socket_directory(&directory.path, env.runtime.uid).unwrap();
+    let stale_socket = directory.path.join("orphan.sock");
+    let stale_listener = std::os::unix::net::UnixListener::bind(&stale_socket).unwrap();
+    drop(stale_listener);
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    run_with(
+        vec!["mez".to_string(), "list".to_string()],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    assert!(!stale_socket.exists());
+    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(directory.path);
     let _ = fs::remove_dir_all(home);
@@ -2477,6 +2511,68 @@ async fn control_socket_primary_attach_loop_exits_on_incomplete_response_eof() {
 
     assert_eq!(io.presentation_entries, 1);
     assert!(io.written_frames.is_empty());
+}
+
+/// Verifies the interactive observer attach loop polls observer-local status
+/// before reading the terminal view.
+///
+/// Pending observers are not authorized for `terminal/view`; this regression
+/// ensures the attach client waits on `observer/inspect` until the request is
+/// approved, then switches to rendered live view requests.
+#[tokio::test(flavor = "current_thread")]
+async fn control_socket_observer_attach_loop_waits_for_approval_before_view() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let server = thread::spawn(move || {
+        for expected in ["observer/inspect", "observer/inspect", "terminal/view"] {
+            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                parsed.get("method").and_then(serde_json::Value::as_str),
+                Some(expected)
+            );
+            let response = match expected {
+                "observer/inspect" if body.contains("cli-observer-inspect-0") => {
+                    r#"{"jsonrpc":"2.0","id":"cli-observer-inspect-0","result":{"observer":{"id":"o1","observer_request_id":"o1","client_id":"c2","state":"pending"}}}"#
+                }
+                "observer/inspect" => {
+                    r#"{"jsonrpc":"2.0","id":"cli-observer-inspect-1","result":{"observer":{"id":"o1","observer_request_id":"o1","client_id":"c2","state":"approved"}}}"#
+                }
+                _ => {
+                    r#"{"jsonrpc":"2.0","id":"cli-terminal-view-2","result":{"view":{"lines":["observer live view"],"line_style_spans":[[]],"cursor":{"row":0,"column":18,"visible":true,"style":"block","blink":false},"output_modes":{"application_keypad":false}}}}"#
+                }
+            };
+            server_stream
+                .write_all(&encode_control_body(response))
+                .unwrap();
+            server_stream.flush().unwrap();
+        }
+    });
+
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_input(b"x".to_vec());
+    io.push_input(b"y".to_vec());
+    io.push_input(b"z".to_vec());
+
+    run_control_socket_attached_observer_client_loop_async(
+        &mut client_stream,
+        &mut io,
+        "o1".to_string(),
+        Size::new(80, 24).unwrap(),
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(
+        io.written_frames[0].lines,
+        vec!["observer pending approval"]
+    );
+    assert_eq!(io.written_frames[1].lines, vec!["observer live view"]);
 }
 
 /// Verifies snapshot resume latest selects newest matching snapshot.

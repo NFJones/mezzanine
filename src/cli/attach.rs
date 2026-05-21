@@ -54,7 +54,7 @@ pub(super) async fn run_attach<W: Write>(
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         writeln!(
             stdout,
-            "usage: mez attach [SESSION_ID|INDEX] [--observer]\n\
+            "usage: mez attach [SESSION_ID|INDEX] [--observer|--observe]\n\
              reattaches the primary terminal client or requests pending observer access"
         )?;
         return Ok(());
@@ -86,8 +86,10 @@ pub(super) async fn run_attach<W: Write>(
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
         if io::stdin().is_terminal() && io::stdout().is_terminal() {
             ensure_control_response_success(body.as_str())?;
+            let observer_request_id = observer_request_id_from_initialize_response(body.as_str())?;
             return run_control_socket_attached_observer_client(
                 &mut stream,
+                observer_request_id,
                 Size::new(columns, rows)?,
             )
             .await;
@@ -182,7 +184,7 @@ pub(super) fn attach_request_from_args(
 )]
 struct AttachCliArgs {
     /// Requests observer access instead of primary access.
-    #[arg(long)]
+    #[arg(long, alias = "observe")]
     observer: bool,
     /// Optional registered session id or creation-order index alias to attach to.
     session_id: Option<String>,
@@ -362,6 +364,7 @@ where
 /// on duplicated control-flow logic.
 pub(super) async fn run_control_socket_attached_observer_client(
     stream: &mut UnixStream,
+    observer_request_id: String,
     client_size: Size,
 ) -> Result<()> {
     let input_fd = io::stdin().as_raw_fd();
@@ -374,6 +377,7 @@ pub(super) async fn run_control_socket_attached_observer_client(
     let run_result = run_control_socket_attached_observer_client_loop_async(
         &mut control_stream,
         terminal_guard.io_mut(),
+        observer_request_id,
         client_size,
     )
     .await;
@@ -396,6 +400,7 @@ pub(super) async fn run_control_socket_attached_observer_client(
 pub(super) async fn run_control_socket_attached_observer_client_loop_async<I>(
     stream: &mut tokio::net::UnixStream,
     terminal_io: &mut I,
+    observer_request_id: String,
     mut client_size: Size,
 ) -> Result<()>
 where
@@ -404,6 +409,7 @@ where
     terminal_io.enter_presentation().await?;
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
+    let mut approved = false;
 
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
@@ -414,8 +420,12 @@ where
             break Ok(());
         }
 
-        let view = terminal_view_control_request(iteration, client_size);
-        if !write_async_control_body_or_disconnected(stream, &view).await? {
+        let request = if approved {
+            terminal_view_control_request(iteration, client_size)
+        } else {
+            observer_inspect_control_request(iteration, &observer_request_id)
+        };
+        if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
         let Some(response) =
@@ -424,6 +434,49 @@ where
             break Ok(());
         };
         let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+        if !approved {
+            match observer_attach_state_from_inspect_response(body.as_str())? {
+                ObserverAttachState::Pending => {
+                    if !write_styled_output_or_disconnected_async(
+                        terminal_io,
+                        &["observer pending approval".to_string()],
+                        &[],
+                        AttachedTerminalOutputModes::default(),
+                    )
+                    .await?
+                    {
+                        break Ok(());
+                    }
+                }
+                ObserverAttachState::Approved => {
+                    approved = true;
+                }
+                ObserverAttachState::Rejected => {
+                    let line = "observer request rejected".to_string();
+                    let _ = write_styled_output_or_disconnected_async(
+                        terminal_io,
+                        &[line],
+                        &[],
+                        AttachedTerminalOutputModes::default(),
+                    )
+                    .await?;
+                    break Ok(());
+                }
+                ObserverAttachState::Revoked => {
+                    let line = "observer access revoked".to_string();
+                    let _ = write_styled_output_or_disconnected_async(
+                        terminal_io,
+                        &[line],
+                        &[],
+                        AttachedTerminalOutputModes::default(),
+                    )
+                    .await?;
+                    break Ok(());
+                }
+            }
+            iteration = iteration.saturating_add(1);
+            continue;
+        }
         let mut lines = terminal_step_response_lines(body.as_str())?;
         let line_style_spans = terminal_step_response_line_style_spans(body.as_str())?;
         if lines.is_empty() {
@@ -665,6 +718,22 @@ pub(super) fn terminal_view_control_request(iteration: u64, client_size: Size) -
     )
 }
 
+/// Builds the request a pending observer uses to inspect only its own approval
+/// state while waiting for the primary client.
+///
+/// # Parameters
+/// - `iteration`: A monotonically increasing request sequence.
+/// - `observer_request_id`: The observer request id returned by initialization.
+pub(super) fn observer_inspect_control_request(
+    iteration: u64,
+    observer_request_id: &str,
+) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":"cli-observer-inspect-{iteration}","method":"observer/inspect","params":{{"observer_request_id":"{}"}}}}"#,
+        json_escape(observer_request_id)
+    )
+}
+
 /// Runs the control socket cursor blink elapsed operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -730,6 +799,87 @@ pub(super) fn primary_client_id_from_initialize_response(body: &str) -> Result<C
         })?;
     ClientId::parse('c', client_id.to_string())
         .ok_or_else(|| MezError::invalid_state("control initialize returned an invalid client id"))
+}
+
+/// Extracts the pending observer request id from a successful initialize
+/// response.
+///
+/// # Parameters
+/// - `body`: The JSON-RPC response body returned by `control/initialize`.
+pub(super) fn observer_request_id_from_initialize_response(body: &str) -> Result<String> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_args("control initialize response is not valid JSON"))?;
+    if let Some(error) = parsed.get("error") {
+        return Err(MezError::invalid_state(format!(
+            "control initialize failed: {}",
+            json_escape(&error.to_string())
+        )));
+    }
+    parsed
+        .get("result")
+        .and_then(|result| result.get("observer_request"))
+        .and_then(observer_request_id_from_value)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            MezError::invalid_state("control initialize did not return an observer request id")
+        })
+}
+
+/// Stores the observer attach state reported by `observer/inspect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ObserverAttachState {
+    /// The request is still waiting for a primary-client decision.
+    Pending,
+    /// The request has been approved and may now read the live terminal view.
+    Approved,
+    /// The request was rejected by the primary client.
+    Rejected,
+    /// A previously approved observer has been revoked.
+    Revoked,
+}
+
+/// Extracts the observer request state from an `observer/inspect` response.
+///
+/// # Parameters
+/// - `body`: The JSON-RPC response body returned by `observer/inspect`.
+pub(super) fn observer_attach_state_from_inspect_response(
+    body: &str,
+) -> Result<ObserverAttachState> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_args("observer inspect response is not valid JSON"))?;
+    if let Some(error) = parsed.get("error") {
+        return Err(MezError::invalid_state(format!(
+            "observer inspect failed: {}",
+            json_escape(&error.to_string())
+        )));
+    }
+    let state = parsed
+        .get("result")
+        .and_then(|result| result.get("observer"))
+        .and_then(|observer| observer.get("state"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| MezError::invalid_state("observer inspect did not return a state"))?;
+    match state {
+        "pending" => Ok(ObserverAttachState::Pending),
+        "approved" => Ok(ObserverAttachState::Approved),
+        "rejected" => Ok(ObserverAttachState::Rejected),
+        "revoked" => Ok(ObserverAttachState::Revoked),
+        _ => Err(MezError::invalid_state(format!(
+            "observer inspect returned unsupported state `{state}`"
+        ))),
+    }
+}
+
+/// Reads either accepted observer-request id spelling from an observer JSON
+/// object.
+///
+/// # Parameters
+/// - `value`: The observer request summary or observer state JSON object.
+fn observer_request_id_from_value(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("observer_request_id")
+        .or_else(|| value.get("id"))
+        .and_then(serde_json::Value::as_str)
 }
 
 /// Runs the terminal step response lines operation for this subsystem.

@@ -266,6 +266,7 @@ pub use sockets::{
     authorize_unix_peer_raw_fd, authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket,
     bind_control_socket, current_effective_uid, default_socket_directory,
     ensure_private_socket_directory, pane_environment, pane_environment_with_term,
+    prune_stale_socket_files_in_directory, remove_stale_socket_file_if_unserved,
     socket_path_for_name,
 };
 pub use types::{

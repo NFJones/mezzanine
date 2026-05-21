@@ -1177,18 +1177,14 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("agent-shell"), "{help}");
     assert!(help.contains("snapshot-session"), "{help}");
     assert!(help.contains("\nkey bindings\n"), "{help}");
-    assert!(
-        help.contains("A-\\:source=default:command=split-window"),
-        "{help}"
-    );
-    assert!(
-        help.contains("C-a ?:source=default:command=list-keys"),
-        "{help}"
-    );
-    assert!(
-        help.contains("C-a [:source=default:command=copy-mode"),
-        "{help}"
-    );
+    assert!(help.contains("key"), "{help}");
+    assert!(help.contains("source"), "{help}");
+    assert!(help.contains("command"), "{help}");
+    assert!(!help.contains("A-\\"), "{help}");
+    assert!(help.contains("C-a ?"), "{help}");
+    assert!(help.contains("list-keys"), "{help}");
+    assert!(help.contains("C-a ["), "{help}");
+    assert!(help.contains("copy-mode"), "{help}");
     assert!(!help.contains("auth-logout"), "{help}");
     assert!(!help.contains("mcp-list"), "{help}");
     assert!(!help.contains("trust-project"), "{help}");
@@ -1213,11 +1209,9 @@ fn help_command_describes_mezzanine_command_set() {
         help.find("windows, groups, and panes").unwrap() < help.find("\nkey bindings\n").unwrap(),
         "{help}"
     );
-    assert!(
-        help.trim_end()
-            .ends_with("C-a ~:source=default:command=show-messages"),
-        "{help}"
-    );
+    let last_line = help.lines().last().unwrap_or_default();
+    assert!(last_line.contains("C-a ~"), "{help}");
+    assert!(last_line.contains("show-messages"), "{help}");
 }
 
 /// Verifies that agent-scoped commands with slash-command equivalents are no
@@ -1316,9 +1310,11 @@ fn display_safe_pending_command_defaults() {
         )
         .unwrap(),
     );
-    assert!(keys.contains("A-\\:source=default:command=split-window"));
-    assert!(keys.contains("C-a ?:source=default:command=list-keys"));
-    assert!(keys.contains("C-a [:source=default:command=copy-mode"));
+    assert!(!keys.contains("A-\\"));
+    assert!(keys.contains("C-a ?"));
+    assert!(keys.contains("list-keys"));
+    assert!(keys.contains("C-a ["));
+    assert!(keys.contains("copy-mode"));
 
     let options = display_body(
         execute_command(
