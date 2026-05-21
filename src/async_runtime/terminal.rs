@@ -143,7 +143,7 @@ where
         cursor_row: view.cursor_row,
         cursor_column: view.cursor_column,
     };
-    let (flushed, bytes_written, output_hangups) = queue_and_flush_async_attached_terminal_output(
+    let flush = queue_and_flush_async_attached_terminal_output(
         handle,
         io,
         recovery.client_id,
@@ -152,9 +152,7 @@ where
         output_modes,
     )
     .await?;
-    report.bytes_written = report.bytes_written.saturating_add(bytes_written);
-    report.output_frames = report.output_frames.saturating_add(flushed);
-    report.output_hangups = report.output_hangups.saturating_add(output_hangups);
+    merge_attached_terminal_flush_report(report, &flush);
     Ok(())
 }
 
@@ -179,7 +177,7 @@ async fn queue_and_flush_async_attached_terminal_output<I>(
     lines: Vec<String>,
     line_style_spans: Vec<Vec<crate::terminal::TerminalStyleSpan>>,
     modes: AttachedTerminalOutputModes,
-) -> Result<(u64, usize, u64)>
+) -> Result<super::AsyncClientOutputFlushServiceReport>
 where
     I: AsyncAttachedTerminalIo,
 {
@@ -207,7 +205,25 @@ where
     if report.flushed > 0 {
         handle.ensure_client_render_timers(timer_client_id).await?;
     }
-    Ok((report.flushed, report.bytes_written, report.output_hangups))
+    Ok(report)
+}
+
+/// Merges an output-flush worker report into the attached-terminal loop report.
+fn merge_attached_terminal_flush_report(
+    loop_report: &mut AttachedTerminalClientLoopReport,
+    flush: &super::AsyncClientOutputFlushServiceReport,
+) {
+    loop_report.bytes_written = loop_report
+        .bytes_written
+        .saturating_add(flush.bytes_written);
+    loop_report.output_frames = loop_report.output_frames.saturating_add(flush.flushed);
+    loop_report.output_hangups = loop_report
+        .output_hangups
+        .saturating_add(flush.output_hangups);
+    loop_report.partial_writes = loop_report
+        .partial_writes
+        .saturating_add(flush.partial_writes);
+    loop_report.pending_output_bytes = flush.pending_output_bytes;
 }
 
 /// Runs the run async attached terminal client loop operation for this subsystem.
@@ -294,6 +310,8 @@ where
         actions: Vec::new(),
         output_frames: 0,
         bytes_written: 0,
+        partial_writes: 0,
+        pending_output_bytes: 0,
         input_hangups: 0,
         output_hangups: 0,
         error_roles: Vec::new(),
@@ -386,20 +404,17 @@ where
                     .map(|view| view.cursor_column)
                     .unwrap_or(0),
             };
-            let (flushed, bytes_written, output_hangups) =
-                queue_and_flush_async_attached_terminal_output(
-                    handle,
-                    io,
-                    request.client_id.clone(),
-                    step.output_lines.clone(),
-                    output_line_style_spans.clone(),
-                    output_modes,
-                )
-                .await?;
-            report.bytes_written = report.bytes_written.saturating_add(bytes_written);
-            report.output_frames = report.output_frames.saturating_add(flushed);
-            if output_hangups > 0 {
-                report.output_hangups = report.output_hangups.saturating_add(output_hangups);
+            let flush = queue_and_flush_async_attached_terminal_output(
+                handle,
+                io,
+                request.client_id.clone(),
+                step.output_lines.clone(),
+                output_line_style_spans.clone(),
+                output_modes,
+            )
+            .await?;
+            merge_attached_terminal_flush_report(&mut report, &flush);
+            if flush.output_hangups > 0 {
                 break;
             }
         }
@@ -471,21 +486,17 @@ where
                         cursor_row: view.cursor_row,
                         cursor_column: view.cursor_column,
                     };
-                    let (flushed, bytes_written, output_hangups) =
-                        queue_and_flush_async_attached_terminal_output(
-                            handle,
-                            io,
-                            request.client_id.clone(),
-                            lines,
-                            spans,
-                            output_modes,
-                        )
-                        .await?;
-                    report.bytes_written = report.bytes_written.saturating_add(bytes_written);
-                    report.output_frames = report.output_frames.saturating_add(flushed);
-                    if output_hangups > 0 {
-                        report.output_hangups =
-                            report.output_hangups.saturating_add(output_hangups);
+                    let flush = queue_and_flush_async_attached_terminal_output(
+                        handle,
+                        io,
+                        request.client_id.clone(),
+                        lines,
+                        spans,
+                        output_modes,
+                    )
+                    .await?;
+                    merge_attached_terminal_flush_report(&mut report, &flush);
+                    if flush.output_hangups > 0 {
                         break;
                     }
                 }
@@ -506,5 +517,6 @@ where
         }
     }
 
+    report.pending_output_bytes = io.pending_output_bytes();
     Ok(report)
 }

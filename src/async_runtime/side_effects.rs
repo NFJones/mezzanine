@@ -6,10 +6,11 @@
 
 use super::{
     AsyncAttachedTerminalIo, AsyncHookEvent, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeSessionHandle, AttachedTerminalFdRole, ClientId, ClientStatusLine, Duration,
-    MezError, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, Result, RuntimeEvent,
-    RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey,
-    TerminalClientLoopConfig, TimerEvent, sleep,
+    AsyncRuntimeSessionHandle, AttachedTerminalFdRole, ClientId, ClientStatusLine,
+    DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, Duration, MezError, PersistenceEvent,
+    PersistenceTarget, PersistenceWriteMode, Result, RuntimeEvent, RuntimeEventBatch,
+    RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, TerminalClientLoopConfig,
+    TimerEvent, sleep,
 };
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -118,6 +119,10 @@ pub struct AsyncClientOutputFlushServiceReport {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub bytes_written: usize,
+    /// Number of bounded output writes that left bytes pending.
+    pub partial_writes: u64,
+    /// Bytes retained by the attached terminal endpoint after this flush pass.
+    pub pending_output_bytes: usize,
     /// Stores the output hangups value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -874,6 +879,8 @@ where
         drained: 0,
         flushed: 0,
         bytes_written: 0,
+        partial_writes: 0,
+        pending_output_bytes: 0,
         output_hangups: 0,
         error_roles: Vec::new(),
         terminal_state: *lifecycle_watcher.borrow(),
@@ -887,6 +894,22 @@ where
         }
 
         report.polls = report.polls.saturating_add(1);
+        if io.pending_output_bytes() > 0 {
+            let write_report = io
+                .flush_pending_output(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES)
+                .await?;
+            report.bytes_written = report
+                .bytes_written
+                .saturating_add(write_report.bytes_written);
+            report.pending_output_bytes = write_report.pending_bytes;
+            if write_report.is_partial() {
+                report.partial_writes = report.partial_writes.saturating_add(1);
+                return Ok(report);
+            }
+            if write_report.bytes_written > 0 {
+                report.flushed = report.flushed.saturating_add(1);
+            }
+        }
         let effects = handle
             .drain_client_output_flush_side_effects(Some(client_id.clone()), config.drain_limit)
             .await?;
@@ -919,12 +942,24 @@ where
                 continue;
             };
             match io
-                .write_styled_output_with_modes(&lines, &line_style_spans, modes)
+                .write_styled_output_with_modes_bounded(
+                    &lines,
+                    &line_style_spans,
+                    modes,
+                    DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+                )
                 .await
             {
-                Ok(bytes_written) => {
-                    report.bytes_written = report.bytes_written.saturating_add(bytes_written);
-                    if bytes_written > 0 {
+                Ok(write_report) => {
+                    report.bytes_written = report
+                        .bytes_written
+                        .saturating_add(write_report.bytes_written);
+                    report.pending_output_bytes = write_report.pending_bytes;
+                    if write_report.is_partial() {
+                        report.partial_writes = report.partial_writes.saturating_add(1);
+                        return Ok(report);
+                    }
+                    if write_report.bytes_written > 0 {
                         report.flushed = report.flushed.saturating_add(1);
                     }
                 }

@@ -195,7 +195,8 @@ pub use terminal::{
 pub use terminal_io::SyncAttachedTerminalIoAdapter;
 pub use terminal_io::{
     AsyncAttachedTerminalFdLoopIo, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
-    AsyncTerminalIoFuture,
+    AsyncTerminalIoFuture, AsyncTerminalOutputWriteReport,
+    DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
 };
 #[cfg(test)]
 pub use terminal_io::{AsyncFakeAttachedTerminalIo, AsyncFakeTerminalFrame};

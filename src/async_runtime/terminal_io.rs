@@ -30,11 +30,41 @@ use tokio::io::unix::AsyncFd;
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, read as rustix_read, write as rustix_write};
 
+/// Default maximum attached-terminal output bytes written in one flush pass.
+pub const DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES: usize = 16 * 1024;
+
 /// Boxed future returned by async terminal I/O trait methods.
 pub type AsyncTerminalIoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+/// Result of one bounded attached-terminal output write attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AsyncTerminalOutputWriteReport {
+    /// Bytes written during this attempt.
+    pub bytes_written: usize,
+    /// Whether the output frame was fully written.
+    pub completed: bool,
+    /// Bytes still retained for later output flush attempts.
+    pub pending_bytes: usize,
+}
+
+impl AsyncTerminalOutputWriteReport {
+    /// Returns a completed write report.
+    pub const fn completed(bytes_written: usize) -> Self {
+        Self {
+            bytes_written,
+            completed: true,
+            pending_bytes: 0,
+        }
+    }
+
+    /// Returns whether this write left bytes pending.
+    pub const fn is_partial(self) -> bool {
+        !self.completed || self.pending_bytes > 0
+    }
+}
+
 /// Async terminal I/O boundary used by the Tokio-native attached client path.
-pub trait AsyncAttachedTerminalIo {
+pub trait AsyncAttachedTerminalIo: Send {
     /// Waits until one or more terminal file descriptors have observable
     /// readiness.
     fn poll_readiness<'a>(
@@ -63,6 +93,40 @@ pub trait AsyncAttachedTerminalIo {
         line_style_spans: &'a [Vec<TerminalStyleSpan>],
         modes: AttachedTerminalOutputModes,
     ) -> AsyncTerminalIoFuture<'a, usize>;
+
+    /// Returns the number of already-started output bytes retained for later
+    /// flush attempts.
+    fn pending_output_bytes(&self) -> usize {
+        0
+    }
+
+    /// Flushes retained output bytes without accepting a new frame.
+    fn flush_pending_output<'a>(
+        &'a mut self,
+        _max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async { Ok(AsyncTerminalOutputWriteReport::completed(0)) })
+    }
+
+    /// Writes at most `max_bytes` of one styled terminal frame.
+    ///
+    /// Implementations that cannot retain partial output may use the default
+    /// whole-frame behavior. Production foreground terminal endpoints override
+    /// this so slow clients cannot monopolize an attached-terminal loop pass.
+    fn write_styled_output_with_modes_bounded<'a>(
+        &'a mut self,
+        lines: &'a [String],
+        line_style_spans: &'a [Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+        _max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            let bytes_written = self
+                .write_styled_output_with_modes(lines, line_style_spans, modes)
+                .await?;
+            Ok(AsyncTerminalOutputWriteReport::completed(bytes_written))
+        })
+    }
 
     /// Reads the current terminal size when available.
     fn terminal_size<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, Option<Size>> {
@@ -229,6 +293,11 @@ pub struct AsyncAttachedTerminalFdLoopIo {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     previous_output_frame: Option<AttachedTerminalOutputFrameState>,
+    /// Started output frame retained across bounded flush attempts.
+    pending_output_frame: Option<PendingAttachedTerminalOutputFrame>,
+    /// Whether a full redraw was requested while a pending frame was still
+    /// being written.
+    pending_output_invalidates_next_frame: bool,
     /// Stores the presentation active value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -257,6 +326,8 @@ impl AsyncAttachedTerminalFdLoopIo {
             original_flags,
             application_keypad_mode: false,
             previous_output_frame: None,
+            pending_output_frame: None,
+            pending_output_invalidates_next_frame: false,
             presentation_active: false,
         })
     }
@@ -286,6 +357,112 @@ impl AsyncAttachedTerminalFdLoopIo {
             hangup: false,
             error: false,
         }
+    }
+
+    /// Queues a freshly encoded output frame for bounded flushing.
+    fn queue_pending_output_frame(
+        &mut self,
+        lines: &[String],
+        line_style_spans: &[Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+    ) {
+        let keypad_transition = if modes.application_keypad != self.application_keypad_mode {
+            self.application_keypad_mode = modes.application_keypad;
+            Some(modes.application_keypad)
+        } else {
+            None
+        };
+        let bytes = encode_attached_terminal_output_update_frame_with_styles(
+            lines,
+            line_style_spans,
+            keypad_transition,
+            modes,
+            self.previous_output_frame.as_ref(),
+        );
+        let next_state =
+            AttachedTerminalOutputFrameState::new_with_modes(lines, line_style_spans, modes);
+        self.pending_output_frame = Some(PendingAttachedTerminalOutputFrame {
+            bytes,
+            written: 0,
+            next_state,
+        });
+    }
+
+    /// Flushes retained output bytes up to `max_bytes`.
+    async fn flush_pending_output_bounded(
+        &mut self,
+        max_bytes: usize,
+    ) -> Result<AsyncTerminalOutputWriteReport> {
+        if max_bytes == 0 {
+            return Err(MezError::invalid_args(
+                "async attached terminal output write limit must be greater than zero",
+            ));
+        }
+        let mut bytes_written = 0usize;
+        while bytes_written < max_bytes {
+            let Some(pending) = self.pending_output_frame.as_ref() else {
+                return Ok(AsyncTerminalOutputWriteReport::completed(bytes_written));
+            };
+            if pending.remaining_bytes() == 0 {
+                self.commit_completed_pending_output_frame();
+                continue;
+            }
+            let remaining_budget = max_bytes.saturating_sub(bytes_written);
+            let write_end = pending
+                .written
+                .saturating_add(pending.remaining_bytes().min(remaining_budget));
+            let write_start = pending.written;
+            let bytes = pending.bytes[write_start..write_end].to_vec();
+            let count = write_some_async_fd(&self.output, &bytes).await?;
+            let Some(pending) = self.pending_output_frame.as_mut() else {
+                return Err(MezError::invalid_state(
+                    "pending attached terminal output disappeared during write",
+                ));
+            };
+            pending.written = pending.written.saturating_add(count);
+            bytes_written = bytes_written.saturating_add(count);
+            if pending.remaining_bytes() == 0 {
+                self.commit_completed_pending_output_frame();
+                return Ok(AsyncTerminalOutputWriteReport::completed(bytes_written));
+            }
+        }
+        Ok(AsyncTerminalOutputWriteReport {
+            bytes_written,
+            completed: false,
+            pending_bytes: self.pending_output_bytes(),
+        })
+    }
+
+    /// Commits and clears a fully written pending output frame.
+    fn commit_completed_pending_output_frame(&mut self) {
+        let Some(pending) = self.pending_output_frame.take() else {
+            return;
+        };
+        if self.pending_output_invalidates_next_frame {
+            self.previous_output_frame = None;
+            self.pending_output_invalidates_next_frame = false;
+        } else {
+            self.previous_output_frame = Some(pending.next_state);
+        }
+    }
+}
+
+/// Encoded attached-terminal frame that has started writing but is not yet
+/// complete.
+#[derive(Debug)]
+struct PendingAttachedTerminalOutputFrame {
+    /// Encoded terminal bytes.
+    bytes: Vec<u8>,
+    /// Number of bytes already written to the attached terminal.
+    written: usize,
+    /// Differential frame state to commit only after all bytes are written.
+    next_state: AttachedTerminalOutputFrameState,
+}
+
+impl PendingAttachedTerminalOutputFrame {
+    /// Returns remaining bytes for this pending frame.
+    fn remaining_bytes(&self) -> usize {
+        self.bytes.len().saturating_sub(self.written)
     }
 }
 
@@ -498,26 +675,40 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
         modes: AttachedTerminalOutputModes,
     ) -> AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
-            let keypad_transition = if modes.application_keypad != self.application_keypad_mode {
-                self.application_keypad_mode = modes.application_keypad;
-                Some(modes.application_keypad)
-            } else {
-                None
-            };
-            let frame = encode_attached_terminal_output_update_frame_with_styles(
-                lines,
-                line_style_spans,
-                keypad_transition,
-                modes,
-                self.previous_output_frame.as_ref(),
-            );
-            self.previous_output_frame = Some(AttachedTerminalOutputFrameState::new_with_modes(
-                lines,
-                line_style_spans,
-                modes,
-            ));
-            write_all_async_fd(&self.output, &frame).await?;
-            Ok(frame.len())
+            let report = self
+                .write_styled_output_with_modes_bounded(lines, line_style_spans, modes, usize::MAX)
+                .await?;
+            Ok(report.bytes_written)
+        })
+    }
+
+    fn pending_output_bytes(&self) -> usize {
+        self.pending_output_frame
+            .as_ref()
+            .map(PendingAttachedTerminalOutputFrame::remaining_bytes)
+            .unwrap_or(0)
+    }
+
+    fn flush_pending_output<'a>(
+        &'a mut self,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move { self.flush_pending_output_bounded(max_bytes).await })
+    }
+
+    fn write_styled_output_with_modes_bounded<'a>(
+        &'a mut self,
+        lines: &'a [String],
+        line_style_spans: &'a [Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            if self.pending_output_frame.is_some() {
+                return self.flush_pending_output_bounded(max_bytes).await;
+            }
+            self.queue_pending_output_frame(lines, line_style_spans, modes);
+            self.flush_pending_output_bounded(max_bytes).await
         })
     }
 
@@ -537,7 +728,11 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
     /// on duplicated control-flow logic.
     fn invalidate_output_frame<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, ()> {
         Box::pin(async move {
-            self.previous_output_frame = None;
+            if self.pending_output_frame.is_some() {
+                self.pending_output_invalidates_next_frame = true;
+            } else {
+                self.previous_output_frame = None;
+            }
             Ok(())
         })
     }
@@ -711,11 +906,21 @@ fn write_all_raw_fd_best_effort(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
 async fn write_all_async_fd(fd: &AsyncFd<AsyncTerminalRawFd>, bytes: &[u8]) -> Result<()> {
     let mut written = 0usize;
     while written < bytes.len() {
+        let count = write_some_async_fd(fd, &bytes[written..]).await?;
+        written = written.saturating_add(count);
+    }
+    Ok(())
+}
+
+/// Writes one non-empty output chunk after Tokio reports output readiness.
+async fn write_some_async_fd(fd: &AsyncFd<AsyncTerminalRawFd>, bytes: &[u8]) -> Result<usize> {
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    loop {
         let mut guard = fd.writable().await?;
-        match guard.try_io(|inner| write_nonblocking_fd(inner.get_ref().fd, &bytes[written..])) {
-            Ok(Ok(count)) if count > 0 => {
-                written = written.saturating_add(count);
-            }
+        match guard.try_io(|inner| write_nonblocking_fd(inner.get_ref().fd, bytes)) {
+            Ok(Ok(count)) if count > 0 => return Ok(count),
             Ok(Ok(_)) => {
                 return Err(MezError::invalid_state(
                     "async attached terminal output write made no progress",
@@ -725,7 +930,6 @@ async fn write_all_async_fd(fd: &AsyncFd<AsyncTerminalRawFd>, bytes: &[u8]) -> R
             Err(_would_block) => continue,
         }
     }
-    Ok(())
 }
 
 /// Styled frame captured by the deterministic async fake.

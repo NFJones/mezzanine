@@ -502,6 +502,10 @@ pub struct AttachedTerminalClientLoopReport {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub bytes_written: usize,
+    /// Number of bounded output writes that left bytes pending.
+    pub partial_writes: u64,
+    /// Bytes retained by the attached terminal endpoint after this loop.
+    pub pending_output_bytes: usize,
     /// Stores the input hangups value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1061,11 +1065,17 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             continue;
         }
         let row = index.saturating_add(1);
-        frame.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
-        if terminal_line_width(line) < terminal_line_width(previous_line) {
-            frame.extend_from_slice(b"\x1b[2K");
+        if let Some(span_update) =
+            encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
+        {
+            frame.extend_from_slice(&span_update);
+        } else {
+            frame.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
+            if terminal_line_width(line) < terminal_line_width(previous_line) {
+                frame.extend_from_slice(b"\x1b[2K");
+            }
+            frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
         }
-        frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
         changed_rows = changed_rows.saturating_add(1);
     }
     if changed_rows > 0 {
@@ -1099,6 +1109,78 @@ fn normalized_style_span_rows(
 /// on duplicated control-flow logic.
 fn output_row_count_changed(previous: &AttachedTerminalOutputFrameState, lines: &[String]) -> bool {
     previous.lines.len() != lines.len()
+}
+
+/// Encodes a bounded row update for a single changed ASCII span when safe.
+fn encode_safe_changed_row_span_update(
+    row: usize,
+    previous_line: &str,
+    line: &str,
+    previous_spans: &[TerminalStyleSpan],
+    spans: &[TerminalStyleSpan],
+) -> Option<Vec<u8>> {
+    if previous_spans != spans
+        || previous_line.len() != line.len()
+        || !line_is_printable_ascii(previous_line)
+        || !line_is_printable_ascii(line)
+        || terminal_line_width(previous_line) != previous_line.len()
+        || terminal_line_width(line) != line.len()
+    {
+        return None;
+    }
+
+    let previous = previous_line.as_bytes();
+    let current = line.as_bytes();
+    let start = previous
+        .iter()
+        .zip(current.iter())
+        .position(|(previous, current)| previous != current)?;
+    let mut previous_end = previous.len();
+    let mut current_end = current.len();
+    while previous_end > start
+        && current_end > start
+        && previous[previous_end.saturating_sub(1)] == current[current_end.saturating_sub(1)]
+    {
+        previous_end = previous_end.saturating_sub(1);
+        current_end = current_end.saturating_sub(1);
+    }
+
+    let segment = &line[start..current_end];
+    let segment_spans = clip_style_spans_to_column_range(spans, start, current_end);
+    let encoded_segment = encode_styled_terminal_line(segment, &segment_spans);
+    let mut span_update = format!("\x1b[{row};{}H", start.saturating_add(1)).into_bytes();
+    span_update.extend_from_slice(encoded_segment.as_bytes());
+
+    let mut row_update = format!("\x1b[{row};1H").into_bytes();
+    row_update.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
+    (span_update.len() < row_update.len()).then_some(span_update)
+}
+
+/// Returns whether a terminal row contains only printable ASCII bytes.
+fn line_is_printable_ascii(line: &str) -> bool {
+    line.bytes().all(|byte| matches!(byte, b' '..=b'~'))
+}
+
+/// Clips row style spans to a changed ASCII column range.
+fn clip_style_spans_to_column_range(
+    spans: &[TerminalStyleSpan],
+    start: usize,
+    end: usize,
+) -> Vec<TerminalStyleSpan> {
+    spans
+        .iter()
+        .filter_map(|span| {
+            let span_start = span.start;
+            let span_end = span.start.saturating_add(span.length);
+            let clipped_start = span_start.max(start);
+            let clipped_end = span_end.min(end);
+            (clipped_start < clipped_end).then_some(TerminalStyleSpan {
+                start: clipped_start.saturating_sub(start),
+                length: clipped_end.saturating_sub(clipped_start),
+                rendition: span.rendition,
+            })
+        })
+        .collect()
 }
 
 /// Runs the terminal line width operation for this subsystem.
@@ -2330,6 +2412,8 @@ where
         actions: Vec::new(),
         output_frames: 0,
         bytes_written: 0,
+        partial_writes: 0,
+        pending_output_bytes: 0,
         input_hangups: 0,
         output_hangups: 0,
         error_roles: Vec::new(),

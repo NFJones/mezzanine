@@ -18,11 +18,12 @@ use super::{
     AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig,
     AsyncRuntimeMessageConnectionConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor, AsyncRuntimeSessionActor,
-    AsyncRuntimeSideEffectServiceConfig, ClientEvent, Duration, PaneEvent, PersistenceTarget,
-    PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, Result, RuntimeEvent,
-    RuntimeEventBatch, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, ShutdownEvent,
-    SyncAttachedTerminalIoAdapter, TimerEvent, build_async_attached_terminal_client_service,
-    build_async_runtime_daemon_services, flush_async_runtime_event_wakeups_to_stream,
+    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalOutputWriteReport, ClientEvent, Duration,
+    PaneEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason,
+    Result, RuntimeEvent, RuntimeEventBatch, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
+    ShutdownEvent, SyncAttachedTerminalIoAdapter, TimerEvent,
+    build_async_attached_terminal_client_service, build_async_runtime_daemon_services,
+    flush_async_runtime_event_wakeups_to_stream,
     plan_and_apply_async_attached_terminal_client_step, plan_async_attached_terminal_client_step,
     run_async_agent_provider_service, run_async_attached_terminal_client_loop,
     run_async_attached_terminal_client_loop_deferred_pane_io,
@@ -68,7 +69,7 @@ use crate::shell::resolve_shell;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
     AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole, MuxAction,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFdInterest,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFdInterest, TerminalStyleSpan,
 };
 use crate::transcript::AgentTranscriptStore;
 
@@ -512,6 +513,185 @@ impl AsyncAttachedTerminalIo for IdleAsyncAttachedTerminalLoopIo {
             self.write_count.fetch_add(1, Ordering::SeqCst);
             self.write_notify.notify_waiters();
             Ok(lines.iter().map(String::len).sum())
+        })
+    }
+}
+
+/// Attached-terminal fake that writes output in bounded chunks while still
+/// allowing input readiness to be observed between incomplete frame flushes.
+#[derive(Debug)]
+struct SlowOutputAttachedTerminalLoopIo {
+    /// Readiness batches returned by the foreground wait path.
+    readiness_batches: Vec<Vec<AttachedTerminalFdReadiness>>,
+    /// Input payloads returned when input readiness is observed.
+    input_batches: Vec<Vec<u8>>,
+    /// Maximum bytes accepted by one fake output write attempt.
+    write_limit: usize,
+    /// Bytes retained from a started but incomplete output frame.
+    pending_output_bytes: usize,
+    /// Number of fully completed output frames.
+    completed_frames: usize,
+    /// Number of partial write attempts.
+    partial_writes: usize,
+    /// Total bytes written by this fake.
+    bytes_written: usize,
+}
+
+impl SlowOutputAttachedTerminalLoopIo {
+    /// Creates a slow output fake with no started output frame.
+    fn new(
+        readiness_batches: Vec<Vec<AttachedTerminalFdReadiness>>,
+        input_batches: Vec<Vec<u8>>,
+        write_limit: usize,
+    ) -> Self {
+        Self {
+            readiness_batches,
+            input_batches,
+            write_limit,
+            pending_output_bytes: 0,
+            completed_frames: 0,
+            partial_writes: 0,
+            bytes_written: 0,
+        }
+    }
+
+    /// Creates a slow output fake that already has a started frame pending.
+    fn with_pending(pending_output_bytes: usize, write_limit: usize) -> Self {
+        Self {
+            readiness_batches: Vec::new(),
+            input_batches: Vec::new(),
+            write_limit,
+            pending_output_bytes,
+            completed_frames: 0,
+            partial_writes: 0,
+            bytes_written: 0,
+        }
+    }
+
+    /// Returns the approximate encoded frame size used by this test fake.
+    fn frame_bytes(lines: &[String]) -> usize {
+        lines.iter().map(|line| line.len()).sum::<usize>().max(1)
+    }
+
+    /// Writes from the retained fake output frame using the supplied bound.
+    fn write_pending_output(&mut self, max_bytes: usize) -> Result<AsyncTerminalOutputWriteReport> {
+        if max_bytes == 0 {
+            return Err(MezError::invalid_args(
+                "test output write limit must be greater than zero",
+            ));
+        }
+        if self.pending_output_bytes == 0 {
+            return Ok(AsyncTerminalOutputWriteReport::completed(0));
+        }
+        let accepted = self
+            .pending_output_bytes
+            .min(max_bytes)
+            .min(self.write_limit);
+        self.pending_output_bytes = self.pending_output_bytes.saturating_sub(accepted);
+        self.bytes_written = self.bytes_written.saturating_add(accepted);
+        if self.pending_output_bytes == 0 {
+            self.completed_frames = self.completed_frames.saturating_add(1);
+            Ok(AsyncTerminalOutputWriteReport::completed(accepted))
+        } else {
+            self.partial_writes = self.partial_writes.saturating_add(1);
+            Ok(AsyncTerminalOutputWriteReport {
+                bytes_written: accepted,
+                completed: false,
+                pending_bytes: self.pending_output_bytes,
+            })
+        }
+    }
+}
+
+impl AsyncAttachedTerminalIo for SlowOutputAttachedTerminalLoopIo {
+    /// Returns the next prepared readiness batch.
+    fn poll_readiness<'a>(
+        &'a mut self,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+        Box::pin(async move {
+            if self.readiness_batches.is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(self.readiness_batches.remove(0))
+        })
+    }
+
+    /// Returns input-oriented readiness without synthetic output readiness.
+    fn poll_input_readiness<'a>(
+        &'a mut self,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+        Box::pin(async move {
+            if self.readiness_batches.is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(self
+                .readiness_batches
+                .remove(0)
+                .into_iter()
+                .filter(|ready| {
+                    ready.role != AttachedTerminalFdRole::Output || ready.hangup || ready.error
+                })
+                .collect())
+        })
+    }
+
+    /// Returns the next prepared input payload.
+    fn read_input<'a>(&'a mut self, max_bytes: usize) -> super::AsyncTerminalIoFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            if self.input_batches.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut input = self.input_batches.remove(0);
+            input.truncate(max_bytes);
+            Ok(input)
+        })
+    }
+
+    /// Writes an entire fake output frame, looping internally across chunks.
+    fn write_styled_output_with_modes<'a>(
+        &'a mut self,
+        lines: &'a [String],
+        _line_style_spans: &'a [Vec<TerminalStyleSpan>],
+        _modes: AttachedTerminalOutputModes,
+    ) -> super::AsyncTerminalIoFuture<'a, usize> {
+        Box::pin(async move {
+            if self.pending_output_bytes == 0 {
+                self.pending_output_bytes = Self::frame_bytes(lines);
+            }
+            let starting_bytes = self.pending_output_bytes;
+            while self.pending_output_bytes > 0 {
+                self.write_pending_output(usize::MAX)?;
+            }
+            Ok(starting_bytes)
+        })
+    }
+
+    /// Returns retained fake output bytes.
+    fn pending_output_bytes(&self) -> usize {
+        self.pending_output_bytes
+    }
+
+    /// Flushes retained fake output bytes using a bounded chunk size.
+    fn flush_pending_output<'a>(
+        &'a mut self,
+        max_bytes: usize,
+    ) -> super::AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move { self.write_pending_output(max_bytes) })
+    }
+
+    /// Starts or continues a bounded fake output frame write.
+    fn write_styled_output_with_modes_bounded<'a>(
+        &'a mut self,
+        lines: &'a [String],
+        _line_style_spans: &'a [Vec<TerminalStyleSpan>],
+        _modes: AttachedTerminalOutputModes,
+        max_bytes: usize,
+    ) -> super::AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            if self.pending_output_bytes == 0 {
+                self.pending_output_bytes = Self::frame_bytes(lines);
+            }
+            self.write_pending_output(max_bytes)
         })
     }
 }
@@ -2054,6 +2234,71 @@ async fn async_client_output_flush_service_writes_styled_flush_effects() {
     let ((), exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.metrics.runtime_side_effects_queued, 2);
     assert_eq!(exit.metrics.runtime_side_effects_drained, 2);
+}
+
+/// Verifies that the client output worker finishes a started partial frame
+/// before draining newer flush effects. Slow terminal transports can return
+/// from a bounded write with bytes still pending, and replacing that frame with
+/// newer output would corrupt the terminal byte stream.
+#[tokio::test(flavor = "current_thread")]
+async fn async_client_output_flush_service_finishes_pending_output_before_new_frames() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::FlushClientOutput {
+                client_id: primary.clone(),
+                lines: vec!["newer frame".to_string()],
+                line_style_spans: vec![Vec::new()],
+                modes: AttachedTerminalOutputModes::default(),
+            }])
+            .await
+            .unwrap();
+        let mut io = SlowOutputAttachedTerminalLoopIo::with_pending(256, 64);
+
+        let report = run_async_client_output_flush_service(
+            &handle,
+            primary.clone(),
+            &mut io,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.polls, 1);
+        assert_eq!(report.drained, 0);
+        assert_eq!(report.flushed, 0);
+        assert_eq!(report.partial_writes, 1);
+        assert_eq!(report.bytes_written, 64);
+        assert_eq!(report.pending_output_bytes, 192);
+        assert_eq!(io.completed_frames, 0);
+        assert_eq!(io.partial_writes, 1);
+        assert_eq!(
+            handle
+                .drain_client_output_flush_side_effects(Some(primary), 8)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_side_effects_queued, 1);
 }
 
 /// Verifies that async hook worker results are no longer accepted-only events.
@@ -9748,6 +9993,86 @@ async fn async_attached_terminal_service_can_defer_pane_input_to_worker() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies that slow client-output flushing does not block foreground input
+/// routing. The first service batch starts a large frame and leaves bytes
+/// pending; the second batch observes user input before that frame has been
+/// fully written and still forwards the payload to the primary pane worker.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_service_routes_input_while_output_is_pending() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let mut io = SlowOutputAttachedTerminalLoopIo::new(
+        vec![vec![AttachedTerminalFdReadiness {
+            role: AttachedTerminalFdRole::Input,
+            fd: 0,
+            interest: TerminalFdInterest::read(),
+            readable: true,
+            writable: false,
+            hangup: false,
+            error: false,
+        }]],
+        vec![b"hello\n".to_vec()],
+        64,
+    );
+
+    let client = async {
+        let report = run_async_attached_terminal_client_service_deferred_pane_io(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+            },
+            AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.batches, 2);
+        assert!(report.loop_report.partial_writes > 0);
+        assert!(report.loop_report.pending_output_bytes > 0);
+        assert!(
+            report
+                .loop_report
+                .actions
+                .contains(&TerminalClientLoopAction::ForwardToPane(
+                    b"hello\n".to_vec()
+                ))
+        );
+        assert_eq!(
+            handle.drain_pane_io_side_effects("%1", 8).await.unwrap(),
+            vec![RuntimeSideEffect::WritePaneInput {
+                pane_id: "%1".to_string(),
+                bytes: b"hello\n".to_vec(),
+            }]
+        );
+        assert_eq!(io.completed_frames, 0);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies async attached terminal loop renders and applies primary actions.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -10957,6 +11282,124 @@ async fn async_attached_terminal_service_propagates_primary_terminal_resize() {
     let ((), exit) = tokio::join!(client, actor.run());
 
     assert!(exit.commands_processed >= 5);
+}
+
+/// Verifies that a rapid sequence of foreground terminal-size changes
+/// reschedules resize debounce work to the newest generation. Slow remote
+/// clients can deliver resize signals close together, so the service should
+/// cancel older debounce timers instead of letting each intermediate size force
+/// a separate delayed full repaint.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_service_coalesces_resize_storm_timers() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let mut io = FakeResizingAttachedTerminalLoopIo {
+        inner: FakeAttachedTerminalLoopIo {
+            readiness_batches: vec![Vec::new(), Vec::new()],
+            input_batches: Vec::new(),
+            written_batches: Vec::new(),
+            write_error_kinds: Vec::new(),
+        },
+        terminal_size_batches: vec![
+            Some(Size::new(100, 30).unwrap()),
+            Some(Size::new(120, 35).unwrap()),
+            Some(Size::new(130, 40).unwrap()),
+        ],
+        invalidated_output_frames: 0,
+    };
+
+    let client = async {
+        let report = run_async_attached_terminal_client_service(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig {
+                    resize_debounce_ms: 25,
+                    ..TerminalClientLoopConfig::default()
+                },
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+            },
+            AsyncAttachedTerminalClientServiceConfig { max_batches: 3 },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.terminal_resizes, 3);
+        let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
+        let resize_timer_effects = timer_effects
+            .into_iter()
+            .filter(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                | RuntimeSideEffect::CancelTimer { key } => {
+                    key.kind == RuntimeTimerKind::ResizeDebounce
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            resize_timer_effects,
+            vec![
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        1,
+                    ),
+                    delay_ms: 200,
+                },
+                RuntimeSideEffect::CancelTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        1,
+                    ),
+                },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        2,
+                    ),
+                    delay_ms: 200,
+                },
+                RuntimeSideEffect::CancelTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        2,
+                    ),
+                },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ResizeDebounce,
+                        primary.as_str(),
+                        3,
+                    ),
+                    delay_ms: 200,
+                },
+            ]
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+
+    assert!(exit.commands_processed >= 13);
 }
 
 /// Verifies that resize handling does not immediately force a full foreground

@@ -43,6 +43,8 @@ pub(super) fn empty_attached_terminal_loop_report() -> AttachedTerminalClientLoo
         actions: Vec::new(),
         output_frames: 0,
         bytes_written: 0,
+        partial_writes: 0,
+        pending_output_bytes: 0,
         input_hangups: 0,
         output_hangups: 0,
         error_roles: Vec::new(),
@@ -64,6 +66,8 @@ pub(super) fn merge_attached_terminal_loop_report(
     total.actions.extend(batch.actions);
     total.output_frames = total.output_frames.saturating_add(batch.output_frames);
     total.bytes_written = total.bytes_written.saturating_add(batch.bytes_written);
+    total.partial_writes = total.partial_writes.saturating_add(batch.partial_writes);
+    total.pending_output_bytes = batch.pending_output_bytes;
     total.input_hangups = total.input_hangups.saturating_add(batch.input_hangups);
     total.output_hangups = total.output_hangups.saturating_add(batch.output_hangups);
     total.error_roles.extend(batch.error_roles);

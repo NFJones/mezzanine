@@ -2422,6 +2422,60 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
 }
 
+/// Verifies that same-width printable ASCII row changes can update only the
+/// changed span instead of rewriting the whole row. This keeps frequent status
+/// or prompt edits small on slower terminal links while preserving the existing
+/// row-diff contract for unsafe text.
+#[test]
+fn attached_terminal_output_update_uses_changed_ascii_span_when_safe() {
+    let previous_lines = vec!["aaaaaaaaaa".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &["aaaabaaaaa".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;5Hb"), "{rendered:?}");
+    assert!(!rendered.contains("aaaabaaaaa"), "{rendered:?}");
+}
+
+/// Verifies that non-ASCII row changes keep the full-row rewrite path. Wide
+/// glyph byte offsets and display columns do not have a one-to-one mapping, so
+/// bounded span updates must avoid those rows rather than risking cursor
+/// placement inside a multi-byte character.
+#[test]
+fn attached_terminal_output_update_rewrites_wide_glyph_rows() {
+    let previous_lines = vec!["aa✔aa".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &["aa✘aa".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H"), "{rendered:?}");
+    assert!(rendered.contains("aa✘aa"), "{rendered:?}");
+}
+
 /// Verifies stable-row attached-terminal updates clear only rows that shrink
 /// instead of falling back to a full-screen redraw. This avoids stale trailing
 /// cells over remote terminal links while keeping the update bounded to the
