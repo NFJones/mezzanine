@@ -8,6 +8,7 @@ use std::io::ErrorKind;
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
+use super::keys::classify_prefix_binding;
 use super::mouse::mouse_copy_position;
 #[cfg(test)]
 use super::{
@@ -73,11 +74,11 @@ pub enum TerminalClientLoopAction {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     HandleCopyMode(CopyModeKeyAction),
-    /// Represents the Enter Prefix Command Mode case for this enumeration.
+    /// Represents the Enter Prefix Key Mode case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    EnterPrefixCommandMode,
+    EnterPrefixKeyMode,
     /// Represents the Report Unbound Prefix case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1266,6 +1267,15 @@ pub fn route_client_input(
     input: &[u8],
     config: &TerminalClientLoopConfig,
 ) -> Result<TerminalClientLoopAction> {
+    if config.prefix_key_pending {
+        let Some((action, _)) = route_pending_prefix_client_input_action(input, config)? else {
+            return Ok(TerminalClientLoopAction::ReportUnboundPrefix(
+                config.bindings.escape,
+            ));
+        };
+        return Ok(action);
+    }
+
     if input.starts_with(b"\x1b[<") {
         let Some(event) = parse_sgr_mouse(input)? else {
             return Ok(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
@@ -1286,8 +1296,8 @@ pub fn route_client_input(
             application_cursor_forwarding_bytes(input, config.mouse_policy)
                 .unwrap_or_else(|| input.to_vec()),
         )),
-        TerminalInputClassification::PrefixCommandMode => {
-            Ok(TerminalClientLoopAction::EnterPrefixCommandMode)
+        TerminalInputClassification::PrefixKeyMode => {
+            Ok(TerminalClientLoopAction::EnterPrefixKeyMode)
         }
         TerminalInputClassification::UnboundPrefix(chord) => {
             Ok(TerminalClientLoopAction::ReportUnboundPrefix(chord))
@@ -1571,6 +1581,7 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
 
     while !remaining.is_empty() {
         if *host_bracketed_paste_active {
+            config.prefix_key_pending = false;
             if let Some(end_start) = input_sequence_start(remaining, HOST_BRACKETED_PASTE_END) {
                 let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
                 actions.push(TerminalClientLoopAction::ForwardToPane(
@@ -1585,6 +1596,41 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
         }
 
         let paste_start = input_sequence_start(remaining, HOST_BRACKETED_PASTE_START);
+        if paste_start == Some(0) {
+            config.prefix_key_pending = false;
+            if let Some(end_start) = input_sequence_start(remaining, HOST_BRACKETED_PASTE_END) {
+                let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
+                actions.push(TerminalClientLoopAction::ForwardToPane(
+                    remaining[..consumed].to_vec(),
+                ));
+                remaining = &remaining[consumed..];
+                continue;
+            }
+            actions.push(TerminalClientLoopAction::ForwardToPane(remaining.to_vec()));
+            *host_bracketed_paste_active = true;
+            break;
+        }
+
+        if config.prefix_key_pending {
+            let Some((action, consumed)) =
+                route_pending_prefix_client_input_action(remaining, &config)?
+            else {
+                actions.push(TerminalClientLoopAction::ReportUnboundPrefix(
+                    config.bindings.escape,
+                ));
+                config.prefix_key_pending = false;
+                break;
+            };
+            let enters_prompt = action_enters_client_prompt(&action);
+            actions.push(action);
+            config.prefix_key_pending = false;
+            remaining = &remaining[consumed..];
+            if enters_prompt {
+                break;
+            }
+            continue;
+        }
+
         let mouse_start = sgr_mouse_sequence_start(remaining);
         let prefix_start = prefix
             .as_deref()
@@ -1603,20 +1649,6 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
             continue;
         }
 
-        if paste_start == Some(0) {
-            if let Some(end_start) = input_sequence_start(remaining, HOST_BRACKETED_PASTE_END) {
-                let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
-                actions.push(TerminalClientLoopAction::ForwardToPane(
-                    remaining[..consumed].to_vec(),
-                ));
-                remaining = &remaining[consumed..];
-                continue;
-            }
-            actions.push(TerminalClientLoopAction::ForwardToPane(remaining.to_vec()));
-            *host_bracketed_paste_active = true;
-            break;
-        }
-
         let prefix_first = prefix_start == Some(0) && mouse_start != Some(0);
         if prefix_first && let Some(prefix) = prefix.as_deref() {
             let Some((action, consumed)) =
@@ -1626,7 +1658,12 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
                 break;
             };
             let enters_prompt = action_enters_client_prompt(&action);
+            let enters_prefix_key_mode =
+                matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode);
             actions.push(action);
+            if enters_prefix_key_mode {
+                config.prefix_key_pending = true;
+            }
             remaining = &remaining[consumed..];
             if enters_prompt {
                 break;
@@ -1702,6 +1739,7 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
 
     while !remaining.is_empty() {
         if *host_bracketed_paste_active {
+            config.prefix_key_pending = false;
             host_bracketed_paste_buffer.extend_from_slice(remaining);
             let Some(end_start) =
                 input_sequence_start(host_bracketed_paste_buffer, HOST_BRACKETED_PASTE_END)
@@ -1727,6 +1765,41 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
         }
 
         let paste_start = input_sequence_start(remaining, HOST_BRACKETED_PASTE_START);
+        if paste_start == Some(0) {
+            config.prefix_key_pending = false;
+            if let Some(end_start) = input_sequence_start(remaining, HOST_BRACKETED_PASTE_END) {
+                let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
+                actions.push(TerminalClientLoopAction::ForwardToPane(
+                    remaining[..consumed].to_vec(),
+                ));
+                remaining = &remaining[consumed..];
+                continue;
+            }
+            host_bracketed_paste_buffer.extend_from_slice(remaining);
+            *host_bracketed_paste_active = true;
+            break;
+        }
+
+        if config.prefix_key_pending {
+            let Some((action, consumed)) =
+                route_pending_prefix_client_input_action(remaining, &config)?
+            else {
+                actions.push(TerminalClientLoopAction::ReportUnboundPrefix(
+                    config.bindings.escape,
+                ));
+                config.prefix_key_pending = false;
+                break;
+            };
+            let enters_prompt = action_enters_client_prompt(&action);
+            actions.push(action);
+            config.prefix_key_pending = false;
+            remaining = &remaining[consumed..];
+            if enters_prompt {
+                break;
+            }
+            continue;
+        }
+
         let mouse_start = sgr_mouse_sequence_start(remaining);
         let prefix_start = prefix
             .as_deref()
@@ -1745,20 +1818,6 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
             continue;
         }
 
-        if paste_start == Some(0) {
-            if let Some(end_start) = input_sequence_start(remaining, HOST_BRACKETED_PASTE_END) {
-                let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
-                actions.push(TerminalClientLoopAction::ForwardToPane(
-                    remaining[..consumed].to_vec(),
-                ));
-                remaining = &remaining[consumed..];
-                continue;
-            }
-            host_bracketed_paste_buffer.extend_from_slice(remaining);
-            *host_bracketed_paste_active = true;
-            break;
-        }
-
         let prefix_first = prefix_start == Some(0) && mouse_start != Some(0);
         if prefix_first && let Some(prefix) = prefix.as_deref() {
             let Some((action, consumed)) =
@@ -1768,7 +1827,12 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
                 break;
             };
             let enters_prompt = action_enters_client_prompt(&action);
+            let enters_prefix_key_mode =
+                matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode);
             actions.push(action);
+            if enters_prefix_key_mode {
+                config.prefix_key_pending = true;
+            }
             remaining = &remaining[consumed..];
             if enters_prompt {
                 break;
@@ -1859,6 +1923,31 @@ fn route_prefix_client_input_action(
     )))
 }
 
+/// Routes the next key through the prefix table.
+///
+/// # Parameters
+/// - `input`: The raw input beginning with the key that should consume the
+///   pending prefix state.
+/// - `config`: The active client loop routing configuration.
+fn route_pending_prefix_client_input_action(
+    input: &[u8],
+    config: &TerminalClientLoopConfig,
+) -> Result<Option<(TerminalClientLoopAction, usize)>> {
+    let Some((chord, consumed)) = parse_key_chord_bytes(input) else {
+        return Ok(None);
+    };
+    if let Some(command) = config.command_bindings.get(&chord) {
+        return Ok(Some((
+            TerminalClientLoopAction::ExecuteCommand(command.to_string()),
+            consumed,
+        )));
+    }
+    let action = classify_prefix_binding(chord, &config.bindings)
+        .map(TerminalClientLoopAction::ExecuteMux)
+        .unwrap_or(TerminalClientLoopAction::ReportUnboundPrefix(chord));
+    Ok(Some((action, consumed)))
+}
+
 /// Runs the action enters client prompt operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1867,15 +1956,14 @@ fn route_prefix_client_input_action(
 fn action_enters_client_prompt(action: &TerminalClientLoopAction) -> bool {
     matches!(
         action,
-        TerminalClientLoopAction::EnterPrefixCommandMode
-            | TerminalClientLoopAction::ExecuteMux(
-                MuxAction::EnterCommandPrompt
-                    | MuxAction::RenameWindow
-                    | MuxAction::KillWindowAfterConfirmation
-                    | MuxAction::KillPaneAfterConfirmation
-                    | MuxAction::FocusWindow(WindowFocusTarget::PromptForIndex)
-                    | MuxAction::FocusWindow(WindowFocusTarget::PromptForNewIndex)
-            )
+        TerminalClientLoopAction::ExecuteMux(
+            MuxAction::EnterCommandPrompt
+                | MuxAction::RenameWindow
+                | MuxAction::KillWindowAfterConfirmation
+                | MuxAction::KillPaneAfterConfirmation
+                | MuxAction::FocusWindow(WindowFocusTarget::PromptForIndex)
+                | MuxAction::FocusWindow(WindowFocusTarget::PromptForNewIndex)
+        )
     )
 }
 

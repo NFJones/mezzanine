@@ -264,6 +264,7 @@ impl RuntimeSessionService {
             agent_modified_files: BTreeMap::new(),
             primary_command_prompt_history: Vec::new(),
             primary_prompt_input: None,
+            primary_prefix_key_pending: false,
             agent_prompt_inputs: BTreeMap::new(),
             primary_display_overlay: None,
             primary_error_status_overlay: None,

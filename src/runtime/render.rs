@@ -3612,6 +3612,9 @@ impl RuntimeSessionService {
         }
 
         for action in &step.actions {
+            if !matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode) {
+                self.primary_prefix_key_pending = false;
+            }
             if self.primary_display_overlay.is_some()
                 && self.apply_primary_display_overlay_terminal_action(primary_client_id, action)?
             {
@@ -3819,10 +3822,9 @@ impl RuntimeSessionService {
                         Err(error) => self.present_attached_action_error(&mut report, &error)?,
                     }
                 }
-                TerminalClientLoopAction::EnterPrefixCommandMode => {
-                    self.enter_primary_command_prompt("")?;
+                TerminalClientLoopAction::EnterPrefixKeyMode => {
+                    self.primary_prefix_key_pending = true;
                     report.view_refresh_required = true;
-                    report.full_redraw_required = true;
                 }
                 TerminalClientLoopAction::ReportUnboundPrefix(chord) => report
                     .unsupported_actions
@@ -3899,7 +3901,7 @@ impl RuntimeSessionService {
             | TerminalClientLoopAction::ExecuteCommand(_)
             | TerminalClientLoopAction::HandleMouse(_)
             | TerminalClientLoopAction::HandleCopyMode(_)
-            | TerminalClientLoopAction::EnterPrefixCommandMode
+            | TerminalClientLoopAction::EnterPrefixKeyMode
             | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok(false),
         }
     }
@@ -4180,7 +4182,7 @@ impl RuntimeSessionService {
             | TerminalClientLoopAction::ExecuteCommand(_)
             | TerminalClientLoopAction::HandleMouse(_)
             | TerminalClientLoopAction::HandleCopyMode(_)
-            | TerminalClientLoopAction::EnterPrefixCommandMode
+            | TerminalClientLoopAction::EnterPrefixKeyMode
             | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok(false),
         }
     }
@@ -7588,6 +7590,7 @@ impl RuntimeSessionService {
             .iter()
             .map(|(chord, binding)| (*chord, binding.command.clone()))
             .collect();
+        config.prefix_key_pending = self.primary_prefix_key_pending;
         config.window_frames_enabled = self.window_frames_enabled;
         config.window_frame_template = self.window_frame_template.clone();
         config.window_frame_position = self.window_frame_position;

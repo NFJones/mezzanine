@@ -3539,6 +3539,11 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) primary_prompt_input: Option<RuntimePrimaryPromptInput>,
+    /// Whether the primary client's next key should use the prefix table.
+    ///
+    /// This transient state is set by a lone escape key and consumed by the
+    /// next attached-terminal input action.
+    pub(super) primary_prefix_key_pending: bool,
     /// Stores the agent prompt inputs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

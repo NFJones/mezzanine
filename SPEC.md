@@ -1182,11 +1182,14 @@ nested operation unless the user has explicitly enabled such behavior.
 
 ### 7.1 Escape Sequence
 
-Mezzanine MUST provide an escape sequence that enters a prefix command mode.
+Mezzanine MUST provide an escape sequence that enters a transient prefix-key
+state.
 
 The default escape sequence MUST be `Ctrl+A`.
 
 The escape sequence MUST be configurable.
+
+Pressing the escape sequence by itself MUST NOT enter the command prompt.
 
 Pressing the escape sequence followed by `:` MUST enter a command prompt.
 

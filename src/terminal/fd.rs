@@ -206,6 +206,12 @@ pub struct TerminalClientLoopConfig {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub command_bindings: BTreeMap<KeyChord, String>,
+    /// Whether the next key should be interpreted through the prefix table.
+    ///
+    /// A lone configured escape key enters this transient state. The next key
+    /// consumes the state and is matched against prefix bindings instead of
+    /// direct accelerators or pane forwarding.
+    pub prefix_key_pending: bool,
     /// Stores the mouse policy value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -373,6 +379,7 @@ impl Default for TerminalClientLoopConfig {
         Self {
             bindings: KeyBindings::default(),
             command_bindings: BTreeMap::new(),
+            prefix_key_pending: false,
             mouse_policy: MousePolicy {
                 enabled: true,
                 pane_application_mouse_mode: false,

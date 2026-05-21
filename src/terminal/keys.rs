@@ -673,11 +673,11 @@ pub enum TerminalInputClassification {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     ForwardToPane,
-    /// Represents the Prefix Command Mode case for this enumeration.
+    /// Represents the Prefix Key Mode case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    PrefixCommandMode,
+    PrefixKeyMode,
     /// Represents the Unbound Prefix case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -807,7 +807,7 @@ pub(crate) fn classify_terminal_input_with_command_bindings(
 
     if first == bindings.escape {
         if first_len == input.len() {
-            return Ok(TerminalInputClassification::PrefixCommandMode);
+            return Ok(TerminalInputClassification::PrefixKeyMode);
         }
         let remaining = &input[first_len..];
         let Some((second, second_len)) = parse_key_chord_bytes(remaining) else {

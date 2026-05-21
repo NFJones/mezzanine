@@ -47,9 +47,9 @@ use super::{
     parse_sgr_mouse, plan_attached_terminal_client_step, poll_attached_terminal_fd_readiness,
     render_attached_client_view, render_readline_prompt_status_row, render_window,
     render_window_with_pane_frame_template, rendered_pane_geometries, resolve_ui_theme,
-    route_client_input, run_attached_terminal_client_loop, select_installed_terminfo,
-    select_terminfo, terminal_char_width, terminal_profile_named, terminal_text_width,
-    window_frame_action_pillbox_cells,
+    route_client_input, route_client_input_actions, run_attached_terminal_client_loop,
+    select_installed_terminfo, select_terminfo, terminal_char_width, terminal_profile_named,
+    terminal_text_width, window_frame_action_pillbox_cells,
 };
 use crate::ids::IdFactory;
 use crate::layout::{PaneGeometry, SplitDirection};
@@ -853,7 +853,7 @@ fn classifies_default_prefix_key_bindings() {
 
     assert_eq!(
         classify_terminal_input(b"\x01", &bindings).unwrap(),
-        TerminalInputClassification::PrefixCommandMode
+        TerminalInputClassification::PrefixKeyMode
     );
     assert_prefix(b"\x01\x01", MuxAction::SendPrefixToPane);
     assert_prefix(b"\x01:", MuxAction::EnterCommandPrompt);
@@ -1206,7 +1206,7 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
     );
     assert_eq!(
         route_client_input(b"\x01", &config).unwrap(),
-        TerminalClientLoopAction::EnterPrefixCommandMode
+        TerminalClientLoopAction::EnterPrefixKeyMode
     );
     config.command_bindings.insert(
         KeyChord::new(KeyCode::Char('x')),
@@ -1383,6 +1383,45 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
     assert_eq!(
         route_client_input(b"\x1b[<0;20;5m", &mouse_config).unwrap(),
         TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane)
+    );
+}
+
+/// Verifies that a previously entered prefix key state routes the next key
+/// through the prefix table instead of opening the command prompt immediately.
+///
+/// This protects the split between the escape key and the command-prompt
+/// binding so callers can keep the prefix state across terminal read frames.
+#[test]
+fn client_loop_routes_pending_prefix_key_to_prefix_table() {
+    let config = TerminalClientLoopConfig {
+        prefix_key_pending: true,
+        ..TerminalClientLoopConfig::default()
+    };
+
+    assert_eq!(
+        route_client_input(b":", &config).unwrap(),
+        TerminalClientLoopAction::ExecuteMux(MuxAction::EnterCommandPrompt)
+    );
+}
+
+/// Verifies that pending prefix state is consumed once and remaining bytes keep
+/// their normal pane-forwarding behavior.
+///
+/// This regression scenario covers attached terminals that deliver the key
+/// after the escape and pane text in the same read buffer.
+#[test]
+fn client_loop_consumes_pending_prefix_before_forwarding_remainder() {
+    let config = TerminalClientLoopConfig {
+        prefix_key_pending: true,
+        ..TerminalClientLoopConfig::default()
+    };
+
+    assert_eq!(
+        route_client_input_actions(b"cabc", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::ExecuteMux(MuxAction::NewWindow),
+            TerminalClientLoopAction::ForwardToPane(b"abc".to_vec()),
+        ]
     );
 }
 

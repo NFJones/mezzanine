@@ -7221,7 +7221,7 @@ fn runtime_applies_attached_terminal_step_actions() {
             TerminalClientLoopAction::ForwardToPane(b"hello\n".to_vec()),
             TerminalClientLoopAction::ExecuteMux(MuxAction::SplitPaneVertical),
             TerminalClientLoopAction::ExecuteMux(MuxAction::FocusPane(PaneFocusDirection::Left)),
-            TerminalClientLoopAction::EnterPrefixCommandMode,
+            TerminalClientLoopAction::EnterPrefixKeyMode,
             TerminalClientLoopAction::ExecuteMux(MuxAction::EnterCopyMode),
         ],
         output_lines: Vec::new(),
@@ -7242,6 +7242,64 @@ fn runtime_applies_attached_terminal_step_actions() {
     assert!(!service.active_copy_modes.is_empty());
     assert_eq!(service.session().windows()[0].panes().len(), 2);
     assert_eq!(service.pane_processes().len(), 2);
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies runtime keeps a lone escape key as pending prefix state until the
+/// next terminal action consumes it.
+///
+/// This regression scenario protects the split between entering prefix-key
+/// state and explicitly requesting the command prompt through the prefix table.
+#[test]
+fn runtime_applies_lone_prefix_key_as_pending_state() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+
+    let prefix_report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::EnterPrefixKeyMode],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(prefix_report.view_refresh_required);
+    assert!(service.primary_prefix_key_pending);
+    assert!(service.primary_prompt_input.is_none());
+    assert!(
+        service
+            .terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .unwrap()
+            .prefix_key_pending
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ExecuteMux(
+                    MuxAction::EnterCommandPrompt,
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(!service.primary_prefix_key_pending);
+    assert!(service.primary_prompt_input.is_some());
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
