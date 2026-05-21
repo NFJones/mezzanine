@@ -3701,7 +3701,12 @@ impl RuntimeSessionService {
                 .values()
                 .any(|transaction| transaction.turn_id == turn_id)
             || self.turn_has_pending_focused_shell_hook_continuation(turn_id)
-            || self.joined_subagent_dependencies.contains_key(turn_id)
+            || self
+                .joined_subagent_dependencies
+                .get(turn_id)
+                .is_some_and(|dependency| {
+                    self.joined_subagent_dependency_has_live_child(dependency)
+                })
             || self
                 .blocked_agent_approval_refs
                 .values()
@@ -3712,10 +3717,7 @@ impl RuntimeSessionService {
                 .is_some_and(|execution| {
                     runtime_execution_ready_for_provider_continuation(execution)
                         || self.execution_has_pending_shell_dispatch(turn_id, execution)
-                        || execution.action_results.iter().any(|result| {
-                            result.status == ActionStatus::Running
-                                && matches!(result.action_type, "spawn_agent")
-                        })
+                        || self.execution_waiting_for_live_joined_subagents(turn_id, execution)
                 })
     }
 
@@ -4453,16 +4455,11 @@ impl RuntimeSessionService {
                 transcript_entries =
                     self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
                 self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-                let _ = self.agent_scheduler.complete(turn_id);
-                self.append_agent_trace_turn_event(
-                    pane_id,
-                    turn_id,
-                    &format!(
-                        "scheduler running -> {} reason=shell_transaction_settled",
-                        runtime_agent_turn_state_name(terminal_state)
-                    ),
+                self.complete_running_agent_turn_and_start_ready(
+                    &turn,
+                    terminal_state,
+                    "shell_transaction_settled",
                 )?;
-                self.finish_agent_turn(pane_id, turn_id, terminal_state)?;
             }
         } else if terminal_state == AgentTurnState::Running {
             self.agent_turn_contexts

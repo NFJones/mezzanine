@@ -1555,14 +1555,6 @@ fn runtime_maap_message_content_type(content_type: &str) -> String {
     }
 }
 
-/// Returns whether a running turn is paused on joined child subagent results.
-fn runtime_execution_waiting_for_joined_subagents(execution: &AgentTurnExecution) -> bool {
-    execution.terminal_state == AgentTurnState::Running
-        && execution.action_results.iter().any(|result| {
-            result.action_type == "spawn_agent" && result.status == ActionStatus::Running
-        })
-}
-
 /// Extracts child agent, display name, and turn ids from a spawn response.
 fn runtime_spawn_json_agent_and_turn(spawn_json: &str) -> Result<(String, Option<String>, String)> {
     let value = serde_json::from_str::<serde_json::Value>(spawn_json).map_err(|error| {
@@ -3326,6 +3318,48 @@ impl RuntimeSessionService {
             });
     }
 
+    /// Reports whether one joined-subagent dependency still has a live child
+    /// turn that can make progress.
+    pub(super) fn joined_subagent_dependency_has_live_child(
+        &self,
+        dependency: &JoinedSubagentDependency,
+    ) -> bool {
+        self.agent_turn_ledger.turns().iter().any(|turn| {
+            turn.turn_id == dependency.child_turn_id
+                && matches!(
+                    turn.state,
+                    AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                )
+        })
+    }
+
+    /// Reports whether a running parent execution is waiting on a live joined
+    /// subagent dependency.
+    ///
+    /// A running `spawn_agent` action only represents progress when it still
+    /// maps to the child turn that was created for that specific parent action.
+    /// Stale action results without a live dependency must not mask a stranded
+    /// parent turn.
+    pub(super) fn execution_waiting_for_live_joined_subagents(
+        &self,
+        parent_turn_id: &str,
+        execution: &AgentTurnExecution,
+    ) -> bool {
+        execution.terminal_state == AgentTurnState::Running
+            && execution.action_results.iter().any(|result| {
+                result.action_type == "spawn_agent"
+                    && result.status == ActionStatus::Running
+                    && self
+                        .joined_subagent_dependencies
+                        .values()
+                        .any(|dependency| {
+                            dependency.parent_turn_id == parent_turn_id
+                                && dependency.parent_action_id == result.action_id
+                                && self.joined_subagent_dependency_has_live_child(dependency)
+                        })
+            })
+    }
+
     /// Queues one bounded provider continuation after model-correctable action
     /// failures.
     ///
@@ -3716,6 +3750,42 @@ impl RuntimeSessionService {
         self.start_ready_agent_turns()?;
         self.checkpoint_agent_session_metadata()?;
         Ok(session)
+    }
+
+    /// Completes the scheduler entry for one running turn and finishes the
+    /// terminal runtime turn through the cleanup path that matches its current
+    /// pane shell binding.
+    ///
+    /// # Parameters
+    /// - `turn`: The running turn being settled.
+    /// - `state`: The terminal turn state to record.
+    /// - `reason`: Trace reason attached to the scheduler transition.
+    pub(super) fn complete_running_agent_turn_and_start_ready(
+        &mut self,
+        turn: &AgentTurnRecord,
+        state: AgentTurnState,
+        reason: &str,
+    ) -> Result<AgentShellSession> {
+        let _ = self.agent_scheduler.complete(&turn.turn_id);
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "scheduler running -> {} reason={}",
+                runtime_agent_turn_state_name(state),
+                reason
+            ),
+        )?;
+        if self
+            .agent_shell_store
+            .get(&turn.pane_id)
+            .and_then(|session| session.running_turn_id.as_deref())
+            == Some(turn.turn_id.as_str())
+        {
+            self.finish_agent_turn(&turn.pane_id, &turn.turn_id, state)
+        } else {
+            self.finish_agent_turn_without_shell_session(turn, state)
+        }
     }
 
     /// Starts all scheduler work that is runnable in the current runtime
@@ -5151,18 +5221,15 @@ impl RuntimeSessionService {
             persisted_transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.emit_subagent_task_result_for_execution(turn, &execution)?;
-            let _ = self.agent_scheduler.complete(turn_id);
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                turn_id,
-                &format!(
-                    "scheduler running -> {} reason=provider_execution_settled",
-                    runtime_agent_turn_state_name(execution.terminal_state)
-                ),
+            self.complete_running_agent_turn_and_start_ready(
+                turn,
+                execution.terminal_state,
+                "provider_execution_settled",
             )?;
-            self.finish_agent_turn(&turn.pane_id, turn_id, execution.terminal_state)?;
         } else {
-            if runtime_execution_waiting_for_joined_subagents(&execution) {
+            let waiting_for_joined_subagents =
+                self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
+            if waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
                 let _ = self.agent_scheduler.block_running(turn_id);
@@ -5205,7 +5272,7 @@ impl RuntimeSessionService {
                     "provider_task queued reason=ready_for_provider_continuation",
                 )?;
             }
-            if !runtime_execution_waiting_for_joined_subagents(&execution) {
+            if !waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
             }
@@ -5384,18 +5451,15 @@ impl RuntimeSessionService {
             persisted_transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.emit_subagent_task_result_for_execution(turn, &execution)?;
-            let _ = self.agent_scheduler.complete(turn_id);
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                turn_id,
-                &format!(
-                    "scheduler running -> {} reason=provider_execution_settled",
-                    runtime_agent_turn_state_name(execution.terminal_state)
-                ),
+            self.complete_running_agent_turn_and_start_ready(
+                turn,
+                execution.terminal_state,
+                "provider_execution_settled",
             )?;
-            self.finish_agent_turn(&turn.pane_id, turn_id, execution.terminal_state)?;
         } else {
-            if runtime_execution_waiting_for_joined_subagents(&execution) {
+            let waiting_for_joined_subagents =
+                self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
+            if waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
                 let _ = self.agent_scheduler.block_running(turn_id);
@@ -5438,7 +5502,7 @@ impl RuntimeSessionService {
                     "provider_task queued reason=ready_for_provider_continuation",
                 )?;
             }
-            if !runtime_execution_waiting_for_joined_subagents(&execution) {
+            if !waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
             }
@@ -5688,16 +5752,11 @@ impl RuntimeSessionService {
                 transcript_entries =
                     self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
                 self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-                let _ = self.agent_scheduler.complete(turn_id);
-                self.append_agent_trace_turn_event(
-                    &turn.pane_id,
-                    turn_id,
-                    &format!(
-                        "scheduler running -> {} reason=pending_shell_dispatch_settled",
-                        runtime_agent_turn_state_name(terminal_state)
-                    ),
+                self.complete_running_agent_turn_and_start_ready(
+                    &turn,
+                    terminal_state,
+                    "pending_shell_dispatch_settled",
                 )?;
-                self.finish_agent_turn(&turn.pane_id, turn_id, terminal_state)?;
             }
         } else {
             self.agent_turn_executions
@@ -5818,25 +5877,11 @@ impl RuntimeSessionService {
             let transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
             self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-            let _ = self.agent_scheduler.complete(&turn.turn_id);
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "scheduler running -> {} reason=pre_shell_hook_blocked",
-                    runtime_agent_turn_state_name(execution.terminal_state)
-                ),
+            self.complete_running_agent_turn_and_start_ready(
+                &turn,
+                execution.terminal_state,
+                "pre_shell_hook_blocked",
             )?;
-            if self
-                .agent_shell_store
-                .get(&turn.pane_id)
-                .and_then(|session| session.running_turn_id.as_deref())
-                == Some(turn.turn_id.as_str())
-            {
-                self.finish_agent_turn(&turn.pane_id, &turn.turn_id, execution.terminal_state)?;
-            } else {
-                self.finish_agent_turn_without_shell_session(&turn, execution.terminal_state)?;
-            }
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
@@ -10000,38 +10045,11 @@ impl RuntimeSessionService {
         let transcript_entries =
             self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
         self.emit_subagent_task_result_for_execution(turn, &execution)?;
-        let _ = self.agent_scheduler.complete(&turn.turn_id);
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            "scheduler running -> failed reason=provider_error",
+        self.complete_running_agent_turn_and_start_ready(
+            turn,
+            AgentTurnState::Failed,
+            "provider_error",
         )?;
-        if self
-            .agent_shell_store
-            .get(&turn.pane_id)
-            .and_then(|session| session.running_turn_id.as_deref())
-            == Some(turn.turn_id.as_str())
-        {
-            self.finish_agent_turn(&turn.pane_id, &turn.turn_id, AgentTurnState::Failed)?;
-        } else {
-            self.agent_turn_ledger
-                .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-            self.append_agent_trace_turn_transition(
-                turn,
-                turn.state,
-                AgentTurnState::Failed,
-                "provider_error_without_shell_session",
-            )?;
-            self.agent_turn_contexts.remove(&turn.turn_id);
-            self.agent_turn_executions.remove(&turn.turn_id);
-            self.agent_turn_pending_steering.remove(&turn.turn_id);
-            self.agent_turn_shell_dispatch_history.remove(&turn.turn_id);
-            self.agent_turn_network_action_history.remove(&turn.turn_id);
-            self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-            self.agent_turn_model_profiles.remove(&turn.turn_id);
-            self.pending_agent_provider_tasks.remove(&turn.turn_id);
-            self.claimed_agent_provider_tasks.remove(&turn.turn_id);
-        }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
@@ -10167,26 +10185,11 @@ impl RuntimeSessionService {
             let transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
             self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-            let _ = self.agent_scheduler.complete(&turn.turn_id);
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "scheduler running -> {} reason={}",
-                    runtime_agent_turn_state_name(terminal_state),
-                    failure.trace_reason
-                ),
+            self.complete_running_agent_turn_and_start_ready(
+                &turn,
+                terminal_state,
+                &failure.trace_reason,
             )?;
-            if self
-                .agent_shell_store
-                .get(&turn.pane_id)
-                .and_then(|session| session.running_turn_id.as_deref())
-                == Some(turn.turn_id.as_str())
-            {
-                self.finish_agent_turn(&turn.pane_id, &turn.turn_id, terminal_state)?;
-            } else {
-                self.finish_agent_turn_without_shell_session(&turn, terminal_state)?;
-            }
             transcript_entries
         };
         self.append_lifecycle_event(
@@ -10275,38 +10278,11 @@ impl RuntimeSessionService {
         let transcript_entries =
             self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
         self.emit_subagent_task_result_for_execution(turn, &execution)?;
-        let _ = self.agent_scheduler.complete(&turn.turn_id);
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            "scheduler running -> failed reason=hook_blocked",
+        self.complete_running_agent_turn_and_start_ready(
+            turn,
+            AgentTurnState::Failed,
+            "hook_blocked",
         )?;
-        if self
-            .agent_shell_store
-            .get(&turn.pane_id)
-            .and_then(|session| session.running_turn_id.as_deref())
-            == Some(turn.turn_id.as_str())
-        {
-            self.finish_agent_turn(&turn.pane_id, &turn.turn_id, AgentTurnState::Failed)?;
-        } else {
-            self.agent_turn_ledger
-                .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-            self.append_agent_trace_turn_transition(
-                turn,
-                turn.state,
-                AgentTurnState::Failed,
-                "hook_blocked_without_shell_session",
-            )?;
-            self.agent_turn_contexts.remove(&turn.turn_id);
-            self.agent_turn_executions.remove(&turn.turn_id);
-            self.agent_turn_pending_steering.remove(&turn.turn_id);
-            self.agent_turn_shell_dispatch_history.remove(&turn.turn_id);
-            self.agent_turn_network_action_history.remove(&turn.turn_id);
-            self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-            self.agent_turn_model_profiles.remove(&turn.turn_id);
-            self.pending_agent_provider_tasks.remove(&turn.turn_id);
-            self.claimed_agent_provider_tasks.remove(&turn.turn_id);
-        }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
@@ -11508,16 +11484,11 @@ impl RuntimeSessionService {
             let _ =
                 self.persist_runtime_agent_turn_execution_transcript(&turn, &transcript_execution)?;
             self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-            let _ = self.agent_scheduler.complete(&turn.turn_id);
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "scheduler running -> {} reason=approval_resume_settled",
-                    runtime_agent_turn_state_name(execution.terminal_state)
-                ),
+            self.complete_running_agent_turn_and_start_ready(
+                &turn,
+                execution.terminal_state,
+                "approval_resume_settled",
             )?;
-            self.finish_agent_turn(&turn.pane_id, &turn.turn_id, execution.terminal_state)?;
             return Ok(Some(1));
         }
         self.agent_turn_executions
@@ -11744,16 +11715,11 @@ impl RuntimeSessionService {
                         &transcript_execution,
                     )?;
                     self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-                    let _ = self.agent_scheduler.complete(&turn.turn_id);
-                    self.append_agent_trace_turn_event(
-                        &turn.pane_id,
-                        &turn.turn_id,
-                        &format!(
-                            "scheduler running -> {} reason=approval_redirect_settled",
-                            runtime_agent_turn_state_name(execution.terminal_state)
-                        ),
+                    self.complete_running_agent_turn_and_start_ready(
+                        &turn,
+                        execution.terminal_state,
+                        "approval_redirect_settled",
                     )?;
-                    self.finish_agent_turn(&turn.pane_id, &turn.turn_id, execution.terminal_state)?;
                     return Ok(Some(1));
                 }
                 self.agent_turn_executions

@@ -10,18 +10,18 @@ use super::{
     ActionStatus, AgentId, AgentShellVisibility, AgentTurnState, ApprovalPolicy, AuditLog,
     AuthStore, AuxiliarySocketKind, BlockedApprovalRequest, CommandRuleScope, ConfigFormat,
     ConfigLayer, ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
-    CooperationMode, EventAudience, EventKind, HookEvent, MEZ_ENV_FIELD_SEPARATOR, MemoryRecord,
-    ModelProfile, ModelProvider, OsString, PaneExitRecord, PaneExitUpdate, PaneReadinessState,
-    Path, PathBuf, ProjectTrustStore, Result, RuleDecision, RuleMatch, RunningShellTransactionKind,
-    RunningShellTransactionRef, RuntimeAgentModifiedFileSummary, RuntimeEnv, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSubagentLineage,
-    RuntimeSubagentPlacement, SenderIdentity, SocketDirectorySource, SplitDirection,
-    SubagentWaitPolicy, TrustDecision, UnixStream, authorize_unix_peer, authorize_unix_peer_uid,
-    auxiliary_socket_path_for_control_socket, bind_control_socket, default_socket_directory,
-    effective_uid, ensure_private_socket_directory, fs, json_escape, pane_environment,
-    pane_environment_with_term, prune_stale_socket_files_in_directory,
-    runtime_hook_event_for_lifecycle, runtime_hook_event_name, runtime_marker_for_action,
-    socket_path_for_name,
+    CooperationMode, EventAudience, EventKind, HookEvent, JoinedSubagentDependency,
+    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, ModelProvider, OsString, PaneExitRecord,
+    PaneExitUpdate, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision,
+    RuleMatch, RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimeAgentModifiedFileSummary, RuntimeEnv, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
+    RuntimeSessionService, RuntimeSubagentLineage, RuntimeSubagentPlacement, SenderIdentity,
+    SocketDirectorySource, SplitDirection, SubagentWaitPolicy, TrustDecision, UnixStream,
+    authorize_unix_peer, authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket,
+    bind_control_socket, default_socket_directory, effective_uid, ensure_private_socket_directory,
+    fs, json_escape, pane_environment, pane_environment_with_term,
+    prune_stale_socket_files_in_directory, runtime_hook_event_for_lifecycle,
+    runtime_hook_event_name, runtime_marker_for_action, socket_path_for_name,
 };
 use crate::MezError;
 use crate::agent::AgentLogLevel;
@@ -897,6 +897,16 @@ fn runtime_say_response(
     text: &str,
     final_turn: bool,
 ) -> crate::agent::ModelResponse {
+    runtime_say_response_for_agent(turn_id, "agent-%1", text, final_turn)
+}
+
+/// Builds a simple `say` response for a selected runtime agent.
+fn runtime_say_response_for_agent(
+    turn_id: &str,
+    agent_id: &str,
+    text: &str,
+    final_turn: bool,
+) -> crate::agent::ModelResponse {
     crate::agent::ModelResponse {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
@@ -907,7 +917,7 @@ fn runtime_say_response(
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
             turn_id: turn_id.to_string(),
-            agent_id: "agent-%1".to_string(),
+            agent_id: agent_id.to_string(),
             actions: vec![crate::agent::AgentAction {
                 id: "say-1".to_string(),
                 rationale: "respond to the pane".to_string(),
@@ -922,9 +932,33 @@ fn runtime_say_response(
     }
 }
 
+/// Builds a joined-spawn action fixture for scheduler and subagent tests.
+fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> crate::agent::AgentAction {
+    crate::agent::AgentAction {
+        id: id.to_string(),
+        rationale: "delegate a bounded child task".to_string(),
+        payload: crate::agent::AgentActionPayload::SpawnAgent {
+            role: "default".to_string(),
+            placement: "new-window".to_string(),
+            cooperation_mode: "explore-only".to_string(),
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            task_prompt: task_prompt.to_string(),
+        },
+    }
+}
+
 /// Builds the request fixture used when a provider response was already
 /// underway before a mid-turn steering prompt was submitted.
 fn runtime_model_request_fixture(turn_id: &str) -> crate::agent::ModelRequest {
+    runtime_model_request_fixture_for_agent(turn_id, "agent-%1")
+}
+
+/// Builds a request fixture for a selected runtime agent.
+fn runtime_model_request_fixture_for_agent(
+    turn_id: &str,
+    agent_id: &str,
+) -> crate::agent::ModelRequest {
     crate::agent::ModelRequest {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
@@ -932,7 +966,7 @@ fn runtime_model_request_fixture(turn_id: &str) -> crate::agent::ModelRequest {
         prompt_cache_retention: None,
         max_output_tokens: None,
         turn_id: turn_id.to_string(),
-        agent_id: "agent-%1".to_string(),
+        agent_id: agent_id.to_string(),
         available_mcp_tools: Vec::new(),
         interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
         allowed_actions: crate::agent::AllowedActionSet::capability_decision(),
@@ -18917,6 +18951,328 @@ fn runtime_scheduler_prefers_other_runnable_agent_after_completion() {
             .collect::<Vec<_>>(),
         vec!["turn-2"]
     );
+}
+
+/// Verifies terminal failures without a pane-local running shell marker still
+/// drain scheduler capacity.
+///
+/// Some runtime failure paths settle a turn after its pane shell session was
+/// already detached or removed. Those paths still release a global scheduler
+/// slot, so they must immediately start queued independent work instead of
+/// leaving it parked until unrelated input arrives.
+#[test]
+fn runtime_no_shell_session_provider_failure_starts_queued_turn() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    let pane2 = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    for pane in ["%1", pane2.as_str()] {
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.pane_screens.insert(pane.to_string(), screen);
+    }
+
+    service.start_agent_prompt_turn("%1", "first").unwrap();
+    service
+        .start_agent_prompt_turn(pane2.as_str(), "second")
+        .unwrap();
+    assert_eq!(service.agent_scheduler().snapshot().running, 1);
+    assert_eq!(service.agent_scheduler().snapshot().queued, 1);
+    service.agent_shell_store_mut().remove_session("%1");
+
+    let error = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchFailingProvider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(
+        service
+            .agent_scheduler()
+            .running_turns()
+            .map(|running| running.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["turn-2"]
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 0);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(pane2.as_str())
+            .and_then(|session| session.running_turn_id.as_deref()),
+        Some("turn-2")
+    );
+}
+
+/// Verifies joined child completion drains the scheduler when other joined
+/// children are queued behind a low concurrency limit.
+///
+/// A blocked parent releases its global scheduler slot while it waits for
+/// joined subagents. When the first running child finishes, the next queued
+/// child must start immediately so the parent is not left waiting for a child
+/// turn that is ready but never launched.
+#[test]
+fn runtime_joined_child_completion_starts_next_queued_child() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    let child_one_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let child_two_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Horizontal)
+        .unwrap();
+    for pane in ["%1", child_one_pane.as_str(), child_two_pane.as_str()] {
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.pane_screens.insert(pane.to_string(), screen);
+    }
+
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let child_one = service
+        .start_agent_prompt_turn(child_one_pane.as_str(), "child one")
+        .unwrap();
+    let child_two = service
+        .start_agent_prompt_turn(child_two_pane.as_str(), "child two")
+        .unwrap();
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let spawn_one = runtime_spawn_agent_action("spawn-one", "child one");
+    let spawn_two = runtime_spawn_agent_action("spawn-two", "child two");
+    service.agent_turn_executions.insert(
+        parent.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "spawn children".to_string(),
+                usage: Default::default(),
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "test action batch rationale".to_string(),
+                    turn_id: parent.turn_id.clone(),
+                    agent_id: parent.agent_id.clone(),
+                    actions: vec![spawn_one.clone(), spawn_two.clone()],
+                    final_turn: false,
+                }),
+            },
+            latest_response_usage: Default::default(),
+            action_results: vec![
+                crate::agent::ActionResult::running(
+                    &parent_turn,
+                    &spawn_one,
+                    vec!["waiting for child one".to_string()],
+                    None,
+                ),
+                crate::agent::ActionResult::running(
+                    &parent_turn,
+                    &spawn_two,
+                    vec!["waiting for child two".to_string()],
+                    None,
+                ),
+            ],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.joined_subagent_dependencies.insert(
+        child_one.turn_id.clone(),
+        JoinedSubagentDependency {
+            parent_turn_id: parent.turn_id.clone(),
+            parent_action_id: "spawn-one".to_string(),
+            child_turn_id: child_one.turn_id.clone(),
+            child_agent_id: child_one.agent_id.clone(),
+            child_display_name: Some("child one".to_string()),
+        },
+    );
+    service.joined_subagent_dependencies.insert(
+        child_two.turn_id.clone(),
+        JoinedSubagentDependency {
+            parent_turn_id: parent.turn_id.clone(),
+            parent_action_id: "spawn-two".to_string(),
+            child_turn_id: child_two.turn_id.clone(),
+            child_agent_id: child_two.agent_id.clone(),
+            child_display_name: Some("child two".to_string()),
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&parent.turn_id);
+    service
+        .agent_scheduler_mut()
+        .block_running(&parent.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger
+        .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+    service.start_ready_agent_turns().unwrap();
+    assert_eq!(
+        service
+            .agent_scheduler()
+            .running_turns()
+            .map(|running| running.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![child_one.turn_id.as_str()]
+    );
+    assert_eq!(
+        service
+            .agent_scheduler()
+            .queued_turns()
+            .map(|queued| queued.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![child_two.turn_id.as_str()]
+    );
+
+    let child_provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &child_one.turn_id,
+            &child_one.agent_id,
+            "child one done",
+            true,
+        ),
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &child_one.turn_id,
+            &child_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_scheduler()
+            .running_turns()
+            .map(|running| running.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![child_two.turn_id.as_str()]
+    );
+    assert_eq!(service.agent_scheduler().snapshot().queued, 0);
+    assert!(
+        !service
+            .joined_subagent_dependencies
+            .contains_key(&child_one.turn_id)
+    );
+    assert!(
+        service
+            .joined_subagent_dependencies
+            .contains_key(&child_two.turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Blocked)
+    );
+}
+
+/// Verifies a stale running `spawn_agent` result without a live joined child is
+/// not treated as a runtime progress path.
+///
+/// The recovery loop must be able to fail or repair an orphaned parent turn
+/// instead of considering any running `spawn_agent` result sufficient evidence
+/// that a child can still complete.
+#[test]
+fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let spawn = runtime_spawn_agent_action("spawn-stale", "missing child");
+    service.agent_turn_executions.insert(
+        parent.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "spawn child".to_string(),
+                usage: Default::default(),
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "test action batch rationale".to_string(),
+                    turn_id: parent.turn_id.clone(),
+                    agent_id: parent.agent_id.clone(),
+                    actions: vec![spawn.clone()],
+                    final_turn: false,
+                }),
+            },
+            latest_response_usage: Default::default(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &parent_turn,
+                &spawn,
+                vec!["waiting for missing child".to_string()],
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&parent.turn_id);
+
+    assert!(service.unreachable_running_agent_turn_timer_needed());
+    assert_eq!(service.reconcile_agent_runtime_progress_paths().unwrap(), 1);
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(!service.agent_turn_executions.contains_key(&parent.turn_id));
 }
 
 /// Verifies runtime provider failure persists and finishes turn.
