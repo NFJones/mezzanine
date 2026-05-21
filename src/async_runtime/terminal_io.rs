@@ -1067,6 +1067,8 @@ pub struct AsyncFakeAttachedTerminalIo {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     input_batches: VecDeque<Vec<u8>>,
+    /// Number of input reads that should remain pending until caller timeout.
+    pending_input_reads: usize,
     /// Stores the terminal size batches value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1092,6 +1094,10 @@ impl AsyncFakeAttachedTerminalIo {
     /// Adds an input batch to be returned by the next input read.
     pub fn push_input(&mut self, input: impl Into<Vec<u8>>) {
         self.input_batches.push_back(input.into());
+    }
+    /// Adds one input read that remains pending until the caller times out.
+    pub fn push_pending_input_read(&mut self) {
+        self.pending_input_reads = self.pending_input_reads.saturating_add(1);
     }
 
     /// Adds a terminal size response to be returned by the next size query.
@@ -1120,6 +1126,11 @@ impl AsyncAttachedTerminalIo for AsyncFakeAttachedTerminalIo {
     /// on duplicated control-flow logic.
     fn read_input<'a>(&'a mut self, max_bytes: usize) -> AsyncTerminalIoFuture<'a, Vec<u8>> {
         Box::pin(async move {
+            if self.pending_input_reads > 0 {
+                self.pending_input_reads -= 1;
+                tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+                return Ok(Vec::new());
+            }
             let mut input = self.input_batches.pop_front().unwrap_or_default();
             input.truncate(max_bytes);
             Ok(input)

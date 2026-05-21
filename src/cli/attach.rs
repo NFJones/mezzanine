@@ -306,25 +306,36 @@ where
     terminal_io.enter_presentation().await?;
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
+    let mut render_requested = true;
 
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            render_requested = true;
         }
 
         let input = read_attached_client_input_or_timeout(terminal_io, 4096).await?;
         if input.eof {
             break Ok(());
         }
-
-        let step = terminal_step_control_request(
-            iteration,
-            &primary_client_id,
-            client_size,
-            input.bytes.as_slice(),
-            true,
-        );
-        if !write_async_control_body_or_disconnected(stream, &step).await? {
+        if input.bytes.is_empty() && !render_requested {
+            if control_socket_disconnected_without_pending_response(stream)? {
+                break Ok(());
+            }
+            continue;
+        }
+        let request = if input.bytes.is_empty() {
+            terminal_view_control_request(iteration, client_size)
+        } else {
+            terminal_step_control_request(
+                iteration,
+                &primary_client_id,
+                client_size,
+                input.bytes.as_slice(),
+                true,
+            )
+        };
+        if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
         let Some(response) =
@@ -336,6 +347,7 @@ where
         if control_response_forbidden(body.as_str())? {
             break Ok(());
         }
+        render_requested = false;
         let lines = terminal_step_response_lines(body.as_str())?;
         let line_style_spans = terminal_step_response_line_style_spans(body.as_str())?;
         if !lines.is_empty() {
@@ -536,6 +548,32 @@ async fn read_attached_client_input_or_timeout<I: AsyncAttachedTerminalIo>(
             bytes: Vec::new(),
             eof: false,
         }),
+    }
+}
+/// Checks whether the control socket has closed while no response is pending.
+///
+/// Idle control-socket attach loops avoid sending render requests after input
+/// timeouts, but they still need to notice daemon teardown promptly. The socket
+/// should not deliver unsolicited bytes in this state, so readable EOF means the
+/// attached client can exit cleanly without reintroducing periodic renders.
+fn control_socket_disconnected_without_pending_response(
+    stream: &tokio::net::UnixStream,
+) -> Result<bool> {
+    let mut byte = [0u8; 1];
+    match stream.try_read(&mut byte) {
+        Ok(0) => Ok(true),
+        Ok(_) => Err(MezError::invalid_state(
+            "control socket delivered an unexpected response while idle",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+        Err(error) => {
+            let error = MezError::from(error);
+            if attached_terminal_output_disconnected(&error) {
+                Ok(true)
+            } else {
+                Err(error)
+            }
+        }
     }
 }
 

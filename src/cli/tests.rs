@@ -2573,6 +2573,68 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
     assert_eq!(io.written_frames[0].modes.cursor_column, 14);
     assert!(io.written_frames[0].modes.cursor_visible);
 }
+/// Verifies that an idle control-socket primary attach renders once for initial
+/// presentation but does not keep sending render requests on repeated terminal
+/// input timeouts. This protects the agent-inactive idle path from recreating
+/// the previous fixed-cadence `terminal/step render=true` loop.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_does_not_repeat_idle_renders() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    server_stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["initial"],"line_style_spans":[[]],"cursor":{"row":0,"column":7,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        let mut unexpected = [0u8; 256];
+        match server_stream.read(&mut unexpected) {
+            Ok(0) => {}
+            Ok(read) => panic!(
+                "unexpected repeated idle render request: {}",
+                String::from_utf8_lossy(&unexpected[..read])
+            ),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => panic!("unexpected server read error: {error}"),
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.written_frames.len(), 1);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+}
 
 /// Verifies interactive control-socket attachment exits cleanly when the daemon
 /// closes the socket before sending a response frame. The foreground terminal
