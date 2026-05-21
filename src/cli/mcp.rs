@@ -5,12 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer, ConfigMutation,
+    Args, BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
-    DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, Parser, ProjectTrustStore, Result,
+    DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore, Result,
     Subcommand, TrustDecision, Write, compose_effective_config, default_trust_database_path,
-    discover_existing_overlays, discover_project_root, fs, is_cli_help_request, json_escape,
-    json_optional, parse_cli_args, persist_config_mutation, write_json_or_plain,
+    discover_existing_overlays, discover_project_root, fs, json_escape, json_optional,
+    persist_config_mutation, write_json_or_plain,
 };
 
 // MCP subcommands and config mutation helpers.
@@ -21,27 +21,13 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn run_mcp<W: Write>(
-    args: &[String],
+    parsed: McpCliArgs,
     env: CliEnv,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if is_cli_help_request(args) {
-        writeln!(
-            stdout,
-            "usage: mez mcp <list|inspect ID|add ID (--command CMD [--arg ARG...]|--url URL)|remove ID|enable ID|disable ID>"
-        )?;
-        return Ok(());
-    }
-    let parsed = parse_cli_args::<McpCliArgs>("mez mcp", args)?;
     let paths = env.config_paths()?;
-    match parsed.command.unwrap_or_default() {
-        McpCliCommand::Help => {
-            writeln!(
-                stdout,
-                "usage: mez mcp <list|inspect ID|add ID (--command CMD [--arg ARG...]|--url URL)|remove ID|enable ID|disable ID>"
-            )?;
-        }
+    match parsed.command.unwrap_or(McpCliCommand::List) {
         McpCliCommand::List => {
             let effective = load_primary_effective_config(&paths)?;
             let registry = McpRegistry::default();
@@ -174,26 +160,17 @@ pub(super) fn run_mcp<W: Write>(
 }
 
 /// Typed process CLI arguments for `mez mcp`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez mcp",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct McpCliArgs {
+#[derive(Debug, Clone, Args)]
+pub(super) struct McpCliArgs {
     /// Optional MCP subcommand, defaulting to `list`.
     #[command(subcommand)]
     command: Option<McpCliCommand>,
 }
 
 /// Typed process CLI subcommands for MCP server configuration.
-#[derive(Debug, Clone, Subcommand, Default)]
+#[derive(Debug, Clone, Subcommand)]
 enum McpCliCommand {
-    /// Shows MCP CLI usage.
-    #[command(name = "help")]
-    Help,
     /// Lists configured MCP servers and known tools.
-    #[default]
     List,
     /// Inspects one configured MCP server.
     Inspect {

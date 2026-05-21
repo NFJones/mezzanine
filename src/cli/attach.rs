@@ -5,13 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
+    Args, AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
     AttachedTerminalOutputModes, CliEnv, CliOutputFormat, ClientId,
-    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT, GraphicRendition, IsTerminal, MezError, Parser,
-    Result, SessionRecord, SessionRegistry, Size, SocketSelection, TerminalColor,
-    TerminalCursorStyle, TerminalStyleSpan, UnixStream, Write,
-    attached_terminal_output_disconnected, decode_control_frame, encode_control_body,
-    incomplete_control_response_error, io, json_escape, parse_cli_args,
+    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT, GraphicRendition, IsTerminal, MezError, Result,
+    SessionRecord, SessionRegistry, Size, SocketSelection, TerminalColor, TerminalCursorStyle,
+    TerminalStyleSpan, UnixStream, Write, attached_terminal_output_disconnected,
+    decode_control_frame, encode_control_body, incomplete_control_response_error, io, json_escape,
     read_control_response_frames, records_to_json, registry_root, resolve_session_record_target,
     selected_socket_path, terminal_size_from_fd_or_environment, write_control_response,
     write_json_or_plain,
@@ -45,21 +44,13 @@ pub(super) fn run_list<W: Write>(
 /// on duplicated control-flow logic.
 pub(super) async fn run_attach<W: Write>(
     socket_selection: &SocketSelection,
-    args: &[String],
+    parsed: AttachCliArgs,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        writeln!(
-            stdout,
-            "usage: mez attach [SESSION_ID|INDEX] [--observer|--observe]\n\
-             reattaches the primary terminal client or requests pending observer access"
-        )?;
-        return Ok(());
-    }
-    let request = attach_request_from_args(socket_selection, args, env.runtime.uid)?;
+    let request = attach_request(socket_selection, parsed, env.runtime.uid)?;
     if !interactive {
         let message = if request.requested_role == "observer" {
             "attaching as an observer client requires an interactive terminal"
@@ -148,12 +139,27 @@ pub(super) struct AttachRequest {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn attach_request_from_args(
     socket_selection: &SocketSelection,
     args: &[String],
     owner_uid: u32,
 ) -> Result<AttachRequest> {
-    let parsed = parse_cli_args::<AttachCliArgs>("mez attach", args)?;
+    let parsed = super::parse_cli_arg_group::<AttachCliArgs>("mez attach", args)?;
+    attach_request(socket_selection, parsed, owner_uid)
+}
+
+/// Builds the control request implied by parsed `mez attach` arguments.
+///
+/// # Parameters
+/// - `socket_selection`: The selected control socket or registry root.
+/// - `parsed`: Parsed attach options.
+/// - `owner_uid`: The effective user id that owns the session registry.
+fn attach_request(
+    socket_selection: &SocketSelection,
+    parsed: AttachCliArgs,
+    owner_uid: u32,
+) -> Result<AttachRequest> {
     let requested_role = if parsed.observer {
         "observer"
     } else {
@@ -176,18 +182,13 @@ pub(super) fn attach_request_from_args(
 }
 
 /// Typed process CLI arguments for `mez attach`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez attach",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct AttachCliArgs {
+#[derive(Debug, Clone, Args)]
+pub(super) struct AttachCliArgs {
     /// Requests observer access instead of primary access.
     #[arg(long, alias = "observe")]
-    observer: bool,
+    pub(super) observer: bool,
     /// Optional registered session id or creation-order index alias to attach to.
-    session_id: Option<String>,
+    pub(super) session_id: Option<String>,
 }
 
 /// Runs the socket selection for registry session operation for this subsystem.

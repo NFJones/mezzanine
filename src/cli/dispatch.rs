@@ -5,10 +5,10 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    CliInvocation, ConfigPaths, IsTerminal, MezError, OsString, Parser, PathBuf, Result,
-    RuntimeEnv, Write, cli_idempotency_key, io, is_cli_help_request, json_escape, parse_cli_args,
-    print_help, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
-    run_control_request, run_list, run_mcp, run_memory, run_new, run_serve, run_snapshot,
+    CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, OsString, PathBuf,
+    Result, RuntimeEnv, Write, cli_idempotency_key, io, json_escape,
+    prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
+    run_list, run_mcp, run_memory, run_new, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -100,19 +100,25 @@ pub async fn run_with<W: Write, E: Write>(
     env: CliEnv,
     interactive: bool,
     stdout: &mut W,
-    stderr: &mut E,
+    _stderr: &mut E,
 ) -> Result<()> {
-    let invocation = CliInvocation::parse(&args, &env.runtime, env.mez.as_ref())?;
+    let invocation = match CliInvocation::parse_or_display(&args, &env.runtime, env.mez.as_ref())? {
+        CliInvocationParse::Invocation(invocation) => invocation,
+        CliInvocationParse::Display(display) => {
+            write!(stdout, "{display}")?;
+            return Ok(());
+        }
+    };
     cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
-    let command = invocation.command.as_str();
-    let command_args = invocation.args.as_slice();
+    let socket_selection = invocation.socket_selection;
+    let command = invocation.command;
     let output_format = invocation.output_format;
 
     match command {
-        "" => {
+        None => {
             let uid = env.runtime.uid;
             let registry = crate::registry::SessionRegistry::new(
-                super::registry_root(&invocation.socket_selection)?,
+                super::registry_root(&socket_selection)?,
                 uid,
             );
             let _ = registry.prune_stale()?;
@@ -120,7 +126,10 @@ pub async fn run_with<W: Write, E: Write>(
             if let Some(session) = sessions.iter().find(|record| record.primary_available) {
                 return run_attach(
                     &super::SocketSelection::Explicit(session.socket_path.clone()),
-                    &[],
+                    super::attach::AttachCliArgs {
+                        observer: false,
+                        session_id: None,
+                    },
                     env,
                     interactive,
                     output_format,
@@ -129,8 +138,8 @@ pub async fn run_with<W: Write, E: Write>(
                 .await;
             }
             run_new(
-                &invocation.socket_selection,
-                command_args,
+                &socket_selection,
+                super::serve::NewCliArgs::default(),
                 env,
                 interactive,
                 output_format,
@@ -138,13 +147,12 @@ pub async fn run_with<W: Write, E: Write>(
             )
             .await?;
         }
-        "-h" | "--help" | "help" => print_help(stdout),
-        "-V" | "--version" | "version" => writeln!(stdout, "mez {}", env!("CARGO_PKG_VERSION"))?,
-        "config" => run_config(command_args, env, output_format, stdout)?,
-        "new" | "new-session" => {
+        Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
+        Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout)?,
+        Some(CliCommand::New(args)) => {
             run_new(
-                &invocation.socket_selection,
-                command_args,
+                &socket_selection,
+                args,
                 env,
                 interactive,
                 output_format,
@@ -152,10 +160,10 @@ pub async fn run_with<W: Write, E: Write>(
             )
             .await?
         }
-        "serve" | "daemon" => {
+        Some(CliCommand::Serve(args)) => {
             run_serve(
-                &invocation.socket_selection,
-                command_args,
+                &socket_selection,
+                args,
                 env,
                 interactive,
                 output_format,
@@ -163,13 +171,11 @@ pub async fn run_with<W: Write, E: Write>(
             )
             .await?
         }
-        "list" | "list-sessions" => {
-            run_list(&invocation.socket_selection, env, output_format, stdout)?
-        }
-        "attach" | "attach-session" => {
+        Some(CliCommand::List) => run_list(&socket_selection, env, output_format, stdout)?,
+        Some(CliCommand::Attach(args)) => {
             run_attach(
-                &invocation.socket_selection,
-                command_args,
+                &socket_selection,
+                args,
                 env,
                 interactive,
                 output_format,
@@ -177,13 +183,8 @@ pub async fn run_with<W: Write, E: Write>(
             )
             .await?
         }
-        "detach" | "detach-client" => {
-            if is_cli_help_request(command_args) {
-                writeln!(stdout, "usage: mez detach [--client-id ID]")?;
-                return Ok(());
-            }
-            let parsed = parse_cli_args::<DetachCliArgs>("mez detach", command_args)?;
-            let params = match parsed.client_id.as_deref() {
+        Some(CliCommand::Detach(args)) => {
+            let params = match args.client_id.as_deref() {
                 Some(client_id) => format!(
                     r#"{{"idempotency_key":"{}","client_id":"{}"}}"#,
                     cli_idempotency_key("client-detach"),
@@ -195,53 +196,44 @@ pub async fn run_with<W: Write, E: Write>(
                 ),
             };
             run_control_request(
-                &invocation.socket_selection,
+                &socket_selection,
                 "client/detach",
                 &params,
                 output_format,
                 stdout,
             )?;
         }
-        "kill-session" => {
-            if is_cli_help_request(command_args) {
-                writeln!(stdout, "usage: mez kill-session [--force]")?;
-                return Ok(());
-            }
-            let parsed = parse_cli_args::<KillSessionCliArgs>("mez kill-session", command_args)?;
-            let force = parsed.force;
+        Some(CliCommand::KillSession(args)) => {
+            let force = args.force;
             let params = format!(
                 r#"{{"idempotency_key":"{}","force":{force}}}"#,
                 cli_idempotency_key("session-kill")
             );
             run_control_request(
-                &invocation.socket_selection,
+                &socket_selection,
                 "session/kill",
                 &params,
                 output_format,
                 stdout,
             )?;
         }
-        "snapshot" => {
+        Some(CliCommand::Snapshot(args)) => {
             run_snapshot(
-                command_args,
+                args,
                 env,
-                &invocation.socket_selection,
+                &socket_selection,
                 interactive,
                 output_format,
                 stdout,
             )
             .await?;
         }
-        "auth" => {
-            run_auth(command_args, env, interactive, output_format, stdout).await?;
+        Some(CliCommand::Auth(args)) => {
+            run_auth(args, env, interactive, output_format, stdout).await?;
         }
-        "mcp" => run_mcp(command_args, env, output_format, stdout)?,
-        "memory" => {
-            run_memory(command_args, env, output_format, stdout)?;
-        }
-        unknown => {
-            writeln!(stderr, "unknown command: {unknown}")?;
-            return Err(MezError::invalid_args("run `mez help` for usage"));
+        Some(CliCommand::Mcp(args)) => run_mcp(args, env, output_format, stdout)?,
+        Some(CliCommand::Memory(args)) => {
+            run_memory(args, env, output_format, stdout)?;
         }
     }
 
@@ -264,30 +256,4 @@ fn cleanup_startup_stale_socket_files(invocation: &CliInvocation, owner_uid: u32
         }
         super::SocketSelection::Explicit(_) | super::SocketSelection::InPane(_) => Ok(()),
     }
-}
-
-/// Typed process CLI arguments for `mez detach`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez detach",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct DetachCliArgs {
-    /// Control client id to detach instead of the current client.
-    #[arg(long, value_name = "ID")]
-    client_id: Option<String>,
-}
-
-/// Typed process CLI arguments for `mez kill-session`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez kill-session",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct KillSessionCliArgs {
-    /// Confirms intentional termination of the live session.
-    #[arg(short, long)]
-    force: bool,
 }

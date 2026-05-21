@@ -11,12 +11,12 @@ use super::{
     AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionActor, AttachedTerminalClientLoopConfig, AuthPaths, AuthStore,
     AuxiliarySocketKind, CliEnv, CliOutputFormat, ClientEvent, ClientId, ClientViewRole,
-    ConfigLayer, ConfigPaths, IsTerminal, MezError, Parser, PathBuf, ProjectTrustStore, Result,
+    ConfigLayer, ConfigPaths, IsTerminal, MezError, PathBuf, ProjectTrustStore, Result,
     RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState, RuntimeSessionService, Session,
     SessionRegistry, SessionSnapshotPayload, Size, SnapshotRestoreResult, SocketSelection,
     TerminalClientLoopConfig, Write, auxiliary_socket_path_for_control_socket, bind_control_socket,
     build_async_runtime_daemon_services, current_unix_seconds, default_trust_database_path, fs, io,
-    json_escape, load_runtime_config_layers, parse_cli_args, resolve_shell,
+    json_escape, load_runtime_config_layers, resolve_shell,
     run_async_attached_terminal_client_service_deferred_pane_io, selected_socket_path,
     supervise_async_runtime_services, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
@@ -44,21 +44,12 @@ static LIVE_SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// on duplicated control-flow logic.
 pub(super) async fn run_new<W: Write>(
     socket_selection: &SocketSelection,
-    args: &[String],
+    parsed: NewCliArgs,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        writeln!(
-            stdout,
-            "usage: mez new [--dry-run]\n\
-             starts a background session daemon and attaches when interactive"
-        )?;
-        return Ok(());
-    }
-    let parsed = parse_cli_args::<NewCliArgs>("mez new", args)?;
     let dry_run = parsed.dry_run;
     if !interactive && !dry_run {
         return Err(MezError::forbidden(
@@ -90,7 +81,10 @@ pub(super) async fn run_new<W: Write>(
         wait_for_background_control_daemon(socket_path.as_path(), &mut daemon).await?;
         return super::run_attach(
             &new_socket_selection,
-            &[],
+            super::attach::AttachCliArgs {
+                observer: false,
+                session_id: None,
+            },
             env,
             interactive,
             output_format,
@@ -117,16 +111,11 @@ pub(super) async fn run_new<W: Write>(
 }
 
 /// Typed process CLI arguments for `mez new`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez new",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct NewCliArgs {
+#[derive(Debug, Clone, Default, Args)]
+pub(super) struct NewCliArgs {
     /// Validate session construction without starting or attaching to a daemon.
     #[arg(long)]
-    dry_run: bool,
+    pub(super) dry_run: bool,
 }
 
 /// Runs the socket selection for new session operation for this subsystem.
@@ -501,19 +490,6 @@ impl ServeCliArgs {
     }
 }
 
-/// Typed parser wrapper for `mez serve`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez serve",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct ServeCliCommand {
-    /// Serve options accepted by the foreground daemon command.
-    #[command(flatten)]
-    options: ServeCliArgs,
-}
-
 /// Carries Runtime Daemon Startup state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -616,22 +592,13 @@ pub(super) struct RestoredSnapshotDaemonRequest<'a> {
 /// on duplicated control-flow logic.
 pub(super) async fn run_serve<W: Write>(
     socket_selection: &SocketSelection,
-    args: &[String],
+    args: ServeCliArgs,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        writeln!(
-            stdout,
-            "usage: mez serve [--attach-primary] [--no-aux-sockets] [--message-socket PATH] [--event-socket PATH] [--max-control-connections N] [--max-message-connections N] [--max-event-connections N]\n\
-             starts a foreground control daemon for a new session"
-        )?;
-        return Ok(());
-    }
-
-    let mut options = parse_serve_options(args)?;
+    let mut options = args.into_parsed()?;
     let paths = env.config_paths()?;
     let config_path = paths.ensure_default_config()?;
     let shell = resolve_shell(env.shell)?;
@@ -724,17 +691,6 @@ fn unique_live_session_id() -> Result<SessionId> {
     let counter = LIVE_SESSION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     let value = timestamp ^ process_component ^ counter;
     Ok(SessionId::new('$', value.max(1)))
-}
-
-/// Runs the parse serve options operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_serve_options(args: &[String]) -> Result<ParsedServeOptions> {
-    parse_cli_args::<ServeCliCommand>("mez serve", args)?
-        .options
-        .into_parsed()
 }
 
 /// Returns an absolute optional path or a CLI validation error.

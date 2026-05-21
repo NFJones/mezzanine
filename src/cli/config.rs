@@ -6,13 +6,13 @@
 
 use super::mcp::load_runtime_config_layers;
 use super::{
-    CliEnv, CliOutputFormat, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
+    Args, CliEnv, CliOutputFormat, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
-    DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, MezError, Parser, PathBuf,
+    DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, MezError, PathBuf,
     ProjectTrustRecord, ProjectTrustStore, Result, Subcommand, TrustDecision, Write,
     compose_effective_config, default_trust_database_path, diagnostics_json, discover_project_root,
-    fs, is_cli_help_request, json_escape, json_optional, parse_cli_args, persist_config_mutation,
-    validate_config_file, validate_config_text, write_json_or_plain,
+    fs, json_escape, json_optional, persist_config_mutation, render_cli_help, validate_config_file,
+    validate_config_text, write_json_or_plain,
 };
 
 // Config and project-trust subcommands.
@@ -23,40 +23,29 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn run_config<W: Write>(
-    args: &[String],
+    parsed: ConfigCliArgs,
     env: CliEnv,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if is_cli_help_request(args) {
-        writeln!(
-            stdout,
-            "usage: mez config <init|path|default|validate|get|layers|set|unset|trust>"
-        )?;
-        return Ok(());
-    }
-    let parsed = parse_cli_args::<ConfigCliArgs>("mez config", args)?;
     let paths = env.config_paths()?;
 
-    match parsed.command.unwrap_or_default() {
-        ConfigCliCommand::Help => writeln!(
-            stdout,
-            "usage: mez config <init|path|default|validate|get|layers|set|unset|trust>"
-        )?,
-        ConfigCliCommand::Init => {
+    match parsed.command {
+        None => write!(stdout, "{}", render_cli_help(&["config"])?)?,
+        Some(ConfigCliCommand::Init) => {
             let path = paths.ensure_default_config()?;
             writeln!(stdout, "{}", path.display())?;
         }
-        ConfigCliCommand::Path => {
+        Some(ConfigCliCommand::Path) => {
             let path = paths
                 .select_primary_file()?
                 .unwrap_or_else(|| paths.default_primary_file());
             writeln!(stdout, "{}", path.display())?;
         }
-        ConfigCliCommand::DefaultConfig => {
+        Some(ConfigCliCommand::DefaultConfig) => {
             write!(stdout, "{DEFAULT_CONFIG_TOML}")?;
         }
-        ConfigCliCommand::Validate { path } => {
+        Some(ConfigCliCommand::Validate { path }) => {
             let validation = if let Some(path) = path {
                 validate_config_file(&path, ConfigScope::Primary)?
             } else if let Some(path) = paths.select_primary_file()? {
@@ -75,38 +64,33 @@ pub(super) fn run_config<W: Write>(
             );
             write_json_or_plain(stdout, output_format, &output)?;
         }
-        ConfigCliCommand::Get { path } => {
+        Some(ConfigCliCommand::Get { path }) => {
             run_config_get(path.as_deref(), &paths, output_format, stdout)?
         }
-        ConfigCliCommand::Layers => run_config_layers(&paths, output_format, stdout)?,
-        ConfigCliCommand::Set(args) => run_config_set(args, &paths, output_format, stdout)?,
-        ConfigCliCommand::Unset(args) => run_config_unset(args, &paths, output_format, stdout)?,
-        ConfigCliCommand::Trust(args) => run_config_trust(args, &paths, output_format, stdout)?,
+        Some(ConfigCliCommand::Layers) => run_config_layers(&paths, output_format, stdout)?,
+        Some(ConfigCliCommand::Set(args)) => run_config_set(args, &paths, output_format, stdout)?,
+        Some(ConfigCliCommand::Unset(args)) => {
+            run_config_unset(args, &paths, output_format, stdout)?
+        }
+        Some(ConfigCliCommand::Trust(args)) => {
+            run_config_trust(args, &paths, output_format, stdout)?
+        }
     }
 
     Ok(())
 }
 
 /// Typed process CLI arguments for `mez config`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez config",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct ConfigCliArgs {
-    /// Optional configuration subcommand, defaulting to usage help.
+#[derive(Debug, Clone, Args)]
+pub(super) struct ConfigCliArgs {
+    /// Optional configuration subcommand.
     #[command(subcommand)]
     command: Option<ConfigCliCommand>,
 }
 
 /// Typed process CLI subcommands for configuration management.
-#[derive(Debug, Clone, Subcommand, Default)]
+#[derive(Debug, Clone, Subcommand)]
 enum ConfigCliCommand {
-    /// Shows configuration CLI usage.
-    #[default]
-    #[command(name = "help")]
-    Help,
     /// Creates the default user config if missing.
     Init,
     /// Prints the selected primary config path.
@@ -136,7 +120,7 @@ enum ConfigCliCommand {
 
 /// Typed process CLI arguments for `mez config set`.
 #[derive(Debug, Clone, clap::Args)]
-struct ConfigSetCliArgs {
+pub(super) struct ConfigSetCliArgs {
     /// Config path to persist.
     path: String,
     /// Config scalar value to persist.
@@ -149,7 +133,7 @@ struct ConfigSetCliArgs {
 
 /// Typed process CLI arguments for `mez config unset`.
 #[derive(Debug, Clone, clap::Args)]
-struct ConfigUnsetCliArgs {
+pub(super) struct ConfigUnsetCliArgs {
     /// Config path to remove.
     path: String,
     /// Persistence target options.
@@ -723,11 +707,7 @@ pub(super) fn run_config_trust<W: Write>(
 ) -> Result<()> {
     let trust_path = default_trust_database_path(paths.root());
     let mut store = ProjectTrustStore::load_from_file(&trust_path)?;
-    match args.command.unwrap_or_default() {
-        ConfigTrustCliCommand::Help => writeln!(
-            stdout,
-            "usage: mez config trust <list|inspect|trust|reject|revoke>"
-        )?,
+    match args.command.unwrap_or(ConfigTrustCliCommand::List) {
         ConfigTrustCliCommand::List => {
             let output = project_records_json(store.records());
             write_json_or_plain(stdout, output_format, &output)?;
@@ -809,13 +789,9 @@ fn persist_config_trust_decision<W: Write>(
 }
 
 /// Typed process CLI subcommands for project trust records.
-#[derive(Debug, Clone, Subcommand, Default)]
+#[derive(Debug, Clone, Subcommand)]
 pub(super) enum ConfigTrustCliCommand {
-    /// Shows project trust CLI usage.
-    #[command(name = "help")]
-    Help,
     /// Lists project trust records.
-    #[default]
     List,
     /// Inspects one project trust record.
     Inspect {

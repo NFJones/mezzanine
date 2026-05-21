@@ -5,9 +5,9 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuthMethod, AuthPaths, AuthStore, CliEnv, CliOutputFormat, ConfigPaths, CredentialStorePlan,
-    MezError, OpenAiProviderCredential, Parser, PathBuf, Result, Serialize, Subcommand, UiTheme,
-    Write, fs, is_cli_help_request, json_escape, load_runtime_config_layers, parse_cli_args,
+    Args, AuthMethod, AuthPaths, AuthStore, CliEnv, CliOutputFormat, ConfigPaths,
+    CredentialStorePlan, MezError, OpenAiProviderCredential, PathBuf, Result, Serialize,
+    Subcommand, UiTheme, Write, fs, json_escape, load_runtime_config_layers,
     run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
     runtime_effective_config_value, runtime_ui_theme_from_config, serialize_json,
     write_json_or_plain,
@@ -21,38 +21,16 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) async fn run_auth<W: Write>(
-    args: &[String],
+    parsed: AuthCliArgs,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if is_cli_help_request(args) {
-        writeln!(
-            stdout,
-            "usage: mez auth <status|login|logout>\n\
-             \n\
-             login defaults to browser-based ChatGPT sign-in.\n\
-             Use --device-code for out-of-band ChatGPT sign-in, or --api-key \
-             [--api-key-file PATH] for OpenAI API-key setup."
-        )?;
-        return Ok(());
-    }
-    let parsed = parse_cli_args::<AuthCliArgs>("mez auth", args)?;
     let paths = env.config_paths()?;
     let store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
 
-    match parsed.command.unwrap_or_default() {
-        AuthCliCommand::Help => {
-            writeln!(
-                stdout,
-                "usage: mez auth <status|login|logout>\n\
-                 \n\
-                 login defaults to browser-based ChatGPT sign-in.\n\
-                 Use --device-code for out-of-band ChatGPT sign-in, or --api-key \
-                 [--api-key-file PATH] for OpenAI API-key setup."
-            )?;
-        }
+    match parsed.command.unwrap_or(AuthCliCommand::Status) {
         AuthCliCommand::Status => {
             let status = run_auth_store_operation({
                 let store = store.clone();
@@ -172,26 +150,17 @@ pub(super) async fn run_auth<W: Write>(
 }
 
 /// Typed process CLI arguments for `mez auth`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez auth",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct AuthCliArgs {
+#[derive(Debug, Clone, Args)]
+pub(super) struct AuthCliArgs {
     /// Optional auth subcommand, defaulting to `status`.
     #[command(subcommand)]
     command: Option<AuthCliCommand>,
 }
 
 /// Typed process CLI subcommands for authentication.
-#[derive(Debug, Clone, Subcommand, Default)]
+#[derive(Debug, Clone, Subcommand)]
 enum AuthCliCommand {
-    /// Shows authentication CLI usage.
-    #[command(name = "help")]
-    Help,
     /// Shows provider authentication metadata.
-    #[default]
     Status,
     /// Starts an authentication flow.
     #[command(alias = "start")]
@@ -284,7 +253,7 @@ fn auth_login_ui_theme(paths: &ConfigPaths) -> UiTheme {
 /// on duplicated control-flow logic.
 #[cfg(test)]
 pub(super) fn auth_login_method(args: &[String]) -> Result<AuthMethod> {
-    match parse_cli_args::<AuthCliArgs>("mez auth", args)?.command {
+    match super::parse_cli_arg_group::<AuthCliArgs>("mez auth", args)?.command {
         Some(AuthCliCommand::Login(login)) => login.method(),
         _ => Ok(AuthMethod::Browser),
     }

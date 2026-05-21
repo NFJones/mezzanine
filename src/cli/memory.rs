@@ -5,9 +5,9 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    CliEnv, CliOutputFormat, MemoryRecord, MemoryScope, MemorySource, MezError, Parser,
-    PersistentMemoryStore, Result, Subcommand, Write, current_unix_seconds, is_cli_help_request,
-    json_escape, parse_cli_args, write_json_or_plain,
+    Args, CliEnv, CliOutputFormat, MemoryRecord, MemoryScope, MemorySource, MezError,
+    PersistentMemoryStore, Result, Subcommand, Write, current_unix_seconds, json_escape,
+    write_json_or_plain,
 };
 
 // Memory subcommands and output formatting.
@@ -18,29 +18,15 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn run_memory<W: Write>(
-    args: &[String],
+    parsed: MemoryCliArgs,
     env: CliEnv,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if is_cli_help_request(args) {
-        writeln!(
-            stdout,
-            "usage: mez memory <list|inspect|add|edit|delete|export>"
-        )?;
-        return Ok(());
-    }
-    let parsed = parse_cli_args::<MemoryCliArgs>("mez memory", args)?;
     let paths = env.config_paths()?;
     let store = PersistentMemoryStore::under_config_root(paths.root());
 
-    match parsed.command.unwrap_or_default() {
-        MemoryCliCommand::Help => {
-            writeln!(
-                stdout,
-                "usage: mez memory <list|inspect|add|edit|delete|export>"
-            )?;
-        }
+    match parsed.command.unwrap_or(MemoryCliCommand::List) {
         MemoryCliCommand::List => {
             let output = memory_records_json(&store.list()?);
             write_json_or_plain(stdout, output_format, &output)?;
@@ -94,26 +80,17 @@ pub(super) fn run_memory<W: Write>(
 }
 
 /// Typed process CLI arguments for `mez memory`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez memory",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct MemoryCliArgs {
+#[derive(Debug, Clone, Args)]
+pub(super) struct MemoryCliArgs {
     /// Optional memory subcommand, defaulting to `list`.
     #[command(subcommand)]
     command: Option<MemoryCliCommand>,
 }
 
 /// Typed process CLI subcommands for persistent agent memory.
-#[derive(Debug, Clone, Subcommand, Default)]
+#[derive(Debug, Clone, Subcommand)]
 enum MemoryCliCommand {
-    /// Shows memory CLI usage.
-    #[command(name = "help")]
-    Help,
     /// Lists configured memory records.
-    #[default]
     List,
     /// Inspects one memory record by id.
     Inspect {

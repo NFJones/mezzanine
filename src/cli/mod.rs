@@ -102,11 +102,6 @@ mod dispatch;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod env;
-/// Exposes the help module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod help;
 /// Exposes the json module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -135,7 +130,8 @@ mod snapshot;
 
 pub use dispatch::{CliEnv, run, run_with};
 
-use args::{is_cli_help_request, parse_cli_args};
+#[cfg(test)]
+use args::parse_cli_arg_group;
 use attach::{run_attach, run_list};
 use auth::run_auth;
 use config::{json_string_array, run_config};
@@ -143,10 +139,10 @@ use control_client::{
     incomplete_control_response_error, read_control_response_frames, run_control_request,
 };
 use env::{
-    CliInvocation, SocketSelection, cli_idempotency_key, registry_root, selected_socket_path,
+    CliCommand, CliInvocation, CliInvocationParse, SocketSelection, cli_idempotency_key,
+    registry_root, render_cli_help, render_cli_version, selected_socket_path,
     terminal_size_from_fd_or_environment,
 };
-use help::print_help;
 use json::{
     CliOutputFormat, current_unix_seconds, diagnostics_json, json_escape, json_optional,
     serialize_json, write_control_response, write_json_or_plain,

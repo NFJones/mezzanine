@@ -6,14 +6,14 @@
 
 use super::serve::{ServeCliArgs, assign_unique_live_session_id};
 use super::{
-    CliEnv, CliOutputFormat, ConfigPaths, LoadedRuntimeConfig, MezError, ParsedServeOptions,
-    Parser, RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup, RuntimeSessionService,
+    Args, CliEnv, CliOutputFormat, ConfigPaths, LoadedRuntimeConfig, MezError, ParsedServeOptions,
+    RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup, RuntimeSessionService,
     SnapshotKind, SnapshotRepository, SnapshotRestoreResult, SnapshotResumePlan,
     SnapshotRollbackPlan, SnapshotState, SocketSelection, Subcommand, Write,
-    apply_default_serve_auxiliary_sockets, cli_idempotency_key, current_unix_seconds,
-    is_cli_help_request, json_escape, json_optional, json_string_array, load_runtime_config_layers,
-    parse_cli_args, resolve_shell, run_control_request, run_foreground_control_daemon,
-    selected_socket_path, validate_serve_options, write_json_or_plain,
+    apply_default_serve_auxiliary_sockets, cli_idempotency_key, current_unix_seconds, json_escape,
+    json_optional, json_string_array, load_runtime_config_layers, resolve_shell,
+    run_control_request, run_foreground_control_daemon, selected_socket_path,
+    validate_serve_options, write_json_or_plain,
 };
 
 // Snapshot subcommands and restored daemon startup.
@@ -24,31 +24,17 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) async fn run_snapshot<W: Write>(
-    args: &[String],
+    parsed: SnapshotCliArgs,
     env: CliEnv,
     socket_selection: &SocketSelection,
     interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
-    if is_cli_help_request(args) {
-        writeln!(
-            stdout,
-            "usage: mez snapshot <list|create|inspect|delete|resume [--serve] [--restart-command CMD]|resume-latest [--serve] [--restart-command CMD]|resume-plan|latest-plan|rollback-plan>"
-        )?;
-        return Ok(());
-    }
-    let parsed = parse_cli_args::<SnapshotCliArgs>("mez snapshot", args)?;
     let paths = env.config_paths()?;
     let repository = SnapshotRepository::new(paths.root().join("snapshots"));
 
-    match parsed.command.unwrap_or_default() {
-        SnapshotCliCommand::Help => {
-            writeln!(
-                stdout,
-                "usage: mez snapshot <list|create|inspect|delete|resume [--serve] [--restart-command CMD]|resume-latest [--serve] [--restart-command CMD]|resume-plan|latest-plan|rollback-plan>"
-            )?;
-        }
+    match parsed.command.unwrap_or(SnapshotCliCommand::List) {
         SnapshotCliCommand::List => {
             let output = snapshots_json(&repository.list()?);
             write_json_or_plain(stdout, output_format, &output)?;
@@ -165,26 +151,17 @@ pub(super) async fn run_snapshot<W: Write>(
 }
 
 /// Typed process CLI arguments for `mez snapshot`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "mez snapshot",
-    disable_help_flag = true,
-    disable_help_subcommand = true
-)]
-struct SnapshotCliArgs {
+#[derive(Debug, Clone, Args)]
+pub(super) struct SnapshotCliArgs {
     /// Optional snapshot subcommand, defaulting to `list`.
     #[command(subcommand)]
     command: Option<SnapshotCliCommand>,
 }
 
 /// Typed process CLI subcommands for snapshot management.
-#[derive(Debug, Clone, Subcommand, Default)]
+#[derive(Debug, Clone, Subcommand)]
 enum SnapshotCliCommand {
-    /// Shows snapshot CLI usage.
-    #[command(name = "help")]
-    Help,
     /// Lists persisted snapshots.
-    #[default]
     List,
     /// Creates a live snapshot through the control socket.
     Create {
@@ -227,7 +204,7 @@ enum SnapshotCliCommand {
 
 /// Typed process CLI arguments for `mez snapshot resume`.
 #[derive(Debug, Clone, clap::Args)]
-struct SnapshotResumeCliArgs {
+pub(super) struct SnapshotResumeCliArgs {
     /// Snapshot id.
     snapshot_id: String,
     /// Restores the snapshot into a live foreground daemon.
@@ -243,7 +220,7 @@ struct SnapshotResumeCliArgs {
 
 /// Typed process CLI arguments for `mez snapshot resume-latest`.
 #[derive(Debug, Clone, clap::Args)]
-struct SnapshotResumeLatestCliArgs {
+pub(super) struct SnapshotResumeLatestCliArgs {
     /// Optional session id filter.
     #[arg(long)]
     session_id: Option<String>,
