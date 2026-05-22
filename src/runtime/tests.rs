@@ -7752,6 +7752,105 @@ fn runtime_primary_display_overlay_renders_and_clears_via_terminal_step() {
     assert!(service.primary_display_overlay.is_none());
 }
 
+/// Verifies keyboard movement inside a primary command-output pager refreshes
+/// through the retained-frame diff path.
+///
+/// Navigating a selectable pager row only changes the active highlight and
+/// optional viewport offset. It must not invalidate the whole attached output
+/// frame, otherwise remote terminals flicker during routine list navigation.
+#[test]
+fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .create_window_with_pane_process(&primary, "work", false, None)
+        .unwrap();
+
+    service
+        .execute_attached_display_command(&primary, "choose-window")
+        .unwrap();
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.active_selection_index),
+        Some(0)
+    );
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert!(report.view_refresh_required);
+    assert!(!report.full_redraw_required);
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.active_selection_index),
+        Some(1)
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies mouse-wheel scrolling inside a primary command-output pager uses a
+/// light view refresh instead of a full terminal-frame redraw.
+///
+/// The overlay renderer already produces a complete next view for the changed
+/// rows, so the attach client can keep diffing against the retained frame.
+#[test]
+fn runtime_primary_display_overlay_mouse_scroll_requests_diff_refresh() {
+    let mut service = test_runtime_service_with_size(Size::new(40, 6).unwrap());
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 6).unwrap(), 120)
+        .unwrap();
+    service
+        .show_primary_display_overlay(
+            (0..20)
+                .map(|index| format!("display line {index:02}"))
+                .collect(),
+        )
+        .unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ScrollDisplayOverlay { lines: 2 },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert!(report.view_refresh_required);
+    assert!(!report.full_redraw_required);
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .map(|overlay| overlay.scroll_offset),
+        Some(2)
+    );
+}
+
 /// Verifies that command chooser output rendered in the primary overlay is not
 /// inert text. Rows that advertise an `action=` command must retain selectable
 /// metadata so a mouse click can execute the command through the normal
@@ -15432,7 +15531,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
     assert_eq!(reasoning_profile.reasoning_profile.as_deref(), Some("high"));
     assert!(service.pane_agent_status_selector.is_none());
 
-    service
+    let open_report = service
         .apply_attached_terminal_step_plan(
             &primary,
             &AttachedTerminalClientStepPlan {
@@ -15449,6 +15548,8 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             },
         )
         .unwrap();
+    assert!(open_report.view_refresh_required);
+    assert!(!open_report.full_redraw_required);
     let full_access_index = service
         .pane_agent_status_selector
         .as_ref()
@@ -15504,7 +15605,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         .unwrap();
     service.agent_auto_reasoning = false;
 
-    service
+    let open_report = service
         .apply_attached_terminal_step_plan(
             &primary,
             &AttachedTerminalClientStepPlan {
@@ -15521,6 +15622,8 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
             },
         )
         .unwrap();
+    assert!(open_report.view_refresh_required);
+    assert!(!open_report.full_redraw_required);
     assert!(service.pane_agent_status_selector.is_none());
     assert_eq!(
         service.agent_auto_reasoning_overrides.get("%1").copied(),
@@ -15613,7 +15716,7 @@ fn runtime_pane_agent_status_selector_esc_closes_without_forwarding() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service
+    let open_report = service
         .apply_attached_terminal_step_plan(
             &primary,
             &AttachedTerminalClientStepPlan {
@@ -15630,6 +15733,8 @@ fn runtime_pane_agent_status_selector_esc_closes_without_forwarding() {
             },
         )
         .unwrap();
+    assert!(open_report.view_refresh_required);
+    assert!(!open_report.full_redraw_required);
     assert!(service.pane_agent_status_selector.is_some());
 
     let report = service
@@ -15647,7 +15752,7 @@ fn runtime_pane_agent_status_selector_esc_closes_without_forwarding() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
-    assert!(report.full_redraw_required);
+    assert!(!report.full_redraw_required);
     assert!(service.pane_agent_status_selector.is_none());
 }
 
@@ -15730,6 +15835,7 @@ fn runtime_pane_agent_status_selector_accepts_keyboard_navigation() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
+    assert!(!report.full_redraw_required);
     assert!(service.pane_agent_status_selector.is_none());
     let (_name, model_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
@@ -15810,6 +15916,8 @@ fn runtime_pane_agent_status_selector_scrolls_only_dropdown_contents() {
         .unwrap();
 
     assert_eq!(report.forwarded_bytes, 0);
+    assert!(report.view_refresh_required);
+    assert!(!report.full_redraw_required);
     assert_eq!(
         service
             .pane_agent_status_selector

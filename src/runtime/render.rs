@@ -3621,11 +3621,15 @@ impl RuntimeSessionService {
             if !matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode) {
                 self.primary_prefix_key_pending = false;
             }
+            let primary_display_overlay_requires_full_redraw =
+                self.primary_display_overlay_action_requires_full_redraw(action);
             if self.primary_display_overlay.is_some()
                 && self.apply_primary_display_overlay_terminal_action(primary_client_id, action)?
             {
                 report.view_refresh_required = true;
-                report.full_redraw_required = true;
+                if primary_display_overlay_requires_full_redraw {
+                    report.full_redraw_required = true;
+                }
                 continue;
             }
             if self.pane_agent_status_selector.is_some()
@@ -3633,9 +3637,6 @@ impl RuntimeSessionService {
                     .apply_pane_agent_status_selector_terminal_action(primary_client_id, action)?
             {
                 report.view_refresh_required = true;
-                if self.pane_agent_status_selector.is_none() {
-                    report.full_redraw_required = true;
-                }
                 continue;
             }
             if self.pane_agent_status_selector.is_some()
@@ -3652,7 +3653,6 @@ impl RuntimeSessionService {
             {
                 self.pane_agent_status_selector = None;
                 report.view_refresh_required = true;
-                report.full_redraw_required = true;
             }
             if self.primary_prompt_input.is_some()
                 && matches!(
@@ -3793,7 +3793,6 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::HandleMouse(action) => {
-                    let selector_was_open = self.pane_agent_status_selector.is_some();
                     let overlay_was_open = self.primary_display_overlay.is_some();
                     match self.apply_attached_mouse_action(primary_client_id, action.clone()) {
                         Ok(true) => {
@@ -3801,7 +3800,6 @@ impl RuntimeSessionService {
                                 report.mouse_actions_reported.saturating_add(1);
                             report.view_refresh_required = true;
                             if Self::mouse_action_requires_full_redraw(action.clone())
-                                || selector_was_open != self.pane_agent_status_selector.is_some()
                                 || overlay_was_open != self.primary_display_overlay.is_some()
                             {
                                 report.full_redraw_required = true;
@@ -3909,6 +3907,47 @@ impl RuntimeSessionService {
             | TerminalClientLoopAction::HandleCopyMode(_)
             | TerminalClientLoopAction::EnterPrefixKeyMode
             | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok(false),
+        }
+    }
+
+    /// Reports whether one primary display overlay action should invalidate the
+    /// attached client's retained output frame.
+    ///
+    /// Keyboard and mouse-wheel navigation only move the overlay viewport or
+    /// active row, so the next rendered view can be applied through the normal
+    /// diff renderer. Exiting the modal overlay or executing a selected row can
+    /// expose a different underlying view or run a command, so those paths keep
+    /// the stronger redraw signal.
+    fn primary_display_overlay_action_requires_full_redraw(
+        &self,
+        action: &TerminalClientLoopAction,
+    ) -> bool {
+        match action {
+            TerminalClientLoopAction::ForwardToPane(input)
+            | TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
+                if self
+                    .primary_display_overlay
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.dismiss_on_any_input && !input.is_empty())
+                {
+                    return true;
+                }
+                matches!(
+                    runtime_display_overlay_input_action(input),
+                    RuntimeDisplayOverlayInputAction::Exit
+                        | RuntimeDisplayOverlayInputAction::SelectActive
+                )
+            }
+            TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay { .. }) => true,
+            TerminalClientLoopAction::HandleMouse(MouseAction::ScrollDisplayOverlay { .. }) => {
+                false
+            }
+            TerminalClientLoopAction::ExecuteMux(_)
+            | TerminalClientLoopAction::ExecuteCommand(_)
+            | TerminalClientLoopAction::HandleMouse(_)
+            | TerminalClientLoopAction::HandleCopyMode(_)
+            | TerminalClientLoopAction::EnterPrefixKeyMode
+            | TerminalClientLoopAction::ReportUnboundPrefix(_) => false,
         }
     }
 
