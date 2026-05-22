@@ -5994,19 +5994,21 @@ MUST be omitted. The prompt MUST require one channel per idea: when progress
 `say` records durable learning, batch rationale MUST be limited to the next
 executable reason; when batch rationale or action summaries already explain
 intent, progress `say` MUST NOT restate that intent. The prompt MUST state that
-progress `say` output is exceptional and MUST be omitted by default when
-executable actions are present unless the user would be materially confused
-without a visible update. Valid progress `say` reasons are material changes in
-diagnosis, implementation strategy, blocker state, validation outcome, or
-user-requested narration. The prompt MUST discourage progress `say` output as a
-routine action-batch heartbeat, and MUST discourage future-tense visible plans,
-intended-work checklists, routine inspection, owner localization, anchor lookup,
-test lookup, command-wrapper lookup, `"now patching"` updates, and headings such
-as `Plan:`, `Steps:`, `Next:`, `Executed:`, or `Evidence:` when executable
-actions are requested in the same response. Refining file or test anchors,
-checking command-wrapper usage, routine owner localization, or confirming the
-same symptom after it was already stated MUST NOT be treated as a new progress
-`say` checkpoint. When an action rationale is
+progress `say` output is for sequence-point updates during non-trivial
+multi-step work. Valid progress `say` reasons are cases where the first
+evidence pass identifies the real owner or diagnosis, the agent chooses an
+implementation or report direction, the work moves from inspection to editing,
+the work moves from editing to validation, validation changes the plan, blocker
+or uncertainty state changes the next step, or the user requests narration. The
+prompt MUST discourage progress `say` output as a routine action-batch
+heartbeat, and MUST discourage future-tense visible plans, intended-work
+checklists, routine inspection, owner localization, anchor lookup, test lookup,
+command-wrapper lookup, `"now patching"` updates, and headings such as `Plan:`,
+`Steps:`, `Next:`, `Executed:`, or `Evidence:` when executable actions are
+requested in the same response. Refining file or test anchors, checking
+command-wrapper usage, routine owner localization, or confirming the same
+symptom after it was already stated MUST NOT be treated as a new progress `say`
+sequence point. When an action rationale is
 present, the prompt SHOULD ask for a concise reason that justifies the
 immediate action and does not duplicate the batch rationale, progress `say`, or
 action summary.

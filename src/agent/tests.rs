@@ -3734,12 +3734,14 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("You're right"));
     assert!(prompt.contains("Exactly"));
     assert!(prompt.contains("Batch rationale is persisted as a thinking line for future context"));
-    assert!(prompt.contains("omit progress say unless it records a material change"));
-    assert!(prompt.contains("changed diagnosis"));
-    assert!(prompt.contains("changed implementation strategy"));
-    assert!(prompt.contains("new blocker state"));
-    assert!(prompt.contains("validation outcome"));
-    assert!(prompt.contains("user-requested narration"));
+    assert!(prompt.contains("decide whether the work has reached a sequence point"));
+    assert!(prompt.contains("first evidence pass identified the owner or diagnosis"));
+    assert!(prompt.contains("an implementation/report direction was chosen"));
+    assert!(prompt.contains("moving from inspection to editing"));
+    assert!(prompt.contains("moving from editing to validation"));
+    assert!(prompt.contains("validation changed the plan"));
+    assert!(prompt.contains("blocker or uncertainty changed the next step"));
+    assert!(prompt.contains("For non-trivial multi-step work, include a progress say"));
     assert!(prompt.contains("include at most one"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
     assert!(prompt.contains("Routine inspection"));
@@ -3748,12 +3750,11 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("command-wrapper lookup"));
     assert!(prompt.contains("\"now patching\""));
     assert!(prompt.contains("confirmation of an already-stated symptom"));
-    assert!(prompt.contains("are not progress checkpoints"));
-    assert!(prompt.contains("Omit progress say by default"));
+    assert!(prompt.contains("are not sequence points"));
     assert!(prompt.contains("Progress say is not a heartbeat"));
-    assert!(prompt.contains("user would be materially confused without a visible update"));
-    assert!(prompt.contains("material change in diagnosis"));
-    assert!(prompt.contains("implementation strategy"));
+    assert!(prompt.contains("Use progress for nonterminal sequence-point updates"));
+    assert!(prompt.contains("user should know what was learned"));
+    assert!(prompt.contains("when choosing an implementation or report direction"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
     assert!(prompt.contains("routine inspection"));
     assert!(prompt.contains("anchor lookup"));
@@ -3925,12 +3926,13 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("text/plain, text/markdown, or text/x-diff"));
     assert!(prompt.contains("Do not put shell commands or Mezzanine patch blocks in say"));
     assert!(prompt.contains("Text inside say is display-only"));
-    assert!(prompt.contains("exceptional nonterminal updates"));
-    assert!(prompt.contains("user would be materially confused without a visible update"));
-    assert!(prompt.contains("Omit progress say by default"));
-    assert!(prompt.contains("material change in diagnosis"));
-    assert!(prompt.contains("implementation strategy"));
-    assert!(prompt.contains("validation outcome"));
+    assert!(prompt.contains("nonterminal sequence-point updates"));
+    assert!(prompt.contains("user should know what was learned"));
+    assert!(prompt.contains("For non-trivial multi-step work"));
+    assert!(prompt.contains("after the first evidence pass identifies"));
+    assert!(prompt.contains("inspection to editing"));
+    assert!(prompt.contains("editing to validation"));
+    assert!(prompt.contains("validation changes the plan"));
     assert!(prompt.contains("routine inspection"));
     assert!(prompt.contains("owner localization"));
     assert!(prompt.contains("anchor lookup"));
@@ -4064,12 +4066,14 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Make each rationale additive to recent thinking lines"));
     assert!(prompt.contains("say only what is newly decisive about this batch"));
     assert!(prompt.contains("Batch rationale is persisted as a thinking line for future context"));
-    assert!(prompt.contains("omit progress say unless it records a material change"));
-    assert!(prompt.contains("changed diagnosis"));
-    assert!(prompt.contains("changed implementation strategy"));
-    assert!(prompt.contains("new blocker state"));
-    assert!(prompt.contains("validation outcome"));
-    assert!(prompt.contains("user-requested narration"));
+    assert!(prompt.contains("decide whether the work has reached a sequence point"));
+    assert!(prompt.contains("first evidence pass identified the owner or diagnosis"));
+    assert!(prompt.contains("an implementation/report direction was chosen"));
+    assert!(prompt.contains("moving from inspection to editing"));
+    assert!(prompt.contains("moving from editing to validation"));
+    assert!(prompt.contains("validation changed the plan"));
+    assert!(prompt.contains("blocker or uncertainty changed the next step"));
+    assert!(prompt.contains("For non-trivial multi-step work, include a progress say"));
     assert!(prompt.contains("include at most one"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
     assert!(prompt.contains("Routine inspection"));
@@ -4078,13 +4082,12 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("command-wrapper lookup"));
     assert!(prompt.contains("\"now patching\""));
     assert!(prompt.contains("confirmation of an already-stated symptom"));
-    assert!(prompt.contains("are not progress checkpoints"));
-    assert!(prompt.contains("Omit progress say by default"));
+    assert!(prompt.contains("are not sequence points"));
     assert!(prompt.contains("Progress say is not a heartbeat"));
     assert!(prompt.contains("1-2 compact sentences"));
-    assert!(prompt.contains("user would be materially confused without a visible update"));
-    assert!(prompt.contains("material change in diagnosis"));
-    assert!(prompt.contains("implementation strategy"));
+    assert!(prompt.contains("Use progress for nonterminal sequence-point updates"));
+    assert!(prompt.contains("user should know what was learned"));
+    assert!(prompt.contains("when choosing an implementation or report direction"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
     assert!(prompt.contains("routine inspection"));
     assert!(prompt.contains("anchor lookup"));
@@ -4093,12 +4096,17 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains(
         "Do not format ordinary progress or final text with Plan:, Executed:, or Evidence:"
     ));
-    assert!(prompt.contains("omit progress say by default"));
+    assert!(prompt.contains("records a sequence-point update"));
+    assert!(prompt.contains("owner/diagnosis found"));
+    assert!(prompt.contains("inspection-to-editing transition"));
+    assert!(prompt.contains("editing-to-validation transition"));
+    assert!(prompt.contains("validation changed the plan"));
+    assert!(prompt.contains("Otherwise omit progress say"));
     assert!(prompt.contains("repeat recent thinking/action-result context"));
     assert!(prompt.contains("duplicate the current batch rationale/action summaries"));
     assert!(prompt.contains("progress say plus executable actions"));
     assert!(prompt.contains("must not communicate the same fact"));
-    assert!(prompt.contains("Include at most one progress say only"));
+    assert!(prompt.contains("include at most one progress say only"));
     assert!(prompt.contains("Never use progress say to announce routine inspection"));
     assert!(!prompt.contains("For multiphase implementation plans"));
     assert!(!prompt.contains("short checkbox list before implementation starts"));
@@ -9176,12 +9184,11 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(rationale_description.contains("Omit optional action rationales"));
     assert!(rationale_description.contains("progress say, or the action summary"));
     assert!(
-        rationale_description.contains("Progress say is exceptional"),
+        rationale_description.contains("Progress say is for sequence-point updates"),
         "{rationale_description}"
     );
     assert!(
-        rationale_description
-            .contains("user would be materially confused without a visible update"),
+        rationale_description.contains("meaningful boundary"),
         "{rationale_description}"
     );
     assert!(
@@ -9250,17 +9257,18 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     let say_status_description = say_schema["properties"]["status"]["description"]
         .as_str()
         .unwrap();
-    assert!(say_status_description.contains("exceptional nonterminal updates"));
-    assert!(
-        say_status_description
-            .contains("user would be materially confused without a visible update")
-    );
-    assert!(say_status_description.contains("Omit progress by default"));
-    assert!(say_status_description.contains("Include at most one progress say"));
-    assert!(say_status_description.contains("material change in diagnosis"));
-    assert!(say_status_description.contains("implementation strategy"));
-    assert!(say_status_description.contains("blocker state"));
-    assert!(say_status_description.contains("validation outcome"));
+    assert!(say_status_description.contains("nonterminal sequence-point updates"));
+    assert!(say_status_description.contains("user should know what was learned"));
+    assert!(say_status_description.contains("which direction was chosen"));
+    assert!(say_status_description.contains("what phase is starting"));
+    assert!(say_status_description.contains("what blocker/validation result"));
+    assert!(say_status_description.contains("include at most one progress say"));
+    assert!(say_status_description.contains("first evidence pass identifies the real owner"));
+    assert!(say_status_description.contains("implementation or report direction"));
+    assert!(say_status_description.contains("inspection to editing"));
+    assert!(say_status_description.contains("editing to validation"));
+    assert!(say_status_description.contains("validation changes the plan"));
+    assert!(say_status_description.contains("blocker or uncertainty changes the next step"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("routine inspection"));
     assert!(say_status_description.contains("owner localization"));
@@ -9281,11 +9289,11 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .as_str()
         .unwrap();
     assert!(say_text_description.contains("Content in say is display-only"));
-    assert!(say_text_description.contains("progress for an exceptional material update"));
+    assert!(say_text_description.contains("progress for a sequence-point update"));
     assert!(say_text_description.contains("1-2 compact sentences"));
     assert!(say_text_description.contains("important fact"));
     assert!(say_text_description.contains("durable learning or a decision, not intended work"));
-    assert!(say_text_description.contains("If there is no substantial new user-visible update"));
+    assert!(say_text_description.contains("If there is no new sequence-point update"));
     assert!(say_text_description.contains("If progress say is included"));
     assert!(
         say_text_description.contains("keep the batch rationale to the next executable reason")
