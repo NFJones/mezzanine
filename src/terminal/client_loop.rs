@@ -27,6 +27,12 @@ use super::{
 
 // Attached terminal loop planning and I/O abstraction.
 
+/// Refresh cadence for active agent status animations.
+///
+/// Renderers advance the scan phase at this interval, and attach clients use
+/// the same value to request fresh views only while animation is active.
+pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
+
 /// Carries Terminal Client Loop Action state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -192,6 +198,10 @@ pub struct RenderedClientView {
     /// This mirrors the active pane application mode so host clipboard pastes
     /// arrive with `CSI 200~`/`CSI 201~` delimiters and can be routed opaquely.
     pub bracketed_paste: bool,
+    /// Milliseconds between client-requested animation refreshes.
+    ///
+    /// A zero value means the view does not require animation refreshes.
+    pub animation_refresh_interval_ms: u64,
     /// Stores the ui theme value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -317,6 +327,10 @@ pub struct AttachedTerminalOutputModes {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub cursor_blink_elapsed_ms: u64,
+    /// Milliseconds between client-requested animation refreshes.
+    ///
+    /// A zero value means the view does not require animation refreshes.
+    pub animation_refresh_interval_ms: u64,
     /// Stores the cursor visible value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -348,6 +362,7 @@ impl Default for AttachedTerminalOutputModes {
             cursor_blink: false,
             cursor_blink_interval_ms: 500,
             cursor_blink_elapsed_ms: 0,
+            animation_refresh_interval_ms: 0,
             cursor_visible: false,
             cursor_row: 0,
             cursor_column: 0,
@@ -2478,6 +2493,9 @@ where
                 cursor_blink: terminal_config.cursor_blink,
                 cursor_blink_interval_ms: terminal_config.cursor_blink_interval_ms,
                 cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
+                animation_refresh_interval_ms: view
+                    .map(|view| view.animation_refresh_interval_ms)
+                    .unwrap_or(0),
                 cursor_visible: view.is_some_and(|view| view.cursor_visible),
                 cursor_row: view.map(|view| view.cursor_row).unwrap_or(0),
                 cursor_column: view.map(|view| view.cursor_column).unwrap_or(0),

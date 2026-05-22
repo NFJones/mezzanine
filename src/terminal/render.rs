@@ -5,15 +5,16 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, ClientStatusKind, ClientStatusLine, ClientViewRole, CopyPosition, GraphicRendition,
-    MezError, MouseBorderCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    MouseWindowFrameCell, MouseWindowGroupFrameCell, PaneAgentStatusField, PaneGeometry,
-    PaneRenderInput, ReadlinePrompt, ReadlinePromptClientPresentation, ReadlinePromptRegion,
-    ReadlinePromptStatusRow, RenderedClientView, Result, Size, TerminalClientLoopConfig,
-    TerminalColor, TerminalFrameContext, TerminalFramePosition, TerminalFrameStyle,
-    TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
-    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
-    UiColorPair, UiTheme, UnicodeWidthChar, UnicodeWidthStr, Window, WindowFrameAction,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, ClientStatusKind, ClientStatusLine,
+    ClientViewRole, CopyPosition, GraphicRendition, MezError, MouseBorderCell,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, MouseWindowFrameCell,
+    MouseWindowGroupFrameCell, PaneAgentStatusField, PaneGeometry, PaneRenderInput, ReadlinePrompt,
+    ReadlinePromptClientPresentation, ReadlinePromptRegion, ReadlinePromptStatusRow,
+    RenderedClientView, Result, Size, TerminalClientLoopConfig, TerminalColor,
+    TerminalFrameContext, TerminalFramePosition, TerminalFrameStyle, TerminalPaneFrameContext,
+    TerminalScreen, TerminalStyleSpan, TerminalStyledLine, TerminalWindowFrameContext,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, UiColorPair, UiTheme,
+    UnicodeWidthChar, UnicodeWidthStr, Window, WindowFrameAction,
 };
 use crate::readline::ReadlinePromptKind;
 use unicode_segmentation::UnicodeSegmentation;
@@ -189,6 +190,11 @@ pub fn render_attached_client_view(
         cursor_blink_interval_ms: config.cursor_blink_interval_ms,
         application_keypad: config.mouse_policy.pane_application_keypad_mode,
         bracketed_paste: config.pane_bracketed_paste_mode,
+        animation_refresh_interval_ms: if config.frame_context.animation_tick_ms > 0 {
+            AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
+        } else {
+            0
+        },
         ui_theme: config.ui_theme.clone(),
         agent_prompt_region,
         primary_prompt_active: false,
@@ -2757,7 +2763,8 @@ fn pane_frame_agent_status_scan_spans(
     }
     let base_pair = ui_theme.colors.agent_status_running;
     let palette = agent_status_running_gradient_palette(ui_theme);
-    let phase = ((tick_ms / 180) as usize) % width.saturating_add(AGENT_STATUS_SCAN_BAND_WIDTH);
+    let phase = ((tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS) as usize)
+        % width.saturating_add(AGENT_STATUS_SCAN_BAND_WIDTH);
     let center = phase as isize - (AGENT_STATUS_SCAN_BAND_WIDTH as isize / 2);
     let mut spans = Vec::with_capacity(width);
     for column in 0..width {
@@ -3468,7 +3475,7 @@ fn agent_live_footer_style_spans(
     let base = agent_live_footer_base_gray(ui_theme);
     let palette = agent_live_footer_grayscale_palette(ui_theme);
     let parenthetical_rendition = agent_live_footer_parenthetical_rendition(ui_theme);
-    let phase = ((animation_tick_ms / 180) as usize)
+    let phase = ((animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS) as usize)
         % state_label_width.saturating_add(AGENT_STATUS_SCAN_BAND_WIDTH);
     let center = phase as isize - (AGENT_STATUS_SCAN_BAND_WIDTH as isize / 2);
     let mut column = 0usize;

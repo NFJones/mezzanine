@@ -139,6 +139,7 @@ where
         cursor_blink: false,
         cursor_blink_interval_ms: refreshed.config.cursor_blink_interval_ms,
         cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(recovery.cursor_blink_epoch),
+        animation_refresh_interval_ms: view.animation_refresh_interval_ms,
         cursor_visible: view.cursor_visible,
         cursor_row: view.cursor_row,
         cursor_column: view.cursor_column,
@@ -396,6 +397,11 @@ where
                 cursor_blink: frame.config.cursor_blink,
                 cursor_blink_interval_ms: frame.config.cursor_blink_interval_ms,
                 cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
+                animation_refresh_interval_ms: frame
+                    .view
+                    .as_ref()
+                    .map(|view| view.animation_refresh_interval_ms)
+                    .unwrap_or(0),
                 cursor_visible: frame.view.as_ref().is_some_and(|view| view.cursor_visible),
                 cursor_row: frame.view.as_ref().map(|view| view.cursor_row).unwrap_or(0),
                 cursor_column: frame
@@ -482,6 +488,7 @@ where
                         cursor_blink: refreshed.config.cursor_blink,
                         cursor_blink_interval_ms: refreshed.config.cursor_blink_interval_ms,
                         cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
+                        animation_refresh_interval_ms: view.animation_refresh_interval_ms,
                         cursor_visible: view.cursor_visible,
                         cursor_row: view.cursor_row,
                         cursor_column: view.cursor_column,

@@ -2458,7 +2458,7 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
 #[test]
 fn terminal_step_response_output_modes_parse_cursor_metadata() {
     let modes = terminal_step_response_output_modes(
-        r#"{"jsonrpc":"2.0","id":1,"result":{"view":{"cursor":{"row":2,"column":7,"visible":true,"style":"bar","blink":true,"blink_interval_ms":250},"output_modes":{"application_keypad":true,"bracketed_paste":true},"lines":["pane"]}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"result":{"view":{"cursor":{"row":2,"column":7,"visible":true,"style":"bar","blink":true,"blink_interval_ms":250},"output_modes":{"application_keypad":true,"bracketed_paste":true,"animation_refresh_interval_ms":180},"lines":["pane"]}}}"#,
     )
     .unwrap()
     .unwrap();
@@ -2474,6 +2474,7 @@ fn terminal_step_response_output_modes_parse_cursor_metadata() {
     assert_eq!(modes.cursor_blink_interval_ms, 250);
     assert!(modes.application_keypad);
     assert!(modes.bracketed_paste);
+    assert_eq!(modes.animation_refresh_interval_ms, 180);
 }
 
 /// Verifies that control-socket attach clients parse SGR style spans from the
@@ -2920,6 +2921,94 @@ async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
     assert_eq!(io.written_frames.len(), 2);
     assert_eq!(io.written_frames[0].lines, vec!["initial"]);
     assert_eq!(io.written_frames[1].lines, vec!["event redraw"]);
+}
+
+/// Verifies active animation metadata refreshes a socket-attached primary view
+/// even when no runtime event arrives.
+///
+/// Agent status animation changes only presentation styling. It should not
+/// require durable event-log traffic, but the attach loop still has to request
+/// fresh views while the last rendered frame advertises an animation cadence.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_refreshes_active_animation_without_runtime_event() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    server_stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let _event_server_stream = event_server_stream;
+        for (expected_id, response_lines, animation_refresh_interval_ms) in [
+            ("cli-terminal-view-0", "thinking phase one", 180),
+            ("cli-terminal-view-1", "thinking phase two", 0),
+        ] {
+            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                parsed.get("method").and_then(serde_json::Value::as_str),
+                Some("terminal/view")
+            );
+            assert_eq!(
+                parsed.get("id").and_then(serde_json::Value::as_str),
+                Some(expected_id)
+            );
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": expected_id,
+                "result": {
+                    "view": {
+                        "lines": [response_lines],
+                        "line_style_spans": [[]],
+                        "cursor": {
+                            "row": 0,
+                            "column": 18,
+                            "visible": true,
+                            "style": "bar",
+                            "blink": false,
+                        },
+                        "output_modes": {
+                            "application_keypad": false,
+                            "animation_refresh_interval_ms": animation_refresh_interval_ms,
+                        },
+                    },
+                },
+            })
+            .to_string();
+            server_stream
+                .write_all(&encode_control_body(&response))
+                .unwrap();
+            server_stream.flush().unwrap();
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(io.written_frames[0].lines, vec!["thinking phase one"]);
+    assert_eq!(io.written_frames[1].lines, vec!["thinking phase two"]);
 }
 
 /// Verifies that generic runtime events do not redraw the attached terminal.

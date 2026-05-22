@@ -36,6 +36,54 @@ pub(super) struct TerminalStepRefreshRequirement {
     pub full_redraw_required: bool,
 }
 
+/// Outcome from rendering one explicit primary terminal view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PrimaryViewRenderOutcome {
+    /// Whether the control connection and attached terminal are still usable.
+    connected: bool,
+    /// Milliseconds until the next animation-only view refresh.
+    animation_refresh_interval_ms: u64,
+}
+
+impl PrimaryViewRenderOutcome {
+    /// Builds an outcome for a disconnected control or terminal endpoint.
+    const fn disconnected() -> Self {
+        Self {
+            connected: false,
+            animation_refresh_interval_ms: 0,
+        }
+    }
+}
+
+/// Tracks the local animation refresh deadline for a control-socket attach.
+#[derive(Debug, Default)]
+struct AttachAnimationRefresh {
+    /// Current refresh interval advertised by the last rendered view.
+    interval_ms: Option<u64>,
+    /// Next local deadline for an animation-only `terminal/view`.
+    deadline: Option<tokio::time::Instant>,
+}
+
+impl AttachAnimationRefresh {
+    /// Returns the next animation refresh deadline, when animation is active.
+    fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.deadline
+    }
+
+    /// Updates the local refresh schedule from the latest rendered view.
+    fn update_from_rendered_view(&mut self, refresh_interval_ms: u64) {
+        if refresh_interval_ms == 0 {
+            self.interval_ms = None;
+            self.deadline = None;
+            return;
+        }
+        self.interval_ms = Some(refresh_interval_ms);
+        self.deadline = Some(
+            tokio::time::Instant::now() + std::time::Duration::from_millis(refresh_interval_ms),
+        );
+    }
+}
+
 /// Runs the run list operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -355,6 +403,7 @@ where
                 cursor_blink_epoch,
             )
             .await?
+            .connected
             {
                 break Ok(());
             }
@@ -394,6 +443,7 @@ where
                 cursor_blink_epoch,
             )
             .await?
+            .connected
         {
             break Ok(());
         }
@@ -422,14 +472,19 @@ where
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
     let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
+    let mut animation_refresh = AttachAnimationRefresh::default();
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
             render_requested = true;
         }
-        let input =
-            read_attached_client_input_or_runtime_event(terminal_io, event_stream.as_mut(), 4096)
-                .await?;
+        let input = read_attached_client_input_or_runtime_event(
+            terminal_io,
+            event_stream.as_mut(),
+            4096,
+            animation_refresh.deadline(),
+        )
+        .await?;
         if input.eof {
             break Ok(());
         }
@@ -451,17 +506,18 @@ where
             continue;
         }
         if input.bytes.is_empty() {
-            if !request_and_render_primary_view_async(
+            let outcome = request_and_render_primary_view_async(
                 stream,
                 terminal_io,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
             )
-            .await?
-            {
+            .await?;
+            if !outcome.connected {
                 break Ok(());
             }
+            animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
             render_requested = false;
             iteration = iteration.saturating_add(1);
             continue;
@@ -489,17 +545,19 @@ where
         if refresh_requirement.full_redraw_required {
             terminal_io.invalidate_output_frame().await?;
         }
-        if (render_requested || refresh_requirement.view_refresh_required)
-            && !request_and_render_primary_view_async(
+        if render_requested || refresh_requirement.view_refresh_required {
+            let outcome = request_and_render_primary_view_async(
                 stream,
                 terminal_io,
                 client_size,
                 iteration,
                 cursor_blink_epoch,
             )
-            .await?
-        {
-            break Ok(());
+            .await?;
+            if !outcome.connected {
+                break Ok(());
+            }
+            animation_refresh.update_from_rendered_view(outcome.animation_refresh_interval_ms);
         }
         render_requested = false;
         iteration = iteration.saturating_add(1);
@@ -741,12 +799,25 @@ async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>
     terminal_io: &mut I,
     event_stream: Option<&mut AttachedRuntimeEventStream>,
     max_bytes: usize,
+    animation_deadline: Option<tokio::time::Instant>,
 ) -> Result<AttachedClientInputPoll> {
+    let animation_wakeup = async {
+        match animation_deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(animation_wakeup);
+    let input = read_attached_client_input_or_timeout(terminal_io, max_bytes);
+    tokio::pin!(input);
     let Some(event_stream) = event_stream else {
-        return read_attached_client_input_or_timeout(terminal_io, max_bytes).await;
+        return tokio::select! {
+            result = &mut input => result,
+            _ = &mut animation_wakeup => Ok(animation_refresh_input_poll()),
+        };
     };
     tokio::select! {
-        input = read_attached_client_input_or_timeout(terminal_io, max_bytes) => input,
+        input = &mut input => input,
         render_action = read_runtime_event_stream_action(event_stream) => {
             let render_action = render_action?;
             Ok(AttachedClientInputPoll {
@@ -755,6 +826,16 @@ async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>
                 render_action,
             })
         }
+        _ = &mut animation_wakeup => Ok(animation_refresh_input_poll()),
+    }
+}
+
+/// Builds the synthetic input poll produced by a local animation refresh tick.
+fn animation_refresh_input_poll() -> AttachedClientInputPoll {
+    AttachedClientInputPoll {
+        bytes: Vec::new(),
+        eof: false,
+        render_action: AttachRenderAction::View,
     }
 }
 
@@ -1061,19 +1142,19 @@ async fn request_and_render_primary_view_async<I: AsyncAttachedTerminalIo>(
     client_size: Size,
     iteration: u64,
     cursor_blink_epoch: std::time::Instant,
-) -> Result<bool> {
+) -> Result<PrimaryViewRenderOutcome> {
     let request = terminal_view_control_request(iteration, client_size);
     if !write_async_control_body_or_disconnected(stream, &request).await? {
-        return Ok(false);
+        return Ok(PrimaryViewRenderOutcome::disconnected());
     }
     let Some(response) =
         read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
     else {
-        return Ok(false);
+        return Ok(PrimaryViewRenderOutcome::disconnected());
     };
     let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
     if control_response_forbidden(body.as_str())? {
-        return Ok(false);
+        return Ok(PrimaryViewRenderOutcome::disconnected());
     }
     render_primary_view_response_async(terminal_io, body.as_str(), cursor_blink_epoch).await
 }
@@ -1083,17 +1164,29 @@ async fn render_primary_view_response_async<I: AsyncAttachedTerminalIo>(
     terminal_io: &mut I,
     body: &str,
     cursor_blink_epoch: std::time::Instant,
-) -> Result<bool> {
+) -> Result<PrimaryViewRenderOutcome> {
     let lines = terminal_step_response_lines(body)?;
     let line_style_spans = terminal_step_response_line_style_spans(body)?;
+    let modes = terminal_step_response_output_modes(body)?.unwrap_or_default();
+    let animation_refresh_interval_ms = modes.animation_refresh_interval_ms;
     if lines.is_empty() {
-        return Ok(true);
+        return Ok(PrimaryViewRenderOutcome {
+            connected: true,
+            animation_refresh_interval_ms,
+        });
     }
-    let modes = control_socket_cursor_blink_elapsed(
-        terminal_step_response_output_modes(body)?.unwrap_or_default(),
-        cursor_blink_epoch,
-    );
-    write_styled_output_or_disconnected_async(terminal_io, &lines, &line_style_spans, modes).await
+    let modes = control_socket_cursor_blink_elapsed(modes, cursor_blink_epoch);
+    let connected =
+        write_styled_output_or_disconnected_async(terminal_io, &lines, &line_style_spans, modes)
+            .await?;
+    Ok(PrimaryViewRenderOutcome {
+        connected,
+        animation_refresh_interval_ms: if connected {
+            animation_refresh_interval_ms
+        } else {
+            0
+        },
+    })
 }
 
 /// Runs the write async control body or disconnected operation for this subsystem.
@@ -1662,9 +1755,15 @@ pub(super) fn terminal_step_response_output_modes(
         .and_then(|modes| modes.get("bracketed_paste"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let animation_refresh_interval_ms = view
+        .get("output_modes")
+        .and_then(|modes| modes.get("animation_refresh_interval_ms"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
     Ok(Some(AttachedTerminalOutputModes {
         application_keypad,
         bracketed_paste,
+        animation_refresh_interval_ms,
         cursor_style,
         cursor_blink,
         cursor_blink_interval_ms,

@@ -36,7 +36,7 @@ use crate::runtime::{
     DeferredConfigFileWrite, DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
     PaneResizeUpdate,
 };
-use crate::terminal::TerminalFdInterest;
+use crate::terminal::{AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, TerminalFdInterest};
 
 // Serialized runtime actor and handle implementation.
 
@@ -51,7 +51,7 @@ const DEFAULT_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
 /// Active agent status indicators advance their scan phase at this cadence.
 /// Keeping the timer in sync with the renderer prevents status-only frames from
 /// appearing frozen when no pane output or keyboard input is arriving.
-const DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
+const DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS: u64 = AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 /// Defines the DEFAULT SHELL RECOVERY INTERVAL MS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -3071,6 +3071,7 @@ impl AsyncRuntimeSessionActor {
                 cursor_blink: config.cursor_blink,
                 cursor_blink_interval_ms: config.cursor_blink_interval_ms,
                 cursor_blink_elapsed_ms,
+                animation_refresh_interval_ms: view.animation_refresh_interval_ms,
                 cursor_visible,
                 cursor_row,
                 cursor_column,

@@ -460,7 +460,7 @@ pub(super) fn rendered_client_view_json(view: &RenderedClientView) -> String {
         })
         .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"role":"{}","authoritative_size":{{"columns":{},"rows":{}}},"client_size":{{"columns":{},"rows":{}}},"requires_client_scroll":{},"viewport":{{"row":{},"column":{},"max_row":{},"max_column":{}}},"cursor":{{"row":{},"column":{},"visible":{},"style":"{}","blink":{},"blink_interval_ms":{}}},"output_modes":{{"application_keypad":{},"bracketed_paste":{}}},"agent_prompt_region":{},"lines":[{}],"line_style_spans":{}}}"#,
+        r#"{{"role":"{}","authoritative_size":{{"columns":{},"rows":{}}},"client_size":{{"columns":{},"rows":{}}},"requires_client_scroll":{},"viewport":{{"row":{},"column":{},"max_row":{},"max_column":{}}},"cursor":{{"row":{},"column":{},"visible":{},"style":"{}","blink":{},"blink_interval_ms":{}}},"output_modes":{{"application_keypad":{},"bracketed_paste":{},"animation_refresh_interval_ms":{}}},"agent_prompt_region":{},"lines":[{}],"line_style_spans":{}}}"#,
         client_view_role_name(view.role),
         view.authoritative_size.columns,
         view.authoritative_size.rows,
@@ -479,6 +479,7 @@ pub(super) fn rendered_client_view_json(view: &RenderedClientView) -> String {
         view.cursor_blink_interval_ms,
         view.application_keypad,
         view.bracketed_paste,
+        view.animation_refresh_interval_ms,
         agent_prompt_region,
         lines.join(","),
         line_style_spans

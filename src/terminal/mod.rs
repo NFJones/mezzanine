@@ -82,10 +82,10 @@ mod theme;
 pub(crate) use client_loop::plan_attached_terminal_client_step_with_host_paste_buffer;
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
-    AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
-    AttachedTerminalClientStepPlan, AttachedTerminalOutputModes, ClientStatusKind,
-    ClientStatusLine, ClientViewRole, ReadlinePromptClientPresentation, ReadlinePromptRegion,
-    ReadlinePromptStatusRow, RenderedClientView, TerminalClientLoopAction,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
+    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan, AttachedTerminalOutputModes,
+    ClientStatusKind, ClientStatusLine, ClientViewRole, ReadlinePromptClientPresentation,
+    ReadlinePromptRegion, ReadlinePromptStatusRow, RenderedClientView, TerminalClientLoopAction,
     attached_terminal_output_disconnected, plan_attached_terminal_client_step, route_client_input,
 };
 #[cfg(test)]
