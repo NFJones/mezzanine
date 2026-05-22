@@ -8601,6 +8601,7 @@ fn runtime_applies_default_prefix_mux_actions() {
         )
         .unwrap();
     assert_eq!(cycle_report.mux_actions_applied, 1);
+    assert!(cycle_report.full_redraw_required);
     assert_ne!(
         service.session().active_window().unwrap().active_pane().id,
         active_before
@@ -8689,6 +8690,52 @@ fn runtime_attached_split_mux_action_focuses_new_pane() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies keyboard pane-focus actions require a full attached-frame redraw.
+///
+/// Focus changes move the global terminal cursor and restyle pane ownership
+/// surfaces even when pane text stays unchanged. Reporting only a light view
+/// refresh can leave the attached client diffing against stale cursor/frame
+/// state, which makes pane navigation appear to need repeated key presses.
+#[test]
+fn runtime_keyboard_focus_pane_requests_full_redraw() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneHorizontal)
+            .unwrap()
+    );
+    service.session.select_pane(&primary, "%1").unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ExecuteMux(MuxAction::FocusPane(
+                    PaneFocusDirection::Down,
+                ))],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert!(report.full_redraw_required);
+    assert_eq!(
+        service.session().windows()[0].active_pane().id.as_str(),
+        "%2"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies mouse focus uses the same pane-frame row accounting as rendering.
 ///
 /// A top pane frame that is merged into an interior divider does not consume the
@@ -8730,6 +8777,7 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
         .unwrap();
 
     assert!(report.view_refresh_required);
+    assert!(report.full_redraw_required);
     assert_eq!(
         service.session().windows()[0].active_pane().id.as_str(),
         "%2"

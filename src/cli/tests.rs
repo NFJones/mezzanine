@@ -12,7 +12,7 @@ use super::attach::{
     run_control_socket_attached_primary_client_loop_async,
     run_control_socket_attached_primary_client_loop_async_with_runtime_events,
     terminal_step_control_request, terminal_step_response_line_style_spans,
-    terminal_step_response_output_modes,
+    terminal_step_response_output_modes, terminal_step_response_refresh_requirement,
 };
 use super::mcp::load_runtime_config_layers_for_directory;
 use super::serve::assign_unique_live_session_id;
@@ -2595,10 +2595,29 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
     server.join().unwrap();
 
     assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 1);
     assert_eq!(io.written_frames.len(), 1);
     assert_eq!(io.written_frames[0].lines, vec!["detached async"]);
     assert_eq!(io.written_frames[0].modes.cursor_column, 14);
     assert!(io.written_frames[0].modes.cursor_visible);
+}
+
+/// Verifies terminal-step response parsing keeps the full-redraw signal
+/// separate from the basic view-refresh signal.
+///
+/// Full redraws must invalidate the attached client's retained output frame
+/// before rendering. This regression protects the control-socket attach path
+/// from collapsing the two runtime signals into a single boolean and then
+/// redrawing against stale frame state.
+#[test]
+fn terminal_step_response_refresh_requirement_preserves_full_redraw() {
+    let refresh = terminal_step_response_refresh_requirement(
+        r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"application":{"view_refresh_required":false,"full_redraw_required":true}}}"#,
+    )
+    .unwrap();
+
+    assert!(refresh.view_refresh_required);
+    assert!(refresh.full_redraw_required);
 }
 
 /// Verifies that once the initial attach redraw has already been satisfied,

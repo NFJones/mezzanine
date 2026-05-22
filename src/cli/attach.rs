@@ -26,6 +26,16 @@ const ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 /// Maximum bytes read from the auxiliary event stream in one socket read.
 const ATTACH_EVENT_STREAM_READ_BUFFER_BYTES: usize = 8192;
 
+/// Redraw requirements reported by one terminal step response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TerminalStepRefreshRequirement {
+    /// Whether the attached client should request a fresh terminal view.
+    pub view_refresh_required: bool,
+    /// Whether the attached client must discard its retained output frame before
+    /// rendering the fresh terminal view.
+    pub full_redraw_required: bool,
+}
+
 /// Runs the run list operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -371,7 +381,11 @@ where
         if control_response_forbidden(body.as_str())? {
             break Ok(());
         }
-        if (render_requested || terminal_step_response_view_refresh_required(body.as_str())?)
+        let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
+        if refresh_requirement.full_redraw_required {
+            terminal_io.invalidate_output_frame().await?;
+        }
+        if (render_requested || refresh_requirement.view_refresh_required)
             && !request_and_render_primary_view_async(
                 stream,
                 terminal_io,
@@ -471,7 +485,11 @@ where
         if control_response_forbidden(body.as_str())? {
             break Ok(());
         }
-        if (render_requested || terminal_step_response_view_refresh_required(body.as_str())?)
+        let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
+        if refresh_requirement.full_redraw_required {
+            terminal_io.invalidate_output_frame().await?;
+        }
+        if (render_requested || refresh_requirement.view_refresh_required)
             && !request_and_render_primary_view_async(
                 stream,
                 terminal_io,
@@ -1387,8 +1405,10 @@ pub(super) fn terminal_step_response_lines(body: &str) -> Result<Vec<String>> {
         .collect()
 }
 
-/// Reports whether a terminal step result requires an immediate explicit view.
-pub(super) fn terminal_step_response_view_refresh_required(body: &str) -> Result<bool> {
+/// Returns the redraw requirements reported by a terminal step response.
+pub(super) fn terminal_step_response_refresh_requirement(
+    body: &str,
+) -> Result<TerminalStepRefreshRequirement> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("terminal step response is not valid JSON"))?;
     if let Some(error) = parsed.get("error") {
@@ -1408,7 +1428,10 @@ pub(super) fn terminal_step_response_view_refresh_required(body: &str) -> Result
         .and_then(|application| application.get("full_redraw_required"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Ok(view_refresh_required || full_redraw_required)
+    Ok(TerminalStepRefreshRequirement {
+        view_refresh_required: view_refresh_required || full_redraw_required,
+        full_redraw_required,
+    })
 }
 
 /// Runs the terminal step response line style spans operation for this subsystem.
