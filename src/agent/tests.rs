@@ -3754,6 +3754,10 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("one outcome and one output stream"));
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
     assert!(prompt.contains("is model-facing evidence"));
+    assert!(prompt.contains("treat recent action_result output as an evidence cache"));
+    assert!(prompt.contains("implicit path -> line ranges read map"));
+    assert!(prompt.contains("subtract already observed ranges"));
+    assert!(prompt.contains("prefer acting on existing evidence over rereading for confidence"));
     assert!(prompt.contains("avoid printf/echo explanations"));
     assert!(prompt.contains("Bound CPU, memory, disk, output, loops, and input size"));
     assert!(prompt.contains("generate exact sizes"));
@@ -3776,6 +3780,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(!prompt.contains("old-line range metadata is a placement hint only"));
     assert!(!prompt.contains("Unanchored pure-addition update hunks append by default"));
     assert!(prompt.contains("distinctive @@ header anchors"));
+    assert!(prompt.contains("use recent action-result evidence"));
+    assert!(prompt.contains("read only the missing or stale candidate/owner ranges once"));
+    assert!(prompt.contains("if replacement or equivalent behavior exists"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains("relative to pane current working directory"));
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
@@ -3874,6 +3881,10 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("shell_command: exact pane shell input"));
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
     assert!(prompt.contains("is model-facing evidence"));
+    assert!(prompt.contains("treat recent action_result output as an evidence cache"));
+    assert!(prompt.contains("implicit path -> line ranges read map"));
+    assert!(prompt.contains("subtract already observed ranges"));
+    assert!(prompt.contains("prefer acting on existing evidence over rereading for confidence"));
     assert!(prompt.contains("avoid printf/echo explanations"));
     assert!(prompt.contains("late allowed-action surface is authoritative"));
     assert!(prompt.contains("only the action types named there are usable now"));
@@ -3941,6 +3952,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(!prompt.contains("old-line range metadata is a placement hint only"));
     assert!(!prompt.contains("Unanchored pure-addition update hunks append by default"));
     assert!(prompt.contains("distinctive @@ header anchors"));
+    assert!(prompt.contains("use recent action-result evidence"));
+    assert!(prompt.contains("read only the missing or stale candidate/owner ranges once"));
+    assert!(prompt.contains("if replacement or equivalent behavior exists"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains("relative to pane current working directory"));
@@ -6277,6 +6291,63 @@ fn semantic_apply_patch_hunk_mismatch_reports_failed_context() {
             .contains("do not retry substantially the same patch"),
         "{}",
         error.message()
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies hunk mismatch diagnostics report already-present replacement blocks.
+///
+/// A failed hunk can mean the model is replaying a stale patch after the target
+/// already reached the intended state. The diagnostic should point recovery
+/// toward reconciling current file contents instead of forcing another retry.
+#[test]
+fn semantic_apply_patch_hunk_mismatch_reports_present_replacement_block() {
+    let temp = test_temp_dir("semantic-codex-patch-replacement-block-present");
+    std::fs::write(temp.join("note.txt"), "new\ncontext\n").unwrap();
+    let patch =
+        "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n context\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("failure_code=HUNK_CONTEXT_MISMATCH"),
+        "{error}"
+    );
+    assert!(
+        error.contains("replacement_hint=full_replacement_block_present span(s): 1-2"),
+        "{error}"
+    );
+    assert!(
+        error.contains("replacement_hint_next_step=reconcile_current_file_before_retry"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies hunk mismatch diagnostics report distinctive added lines.
+///
+/// When the exact replacement block is no longer present because neighboring
+/// context changed, the presence of distinctive added lines is still useful
+/// evidence that the target may have been rewritten or partly applied.
+#[test]
+fn semantic_apply_patch_hunk_mismatch_reports_present_distinctive_added_lines() {
+    let temp = test_temp_dir("semantic-codex-patch-added-lines-present");
+    std::fs::write(temp.join("note.txt"), "new_helper();\nother\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.txt\n@@\n-missing_old();\n+new_helper();\n context\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("failure_code=HUNK_CONTEXT_MISMATCH"),
+        "{error}"
+    );
+    assert!(
+        error.contains("replacement_hint=distinctive_added_lines_present span(s): 1"),
+        "{error}"
+    );
+    assert!(
+        error.contains("replacement_hint_next_step=reconcile_current_file_before_retry"),
+        "{error}"
     );
     std::fs::remove_dir_all(&temp).unwrap();
 }
@@ -10306,6 +10377,26 @@ fn openai_responses_request_body_describes_apply_patch_format() {
     assert!(description.contains("with no body"), "{description}");
     assert!(
         description.contains("After a hunk/context mismatch or ambiguity"),
+        "{description}"
+    );
+    assert!(
+        description.contains("classify the failure"),
+        "{description}"
+    );
+    assert!(
+        description.contains("reuse fresh current-file evidence already present"),
+        "{description}"
+    );
+    assert!(
+        description.contains("re-read only missing or stale candidate/owner ranges"),
+        "{description}"
+    );
+    assert!(
+        description.contains("skip already-applied or equivalent behavior"),
+        "{description}"
+    );
+    assert!(
+        description.contains("replacement_hint diagnostics mean reconcile"),
         "{description}"
     );
     assert!(

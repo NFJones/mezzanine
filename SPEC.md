@@ -3501,6 +3501,10 @@ The baseline action types are:
   model-correctable ambiguity diagnostic instead of choosing a location. The
   diagnostic SHOULD identify the search scope, candidate spans, useful
   hunk-header anchor state, and range-hint rejection details when available.
+  When old-context matching fails, the diagnostic SHOULD conservatively report
+  whether the replacement block or distinctive added lines are already present
+  in the relevant target scope so the model can reconcile current file state
+  instead of retrying a stale hunk.
   Raw unified diffs MUST NOT be accepted by this semantic action; agents that
   truly need a raw unified diff MUST use `shell_command` with an explicit tool
   such as `git apply`.
@@ -5743,6 +5747,13 @@ directly, use small anchored hunks with exact copied context, and reread before
 retry after hunk mismatch. Detailed patch compatibility, fallback matching, and
 recovery behavior MAY live in provider schemas and action-result diagnostics
 instead of the high-level prompt.
+The prompt MUST instruct the agent to treat recent file-inspection action
+results as reusable evidence. Before issuing another `sed`, `rg`, or equivalent
+file-read command, the agent SHOULD subtract already observed path/line ranges
+from the requested context and read only missing or stale ranges. It SHOULD
+reread an overlapping region only when a file changed, prior output was
+truncated, a diagnostic explicitly requires fresh context, or a named missing
+range or boundary is needed.
 
 The prompt MUST require the agent to inspect relevant project context before
 making non-trivial changes. For code and configuration work, the prompt MUST
@@ -5844,11 +5855,13 @@ wrappers, or `apply_patch <<...` shell text. It MUST state that the most
 reliable update shape is a small file operation with a copied `@@` anchor and a
 small number of exact old/context lines, and MUST recommend several small
 anchored hunks over one large brittle hunk. It MUST state that after an
-`apply_patch` hunk or context mismatch, the model should re-read affected
-context and retry with a smaller fresh Mezzanine patch using a distinctive
-`@@` header anchor instead of replaying substantially the same patch. It MUST
-state that raw unified diffs belong in an explicit shell command such as
-`git apply`.
+`apply_patch` hunk or context mismatch, the model should reuse already-read
+fresh current context when available, otherwise re-read only missing or stale
+candidate/owner ranges, and retry with a smaller fresh Mezzanine patch using a
+distinctive `@@` header anchor instead of replaying substantially the same
+patch. It MUST tell the model to skip or adapt stale hunks when equivalent
+behavior or the intended replacement is already present. It MUST state that raw
+unified diffs belong in an explicit shell command such as `git apply`.
 It MUST state that `apply_patch` path headers are relative to the pane current
 working directory and cannot use absolute paths or `..`, while other semantic
 file actions MAY still use valid absolute paths when policy permits. For other

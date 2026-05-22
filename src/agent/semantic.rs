@@ -1430,6 +1430,26 @@ fn apply_patch_hunk_mismatch_error(
             message.push_str(&format!(" next_distance={distance}"));
         }
     }
+    if let Some(hint) = apply_patch_replacement_presence_hint(file, hunk, scope) {
+        message.push_str(&format!(
+            "\napply_patch: replacement_hint={} span(s): {}",
+            hint.kind.as_str(),
+            hint.spans
+                .iter()
+                .map(|span| {
+                    if span.start_line == span.end_line {
+                        span.start_line.to_string()
+                    } else {
+                        format!("{}-{}", span.start_line, span.end_line)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        message.push_str(
+            "\napply_patch: replacement_hint_next_step=reconcile_current_file_before_retry",
+        );
+    }
     if let Some(first_line) = hunk.old.first() {
         let anchor_lines = apply_patch_anchor_line_numbers(&file.lines, first_line);
         if anchor_lines.is_empty() {
@@ -1499,6 +1519,137 @@ fn apply_patch_hunk_mismatch_error(
         "\napply_patch: do not retry substantially the same patch without fresh target context",
     );
     super::MezError::invalid_args(message)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyPatchReplacementPresenceKind {
+    FullReplacementBlockPresent,
+    DistinctiveAddedLinesPresent,
+}
+
+impl ApplyPatchReplacementPresenceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApplyPatchReplacementPresenceKind::FullReplacementBlockPresent => {
+                "full_replacement_block_present"
+            }
+            ApplyPatchReplacementPresenceKind::DistinctiveAddedLinesPresent => {
+                "distinctive_added_lines_present"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApplyPatchReplacementPresenceHint {
+    kind: ApplyPatchReplacementPresenceKind,
+    spans: Vec<ApplyPatchCandidateSpan>,
+}
+
+fn apply_patch_replacement_presence_hint(
+    file: &ApplyPatchTextFile,
+    hunk: &MezPatchHunk,
+    scope: ApplyPatchSearchScope,
+) -> Option<ApplyPatchReplacementPresenceHint> {
+    let ranges = apply_patch_replacement_search_ranges(file, hunk, scope);
+    if !hunk.new.is_empty() && hunk.new != hunk.old {
+        let spans = apply_patch_exact_sequence_spans(&file.lines, &hunk.new, &ranges);
+        if !spans.is_empty() {
+            return Some(ApplyPatchReplacementPresenceHint {
+                kind: ApplyPatchReplacementPresenceKind::FullReplacementBlockPresent,
+                spans,
+            });
+        }
+    }
+
+    let distinctive_added_lines = hunk
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+            MezPatchHunkLine::Add(text) => Some(text),
+            MezPatchHunkLine::Context(_) | MezPatchHunkLine::Remove(_) => None,
+        })
+        .filter(|line| apply_patch_added_line_is_distinctive(line, &hunk.old))
+        .fold(Vec::<&String>::new(), |mut lines, line| {
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+            lines
+        });
+    if distinctive_added_lines.is_empty() {
+        return None;
+    }
+
+    let mut spans = Vec::new();
+    for line in distinctive_added_lines {
+        let line_spans =
+            apply_patch_exact_sequence_spans(&file.lines, std::slice::from_ref(line), &ranges);
+        if line_spans.is_empty() {
+            return None;
+        }
+        spans.extend(line_spans);
+        if spans.len() >= APPLY_PATCH_MATCH_CANDIDATE_LIMIT {
+            spans.truncate(APPLY_PATCH_MATCH_CANDIDATE_LIMIT);
+            break;
+        }
+    }
+    Some(ApplyPatchReplacementPresenceHint {
+        kind: ApplyPatchReplacementPresenceKind::DistinctiveAddedLinesPresent,
+        spans,
+    })
+}
+
+fn apply_patch_replacement_search_ranges(
+    file: &ApplyPatchTextFile,
+    hunk: &MezPatchHunk,
+    scope: ApplyPatchSearchScope,
+) -> Vec<(usize, usize)> {
+    if !hunk.anchors.is_empty() {
+        let chains = ordered_anchor_chains(&file.lines, &hunk.anchors, 0);
+        if !chains.is_empty() {
+            if scope == ApplyPatchSearchScope::StructuralAnchorScope {
+                let structural_ranges = structural_anchor_ranges(&file.lines, &chains);
+                if !structural_ranges.is_empty() {
+                    return structural_ranges;
+                }
+            }
+            let ordered_ranges = ordered_anchor_search_ranges(&file.lines, &chains, 0);
+            if !ordered_ranges.is_empty() {
+                return ordered_ranges;
+            }
+        }
+    }
+    vec![(0, file.lines.len())]
+}
+
+fn apply_patch_exact_sequence_spans(
+    lines: &[String],
+    needle: &[String],
+    ranges: &[(usize, usize)],
+) -> Vec<ApplyPatchCandidateSpan> {
+    let mut spans = Vec::new();
+    for (start, end) in ranges {
+        let matches =
+            find_line_sequence_matches(lines, needle, *start, *end, ApplyPatchMatchMode::Exact);
+        spans.extend(matches.lines.into_iter().map(|position| {
+            ApplyPatchCandidateSpan::from_position_and_len(position, needle.len())
+        }));
+        if spans.len() >= APPLY_PATCH_MATCH_CANDIDATE_LIMIT {
+            spans.truncate(APPLY_PATCH_MATCH_CANDIDATE_LIMIT);
+            break;
+        }
+    }
+    spans
+}
+
+fn apply_patch_added_line_is_distinctive(line: &str, old: &[String]) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty()
+        && !matches!(trimmed, "{" | "}" | ");" | "," | ".")
+        && trimmed
+            .chars()
+            .any(|character| character.is_ascii_alphanumeric() || character == '_')
+        && !old.iter().any(|old_line| old_line == line)
 }
 
 fn apply_patch_match_attempts_summary(attempts: &[ApplyPatchMatchAttempt]) -> String {
