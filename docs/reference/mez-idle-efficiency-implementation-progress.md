@@ -63,3 +63,6 @@ regions, pane frames, and other view data even when nothing visible changed.
   `terminal_client_loop_config` now reuse that config for rendering instead of
   rebuilding frame context and mouse hit regions a second time in the same
   request.
+- Added actor metrics for rendered client frames, rendered client views,
+  `terminal/step`, and `terminal/view` requests so idle attach benchmarking can
+  verify redraw/control-request rates without depending on external profilers.

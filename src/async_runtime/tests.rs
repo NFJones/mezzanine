@@ -3314,6 +3314,70 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
     );
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
+/// Verifies that actor metrics expose rendered-view and terminal control
+/// request counts that can be used for idle attach benchmarking. The counters
+/// distinguish direct actor render calls from control-socket `terminal/view`
+/// and `terminal/step` traffic so regressions toward periodic redraws remain
+/// measurable.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_metrics_track_render_and_terminal_control_requests() {
+    use crate::control::encode_control_body;
+
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let client = async {
+        handle
+            .render_client_frame(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+                true,
+            )
+            .await
+            .unwrap();
+        handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap();
+        let terminal_step = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"step","method":"terminal/step","params":{"idempotency_key":"metrics-step","client_size":{"columns":80,"rows":24},"render":false,"input_bytes":[]}}"#,
+        );
+        let terminal_view = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#,
+        );
+        handle
+            .handle_control_input_for_connection(
+                [terminal_step, terminal_view].concat(),
+                1024 * 1024,
+                ControlConnectionState::trusted_existing_client(primary),
+            )
+            .await
+            .unwrap();
+        let metrics = handle.metrics().await.unwrap();
+        assert_eq!(metrics.render_client_frame_requests, 1);
+        assert_eq!(metrics.render_client_view_requests, 1);
+        assert_eq!(metrics.terminal_step_control_requests, 1);
+        assert_eq!(metrics.terminal_view_control_requests, 1);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.render_client_frame_requests, 1);
+    assert_eq!(exit.metrics.render_client_view_requests, 1);
+    assert_eq!(exit.metrics.terminal_step_control_requests, 1);
+    assert_eq!(exit.metrics.terminal_view_control_requests, 1);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
 
 /// Verifies that queued runtime side effects can be consumed by a supervised
 /// async service without taking mutable access to the runtime service itself.

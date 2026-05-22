@@ -52,6 +52,14 @@ impl Default for AsyncRuntimeActorConfig {
 pub struct AsyncRuntimeActorMetrics {
     /// Number of actor requests processed in serialized order.
     pub commands_processed: u64,
+    /// Number of direct actor requests for a rendered client view.
+    pub render_client_view_requests: u64,
+    /// Number of direct actor frame requests that included a rendered view.
+    pub render_client_frame_requests: u64,
+    /// Number of `terminal/step` control requests observed by the actor.
+    pub terminal_step_control_requests: u64,
+    /// Number of `terminal/view` control requests observed by the actor.
+    pub terminal_view_control_requests: u64,
     /// Number of typed runtime event batches accepted by the actor.
     pub runtime_event_batches: u64,
     /// Number of typed runtime events accepted by the actor.

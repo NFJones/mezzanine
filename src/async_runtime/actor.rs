@@ -302,6 +302,43 @@ impl AsyncRuntimeSessionActor {
             metrics: self.metrics,
         }
     }
+    /// Records terminal control request counters from framed control input.
+    ///
+    /// The metrics path is best-effort: malformed or partial frames are left
+    /// to the normal control dispatcher so diagnostics never change request
+    /// handling semantics.
+    fn record_terminal_control_request_metrics(&mut self, input: &[u8], max_content_length: usize) {
+        let mut offset = 0usize;
+        while offset < input.len() {
+            let Ok((body, consumed)) = decode_control_frame(&input[offset..], max_content_length)
+            else {
+                break;
+            };
+            if consumed == 0 {
+                break;
+            }
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(method) = value.get("method").and_then(serde_json::Value::as_str)
+            {
+                match method {
+                    "terminal/step" => {
+                        self.metrics.terminal_step_control_requests = self
+                            .metrics
+                            .terminal_step_control_requests
+                            .saturating_add(1);
+                    }
+                    "terminal/view" => {
+                        self.metrics.terminal_view_control_requests = self
+                            .metrics
+                            .terminal_view_control_requests
+                            .saturating_add(1);
+                    }
+                    _ => {}
+                }
+            }
+            offset = offset.saturating_add(consumed);
+        }
+    }
 
     /// Runs the handle request operation for this subsystem.
     ///
@@ -326,6 +363,8 @@ impl AsyncRuntimeSessionActor {
                 config,
                 reply,
             } => {
+                self.metrics.render_client_view_requests =
+                    self.metrics.render_client_view_requests.saturating_add(1);
                 let result = self.service.render_client_view(role, client_size, &config);
                 let _ = reply.send(result);
                 false
@@ -337,6 +376,10 @@ impl AsyncRuntimeSessionActor {
                 render,
                 reply,
             } => {
+                if render {
+                    self.metrics.render_client_frame_requests =
+                        self.metrics.render_client_frame_requests.saturating_add(1);
+                }
                 let result = self
                     .service
                     .terminal_client_loop_config(config)
@@ -387,6 +430,7 @@ impl AsyncRuntimeSessionActor {
                 mut connection,
                 reply,
             } => {
+                self.record_terminal_control_request_metrics(&input, max_content_length);
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self
                     .service
@@ -418,6 +462,7 @@ impl AsyncRuntimeSessionActor {
                 snapshots,
                 reply,
             } => {
+                self.record_terminal_control_request_metrics(&input, max_content_length);
                 if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
                     && consumed == input.len()
                     && let Some(prepared) = self
