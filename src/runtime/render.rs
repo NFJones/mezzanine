@@ -1281,13 +1281,13 @@ fn runtime_display_overlay_render_lines(overlay: &RuntimeDisplayOverlay) -> Vec<
         .enumerate()
         .map(|(line_index, line)| {
             if active_line == Some(line_index) {
-                format!("› {line}")
+                format!("▶ {line}")
             } else if overlay
                 .selections
                 .iter()
                 .any(|selection| selection.line_index == line_index)
             {
-                format!("· {line}")
+                format!("  {line}")
             } else {
                 line.to_string()
             }

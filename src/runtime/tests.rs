@@ -7886,10 +7886,14 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
     let initial_active_row = initial_view
         .lines
         .iter()
-        .position(|line| line.starts_with("› "))
+        .position(|line| line.starts_with("▶ "))
         .expect("overlay should show an active selector gutter");
     assert!(
-        initial_view.lines.iter().any(|line| line.starts_with("· ")),
+        initial_view
+            .lines
+            .iter()
+            .enumerate()
+            .any(|(index, line)| index != initial_active_row && line.starts_with("  ")),
         "{initial_view:?}"
     );
 
@@ -7927,11 +7931,15 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
     let moved_active_row = moved_view
         .lines
         .iter()
-        .position(|line| line.starts_with("› "))
+        .position(|line| line.starts_with("▶ "))
         .expect("overlay should keep an active selector gutter after navigation");
     assert_ne!(moved_active_row, initial_active_row, "{moved_view:?}");
     assert!(
-        moved_view.lines.iter().any(|line| line.starts_with("· ")),
+        moved_view
+            .lines
+            .iter()
+            .enumerate()
+            .any(|(index, line)| index != moved_active_row && line.starts_with("  ")),
         "{moved_view:?}"
     );
     service.pane_processes_mut().terminate_all().unwrap();
