@@ -5998,11 +5998,15 @@ progress `say` output is for substantial checkpoints such as significant newly
 observed progress, evidence-backed direction choices, concrete blockers,
 validation outcomes, or user-requested narration. It MUST discourage progress
 `say` output as a routine action-batch heartbeat, and MUST discourage
-future-tense visible plans, intended-work checklists, and headings such as
-`Plan:`, `Steps:`, `Next:`, `Executed:`, or `Evidence:` when executable actions
-are requested in the same response. When an action rationale is present, the
-prompt SHOULD ask for a concise reason that justifies the immediate action and
-does not duplicate the batch rationale, progress `say`, or action summary.
+future-tense visible plans, intended-work checklists, routine owner/test anchor
+lookup, command-wrapper lookup, and headings such as `Plan:`, `Steps:`,
+`Next:`, `Executed:`, or `Evidence:` when executable actions are requested in
+the same response. Refining file or test anchors, checking command-wrapper
+usage, or confirming the same symptom after it was already stated MUST NOT be
+treated as a new progress `say` checkpoint. When an action rationale is
+present, the prompt SHOULD ask for a concise reason that justifies the
+immediate action and does not duplicate the batch rationale, progress `say`, or
+action summary.
 For implementation summaries, the prompt MUST require changed files, successful
 mutation evidence, verification evidence, and skipped validation when relevant.
 The prompt MUST prohibit leading with approval phrases such as "Great

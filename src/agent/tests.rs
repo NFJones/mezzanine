@@ -3741,12 +3741,18 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("include exactly one progress say in the batch"));
     assert!(prompt.contains("even when executable actions are also present"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
+    assert!(prompt.contains("Refining file or test anchors"));
+    assert!(prompt.contains("checking command-wrapper usage"));
+    assert!(prompt.contains("confirming the same symptom after it was already stated"));
+    assert!(prompt.contains("is not a new checkpoint"));
     assert!(prompt.contains("If no substantial checkpoint exists, omit progress say"));
     assert!(prompt.contains("progress say is not a heartbeat"));
     assert!(prompt.contains("Progress say is for substantial checkpoints"));
     assert!(prompt.contains("evidence-backed direction choices"));
     assert!(prompt.contains("validation results that determine the next step"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
+    assert!(prompt.contains("routine owner/test anchor lookup"));
+    assert!(prompt.contains("command-wrapper lookup"));
     assert!(prompt.contains("headings such as Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(prompt.contains(
         "Do not format ordinary progress or final text with Plan:, Executed:, or Evidence:"
@@ -4055,11 +4061,17 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("include exactly one progress say in the batch"));
     assert!(prompt.contains("even when executable actions are also present"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
+    assert!(prompt.contains("Refining file or test anchors"));
+    assert!(prompt.contains("checking command-wrapper usage"));
+    assert!(prompt.contains("confirming the same symptom after it was already stated"));
+    assert!(prompt.contains("is not a new checkpoint"));
     assert!(prompt.contains("If no substantial checkpoint exists, omit progress say"));
     assert!(prompt.contains("progress say is not a heartbeat"));
     assert!(prompt.contains("1-3 compact sentences"));
     assert!(prompt.contains("Do not emit such checkpoints for every action batch"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
+    assert!(prompt.contains("routine owner/test anchor lookup"));
+    assert!(prompt.contains("command-wrapper lookup"));
     assert!(prompt.contains("headings such as Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(prompt.contains(
         "Do not format ordinary progress or final text with Plan:, Executed:, or Evidence:"
@@ -9228,6 +9240,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_status_description.contains("validation results that determine the next step"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("routine action continuity"));
+    assert!(say_status_description.contains("routine owner/test anchor lookup"));
+    assert!(say_status_description.contains("command-wrapper lookup"));
     assert!(say_status_description.contains("Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(
         say_status_description.contains("Do not use progress just to announce"),
