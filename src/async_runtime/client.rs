@@ -456,12 +456,6 @@ where
                 synthetic_output_readiness(),
             ]));
         }
-        if io.pending_output_bytes() > 0 {
-            return Ok(AttachedTerminalBatchWake::Readiness(
-                io.poll_readiness().await?,
-            ));
-        }
-
         if let Some(render_delay) = render_limiter.pending_render_delay() {
             tokio::select! {
                 biased;
@@ -483,6 +477,12 @@ where
                 }
             }
             continue;
+        }
+
+        if io.pending_output_bytes() > 0 {
+            return Ok(AttachedTerminalBatchWake::Readiness(
+                io.poll_readiness().await?,
+            ));
         }
 
         tokio::select! {

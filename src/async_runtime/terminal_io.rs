@@ -814,7 +814,11 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
     ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
         Box::pin(async move {
             if self.pending_output_frame.is_some() {
-                return self.flush_pending_output_bounded(max_bytes).await;
+                // A newer render frame supersedes any old frame that could not
+                // be fully written to a slow foreground terminal.
+                self.pending_output_frame = None;
+                self.previous_output_frame = None;
+                self.pending_output_invalidates_next_frame = false;
             }
             self.queue_pending_output_frame(lines, line_style_spans, modes);
             self.flush_pending_output_bounded(max_bytes).await

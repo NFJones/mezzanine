@@ -517,6 +517,106 @@ impl AsyncAttachedTerminalIo for IdleAsyncAttachedTerminalLoopIo {
     }
 }
 
+/// Attached-terminal fake with caller-controlled stale pending output.
+#[derive(Debug)]
+struct SupersedablePendingOutputIo {
+    /// Completed latest-frame writes.
+    write_count: StdArc<AtomicUsize>,
+    /// Notification emitted after a latest-frame write.
+    write_notify: StdArc<tokio::sync::Notify>,
+    /// Simulated stale pending bytes from a partially written older frame.
+    pending_output_bytes: StdArc<AtomicUsize>,
+    /// Count of stale pending-output flush attempts.
+    stale_flushes: StdArc<AtomicUsize>,
+}
+
+impl SupersedablePendingOutputIo {
+    /// Builds a fake output endpoint with externally controlled pending bytes.
+    fn new(
+        write_count: StdArc<AtomicUsize>,
+        write_notify: StdArc<tokio::sync::Notify>,
+        pending_output_bytes: StdArc<AtomicUsize>,
+        stale_flushes: StdArc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            write_count,
+            write_notify,
+            pending_output_bytes,
+            stale_flushes,
+        }
+    }
+}
+
+impl AsyncAttachedTerminalIo for SupersedablePendingOutputIo {
+    /// Returns output writability when a caller asks to flush pending bytes.
+    fn poll_readiness<'a>(
+        &'a mut self,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+        Box::pin(async move {
+            Ok(vec![AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Output,
+                fd: 1,
+                interest: TerminalFdInterest::write(),
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: false,
+            }])
+        })
+    }
+
+    /// Leaves input idle so render timing is the only wake source.
+    fn poll_input_readiness<'a>(
+        &'a mut self,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+        Box::pin(std::future::pending())
+    }
+
+    /// Leaves input idle so render timing is the only wake source.
+    fn read_input<'a>(
+        &'a mut self,
+        _max_bytes: usize,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<u8>> {
+        Box::pin(std::future::pending())
+    }
+
+    /// Records that the latest frame replaced any stale pending output.
+    fn write_styled_output_with_modes<'a>(
+        &'a mut self,
+        lines: &'a [String],
+        _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        _modes: AttachedTerminalOutputModes,
+    ) -> super::AsyncTerminalIoFuture<'a, usize> {
+        Box::pin(async move {
+            self.pending_output_bytes.store(0, Ordering::SeqCst);
+            self.write_count.fetch_add(1, Ordering::SeqCst);
+            self.write_notify.notify_waiters();
+            Ok(lines.iter().map(String::len).sum())
+        })
+    }
+
+    /// Returns the simulated stale pending byte count.
+    fn pending_output_bytes(&self) -> usize {
+        self.pending_output_bytes.load(Ordering::SeqCst)
+    }
+
+    /// Records an obsolete pending-frame flush attempt.
+    fn flush_pending_output<'a>(
+        &'a mut self,
+        _max_bytes: usize,
+    ) -> super::AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            self.stale_flushes.fetch_add(1, Ordering::SeqCst);
+            let pending = self.pending_output_bytes.load(Ordering::SeqCst);
+            Ok(AsyncTerminalOutputWriteReport {
+                bytes_written: pending.min(1),
+                completed: false,
+                pending_bytes: pending,
+            })
+        })
+    }
+}
+
 /// Attached-terminal fake that writes output in bounded chunks while still
 /// allowing input readiness to be observed between incomplete frame flushes.
 #[derive(Debug)]
@@ -549,19 +649,6 @@ impl SlowOutputAttachedTerminalLoopIo {
             input_batches,
             write_limit,
             pending_output_bytes: 0,
-            completed_frames: 0,
-            partial_writes: 0,
-            bytes_written: 0,
-        }
-    }
-
-    /// Creates a slow output fake that already has a started frame pending.
-    fn with_pending(pending_output_bytes: usize, write_limit: usize) -> Self {
-        Self {
-            readiness_batches: Vec::new(),
-            input_batches: Vec::new(),
-            write_limit,
-            pending_output_bytes,
             completed_frames: 0,
             partial_writes: 0,
             bytes_written: 0,
@@ -2346,18 +2433,24 @@ async fn async_client_output_flush_service_writes_styled_flush_effects() {
     assert_eq!(exit.metrics.runtime_side_effects_drained, 2);
 }
 
-/// Verifies that the client output worker finishes a started partial frame
-/// before draining newer flush effects. Slow terminal transports can return
-/// from a bounded write with bytes still pending, and replacing that frame with
-/// newer output would corrupt the terminal byte stream.
+/// Verifies that the client output worker prefers a newer frame over stale
+/// pending output.
+///
+/// Slow terminal transports can return from a bounded write with bytes still
+/// pending. If a newer frame is already queued, the worker should materialize
+/// the latest state instead of spending bandwidth on obsolete frame bytes.
 #[tokio::test(flavor = "current_thread")]
-async fn async_client_output_flush_service_finishes_pending_output_before_new_frames() {
+async fn async_client_output_flush_service_prefers_new_frame_over_stale_pending_output() {
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+    let pending_output_bytes = StdArc::new(AtomicUsize::new(256));
+    let stale_flushes = StdArc::new(AtomicUsize::new(0));
 
     let client = async {
         handle
@@ -2369,7 +2462,12 @@ async fn async_client_output_flush_service_finishes_pending_output_before_new_fr
             }])
             .await
             .unwrap();
-        let mut io = SlowOutputAttachedTerminalLoopIo::with_pending(256, 64);
+        let mut io = SupersedablePendingOutputIo::new(
+            write_count.clone(),
+            write_notify,
+            pending_output_bytes.clone(),
+            stale_flushes.clone(),
+        );
 
         let report = run_async_client_output_flush_service(
             &handle,
@@ -2386,20 +2484,21 @@ async fn async_client_output_flush_service_finishes_pending_output_before_new_fr
         .unwrap();
 
         assert_eq!(report.polls, 1);
-        assert_eq!(report.drained, 0);
-        assert_eq!(report.flushed, 0);
-        assert_eq!(report.partial_writes, 1);
-        assert_eq!(report.bytes_written, 64);
-        assert_eq!(report.pending_output_bytes, 192);
-        assert_eq!(io.completed_frames, 0);
-        assert_eq!(io.partial_writes, 1);
+        assert_eq!(report.drained, 1);
+        assert_eq!(report.flushed, 1);
+        assert_eq!(report.partial_writes, 0);
+        assert!(report.bytes_written > 0);
+        assert_eq!(report.pending_output_bytes, 0);
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+        assert_eq!(stale_flushes.load(Ordering::SeqCst), 0);
+        assert_eq!(pending_output_bytes.load(Ordering::SeqCst), 0);
         assert_eq!(
             handle
                 .drain_client_output_flush_side_effects(Some(primary), 8)
                 .await
                 .unwrap()
                 .len(),
-            1
+            0
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),
@@ -11430,6 +11529,108 @@ async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations
             .unwrap();
         assert_eq!(report.batches, 2);
         assert_eq!(report.loop_report.output_frames, 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 7);
+}
+
+/// Verifies that a newer rate-limited render supersedes stale pending output.
+///
+/// Slow clients can leave bytes from an older frame pending. During rapid pane
+/// output, the attached client should wait for the next render tick and write
+/// the latest frame instead of streaming obsolete pending bytes immediately.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_service_does_not_flush_stale_pending_output_before_render_tick() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+    let pending_output_bytes = StdArc::new(AtomicUsize::new(0));
+    let stale_flushes = StdArc::new(AtomicUsize::new(0));
+
+    let client = async {
+        let service_handle = handle.clone();
+        let service_primary = primary.clone();
+        let service_write_count = write_count.clone();
+        let service_write_notify = write_notify.clone();
+        let service_pending_output_bytes = pending_output_bytes.clone();
+        let service_stale_flushes = stale_flushes.clone();
+        let service_task = tokio::spawn(async move {
+            let mut io = SupersedablePendingOutputIo::new(
+                service_write_count,
+                service_write_notify,
+                service_pending_output_bytes,
+                service_stale_flushes,
+            );
+            run_async_attached_terminal_client_service(
+                &service_handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Primary,
+                    client_id: service_primary.clone(),
+                    primary_client_id: Some(service_primary),
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
+                },
+                AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+                |_| Ok(None),
+            )
+            .await
+        });
+
+        write_notify.notified().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+        pending_output_bytes.store(1024, Ordering::SeqCst);
+
+        for _ in 0..3 {
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                    client_id: primary.clone(),
+                    reason: RenderInvalidationReason::PaneOutput,
+                }])
+                .await
+                .unwrap();
+        }
+
+        tokio::task::yield_now().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+        assert_eq!(stale_flushes.load(Ordering::SeqCst), 0);
+
+        tokio::time::advance(Duration::from_millis(199)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+        assert_eq!(stale_flushes.load(Ordering::SeqCst), 0);
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        for _ in 0..8 {
+            if write_count.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(write_count.load(Ordering::SeqCst), 2);
+        assert_eq!(stale_flushes.load(Ordering::SeqCst), 0);
+        assert_eq!(pending_output_bytes.load(Ordering::SeqCst), 0);
+
+        let report = tokio::time::timeout(Duration::from_millis(1), service_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.batches, 2);
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running

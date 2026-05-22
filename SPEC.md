@@ -2296,8 +2296,10 @@ foreground clients SHOULD coalesce bursty render invalidations so ordinary
 output rendering is emitted no more frequently than the configured frame rate
 per client, while still delivering one trailing frame after a burst. A value of
 0 MUST disable render rate limiting. Initial attach frames, terminal cleanup,
-pending partial-output flushes, and user-input handling MUST NOT be delayed by
-this limit.
+unsuperseded pending partial-output flushes, and user-input handling MUST NOT
+be delayed by this limit. When a newer render is waiting behind the rate gate,
+stale pending bytes from an older incomplete frame SHOULD be superseded by the
+newer frame rather than flushed eagerly.
 
 Implementations MAY accept `terminal.nested_muxxer` as a migration alias for
 `terminal.nested_multiplexer`. When accepted, the alias MUST be normalized to

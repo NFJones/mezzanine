@@ -894,26 +894,26 @@ where
         }
 
         report.polls = report.polls.saturating_add(1);
-        if io.pending_output_bytes() > 0 {
-            let write_report = io
-                .flush_pending_output(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES)
-                .await?;
-            report.bytes_written = report
-                .bytes_written
-                .saturating_add(write_report.bytes_written);
-            report.pending_output_bytes = write_report.pending_bytes;
-            if write_report.is_partial() {
-                report.partial_writes = report.partial_writes.saturating_add(1);
-                return Ok(report);
-            }
-            if write_report.bytes_written > 0 {
-                report.flushed = report.flushed.saturating_add(1);
-            }
-        }
         let effects = handle
             .drain_client_output_flush_side_effects(Some(client_id.clone()), config.drain_limit)
             .await?;
         if effects.is_empty() {
+            if io.pending_output_bytes() > 0 {
+                let write_report = io
+                    .flush_pending_output(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES)
+                    .await?;
+                report.bytes_written = report
+                    .bytes_written
+                    .saturating_add(write_report.bytes_written);
+                report.pending_output_bytes = write_report.pending_bytes;
+                if write_report.is_partial() {
+                    report.partial_writes = report.partial_writes.saturating_add(1);
+                    return Ok(report);
+                }
+                if write_report.bytes_written > 0 {
+                    report.flushed = report.flushed.saturating_add(1);
+                }
+            }
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
