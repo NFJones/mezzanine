@@ -8601,7 +8601,8 @@ fn runtime_applies_default_prefix_mux_actions() {
         )
         .unwrap();
     assert_eq!(cycle_report.mux_actions_applied, 1);
-    assert!(cycle_report.full_redraw_required);
+    assert!(cycle_report.view_refresh_required);
+    assert!(!cycle_report.full_redraw_required);
     assert_ne!(
         service.session().active_window().unwrap().active_pane().id,
         active_before
@@ -8690,14 +8691,14 @@ fn runtime_attached_split_mux_action_focuses_new_pane() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
-/// Verifies keyboard pane-focus actions require a full attached-frame redraw.
+/// Verifies keyboard pane-focus actions use a diff redraw.
 ///
 /// Focus changes move the global terminal cursor and restyle pane ownership
-/// surfaces even when pane text stays unchanged. Reporting only a light view
-/// refresh can leave the attached client diffing against stale cursor/frame
-/// state, which makes pane navigation appear to need repeated key presses.
+/// surfaces even when pane text stays unchanged. They need a fresh view, but
+/// they should keep the retained output frame so the attached renderer can
+/// update only changed rows and cursor state instead of clearing the viewport.
 #[test]
-fn runtime_keyboard_focus_pane_requests_full_redraw() {
+fn runtime_keyboard_focus_pane_requests_diff_redraw() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -8728,7 +8729,7 @@ fn runtime_keyboard_focus_pane_requests_full_redraw() {
         .unwrap();
 
     assert!(report.view_refresh_required);
-    assert!(report.full_redraw_required);
+    assert!(!report.full_redraw_required);
     assert_eq!(
         service.session().windows()[0].active_pane().id.as_str(),
         "%2"
@@ -8777,7 +8778,7 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
         .unwrap();
 
     assert!(report.view_refresh_required);
-    assert!(report.full_redraw_required);
+    assert!(!report.full_redraw_required);
     assert_eq!(
         service.session().windows()[0].active_pane().id.as_str(),
         "%2"

@@ -3851,11 +3851,6 @@ impl RuntimeSessionService {
                 | MuxAction::NewGroup
                 | MuxAction::SplitPaneVertical
                 | MuxAction::SplitPaneHorizontal
-                | MuxAction::FocusWindow(_)
-                | MuxAction::FocusGroup(_)
-                | MuxAction::FocusPane(_)
-                | MuxAction::CyclePane
-                | MuxAction::FocusLastPane
                 | MuxAction::TogglePaneZoom
                 | MuxAction::CycleLayouts
                 | MuxAction::KillPaneAfterConfirmation
@@ -3883,10 +3878,7 @@ impl RuntimeSessionService {
     fn mouse_action_requires_full_redraw(action: MouseAction) -> bool {
         matches!(
             action,
-            MouseAction::FocusPane(_)
-                | MouseAction::FocusPaneOnly(_)
-                | MouseAction::ResizePane { .. }
-                | MouseAction::ReleaseWindowAction { .. }
+            MouseAction::ResizePane { .. } | MouseAction::ReleaseWindowAction { .. }
         )
     }
 
