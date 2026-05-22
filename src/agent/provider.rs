@@ -2865,7 +2865,7 @@ fn maap_action_batch_schema(
             "rationale": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Very terse model-authored rationale for this complete action batch. Mezzanine renders this once as a thinking log before the listed actions. Write it as an additive delta: only the new reason these actions are next, not a restatement of the user request, global goal, previous rationale, loaded context, or action summaries. Use this instead of a progress say when the text only announces, justifies, or narrates executable actions in the same batch. If the response includes executable actions, the usual output should be a short rationale plus actions with no progress say unless the user needs an independent visible status or blocker."
+                "description": "Very terse model-authored rationale for this complete action batch. Mezzanine renders this once as a thinking log before the listed actions. Write it as an additive delta: only the new reason these actions are next, not a restatement of the user request, global goal, previous rationale, loaded context, or action summaries. Use this instead of a progress say when the text only announces, justifies, or narrates executable actions in the same batch. If the response includes executable actions, the usual output should be a short rationale plus actions with no progress say. A progress say is appropriate only for an independent visible status: significant evidence learned, a direction chosen from that evidence, a blocker, or a coherent phase transition."
             },
             "actions": {
                 "type": "array",
@@ -3006,7 +3006,7 @@ fn maap_say_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": ["progress", "final", "blocked"],
-                    "description": "Required terminal intent. Use progress only for nonterminal updates when the turn should continue and the message is useful independently of action logs. Progress is for already-observed progress, concrete blockers, or user-requested narration; do not use it for future-tense plans, intended-work checklists, or headings such as Plan:, Steps:, Next:, Executed:, or Evidence: when executable actions are requested in the same response. Do not use progress just to announce or justify executable actions in the same batch. Use final when the user goal is complete, and blocked when user input or an external condition is required before progress can continue. Do not pair final or blocked say actions with executable actions; wait for results first."
+                    "description": "Required terminal intent. Use progress only for nonterminal updates when the turn should continue and the message is useful independently of action logs. Progress is for already-observed progress, significant evidence that changes the working theory, an evidence-backed direction choice, concrete blockers, coherent phase transitions, or user-requested narration; do not use it for future-tense plans, intended-work checklists, or headings such as Plan:, Steps:, Next:, Executed:, or Evidence: when executable actions are requested in the same response. Do not use progress just to announce or justify executable actions in the same batch. Use final when the user goal is complete, and blocked when user input or an external condition is required before progress can continue. Do not pair final or blocked say actions with executable actions; wait for results first."
                 }),
             ),
             (
@@ -3022,7 +3022,7 @@ fn maap_say_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "minLength": 1,
-                    "description": "Non-empty conversational text for the user. Content in say is display-only: shell commands and Mezzanine patch blocks here do not execute. Use shell_command when terminal work should be executed and apply_patch for executable *** Begin Patch blocks. Only include commands or patches here when the user explicitly asked to see examples or text. Do not use say to duplicate the batch rationale or action summaries, and do not format ordinary progress or final text with Plan:, Executed:, or Evidence: headings unless the user explicitly requested that report format. For markdown content, this remains the raw markdown copied to buffers and clipboards."
+                    "description": "Non-empty conversational text for the user. Content in say is display-only: shell commands and Mezzanine patch blocks here do not execute. Use shell_command when terminal work should be executed and apply_patch for executable *** Begin Patch blocks. Only include commands or patches here when the user explicitly asked to see examples or text. Do not use say to duplicate the batch rationale or action summaries. When using progress for a substantive checkpoint, write 1-3 compact sentences naming the important fact, supported decision, and next direction. Do not format ordinary progress or final text with Plan:, Executed:, or Evidence: headings unless the user explicitly requested that report format. For markdown content, this remains the raw markdown copied to buffers and clipboards."
                 }),
             ),
         ],

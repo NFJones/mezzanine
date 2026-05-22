@@ -3994,6 +3994,11 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Make each rationale additive to recent thinking lines"));
     assert!(prompt.contains("say only what is newly decisive about this batch"));
     assert!(prompt.contains("use it instead of progress say"));
+    assert!(prompt.contains("A progress say is useful at substantive checkpoints"));
+    assert!(prompt.contains("learning a fact that changes the working theory"));
+    assert!(prompt.contains("choosing a direction from real evidence"));
+    assert!(prompt.contains("1-3 compact sentences"));
+    assert!(prompt.contains("Do not emit such checkpoints for every action batch"));
     assert!(prompt.contains("Progress say is for already-observed progress"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
     assert!(prompt.contains("headings such as Plan:, Steps:, Next:, Executed:, or Evidence:"));
@@ -4002,6 +4007,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     ));
     assert!(prompt.contains("If executable actions are in the same response"));
     assert!(prompt.contains("normally omit progress say"));
+    assert!(prompt.contains("Include progress say with executable actions only"));
+    assert!(prompt.contains("substantive checkpoint"));
     assert!(!prompt.contains("For multiphase implementation plans"));
     assert!(!prompt.contains("short checkbox list before implementation starts"));
     assert!(prompt.contains("For final summaries after code work"));
@@ -9066,7 +9073,15 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("rationale plus actions with no progress say"),
+        rationale_description.contains("short rationale plus actions with no progress say"),
+        "{rationale_description}"
+    );
+    assert!(
+        rationale_description.contains("significant evidence learned"),
+        "{rationale_description}"
+    );
+    assert!(
+        rationale_description.contains("direction chosen from that evidence"),
         "{rationale_description}"
     );
     assert_eq!(
@@ -9129,6 +9144,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert!(say_status_description.contains("useful independently of action logs"));
     assert!(say_status_description.contains("already-observed progress"));
+    assert!(say_status_description.contains("significant evidence"));
+    assert!(say_status_description.contains("evidence-backed direction choice"));
+    assert!(say_status_description.contains("coherent phase transitions"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(
@@ -9139,8 +9157,11 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .as_str()
         .unwrap();
     assert!(say_text_description.contains("Content in say is display-only"));
+    assert!(say_text_description.contains("substantive checkpoint"));
+    assert!(say_text_description.contains("1-3 compact sentences"));
+    assert!(say_text_description.contains("important fact"));
     assert!(
-        say_text_description.contains("do not format ordinary progress or final text with Plan:"),
+        say_text_description.contains("Do not format ordinary progress or final text with Plan:"),
         "{say_text_description}"
     );
     assert_eq!(
