@@ -7603,6 +7603,85 @@ fn runtime_copy_mode_command_preserves_live_viewport_height() {
     assert_eq!(visible, vec!["one", "two", "three", "four"]);
 }
 
+/// Verifies copy-mode key navigation marks the attached view dirty without
+/// invalidating the retained terminal frame. Copy-mode scrolling only changes
+/// pane content and cursor placement, so it should use the diff renderer rather
+/// than clearing the whole attached terminal.
+#[test]
+fn runtime_copy_mode_key_navigation_requests_diff_refresh() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.window_frames_enabled = false;
+    service.pane_frames_enabled = false;
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
+    screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix");
+    service.pane_screens.insert(pane_id.clone(), screen);
+    service.ensure_active_copy_mode(&pane_id).unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleCopyMode(
+                    crate::terminal::CopyModeKeyAction::PageUp,
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert!(!report.full_redraw_required);
+    assert!(service.active_copy_modes.contains_key(&pane_id));
+}
+
+/// Verifies mouse-wheel history scrolling updates the pane through a diff
+/// refresh. Scrollback movement changes the copy-mode viewport but not the
+/// terminal geometry, so preserving the retained output frame avoids visible
+/// flicker over slower terminal links.
+#[test]
+fn runtime_mouse_history_scroll_requests_diff_refresh() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.window_frames_enabled = false;
+    service.pane_frames_enabled = false;
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
+    screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix");
+    service.pane_screens.insert(pane_id.clone(), screen);
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::ScrollHistory {
+                        lines: -3,
+                        position: CopyPosition { line: 1, column: 1 },
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert!(!report.full_redraw_required);
+    assert!(service.active_copy_modes.contains_key(&pane_id));
+    assert!(service.scrollback_copy_mode_panes.contains(&pane_id));
+}
+
 /// Verifies that pane split actions which cannot fit inside the active window
 /// become transient status-line errors instead of escaping as runtime errors.
 /// The failing action must be consumed with no partial pane/process side

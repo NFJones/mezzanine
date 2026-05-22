@@ -2481,6 +2481,35 @@ fn attached_terminal_output_update_uses_changed_ascii_span_when_safe() {
     assert!(!rendered.contains("aaaabaaaaa"), "{rendered:?}");
 }
 
+/// Verifies multi-row viewport changes rewrite whole changed rows instead of
+/// issuing one tiny span update per row. Scrollback and copy-mode paging often
+/// change most visible rows at once; full-row diff updates keep each rendered
+/// row self-contained without falling back to a full-screen clear.
+#[test]
+fn attached_terminal_output_update_rewrites_full_rows_for_multi_row_changes() {
+    let previous_lines = vec!["row 001".to_string(), "row 002".to_string()];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &[]);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &["row 101".to_string(), "row 102".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1Hrow 101"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[2;1Hrow 102"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[1;5H1"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[2;5H1"), "{rendered:?}");
+}
+
 /// Verifies that non-ASCII row changes keep the full-row rewrite path. Wide
 /// glyph byte offsets and display columns do not have a one-to-one mapping, so
 /// bounded span updates must avoid those rows rather than risking cursor

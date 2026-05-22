@@ -1064,6 +1064,24 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             modes.bracketed_paste,
         ));
     }
+    let changed_row_count = lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| {
+            let previous_line = previous.lines.get(*index).map(String::as_str).unwrap_or("");
+            let previous_spans = previous
+                .line_style_spans
+                .get(*index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let spans = line_style_spans
+                .get(*index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            line.as_str() != previous_line || spans != previous_spans
+        })
+        .count();
+    let use_single_span_updates = changed_row_count <= 1;
     let mut changed_rows = 0usize;
     let mut cursor_hidden_for_row_updates = false;
     for (index, line) in lines.iter().enumerate() {
@@ -1085,8 +1103,9 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             cursor_hidden_for_row_updates = true;
         }
         let row = index.saturating_add(1);
-        if let Some(span_update) =
-            encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
+        if use_single_span_updates
+            && let Some(span_update) =
+                encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
         {
             frame.extend_from_slice(&span_update);
         } else {

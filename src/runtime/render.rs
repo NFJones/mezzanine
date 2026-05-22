@@ -3833,7 +3833,9 @@ impl RuntimeSessionService {
                 }
                 TerminalClientLoopAction::HandleCopyMode(action) => {
                     match self.apply_attached_copy_mode_action(*action) {
-                        Ok(true) => {}
+                        Ok(true) => {
+                            report.view_refresh_required = true;
+                        }
                         Ok(false) => {
                             report
                                 .unsupported_actions
