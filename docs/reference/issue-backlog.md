@@ -12,7 +12,8 @@ No implementation plan is currently active.
   the active row renders with a right-pointing triangle while other
   selectable rows keep an unmarked gutter, leaving the selected link obvious
   without adding background styling while link text stays bold, underlined,
-  and theme-colored.
+  theme-colored, and fully styled through the final link character when the
+  row is active.
 - Pager view links now preserve their rendered bold, underlined,
   theme-colored markdown styling without background treatment, including
   `/list-sessions` command overlay selections.

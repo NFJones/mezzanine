@@ -1352,6 +1352,115 @@ fn runtime_display_overlay_selection_rendition(
     }
     rendition
 }
+/// Returns the shifted, clipped markdown/body spans for one overlay line.
+fn runtime_display_overlay_body_style_spans(
+    overlay: &RuntimeDisplayOverlay,
+    line_index: usize,
+    max_columns: usize,
+) -> Vec<TerminalStyleSpan> {
+    let prefix_columns = usize::from(runtime_display_overlay_line_has_selection(
+        overlay, line_index,
+    )) * 2;
+    let visible_columns = max_columns.saturating_sub(prefix_columns);
+    overlay
+        .line_style_spans
+        .get(line_index)
+        .into_iter()
+        .flatten()
+        .filter_map(|span| clipped_overlay_style_span(*span, prefix_columns, visible_columns))
+        .collect()
+}
+/// Appends one selection rendition only where later body spans do not apply.
+fn append_uncovered_overlay_selection_span(
+    spans: &mut Vec<TerminalStyleSpan>,
+    selection_start: usize,
+    selection_length: usize,
+    rendition: GraphicRendition,
+    occupied_spans: &[TerminalStyleSpan],
+) {
+    let selection_end = selection_start.saturating_add(selection_length);
+    if selection_start >= selection_end {
+        return;
+    }
+    let mut occupied_ranges: Vec<(usize, usize)> = occupied_spans
+        .iter()
+        .filter_map(|span| {
+            let span_start = span.start.max(selection_start);
+            let span_end = span.start.saturating_add(span.length).min(selection_end);
+            (span_start < span_end).then_some((span_start, span_end))
+        })
+        .collect();
+    occupied_ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut cursor = selection_start;
+    for (occupied_start, occupied_end) in occupied_ranges {
+        if cursor < occupied_start {
+            push_or_extend_style_span(
+                spans,
+                TerminalStyleSpan {
+                    start: cursor,
+                    length: occupied_start.saturating_sub(cursor),
+                    rendition,
+                },
+            );
+        }
+        cursor = cursor.max(occupied_end);
+        if cursor >= selection_end {
+            return;
+        }
+    }
+    push_or_extend_style_span(
+        spans,
+        TerminalStyleSpan {
+            start: cursor,
+            length: selection_end.saturating_sub(cursor),
+            rendition,
+        },
+    );
+}
+/// Returns the fully composed style spans for one rendered overlay line.
+fn runtime_display_overlay_rendered_line_style_spans(
+    overlay: &RuntimeDisplayOverlay,
+    line_index: usize,
+    max_columns: usize,
+    ui_theme: &UiTheme,
+) -> Vec<TerminalStyleSpan> {
+    let body_spans = runtime_display_overlay_body_style_spans(overlay, line_index, max_columns);
+    let mut spans = Vec::new();
+    for (selection_index, selection) in overlay.selections.iter().enumerate() {
+        if selection.line_index != line_index {
+            continue;
+        }
+        let active = overlay.active_selection_index == Some(selection_index);
+        let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
+        if start < max_columns && selection.width > 0 {
+            append_uncovered_overlay_selection_span(
+                &mut spans,
+                start,
+                selection.width.min(max_columns.saturating_sub(start)),
+                runtime_display_overlay_selection_rendition(ui_theme, selection.kind, active),
+                &body_spans,
+            );
+        }
+        if active {
+            push_or_extend_style_span(
+                &mut spans,
+                TerminalStyleSpan {
+                    start: 0,
+                    length: 1,
+                    rendition: runtime_display_overlay_selection_rendition(
+                        ui_theme,
+                        selection.kind,
+                        true,
+                    ),
+                },
+            );
+        }
+    }
+    for span in body_spans {
+        push_or_extend_style_span(&mut spans, span);
+    }
+    spans
+}
 
 /// Computes terminal placement for a pane agent model/reasoning selector.
 fn runtime_pane_agent_status_selector_layout(
@@ -7430,22 +7539,14 @@ impl RuntimeSessionService {
         {
             let offset = line_index.saturating_sub(overlay.scroll_offset);
             let row = offset.saturating_add(1);
-            let prefix_columns = usize::from(runtime_display_overlay_line_has_selection(
-                overlay, line_index,
-            )) * 2;
-            let visible_columns = max_columns.saturating_sub(prefix_columns);
             let Some(spans) = view.line_style_spans.get_mut(row) else {
                 continue;
             };
-            spans.extend(
-                overlay
-                    .line_style_spans
-                    .get(line_index)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|span| {
-                        clipped_overlay_style_span(*span, prefix_columns, visible_columns)
-                    }),
+            *spans = runtime_display_overlay_rendered_line_style_spans(
+                overlay,
+                line_index,
+                max_columns,
+                &self.ui_theme,
             );
         }
         view.cursor_visible = false;
@@ -10144,10 +10245,12 @@ mod tests {
         AgentRenderedLine, agent_action_result_uses_diff_preview,
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
         readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
-        render_command_markdown_body_lines, runtime_agent_shell_markdown_overlay_content,
-        runtime_command_display_overlay_content, runtime_display_overlay_rendered_selection_start,
-        runtime_human_readable_display_lines, wrap_agent_rendered_line_to_width,
-        wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
+        render_command_markdown_body_lines, rendered_line_rendition_at,
+        runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
+        runtime_display_overlay_rendered_line_style_spans,
+        runtime_display_overlay_rendered_selection_start, runtime_human_readable_display_lines,
+        wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
+        wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
     use crate::runtime::types::RuntimeDisplayOverlay;
@@ -10672,6 +10775,56 @@ mod tests {
                 }),
             "{content:?}"
         );
+    }
+    /// Verifies an active pager link keeps link styling on every rendered cell.
+    ///
+    /// Selected command-overlay links layer selector and markdown spans on the
+    /// same columns. The final rendered row must preserve the markdown link
+    /// rendition through the last link character instead of letting the
+    /// fallback selection span leak onto the tail cell.
+    #[test]
+    fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("list-sessions".to_string()),
+            "- [`saved`](mez-agent:%2Fresume%20saved)",
+            &ui_theme,
+        );
+        let overlay = RuntimeDisplayOverlay {
+            lines: content.lines.clone(),
+            line_style_spans: content.line_style_spans.clone(),
+            scroll_offset: 0,
+            selections: content.selections.clone(),
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+        };
+        let selection = &overlay.selections[0];
+        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        for column in start..start.saturating_add(selection.width) {
+            let rendition = rendered_line_rendition_at(&spans, column);
+            assert!(
+                rendition.bold,
+                "column {column} lost bold styling: {spans:?}"
+            );
+            assert!(
+                rendition.underline,
+                "column {column} lost underline styling: {spans:?}"
+            );
+            assert!(
+                !rendition.inverse,
+                "column {column} became inverse: {spans:?}"
+            );
+            assert!(
+                rendition.background.is_none(),
+                "column {column} gained background styling: {spans:?}"
+            );
+            assert_eq!(
+                rendition.foreground,
+                Some(ui_theme.colors.agent_transcript_command.foreground),
+                "column {column} lost link foreground: {spans:?}"
+            );
+        }
     }
 
     /// Verifies `/list-sessions` only linkifies the first visible occurrence of
