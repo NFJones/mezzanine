@@ -67,7 +67,7 @@ subsystem modules rather than expanding `src/main.rs`.
 - Commit messages in history are short, imperative, sentence case, and often end with a period (e.g., “Update pyo3 to latest release and fix compilation issues.”). Keep new commits consistent.
 - PRs should include a clear summary, test commands/results, and any config changes. Add docs updates in `README.md` or `SPEC.md` when behavior changes.
 - When adding new behaviors, ensure that they do not violate the requirements in `SPEC.md`.
-- Always commit your changes at the end of a turn. Never skip this.
+- Always commit your changes at the end of a turn with a long-form informative message. Never skip this.
 
 ## Security & Configuration Tips
 - Do not commit secrets in config files. Use `docs/examples/config.toml` as the baseline and override locally.
