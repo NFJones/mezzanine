@@ -19,6 +19,7 @@ use super::{
     run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
 use crate::agent::AsyncModelProvider;
+use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
 use crate::ids::AgentId;
 use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
@@ -203,9 +204,16 @@ where
         )
         .await?;
         render_requested = false;
-        let AttachedTerminalBatchWake::Readiness(mut readiness) = wake else {
+        let AttachedTerminalBatchWake::Readiness {
+            mut readiness,
+            invalidate_output_frame,
+        } = wake
+        else {
             continue;
         };
+        if invalidate_output_frame {
+            io.invalidate_output_frame().await?;
+        }
 
         let mut resized_this_batch = false;
         if let Some(size) = io.terminal_size().await?
@@ -223,6 +231,9 @@ where
             resized_this_batch = true;
         }
         if resized_this_batch {
+            if !invalidate_output_frame {
+                io.invalidate_output_frame().await?;
+            }
             ensure_output_readiness(&mut readiness);
         }
 
@@ -362,6 +373,11 @@ impl AttachedTerminalRenderRateLimiter {
         self.pending_render = true;
     }
 
+    /// Clears a queued render invalidation after an immediate render is chosen.
+    fn clear_pending(&mut self) {
+        self.pending_render = false;
+    }
+
     /// Records a completed frame flush.
     fn mark_flushed(&mut self) {
         self.last_flush_at = Some(Instant::now());
@@ -419,7 +435,12 @@ enum AttachedTerminalBatchWake {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    Readiness(Vec<AttachedTerminalFdReadiness>),
+    Readiness {
+        /// File-descriptor readiness that should drive the next client batch.
+        readiness: Vec<AttachedTerminalFdReadiness>,
+        /// Whether retained differential output must be discarded first.
+        invalidate_output_frame: bool,
+    },
     /// Represents the State Changed case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -444,17 +465,20 @@ where
     I: AsyncAttachedTerminalIo,
 {
     if render_requested {
-        return Ok(AttachedTerminalBatchWake::Readiness(vec![
-            synthetic_output_readiness(),
-        ]));
+        return Ok(AttachedTerminalBatchWake::Readiness {
+            readiness: vec![synthetic_output_readiness()],
+            invalidate_output_frame: false,
+        });
     }
 
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     loop {
-        if drain_render_request_for_client(handle, client_id, render_limiter).await? {
-            return Ok(AttachedTerminalBatchWake::Readiness(vec![
-                synthetic_output_readiness(),
-            ]));
+        let render = drain_render_request_for_client(handle, client_id, render_limiter).await?;
+        if render.ready {
+            return Ok(AttachedTerminalBatchWake::Readiness {
+                readiness: vec![synthetic_output_readiness()],
+                invalidate_output_frame: render.invalidate_output_frame,
+            });
         }
         if let Some(render_delay) = render_limiter.pending_render_delay() {
             tokio::select! {
@@ -464,15 +488,40 @@ where
                     if readiness.iter().any(attached_terminal_readiness_is_readable_input_or_control) {
                         ensure_output_readiness(&mut readiness);
                     }
-                    return Ok(AttachedTerminalBatchWake::Readiness(readiness));
+                    return Ok(AttachedTerminalBatchWake::Readiness {
+                        readiness,
+                        invalidate_output_frame: false,
+                    });
                 }
                 result = lifecycle_watcher.changed() => {
                     let _ = result;
                     return Ok(AttachedTerminalBatchWake::StateChanged);
                 }
+                _ = handle.wait_for_event_delivery() => {
+                    let render = drain_render_request_for_client(handle, client_id, render_limiter).await?;
+                    if render.ready {
+                        return Ok(AttachedTerminalBatchWake::Readiness {
+                            readiness: vec![synthetic_output_readiness()],
+                            invalidate_output_frame: render.invalidate_output_frame,
+                        });
+                    }
+                }
+                result = side_effect_watcher.changed() => {
+                    let _ = result;
+                    let render = drain_render_request_for_client(handle, client_id, render_limiter).await?;
+                    if render.ready {
+                        return Ok(AttachedTerminalBatchWake::Readiness {
+                            readiness: vec![synthetic_output_readiness()],
+                            invalidate_output_frame: render.invalidate_output_frame,
+                        });
+                    }
+                }
                 _ = sleep(render_delay) => {
                     if render_limiter.consume_ready_render() {
-                        return Ok(AttachedTerminalBatchWake::Readiness(vec![synthetic_output_readiness()]));
+                        return Ok(AttachedTerminalBatchWake::Readiness {
+                            readiness: vec![synthetic_output_readiness()],
+                            invalidate_output_frame: false,
+                        });
                     }
                 }
             }
@@ -480,9 +529,10 @@ where
         }
 
         if io.pending_output_bytes() > 0 {
-            return Ok(AttachedTerminalBatchWake::Readiness(
-                io.poll_readiness().await?,
-            ));
+            return Ok(AttachedTerminalBatchWake::Readiness {
+                readiness: io.poll_readiness().await?,
+                invalidate_output_frame: false,
+            });
         }
 
         tokio::select! {
@@ -492,18 +542,29 @@ where
                 if readiness.iter().any(attached_terminal_readiness_is_readable_input_or_control) {
                     ensure_output_readiness(&mut readiness);
                 }
-                return Ok(AttachedTerminalBatchWake::Readiness(readiness));
+                return Ok(AttachedTerminalBatchWake::Readiness {
+                    readiness,
+                    invalidate_output_frame: false,
+                });
             }
             _ = handle.wait_for_event_delivery() => {
-                if drain_render_request_for_client(handle, client_id, render_limiter).await? {
-                    return Ok(AttachedTerminalBatchWake::Readiness(vec![synthetic_output_readiness()]));
+                let render = drain_render_request_for_client(handle, client_id, render_limiter).await?;
+                if render.ready {
+                    return Ok(AttachedTerminalBatchWake::Readiness {
+                        readiness: vec![synthetic_output_readiness()],
+                        invalidate_output_frame: render.invalidate_output_frame,
+                    });
                 }
                 return Ok(AttachedTerminalBatchWake::StateChanged);
             }
             result = side_effect_watcher.changed() => {
                 let _ = result;
-                if drain_render_request_for_client(handle, client_id, render_limiter).await? {
-                    return Ok(AttachedTerminalBatchWake::Readiness(vec![synthetic_output_readiness()]));
+                let render = drain_render_request_for_client(handle, client_id, render_limiter).await?;
+                if render.ready {
+                    return Ok(AttachedTerminalBatchWake::Readiness {
+                        readiness: vec![synthetic_output_readiness()],
+                        invalidate_output_frame: render.invalidate_output_frame,
+                    });
                 }
             }
             result = lifecycle_watcher.changed() => {
@@ -519,14 +580,105 @@ async fn drain_render_request_for_client(
     handle: &AsyncRuntimeSessionHandle,
     client_id: &super::ClientId,
     render_limiter: &mut AttachedTerminalRenderRateLimiter,
-) -> Result<bool> {
+) -> Result<AttachedTerminalRenderDrain> {
     let render_effects = handle
         .drain_render_side_effects_for_client(client_id.clone(), 8)
         .await?;
-    if !render_effects.is_empty() {
-        render_limiter.request_render();
+    let Some(reason) = strongest_render_invalidation_reason(&render_effects) else {
+        return Ok(AttachedTerminalRenderDrain::default());
+    };
+    if render_invalidation_reason_bypasses_rate_limit(reason) {
+        render_limiter.clear_pending();
+        return Ok(AttachedTerminalRenderDrain {
+            ready: true,
+            invalidate_output_frame: render_invalidation_reason_invalidates_frame(reason),
+        });
     }
-    Ok(render_limiter.consume_ready_render())
+    render_limiter.request_render();
+    Ok(AttachedTerminalRenderDrain {
+        ready: render_limiter.consume_ready_render(),
+        invalidate_output_frame: false,
+    })
+}
+
+/// Render invalidation drained for one attached client.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AttachedTerminalRenderDrain {
+    /// Whether the render should run in this batch.
+    ready: bool,
+    /// Whether retained differential output must be discarded first.
+    invalidate_output_frame: bool,
+}
+
+/// Returns the strongest render invalidation reason from drained side effects.
+fn strongest_render_invalidation_reason(
+    effects: &[RuntimeSideEffect],
+) -> Option<RenderInvalidationReason> {
+    effects
+        .iter()
+        .filter_map(render_invalidation_reason)
+        .fold(None, |current, incoming| {
+            Some(match current {
+                Some(current) => strongest_client_render_invalidation_reason(current, incoming),
+                None => incoming,
+            })
+        })
+}
+
+/// Extracts the render invalidation reason from one side effect.
+fn render_invalidation_reason(effect: &RuntimeSideEffect) -> Option<RenderInvalidationReason> {
+    match effect {
+        RuntimeSideEffect::RenderClient { reason, .. } => Some(*reason),
+        _ => None,
+    }
+}
+
+/// Chooses the stronger client render invalidation reason.
+fn strongest_client_render_invalidation_reason(
+    current: RenderInvalidationReason,
+    incoming: RenderInvalidationReason,
+) -> RenderInvalidationReason {
+    if client_render_invalidation_priority(current) >= client_render_invalidation_priority(incoming)
+    {
+        current
+    } else {
+        incoming
+    }
+}
+
+/// Priority used by the attached client when coalescing drained render requests.
+fn client_render_invalidation_priority(reason: RenderInvalidationReason) -> u8 {
+    match reason {
+        RenderInvalidationReason::CursorBlink => 0,
+        RenderInvalidationReason::StatusLine => 1,
+        RenderInvalidationReason::PaneOutput => 2,
+        RenderInvalidationReason::AgentPrompt => 3,
+        RenderInvalidationReason::Overlay => 4,
+        RenderInvalidationReason::Configuration => 5,
+        RenderInvalidationReason::Resize => 6,
+        RenderInvalidationReason::Layout => 7,
+        RenderInvalidationReason::FullRedraw => 8,
+    }
+}
+
+/// Returns whether a render invalidation should bypass the output rate gate.
+fn render_invalidation_reason_bypasses_rate_limit(reason: RenderInvalidationReason) -> bool {
+    matches!(
+        reason,
+        RenderInvalidationReason::Resize
+            | RenderInvalidationReason::Layout
+            | RenderInvalidationReason::FullRedraw
+    )
+}
+
+/// Returns whether a render invalidation invalidates retained output state.
+fn render_invalidation_reason_invalidates_frame(reason: RenderInvalidationReason) -> bool {
+    matches!(
+        reason,
+        RenderInvalidationReason::Resize
+            | RenderInvalidationReason::Layout
+            | RenderInvalidationReason::FullRedraw
+    )
 }
 
 /// Runs the attached terminal readiness is readable input or control operation for this subsystem.

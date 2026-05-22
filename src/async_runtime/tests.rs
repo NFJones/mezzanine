@@ -517,6 +517,83 @@ impl AsyncAttachedTerminalIo for IdleAsyncAttachedTerminalLoopIo {
     }
 }
 
+/// Attached-terminal fake that idles for input while counting output-frame
+/// invalidations.
+#[derive(Debug)]
+struct InvalidatingIdleAsyncAttachedTerminalLoopIo {
+    /// Number of completed foreground frame writes.
+    write_count: StdArc<AtomicUsize>,
+    /// Notification emitted after each completed foreground frame write.
+    write_notify: StdArc<tokio::sync::Notify>,
+    /// Number of times retained differential output state was discarded.
+    invalidate_count: StdArc<AtomicUsize>,
+}
+
+impl InvalidatingIdleAsyncAttachedTerminalLoopIo {
+    /// Creates an idle output-counting fake for attached-terminal service
+    /// tests.
+    fn new(
+        write_count: StdArc<AtomicUsize>,
+        write_notify: StdArc<tokio::sync::Notify>,
+        invalidate_count: StdArc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            write_count,
+            write_notify,
+            invalidate_count,
+        }
+    }
+}
+
+impl AsyncAttachedTerminalIo for InvalidatingIdleAsyncAttachedTerminalLoopIo {
+    /// Parks forever while waiting for ordinary readiness, forcing the service
+    /// to rely on runtime-side-effect wakeups.
+    fn poll_readiness<'a>(
+        &'a mut self,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+        Box::pin(std::future::pending())
+    }
+
+    /// Parks forever while waiting for input readiness, forcing the service to
+    /// rely on runtime-side-effect wakeups.
+    fn poll_input_readiness<'a>(
+        &'a mut self,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+        Box::pin(std::future::pending())
+    }
+
+    /// Parks forever when asked to read input because this fake never reports
+    /// readable input.
+    fn read_input<'a>(
+        &'a mut self,
+        _max_bytes: usize,
+    ) -> super::AsyncTerminalIoFuture<'a, Vec<u8>> {
+        Box::pin(std::future::pending())
+    }
+
+    /// Counts a completed frame write and wakes the test driver.
+    fn write_styled_output_with_modes<'a>(
+        &'a mut self,
+        lines: &'a [String],
+        _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        _modes: AttachedTerminalOutputModes,
+    ) -> super::AsyncTerminalIoFuture<'a, usize> {
+        Box::pin(async move {
+            self.write_count.fetch_add(1, Ordering::SeqCst);
+            self.write_notify.notify_waiters();
+            Ok(lines.iter().map(String::len).sum())
+        })
+    }
+
+    /// Counts a retained-frame invalidation before the next full repaint.
+    fn invalidate_output_frame<'a>(&'a mut self) -> super::AsyncTerminalIoFuture<'a, ()> {
+        Box::pin(async move {
+            self.invalidate_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
 /// Attached-terminal fake with caller-controlled stale pending output.
 #[derive(Debug)]
 struct SupersedablePendingOutputIo {
@@ -11576,6 +11653,101 @@ async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations
     assert!(exit.commands_processed >= 7);
 }
 
+/// Verifies that resize render invalidations interrupt an already pending
+/// ordinary render-rate wait. Slow remote terminals can leave pane-output
+/// refreshes coalesced behind the frame cadence, but a hosting terminal resize
+/// changes the visible geometry and must immediately discard retained diff
+/// state before repainting instead of waiting for the next pane-output tick.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_service_resize_bypasses_pending_render_rate_limit() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+    let invalidate_count = StdArc::new(AtomicUsize::new(0));
+
+    let client = async {
+        let service_handle = handle.clone();
+        let service_primary = primary.clone();
+        let service_write_count = write_count.clone();
+        let service_write_notify = write_notify.clone();
+        let service_invalidate_count = invalidate_count.clone();
+        let service_task = tokio::spawn(async move {
+            let mut io = InvalidatingIdleAsyncAttachedTerminalLoopIo::new(
+                service_write_count,
+                service_write_notify,
+                service_invalidate_count,
+            );
+            run_async_attached_terminal_client_service(
+                &service_handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Primary,
+                    client_id: service_primary.clone(),
+                    primary_client_id: Some(service_primary),
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
+                },
+                AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+                |_| Ok(None),
+            )
+            .await
+        });
+
+        write_notify.notified().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::PaneOutput,
+            }])
+            .await
+            .unwrap();
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_millis(50)).await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::Resize,
+            }])
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_millis(1), write_notify.notified())
+            .await
+            .unwrap();
+        assert_eq!(write_count.load(Ordering::SeqCst), 2);
+        assert_eq!(invalidate_count.load(Ordering::SeqCst), 1);
+
+        let report = tokio::time::timeout(Duration::from_millis(1), service_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.batches, 2);
+        assert_eq!(report.loop_report.output_frames, 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 7);
+}
+
 /// Verifies that a newer rate-limited render supersedes stale pending output.
 ///
 /// Slow clients can leave bytes from an older frame pending. During rapid pane
@@ -11922,10 +12094,10 @@ async fn async_attached_terminal_service_coalesces_resize_storm_timers() {
     assert!(exit.commands_processed >= 13);
 }
 
-/// Verifies that resize handling does not immediately force a full foreground
-/// redraw while resize activity is still arriving. Instead, the attached client
-/// queues an actor-owned resize debounce timer so the timer worker can later
-/// re-enter the actor and trigger a resize render invalidation without a blind
+/// Verifies that resize handling immediately invalidates retained foreground
+/// output state and also queues a resize debounce timer. The immediate
+/// invalidation gives the resized terminal a full refresh right away, while the
+/// actor-owned timer still coalesces follow-up resize work without a blind
 /// compatibility client-loop deadline.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_schedules_resize_debounce_timer() {
@@ -11978,7 +12150,7 @@ async fn async_attached_terminal_service_schedules_resize_debounce_timer() {
         .unwrap();
 
         assert_eq!(report.terminal_resizes, 1);
-        assert_eq!(io.invalidated_output_frames, 0);
+        assert_eq!(io.invalidated_output_frames, 1);
         let timers = handle.drain_timer_side_effects(8).await.unwrap();
         let resize_timer = timers
             .iter()
