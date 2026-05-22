@@ -3716,6 +3716,10 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Treat batch rationales as thinking-line deltas"));
     assert!(prompt.contains("add only the new reason for the next action batch"));
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
+    assert!(prompt.contains("prior say"));
+    assert!(prompt.contains("compare it to recent thinking lines, action results"));
+    assert!(prompt.contains("omit optional action rationales"));
+    assert!(prompt.contains("omit progress say"));
     assert!(prompt.contains("Prefer a short clause"));
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
@@ -3728,12 +3732,13 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Durable learned facts or decisions"));
     assert!(prompt.contains("still belong in checkpoint progress say"));
     assert!(prompt.contains("Before every non-final action batch"));
-    assert!(prompt.contains("A checkpoint exists when"));
+    assert!(prompt.contains("A substantial checkpoint exists when"));
     assert!(prompt.contains("include exactly one progress say in the batch"));
     assert!(prompt.contains("even when executable actions are also present"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
-    assert!(prompt.contains("If no checkpoint exists, omit progress say"));
-    assert!(prompt.contains("Progress say is required at checkpoints"));
+    assert!(prompt.contains("If no substantial checkpoint exists, omit progress say"));
+    assert!(prompt.contains("progress say is not a heartbeat"));
+    assert!(prompt.contains("Progress say is for substantial checkpoints"));
     assert!(prompt.contains("evidence-backed direction choices"));
     assert!(prompt.contains("validation results that determine the next step"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
@@ -3752,7 +3757,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     );
     assert!(prompt.contains("Make each rationale additive to recent thinking lines"));
     assert!(prompt.contains("say only what is newly decisive about this batch"));
-    assert!(prompt.contains("Do not use progress say merely to announce, justify, or narrate"));
+    assert!(prompt.contains(
+        "Do not use progress say merely to announce, justify, narrate executable actions"
+    ));
     assert!(prompt.contains("web_search: search external HTTP(S) web/current information"));
     assert!(prompt.contains("fetch_url: fetch an explicit http:// or https:// URL"));
     assert!(prompt.contains("Use shell_command for local inspection"));
@@ -3902,10 +3909,11 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Do not put shell commands or Mezzanine patch blocks in say"));
     assert!(prompt.contains("Text inside say is display-only"));
     assert!(prompt.contains("useful independently of the action logs"));
-    assert!(prompt.contains("Progress say is required at checkpoints"));
+    assert!(prompt.contains("Progress say is for substantial checkpoints"));
     assert!(prompt.contains("evidence-backed direction choices"));
     assert!(prompt.contains("validation results that determine the next step"));
     assert!(prompt.contains("Do not use progress say merely to announce"));
+    assert!(prompt.contains("repeat recent thinking/action-result context"));
     assert!(prompt.contains("action-specific intent in summaries"));
     assert!(prompt.contains("shell_command: exact pane shell input"));
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
@@ -4009,6 +4017,10 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Treat batch rationales as thinking-line deltas"));
     assert!(prompt.contains("add only the new reason for the next action batch"));
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
+    assert!(prompt.contains("prior say"));
+    assert!(prompt.contains("compare it to recent thinking lines, action results"));
+    assert!(prompt.contains("omit optional action rationales"));
+    assert!(prompt.contains("omit progress say"));
     assert!(prompt.contains("Prefer a short clause"));
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
@@ -4026,13 +4038,14 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Durable learned facts or decisions"));
     assert!(prompt.contains("still belong in checkpoint progress say"));
     assert!(prompt.contains("Before every non-final action batch"));
-    assert!(prompt.contains("A checkpoint exists when"));
+    assert!(prompt.contains("A substantial checkpoint exists when"));
     assert!(prompt.contains("learned a non-obvious fact that changes the working theory"));
     assert!(prompt.contains("chosen an implementation or report direction from evidence"));
     assert!(prompt.contains("include exactly one progress say in the batch"));
     assert!(prompt.contains("even when executable actions are also present"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
-    assert!(prompt.contains("If no checkpoint exists, omit progress say"));
+    assert!(prompt.contains("If no substantial checkpoint exists, omit progress say"));
+    assert!(prompt.contains("progress say is not a heartbeat"));
     assert!(prompt.contains("1-3 compact sentences"));
     assert!(prompt.contains("Do not emit such checkpoints for every action batch"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
@@ -4041,8 +4054,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
         "Do not format ordinary progress or final text with Plan:, Executed:, or Evidence:"
     ));
     assert!(prompt.contains("omit progress say when it would only announce"));
-    assert!(prompt.contains("Do not omit progress say when it records a checkpoint"));
-    assert!(prompt.contains("A checkpoint progress say is required"));
+    assert!(prompt.contains("repeat recent thinking/action-result context"));
+    assert!(prompt.contains("Do not omit progress say when it records a substantial checkpoint"));
+    assert!(prompt.contains("A checkpoint progress say is required only"));
     assert!(!prompt.contains("For multiphase implementation plans"));
     assert!(!prompt.contains("short checkbox list before implementation starts"));
     assert!(prompt.contains("For final summaries after code work"));
@@ -9102,14 +9116,18 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(rationale_description.contains("only the new reason these actions are next"));
     assert!(rationale_description.contains("not a restatement of the user request"));
     assert!(rationale_description.contains("previous rationale"));
+    assert!(rationale_description.contains("prior say"));
     assert!(
         rationale_description.contains("persists it as future context"),
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("Keep it compact and focused on execution continuity"),
+        rationale_description.contains("Compare against recent thinking lines and action results"),
         "{rationale_description}"
     );
+    assert!(rationale_description.contains("if there is no new user-visible update"));
+    assert!(rationale_description.contains("do not add a progress say"));
+    assert!(rationale_description.contains("Omit optional action rationales"));
     assert!(
         rationale_description.contains("Do not use this as a substitute"),
         "{rationale_description}"
@@ -9185,31 +9203,33 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .as_str()
         .unwrap();
     assert!(say_status_description.contains("useful independently of action logs"));
-    assert!(say_status_description.contains("Progress is required for a checkpoint"));
-    assert!(say_status_description.contains("already-observed progress"));
+    assert!(say_status_description.contains("Progress is for substantial checkpoints"));
     assert!(say_status_description.contains("significant evidence"));
     assert!(say_status_description.contains("evidence-backed direction choice"));
     assert!(say_status_description.contains("coherent phase transitions"));
     assert!(say_status_description.contains("validation results that determine the next step"));
     assert!(say_status_description.contains("future-tense plans"));
+    assert!(say_status_description.contains("routine action continuity"));
     assert!(say_status_description.contains("Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(
         say_status_description.contains("Do not use progress just to announce"),
         "{say_status_description}"
     );
+    assert!(say_status_description.contains("do not emit progress in every action batch"));
     assert!(
         say_status_description
-            .contains("include exactly one progress say when a checkpoint exists"),
+            .contains("Use exactly one progress say when a substantial checkpoint exists"),
         "{say_status_description}"
     );
     let say_text_description = say_schema["properties"]["text"]["description"]
         .as_str()
         .unwrap();
     assert!(say_text_description.contains("Content in say is display-only"));
-    assert!(say_text_description.contains("progress for a checkpoint"));
+    assert!(say_text_description.contains("progress for a substantial checkpoint"));
     assert!(say_text_description.contains("1-3 compact sentences"));
     assert!(say_text_description.contains("important fact"));
     assert!(say_text_description.contains("durable learning or a decision, not intended work"));
+    assert!(say_text_description.contains("If there is no substantial new user-visible update"));
     assert!(
         say_text_description.contains("Do not format ordinary progress or final text with Plan:"),
         "{say_text_description}"
