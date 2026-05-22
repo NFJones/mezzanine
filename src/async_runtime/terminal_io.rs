@@ -784,10 +784,25 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
         modes: AttachedTerminalOutputModes,
     ) -> AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
-            let report = self
-                .write_styled_output_with_modes_bounded(lines, line_style_spans, modes, usize::MAX)
-                .await?;
-            Ok(report.bytes_written)
+            if self.pending_output_frame.is_some() {
+                // A complete frame write supersedes any older retained partial
+                // output. The next encoded frame must stand on its own.
+                self.pending_output_frame = None;
+                self.previous_output_frame = None;
+                self.pending_output_invalidates_next_frame = false;
+            }
+            self.queue_pending_output_frame(lines, line_style_spans, modes);
+            let mut bytes_written = 0usize;
+            while self.pending_output_frame.is_some() {
+                let report = self.flush_pending_output_bounded(usize::MAX).await?;
+                bytes_written = bytes_written.saturating_add(report.bytes_written);
+                if report.is_partial() && report.bytes_written == 0 {
+                    return Err(MezError::invalid_state(
+                        "async attached terminal output write made no progress",
+                    ));
+                }
+            }
+            Ok(bytes_written)
         })
     }
 

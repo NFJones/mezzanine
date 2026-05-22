@@ -18,12 +18,12 @@ use super::{
     AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig,
     AsyncRuntimeMessageConnectionConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor, AsyncRuntimeSessionActor,
-    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalOutputWriteReport, ClientEvent, Duration,
-    PaneEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason,
-    Result, RuntimeEvent, RuntimeEventBatch, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
-    ShutdownEvent, SyncAttachedTerminalIoAdapter, TimerEvent,
-    build_async_attached_terminal_client_service, build_async_runtime_daemon_services,
-    flush_async_runtime_event_wakeups_to_stream,
+    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalOutputWriteReport, ClientEvent,
+    DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, Duration, PaneEvent, PersistenceTarget,
+    PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, Result, RuntimeEvent,
+    RuntimeEventBatch, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, ShutdownEvent,
+    SyncAttachedTerminalIoAdapter, TimerEvent, build_async_attached_terminal_client_service,
+    build_async_runtime_daemon_services, flush_async_runtime_event_wakeups_to_stream,
     plan_and_apply_async_attached_terminal_client_step, plan_async_attached_terminal_client_step,
     run_async_agent_provider_service, run_async_attached_terminal_client_loop,
     run_async_attached_terminal_client_loop_deferred_pane_io,
@@ -4758,6 +4758,43 @@ async fn async_fd_attached_terminal_io_reads_and_writes_socket_pair() {
     let read = peer.read(&mut output).unwrap();
     let output = String::from_utf8_lossy(&output[..read]);
     assert!(output.contains("async-frame"), "{output:?}");
+}
+
+/// Verifies that the native async terminal endpoint's normal frame-write API
+/// completes frames larger than the adaptive bounded-write chunk. Control-socket
+/// attach rendering uses this API directly; returning after the first chunk
+/// leaves the rest of a scroll or copy-mode repaint retained but never flushed,
+/// which appears as large unrendered regions on the attached terminal.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_unbounded_write_completes_large_frame() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    let large_line = format!(
+        "{}tail-marker",
+        "x".repeat(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES + 1024)
+    );
+    let lines = vec![large_line.clone()];
+    let bytes = io
+        .write_styled_output_with_modes(&lines, &[], AttachedTerminalOutputModes::default())
+        .await
+        .unwrap();
+
+    assert!(bytes > DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES);
+    assert_eq!(io.pending_output_bytes(), 0);
+
+    let mut output = Vec::new();
+    drop(io);
+    drop(driver_output);
+    drop(driver);
+    peer.read_to_end(&mut output).unwrap();
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains("tail-marker"), "{output:?}");
 }
 
 /// Verifies that the native async terminal endpoint reports pending input
