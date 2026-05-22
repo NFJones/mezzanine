@@ -23,7 +23,9 @@ use crate::error::MezErrorKind;
 use crate::ids::AgentId;
 use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use crate::terminal::{TerminalFdInterest, TerminalStyleSpan};
+use std::time::Duration;
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 // Attached terminal client service construction.
 
@@ -175,6 +177,8 @@ where
     let mut pending_resize_debounce_timer: Option<RuntimeTimerKey> = None;
     let mut resize_debounce_generation = 0u64;
     let mut render_requested = true;
+    let mut render_limiter =
+        AttachedTerminalRenderRateLimiter::new(request.terminal_config.render_rate_limit_fps);
 
     while report.batches < service_config.max_batches {
         let state = *lifecycle_watcher.borrow_and_update();
@@ -187,12 +191,14 @@ where
         request.terminal_config = handle
             .terminal_client_loop_config(request.terminal_config.clone())
             .await?;
+        render_limiter.set_rate_limit(request.terminal_config.render_rate_limit_fps);
 
         let wake = wait_for_attached_terminal_batch_readiness(
             handle,
             io,
             &request.client_id,
             render_requested,
+            &mut render_limiter,
             &mut lifecycle_watcher,
         )
         .await?;
@@ -243,6 +249,7 @@ where
             }
         };
         report.batches = report.batches.saturating_add(1);
+        let batch_output_frames = batch.output_frames;
         let should_finish =
             batch.input_hangups > 0 || batch.output_hangups > 0 || !batch.error_roles.is_empty();
         resized_this_batch |= attached_terminal_actions_include_resize(&batch.actions);
@@ -250,6 +257,9 @@ where
         request.terminal_config.host_bracketed_paste_buffer =
             batch.host_bracketed_paste_buffer.clone();
         merge_attached_terminal_loop_report(&mut report.loop_report, batch);
+        if batch_output_frames > 0 {
+            render_limiter.mark_flushed();
+        }
         if resized_this_batch {
             resize_debounce_generation = resize_debounce_generation.saturating_add(1);
             let next_key = RuntimeTimerKey::new(
@@ -318,6 +328,87 @@ async fn queue_resize_debounce_timer(
         .map(|_| ())
 }
 
+/// Coalesces foreground render invalidations behind a per-client frame cadence.
+#[derive(Debug, Clone)]
+struct AttachedTerminalRenderRateLimiter {
+    /// Minimum time between ordinary render invalidation flushes.
+    min_interval: Option<Duration>,
+    /// Last time this client wrote a rendered frame.
+    last_flush_at: Option<Instant>,
+    /// Whether a render invalidation is waiting for the next allowed frame.
+    pending_render: bool,
+}
+
+impl AttachedTerminalRenderRateLimiter {
+    /// Builds a limiter from the configured maximum frames per second.
+    fn new(rate_limit_fps: u64) -> Self {
+        Self {
+            min_interval: render_rate_limit_interval(rate_limit_fps),
+            last_flush_at: None,
+            pending_render: false,
+        }
+    }
+
+    /// Applies a refreshed render-rate configuration.
+    fn set_rate_limit(&mut self, rate_limit_fps: u64) {
+        self.min_interval = render_rate_limit_interval(rate_limit_fps);
+        if self.min_interval.is_none() {
+            self.pending_render = false;
+        }
+    }
+
+    /// Records that a render invalidation arrived.
+    fn request_render(&mut self) {
+        self.pending_render = true;
+    }
+
+    /// Records a completed frame flush.
+    fn mark_flushed(&mut self) {
+        self.last_flush_at = Some(Instant::now());
+        self.pending_render = false;
+    }
+
+    /// Consumes a pending render when the rate gate permits it.
+    fn consume_ready_render(&mut self) -> bool {
+        if !self.pending_render {
+            return false;
+        }
+        if self
+            .pending_render_delay()
+            .is_some_and(|delay| !delay.is_zero())
+        {
+            return false;
+        }
+        self.pending_render = false;
+        true
+    }
+
+    /// Returns the remaining delay before a pending render may flush.
+    fn pending_render_delay(&self) -> Option<Duration> {
+        if !self.pending_render {
+            return None;
+        }
+        let Some(min_interval) = self.min_interval else {
+            return Some(Duration::ZERO);
+        };
+        let Some(last_flush_at) = self.last_flush_at else {
+            return Some(Duration::ZERO);
+        };
+        let next_allowed = last_flush_at + min_interval;
+        Some(next_allowed.saturating_duration_since(Instant::now()))
+    }
+}
+
+/// Converts a frame-rate limit into a minimum interval between render flushes.
+fn render_rate_limit_interval(rate_limit_fps: u64) -> Option<Duration> {
+    if rate_limit_fps == 0 {
+        return None;
+    }
+    Some(Duration::from_millis(
+        1_000u64.saturating_add(rate_limit_fps.saturating_sub(1)) / rate_limit_fps,
+    ))
+}
+
 /// Carries Attached Terminal Batch Wake state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -346,6 +437,7 @@ async fn wait_for_attached_terminal_batch_readiness<I>(
     io: &mut I,
     client_id: &super::ClientId,
     render_requested: bool,
+    render_limiter: &mut AttachedTerminalRenderRateLimiter,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
 ) -> Result<AttachedTerminalBatchWake>
 where
@@ -359,10 +451,7 @@ where
 
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     loop {
-        let render_effects = handle
-            .drain_render_side_effects_for_client(client_id.clone(), 8)
-            .await?;
-        if !render_effects.is_empty() {
+        if drain_render_request_for_client(handle, client_id, render_limiter).await? {
             return Ok(AttachedTerminalBatchWake::Readiness(vec![
                 synthetic_output_readiness(),
             ]));
@@ -371,6 +460,29 @@ where
             return Ok(AttachedTerminalBatchWake::Readiness(
                 io.poll_readiness().await?,
             ));
+        }
+
+        if let Some(render_delay) = render_limiter.pending_render_delay() {
+            tokio::select! {
+                biased;
+                readiness = io.poll_input_readiness() => {
+                    let mut readiness = readiness?;
+                    if readiness.iter().any(attached_terminal_readiness_is_readable_input_or_control) {
+                        ensure_output_readiness(&mut readiness);
+                    }
+                    return Ok(AttachedTerminalBatchWake::Readiness(readiness));
+                }
+                result = lifecycle_watcher.changed() => {
+                    let _ = result;
+                    return Ok(AttachedTerminalBatchWake::StateChanged);
+                }
+                _ = sleep(render_delay) => {
+                    if render_limiter.consume_ready_render() {
+                        return Ok(AttachedTerminalBatchWake::Readiness(vec![synthetic_output_readiness()]));
+                    }
+                }
+            }
+            continue;
         }
 
         tokio::select! {
@@ -383,20 +495,14 @@ where
                 return Ok(AttachedTerminalBatchWake::Readiness(readiness));
             }
             _ = handle.wait_for_event_delivery() => {
-                let render_effects = handle
-                    .drain_render_side_effects_for_client(client_id.clone(), 8)
-                    .await?;
-                if !render_effects.is_empty() {
+                if drain_render_request_for_client(handle, client_id, render_limiter).await? {
                     return Ok(AttachedTerminalBatchWake::Readiness(vec![synthetic_output_readiness()]));
                 }
                 return Ok(AttachedTerminalBatchWake::StateChanged);
             }
             result = side_effect_watcher.changed() => {
                 let _ = result;
-                let render_effects = handle
-                    .drain_render_side_effects_for_client(client_id.clone(), 8)
-                    .await?;
-                if !render_effects.is_empty() {
+                if drain_render_request_for_client(handle, client_id, render_limiter).await? {
                     return Ok(AttachedTerminalBatchWake::Readiness(vec![synthetic_output_readiness()]));
                 }
             }
@@ -406,6 +512,21 @@ where
             }
         }
     }
+}
+
+/// Drains queued render invalidations for one client into the rate limiter.
+async fn drain_render_request_for_client(
+    handle: &AsyncRuntimeSessionHandle,
+    client_id: &super::ClientId,
+    render_limiter: &mut AttachedTerminalRenderRateLimiter,
+) -> Result<bool> {
+    let render_effects = handle
+        .drain_render_side_effects_for_client(client_id.clone(), 8)
+        .await?;
+    if !render_effects.is_empty() {
+        render_limiter.request_render();
+    }
+    Ok(render_limiter.consume_ready_render())
 }
 
 /// Runs the attached terminal readiness is readable input or control operation for this subsystem.

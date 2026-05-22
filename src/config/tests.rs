@@ -1326,7 +1326,7 @@ fn rejects_invalid_terminal_term_and_profile_values() {
 fn rejects_invalid_terminal_presentation_values() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nreduced_motion = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\n",
+        "[terminal]\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nreduced_motion = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
         ConfigScope::Primary,
     );
 
@@ -1350,6 +1350,10 @@ fn rejects_invalid_terminal_presentation_values() {
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.resize_debounce_ms"
             && diagnostic.message == "terminal.resize_debounce_ms must be a positive integer"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "terminal.render_rate_limit_fps"
+            && diagnostic.message == "terminal.render_rate_limit_fps must be a non-negative integer"
     }));
 }
 

@@ -364,6 +364,11 @@ pub struct TerminalClientLoopConfig {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub resize_debounce_ms: u64,
+    /// Maximum foreground render frames per second during bursty invalidations.
+    ///
+    /// A value of zero disables rate limiting. Nonzero values coalesce repeated
+    /// render invalidations while preserving one trailing frame after a burst.
+    pub render_rate_limit_fps: u64,
     /// Stores the ui theme value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -427,6 +432,7 @@ impl Default for TerminalClientLoopConfig {
             host_bracketed_paste_active: false,
             host_bracketed_paste_buffer: Vec::new(),
             resize_debounce_ms: 200,
+            render_rate_limit_fps: 5,
             ui_theme: UiTheme::default(),
         }
     }

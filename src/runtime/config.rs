@@ -1311,6 +1311,19 @@ pub(super) fn runtime_terminal_resize_debounce_ms_from_config(root: &Value) -> R
     Ok(interval)
 }
 
+/// Returns the configured attached-terminal render rate limit in frames per second.
+pub(super) fn runtime_terminal_render_rate_limit_fps_from_config(root: &Value) -> Result<u64> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(5);
+    };
+    let Some(value) = terminal.get("render_rate_limit_fps") else {
+        return Ok(5);
+    };
+    value.as_u64().ok_or_else(|| {
+        MezError::config("terminal.render_rate_limit_fps must be a non-negative integer")
+    })
+}
+
 /// Returns whether optional terminal animations should render as static UI.
 pub(super) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {

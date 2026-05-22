@@ -3327,6 +3327,11 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) terminal_resize_debounce_ms: u64,
+    /// Stores the terminal render rate limit fps value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) terminal_render_rate_limit_fps: u64,
     /// Stores whether optional terminal animations should be disabled.
     ///
     /// The field is part of structured state exchanged across this module

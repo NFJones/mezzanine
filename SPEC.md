@@ -2283,12 +2283,21 @@ window creation.
 The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
-`passthrough`, `reduced_motion`, `resize_debounce_ms`, `cursor_style`,
-`cursor_blink`, and `cursor_blink_interval_ms`.
+`passthrough`, `reduced_motion`, `resize_debounce_ms`,
+`render_rate_limit_fps`, `cursor_style`, `cursor_blink`, and
+`cursor_blink_interval_ms`.
 
 `terminal.reduced_motion` MUST default to false. When true, optional
 frame/status animations MUST render as static UI while preserving the same
 semantic status text and color category.
+
+`terminal.render_rate_limit_fps` MUST default to 5. When nonzero, attached
+foreground clients SHOULD coalesce bursty render invalidations so ordinary
+output rendering is emitted no more frequently than the configured frame rate
+per client, while still delivering one trailing frame after a burst. A value of
+0 MUST disable render rate limiting. Initial attach frames, terminal cleanup,
+pending partial-output flushes, and user-input handling MUST NOT be delayed by
+this limit.
 
 Implementations MAY accept `terminal.nested_muxxer` as a migration alias for
 `terminal.nested_multiplexer`. When accepted, the alias MUST be normalized to

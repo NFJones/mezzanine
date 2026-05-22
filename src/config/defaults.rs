@@ -36,6 +36,7 @@ nested_multiplexer = "auto"
 passthrough = false
 reduced_motion = false
 resize_debounce_ms = 200
+render_rate_limit_fps = 5
 cursor_style = "block"
 cursor_blink = false
 cursor_blink_interval_ms = 500

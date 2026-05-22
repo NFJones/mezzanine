@@ -4217,6 +4217,7 @@ pub(super) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "terminal.cursor_blink_interval_ms"
                 | "terminal.reduced_motion"
                 | "terminal.resize_debounce_ms"
+                | "terminal.render_rate_limit_fps"
                 | "terminal.true_color"
                 | "terminal.mouse"
                 | "terminal.clipboard"

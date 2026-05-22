@@ -354,6 +354,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "passthrough",
     "reduced_motion",
     "resize_debounce_ms",
+    "render_rate_limit_fps",
     "cursor_style",
     "cursor_blink",
     "cursor_blink_interval_ms",

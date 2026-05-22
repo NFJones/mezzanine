@@ -7667,6 +7667,7 @@ impl RuntimeSessionService {
         config.cursor_blink = self.terminal_cursor_blink;
         config.cursor_blink_interval_ms = self.terminal_cursor_blink_interval_ms;
         config.resize_debounce_ms = self.terminal_resize_debounce_ms;
+        config.render_rate_limit_fps = self.terminal_render_rate_limit_fps;
         config.ui_theme = self.ui_theme.clone();
         config.primary_display_overlay_active = self.primary_display_overlay.is_some();
         let frame_context = self.terminal_frame_context();

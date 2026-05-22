@@ -4617,7 +4617,7 @@ fn runtime_applies_cursor_presentation_options_from_config_layers() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[terminal]\ncursor_style = \"bar\"\ncursor_blink = false\ncursor_blink_interval_ms = 250\nresize_debounce_ms = 125\nreduced_motion = true\n"
+            text: "[terminal]\ncursor_style = \"bar\"\ncursor_blink = false\ncursor_blink_interval_ms = 250\nresize_debounce_ms = 125\nrender_rate_limit_fps = 8\nreduced_motion = true\n"
                 .to_string(),
         }])
         .unwrap();
@@ -4633,6 +4633,7 @@ fn runtime_applies_cursor_presentation_options_from_config_layers() {
     assert!(!config.cursor_blink);
     assert_eq!(config.cursor_blink_interval_ms, 250);
     assert_eq!(config.resize_debounce_ms, 125);
+    assert_eq!(config.render_rate_limit_fps, 8);
     assert!(config.frame_context.reduced_motion);
     assert_eq!(config.frame_context.animation_tick_ms, 0);
 }

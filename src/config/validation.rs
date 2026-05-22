@@ -387,6 +387,10 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 _ => Some(format!("{path} must be a positive integer")),
             }
         }
+        "terminal.render_rate_limit_fps" => match value.parse::<u64>() {
+            Ok(_) => None,
+            _ => Some(format!("{path} must be a non-negative integer")),
+        },
         _ => None,
     }
 }

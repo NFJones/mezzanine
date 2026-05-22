@@ -51,6 +51,7 @@ use super::{
     runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_reduced_motion_from_config,
+    runtime_terminal_render_rate_limit_fps_from_config,
     runtime_terminal_resize_debounce_ms_from_config, runtime_terminal_term_from_config,
     runtime_ui_theme_from_config, runtime_window_frame_position_from_config,
     runtime_window_frame_right_status_template_from_config, runtime_window_frame_style_from_config,
@@ -222,6 +223,7 @@ impl RuntimeSessionService {
             terminal_cursor_blink: false,
             terminal_cursor_blink_interval_ms: 500,
             terminal_resize_debounce_ms: 200,
+            terminal_render_rate_limit_fps: 5,
             terminal_reduced_motion: false,
             terminal_clipboard: "external".to_string(),
             ui_theme: crate::terminal::UiTheme::default(),
@@ -659,6 +661,8 @@ impl RuntimeSessionService {
             runtime_terminal_cursor_blink_interval_ms_from_config(&structured)?;
         let terminal_resize_debounce_ms =
             runtime_terminal_resize_debounce_ms_from_config(&structured)?;
+        let terminal_render_rate_limit_fps =
+            runtime_terminal_render_rate_limit_fps_from_config(&structured)?;
         let terminal_reduced_motion = runtime_terminal_reduced_motion_from_config(&structured)?;
         let terminal_clipboard = runtime_terminal_clipboard_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
@@ -691,6 +695,7 @@ impl RuntimeSessionService {
         self.terminal_cursor_blink = terminal_cursor_blink;
         self.terminal_cursor_blink_interval_ms = terminal_cursor_blink_interval_ms;
         self.terminal_resize_debounce_ms = terminal_resize_debounce_ms;
+        self.terminal_render_rate_limit_fps = terminal_render_rate_limit_fps;
         self.terminal_reduced_motion = terminal_reduced_motion;
         self.terminal_clipboard = terminal_clipboard;
         self.host_clipboard = host_clipboard;

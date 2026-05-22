@@ -105,6 +105,7 @@ entry is shown.
 | `terminal.passthrough` | boolean | `false` | Allow broader terminal passthrough behavior when configured. |
 | `terminal.reduced_motion` | boolean | `false` | Disable optional frame/status animations. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
+| `terminal.render_rate_limit_fps` | integer | `5` | Maximum burst render frames per second; `0` disables render rate limiting. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |

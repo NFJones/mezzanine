@@ -11351,6 +11351,95 @@ async fn async_attached_terminal_service_drains_stranded_render_effect_before_wa
     assert!(exit.commands_processed >= 7);
 }
 
+/// Verifies that bursty render invalidations are coalesced behind the
+/// configured foreground render rate and still produce one trailing frame.
+///
+/// This protects slow remote clients from being flooded by intermediate frames
+/// while preserving the final visible state after an output burst settles.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+
+    let client = async {
+        let service_handle = handle.clone();
+        let service_primary = primary.clone();
+        let service_write_notify = write_notify.clone();
+        let service_write_count = write_count.clone();
+        let service_task = tokio::spawn(async move {
+            let mut io =
+                IdleAsyncAttachedTerminalLoopIo::new(service_write_count, service_write_notify);
+            run_async_attached_terminal_client_service(
+                &service_handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Primary,
+                    client_id: service_primary.clone(),
+                    primary_client_id: Some(service_primary),
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
+                },
+                AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+                |_| Ok(None),
+            )
+            .await
+        });
+
+        write_notify.notified().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+
+        for _ in 0..3 {
+            handle
+                .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                    client_id: primary.clone(),
+                    reason: RenderInvalidationReason::PaneOutput,
+                }])
+                .await
+                .unwrap();
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_millis(199)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        for _ in 0..8 {
+            if write_count.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(write_count.load(Ordering::SeqCst), 2);
+
+        let report = tokio::time::timeout(Duration::from_millis(1), service_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.batches, 2);
+        assert_eq!(report.loop_report.output_frames, 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 7);
+}
+
 /// Verifies that a closed foreground terminal output endpoint is treated as a
 /// normal hangup instead of bubbling a `BrokenPipe` I/O error to the top-level
 /// CLI error handler during clean primary shutdown or terminal teardown.
