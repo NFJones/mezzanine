@@ -3708,8 +3708,17 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Good catch"));
     assert!(prompt.contains("You're right"));
     assert!(prompt.contains("Exactly"));
-    assert!(prompt.contains("use it instead of progress say"));
-    assert!(prompt.contains("Progress say is for already-observed progress"));
+    assert!(prompt.contains("Batch rationale is transient execution intent"));
+    assert!(prompt.contains("not the place for durable learned facts or decisions"));
+    assert!(prompt.contains("Before every non-final action batch"));
+    assert!(prompt.contains("A checkpoint exists when"));
+    assert!(prompt.contains("include exactly one progress say in the batch"));
+    assert!(prompt.contains("even when executable actions are also present"));
+    assert!(prompt.contains("state durable learning or a decision, not intended work"));
+    assert!(prompt.contains("If no checkpoint exists, omit progress say"));
+    assert!(prompt.contains("Progress say is required at checkpoints"));
+    assert!(prompt.contains("evidence-backed direction choices"));
+    assert!(prompt.contains("validation results that determine the next step"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
     assert!(prompt.contains("headings such as Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(prompt.contains(
@@ -3876,6 +3885,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Do not put shell commands or Mezzanine patch blocks in say"));
     assert!(prompt.contains("Text inside say is display-only"));
     assert!(prompt.contains("useful independently of the action logs"));
+    assert!(prompt.contains("Progress say is required at checkpoints"));
+    assert!(prompt.contains("evidence-backed direction choices"));
+    assert!(prompt.contains("validation results that determine the next step"));
     assert!(prompt.contains("Do not use progress say merely to announce"));
     assert!(prompt.contains("action-specific intent in summaries"));
     assert!(prompt.contains("shell_command: exact pane shell input"));
@@ -3993,22 +4005,26 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     );
     assert!(prompt.contains("Make each rationale additive to recent thinking lines"));
     assert!(prompt.contains("say only what is newly decisive about this batch"));
-    assert!(prompt.contains("use it instead of progress say"));
-    assert!(prompt.contains("A progress say is useful at substantive checkpoints"));
-    assert!(prompt.contains("learning a fact that changes the working theory"));
-    assert!(prompt.contains("choosing a direction from real evidence"));
+    assert!(prompt.contains("Batch rationale is transient execution intent"));
+    assert!(prompt.contains("not the place for durable learned facts or decisions"));
+    assert!(prompt.contains("Before every non-final action batch"));
+    assert!(prompt.contains("A checkpoint exists when"));
+    assert!(prompt.contains("learned a non-obvious fact that changes the working theory"));
+    assert!(prompt.contains("chosen an implementation or report direction from evidence"));
+    assert!(prompt.contains("include exactly one progress say in the batch"));
+    assert!(prompt.contains("even when executable actions are also present"));
+    assert!(prompt.contains("state durable learning or a decision, not intended work"));
+    assert!(prompt.contains("If no checkpoint exists, omit progress say"));
     assert!(prompt.contains("1-3 compact sentences"));
     assert!(prompt.contains("Do not emit such checkpoints for every action batch"));
-    assert!(prompt.contains("Progress say is for already-observed progress"));
     assert!(prompt.contains("Do not use progress say for future-tense plans"));
     assert!(prompt.contains("headings such as Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(prompt.contains(
         "Do not format ordinary progress or final text with Plan:, Executed:, or Evidence:"
     ));
-    assert!(prompt.contains("If executable actions are in the same response"));
-    assert!(prompt.contains("normally omit progress say"));
-    assert!(prompt.contains("Include progress say with executable actions only"));
-    assert!(prompt.contains("substantive checkpoint"));
+    assert!(prompt.contains("omit progress say when it would only announce"));
+    assert!(prompt.contains("Do not omit progress say when it records a checkpoint"));
+    assert!(prompt.contains("A checkpoint progress say is required"));
     assert!(!prompt.contains("For multiphase implementation plans"));
     assert!(!prompt.contains("short checkbox list before implementation starts"));
     assert!(prompt.contains("For final summaries after code work"));
@@ -9069,19 +9085,27 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(rationale_description.contains("not a restatement of the user request"));
     assert!(rationale_description.contains("previous rationale"));
     assert!(
-        rationale_description.contains("Use this instead of a progress say"),
+        rationale_description.contains("Batch rationale is transient execution intent"),
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("short rationale plus actions with no progress say"),
+        rationale_description.contains("not durable learned facts or decisions"),
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("significant evidence learned"),
+        rationale_description.contains("Do not use this as a substitute"),
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("direction chosen from that evidence"),
+        rationale_description.contains("significant evidence was learned"),
+        "{rationale_description}"
+    );
+    assert!(
+        rationale_description.contains("a direction was chosen from that evidence"),
+        "{rationale_description}"
+    );
+    assert!(
+        rationale_description.contains("validation results determine the next step"),
         "{rationale_description}"
     );
     assert_eq!(
@@ -9143,23 +9167,31 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .as_str()
         .unwrap();
     assert!(say_status_description.contains("useful independently of action logs"));
+    assert!(say_status_description.contains("Progress is required for a checkpoint"));
     assert!(say_status_description.contains("already-observed progress"));
     assert!(say_status_description.contains("significant evidence"));
     assert!(say_status_description.contains("evidence-backed direction choice"));
     assert!(say_status_description.contains("coherent phase transitions"));
+    assert!(say_status_description.contains("validation results that determine the next step"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(
         say_status_description.contains("Do not use progress just to announce"),
         "{say_status_description}"
     );
+    assert!(
+        say_status_description
+            .contains("include exactly one progress say when a checkpoint exists"),
+        "{say_status_description}"
+    );
     let say_text_description = say_schema["properties"]["text"]["description"]
         .as_str()
         .unwrap();
     assert!(say_text_description.contains("Content in say is display-only"));
-    assert!(say_text_description.contains("substantive checkpoint"));
+    assert!(say_text_description.contains("progress for a checkpoint"));
     assert!(say_text_description.contains("1-3 compact sentences"));
     assert!(say_text_description.contains("important fact"));
+    assert!(say_text_description.contains("durable learning or a decision, not intended work"));
     assert!(
         say_text_description.contains("Do not format ordinary progress or final text with Plan:"),
         "{say_text_description}"
