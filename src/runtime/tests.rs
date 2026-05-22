@@ -4665,6 +4665,25 @@ fn runtime_frame_context_animates_live_agent_footer() {
         .unwrap();
     assert!(config.frame_context.animation_tick_ms > 0);
 }
+/// Verifies that callers with an already-resolved terminal loop config can
+/// render the same primary view without rebuilding frame context and mouse hit
+/// regions. This protects the optimized hot path used by control requests that
+/// need both config and a rendered frame.
+#[test]
+fn runtime_render_client_view_with_resolved_config_matches_public_render() {
+    let service = test_runtime_service();
+    let client_size = Size::new(80, 24).unwrap();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let direct = service
+        .render_client_view(ClientViewRole::Primary, client_size, &config)
+        .unwrap();
+    let resolved = service
+        .render_client_view_with_resolved_config(ClientViewRole::Primary, client_size, &config)
+        .unwrap();
+    assert_eq!(resolved, direct);
+}
 
 /// Verifies that runtime frame context sources `pane.process_name` from the
 /// live host process metadata instead of only echoing the configured shell path.

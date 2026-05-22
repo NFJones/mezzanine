@@ -58,3 +58,8 @@ regions, pane frames, and other view data even when nothing visible changed.
   active window shows a live agent footer, and right-status pane path, uptime,
   and datetime fields are only computed when the configured template references
   them.
+- Began the render-component efficiency phase by adding a resolved-config render
+  helper. Control and async runtime hot paths that already requested
+  `terminal_client_loop_config` now reuse that config for rendering instead of
+  rebuilding frame context and mouse hit regions a second time in the same
+  request.

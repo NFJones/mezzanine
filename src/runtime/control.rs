@@ -4910,8 +4910,12 @@ impl RuntimeSessionService {
         let prompt_active = if input.is_empty() {
             false
         } else {
-            self.render_client_view(ClientViewRole::Primary, client_size, &terminal_config)?
-                .is_some_and(|view| view.primary_prompt_active)
+            self.render_client_view_with_resolved_config(
+                ClientViewRole::Primary,
+                client_size,
+                &terminal_config,
+            )?
+            .is_some_and(|view| view.primary_prompt_active)
         };
         let actions = if prompt_active {
             vec![TerminalClientLoopAction::ForwardToPane(input.clone())]
@@ -4927,7 +4931,11 @@ impl RuntimeSessionService {
         };
         let application = self.apply_attached_terminal_step_plan(primary_client_id, &step)?;
         let view = if render {
-            self.render_client_view(ClientViewRole::Primary, client_size, &terminal_config)?
+            self.render_client_view_with_resolved_config(
+                ClientViewRole::Primary,
+                client_size,
+                &terminal_config,
+            )?
         } else {
             None
         };
@@ -4974,7 +4982,8 @@ impl RuntimeSessionService {
         };
         let terminal_config =
             self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        let mut view = self.render_client_view(role, client_size, &terminal_config)?;
+        let mut view =
+            self.render_client_view_with_resolved_config(role, client_size, &terminal_config)?;
         if let (Some(params), Some(view)) = (params, view.as_mut())
             && let Some((row, column)) = runtime_json_optional_view_offset(params)?
         {

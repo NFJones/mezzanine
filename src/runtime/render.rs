@@ -7144,6 +7144,20 @@ impl RuntimeSessionService {
         config: &TerminalClientLoopConfig,
     ) -> Result<Option<RenderedClientView>> {
         let config = self.terminal_client_loop_config(config.clone())?;
+        self.render_client_view_with_resolved_config(role, client_size, &config)
+    }
+    /// Renders a client view using a terminal configuration that has already
+    /// been resolved from runtime state.
+    ///
+    /// Hot paths that need both the loop configuration and a frame use this
+    /// helper to avoid rebuilding frame context and mouse hit regions twice
+    /// for the same control request.
+    pub fn render_client_view_with_resolved_config(
+        &self,
+        role: ClientViewRole,
+        client_size: Size,
+        config: &TerminalClientLoopConfig,
+    ) -> Result<Option<RenderedClientView>> {
         let Some(window) = self.session.active_window() else {
             return if self.session.windows().is_empty() {
                 Ok(None)
@@ -7152,7 +7166,7 @@ impl RuntimeSessionService {
             };
         };
         let mut view =
-            render_attached_client_view(role, window, &self.pane_screens, &config, client_size)?;
+            render_attached_client_view(role, window, &self.pane_screens, config, client_size)?;
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
         {

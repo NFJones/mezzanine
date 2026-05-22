@@ -342,8 +342,11 @@ impl AsyncRuntimeSessionActor {
                     .terminal_client_loop_config(config)
                     .and_then(|config| {
                         let view = if render {
-                            self.service
-                                .render_client_view(role, client_size, &config)?
+                            self.service.render_client_view_with_resolved_config(
+                                role,
+                                client_size,
+                                &config,
+                            )?
                         } else {
                             None
                         };
@@ -1698,9 +1701,11 @@ impl AsyncRuntimeSessionActor {
         let config = self
             .service
             .terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        let view =
-            self.service
-                .render_client_view(ClientViewRole::Primary, client_size, &config)?;
+        let view = self.service.render_client_view_with_resolved_config(
+            ClientViewRole::Primary,
+            client_size,
+            &config,
+        )?;
         let readiness = [AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Input,
             fd: 0,
@@ -2978,9 +2983,9 @@ impl AsyncRuntimeSessionActor {
             ClientViewRole::Observer
         };
         let config = self.service.terminal_client_loop_config(config)?;
-        let Some(view) = self
-            .service
-            .render_client_view(role, client_size, &config)?
+        let Some(view) =
+            self.service
+                .render_client_view_with_resolved_config(role, client_size, &config)?
         else {
             return Ok(None);
         };
