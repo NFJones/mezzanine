@@ -7875,6 +7875,23 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
             .and_then(|overlay| overlay.active_selection_index),
         Some(0)
     );
+    let initial_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let initial_active_row = initial_view
+        .lines
+        .iter()
+        .position(|line| line.starts_with("› "))
+        .expect("overlay should show an active selector gutter");
+    assert!(
+        initial_view.lines.iter().any(|line| line.starts_with("· ")),
+        "{initial_view:?}"
+    );
 
     let report = service
         .apply_attached_terminal_step_plan(
@@ -7898,6 +7915,24 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
             .as_ref()
             .and_then(|overlay| overlay.active_selection_index),
         Some(1)
+    );
+    let moved_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let moved_active_row = moved_view
+        .lines
+        .iter()
+        .position(|line| line.starts_with("› "))
+        .expect("overlay should keep an active selector gutter after navigation");
+    assert_ne!(moved_active_row, initial_active_row, "{moved_view:?}");
+    assert!(
+        moved_view.lines.iter().any(|line| line.starts_with("· ")),
+        "{moved_view:?}"
     );
     service.pane_processes_mut().terminate_all().unwrap();
 }

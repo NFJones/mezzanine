@@ -8,6 +8,10 @@ None currently recorded.
 No implementation plan is currently active.
 
 ## Completed
+- Command-output pager links once again show a visible movable selector gutter:
+  the active row renders with a chevron and other selectable rows retain a
+  non-background bullet marker while link text stays bold, underlined, and
+  theme-colored.
 - Pager view links now preserve their rendered bold, underlined,
   theme-colored markdown styling without background treatment, including
   `/list-sessions` command overlay selections.

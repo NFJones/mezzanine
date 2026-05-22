@@ -1287,7 +1287,7 @@ fn runtime_display_overlay_render_lines(overlay: &RuntimeDisplayOverlay) -> Vec<
                 .iter()
                 .any(|selection| selection.line_index == line_index)
             {
-                format!("  {line}")
+                format!("· {line}")
             } else {
                 line.to_string()
             }
