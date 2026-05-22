@@ -1065,6 +1065,7 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         ));
     }
     let mut changed_rows = 0usize;
+    let mut cursor_hidden_for_row_updates = false;
     for (index, line) in lines.iter().enumerate() {
         let previous_line = previous.lines.get(index).map(String::as_str).unwrap_or("");
         let previous_spans = previous
@@ -1078,6 +1079,10 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             .unwrap_or(&[]);
         if line.as_str() == previous_line && spans == previous_spans {
             continue;
+        }
+        if !cursor_hidden_for_row_updates {
+            frame.extend_from_slice(b"\x1b[?25l");
+            cursor_hidden_for_row_updates = true;
         }
         let row = index.saturating_add(1);
         if let Some(span_update) =
@@ -1256,7 +1261,7 @@ fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputM
         .min(frame_width.saturating_sub(1))
         .saturating_add(1);
     let style = modes.cursor_style.decscusr_parameter(false);
-    format!("\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
+    format!("\x1b[?25l\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
 }
 
 /// Runs the cursor phase visible operation for this subsystem.

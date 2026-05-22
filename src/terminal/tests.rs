@@ -2283,7 +2283,7 @@ fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
         "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
     ));
     assert!(rendered.contains("pane"));
-    assert!(rendered.ends_with("\x1b[2 q\x1b[1;1H\x1b[?25h"));
+    assert!(rendered.ends_with("\x1b[?25l\x1b[2 q\x1b[1;1H\x1b[?25h"));
 }
 
 /// Verifies that attached TTY output writability is sampled after the blocking
@@ -2345,7 +2345,7 @@ fn attached_terminal_output_frame_controls_cursor_presentation() {
         "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
     ));
     assert!(rendered.contains("pane"));
-    assert!(rendered.ends_with("\x1b[4 q\x1b[3;4H\x1b[?25h"));
+    assert!(rendered.ends_with("\x1b[?25l\x1b[4 q\x1b[3;4H\x1b[?25h"));
 }
 
 /// Verifies attached-terminal cursor presentation clamps to the rendered frame
@@ -2369,7 +2369,7 @@ fn attached_terminal_output_frame_clamps_visible_cursor_to_rendered_bounds() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(
-        rendered.ends_with("\x1b[2 q\x1b[2;5H\x1b[?25h"),
+        rendered.ends_with("\x1b[?25l\x1b[2 q\x1b[2;5H\x1b[?25h"),
         "{rendered:?}"
     );
     assert!(!rendered.contains("\x1b[10;6H"), "{rendered:?}");
@@ -2397,7 +2397,7 @@ fn attached_terminal_output_frame_uses_screen_cursor_after_patched_font_prompt_g
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(
-        rendered.ends_with("\x1b[2 q\x1b[1;2H\x1b[?25h"),
+        rendered.ends_with("\x1b[?25l\x1b[2 q\x1b[1;2H\x1b[?25h"),
         "{rendered:?}"
     );
 }
@@ -2448,6 +2448,7 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.starts_with("\x1b[?25l"), "{rendered:?}");
     assert!(rendered.contains("\x1b[2;1Hchanged"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[K"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
@@ -2594,7 +2595,7 @@ fn attached_terminal_output_update_uses_cursor_only_frame_for_cursor_moves() {
     assert!(!rendered.contains("\x1b[?1000;1002;1006h"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[?2004"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
-    assert_eq!(rendered, "\x1b[2 q\x1b[1;2H\x1b[?25h");
+    assert_eq!(rendered, "\x1b[?25l\x1b[2 q\x1b[1;2H\x1b[?25h");
 }
 
 /// Verifies stable-size attached-terminal updates emit bracketed-paste mode
