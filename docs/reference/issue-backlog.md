@@ -8,9 +8,9 @@ None currently recorded.
 No implementation plan is currently active.
 
 ## Completed
-- Pager view links now render with foreground-only bold + underline styling
-  instead of inverse/highlight treatment, including `/list-sessions` command
-  overlay selections.
+- Pager view links now preserve their rendered bold, underlined,
+  theme-colored markdown styling without background treatment, including
+  `/list-sessions` command overlay selections.
 - `terminal.reduced_motion` now defaults to false and, when enabled, renders
   running agent status indicators as static status text instead of animated
   scan effects.

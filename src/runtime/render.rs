@@ -311,6 +311,7 @@ fn runtime_agent_shell_markdown_overlay_content(
     let mut content = RuntimeCommandDisplayOverlayContent {
         command,
         lines: Vec::new(),
+        line_style_spans: Vec::new(),
         selections: Vec::new(),
     };
     let hidden_links = agent_command_links_in_markdown(markdown);
@@ -351,6 +352,7 @@ fn runtime_agent_shell_markdown_overlay_content(
                 }
             }
         }
+        content.line_style_spans.push(rendered.style_spans);
         content.lines.push(rendered.display);
     }
     content
@@ -517,6 +519,8 @@ struct RuntimeCommandDisplayOverlayContent {
     command: Option<String>,
     /// Human-readable lines rendered in the command display overlay.
     lines: Vec<String>,
+    /// Visible terminal styles for each rendered display line.
+    line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Optional command actions keyed by line index.
     selections: Vec<RuntimeDisplayOverlaySelection>,
 }
@@ -581,6 +585,7 @@ fn runtime_command_display_overlay_content(
     let mut content = RuntimeCommandDisplayOverlayContent {
         command: None,
         lines: Vec::new(),
+        line_style_spans: Vec::new(),
         selections: Vec::new(),
     };
     for outcome in outcomes {
@@ -840,6 +845,7 @@ impl RuntimeCommandDisplayOverlayContent {
             for display_line in runtime_human_readable_display_line_with_choices(line) {
                 let line_index = self.lines.len();
                 self.lines.push(display_line.text);
+                self.line_style_spans.push(Vec::new());
                 for choice in display_line.choices {
                     self.selections.push(RuntimeDisplayOverlaySelection {
                         line_index,
@@ -2660,7 +2666,11 @@ impl AgentMarkdownRenderer {
         self.ensure_line_prefix();
         let mut style = self.active;
         style.inverse = false;
-        style.foreground = Some(self.inline_code_foreground);
+        style.foreground = Some(if self.link_stack.is_empty() {
+            self.inline_code_foreground
+        } else {
+            self.link_foreground
+        });
         style.background = None;
         self.append_styled_text(&sanitized_agent_terminal_line(code), style);
     }
@@ -3487,7 +3497,8 @@ impl RuntimeSessionService {
     /// primary render pass. An empty line set clears any active overlay. This
     /// fails when the runtime is no longer live.
     pub fn show_primary_display_overlay(&mut self, lines: Vec<String>) -> Result<()> {
-        self.show_primary_display_overlay_inner(lines, Vec::new(), false)
+        let line_style_spans = vec![Vec::new(); lines.len()];
+        self.show_primary_display_overlay_inner(lines, line_style_spans, Vec::new(), false)
     }
 
     /// Shows or clears the primary-client recoverable error status overlay.
@@ -3512,6 +3523,7 @@ impl RuntimeSessionService {
     fn show_primary_display_overlay_inner(
         &mut self,
         lines: Vec<String>,
+        mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
         selections: Vec<RuntimeDisplayOverlaySelection>,
         dismiss_on_any_input: bool,
     ) -> Result<()> {
@@ -3519,9 +3531,12 @@ impl RuntimeSessionService {
         self.primary_display_overlay = if lines.is_empty() {
             None
         } else {
+            line_style_spans.truncate(lines.len());
+            line_style_spans.resize(lines.len(), Vec::new());
             let active_selection_index = (!selections.is_empty()).then_some(0);
             Some(RuntimeDisplayOverlay {
                 lines,
+                line_style_spans,
                 scroll_offset: 0,
                 selections,
                 active_selection_index,
@@ -4050,7 +4065,12 @@ impl RuntimeSessionService {
             .execute_terminal_command(primary_client_id, command)
             .and_then(|body| runtime_command_display_overlay_content(&body))?;
         if runtime_command_display_should_open_overlay(&content) {
-            self.show_primary_display_overlay_inner(content.lines, content.selections, false)?;
+            self.show_primary_display_overlay_inner(
+                content.lines,
+                content.line_style_spans,
+                content.selections,
+                false,
+            )?;
         }
         Ok(true)
     }
@@ -4319,6 +4339,7 @@ impl RuntimeSessionService {
                             {
                                 self.show_primary_display_overlay_inner(
                                     content.lines,
+                                    content.line_style_spans,
                                     content.selections,
                                     false,
                                 )?;
@@ -4812,6 +4833,7 @@ impl RuntimeSessionService {
                 if runtime_command_display_should_open_overlay(&content) {
                     self.show_primary_display_overlay_inner(
                         content.lines,
+                        content.line_style_spans,
                         content.selections,
                         false,
                     )?;
@@ -6967,7 +6989,12 @@ impl RuntimeSessionService {
         )?;
         let content = runtime_command_display_overlay_content(&output)?;
         if runtime_command_display_should_open_overlay(&content) {
-            self.show_primary_display_overlay_inner(content.lines, content.selections, false)
+            self.show_primary_display_overlay_inner(
+                content.lines,
+                content.line_style_spans,
+                content.selections,
+                false,
+            )
         } else {
             self.append_runtime_command_display_lines_to_active_pane(&content.lines)
         }
@@ -7394,6 +7421,32 @@ impl RuntimeSessionService {
                     });
                 }
             }
+        }
+        for line_index in overlay.scroll_offset
+            ..overlay
+                .scroll_offset
+                .saturating_add(page_rows)
+                .min(overlay.lines.len())
+        {
+            let offset = line_index.saturating_sub(overlay.scroll_offset);
+            let row = offset.saturating_add(1);
+            let prefix_columns = usize::from(runtime_display_overlay_line_has_selection(
+                overlay, line_index,
+            )) * 2;
+            let visible_columns = max_columns.saturating_sub(prefix_columns);
+            let Some(spans) = view.line_style_spans.get_mut(row) else {
+                continue;
+            };
+            spans.extend(
+                overlay
+                    .line_style_spans
+                    .get(line_index)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|span| {
+                        clipped_overlay_style_span(*span, prefix_columns, visible_columns)
+                    }),
+            );
         }
         view.cursor_visible = false;
         view.cursor_row = 0;
@@ -10093,9 +10146,8 @@ mod tests {
         readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
         render_command_markdown_body_lines, runtime_agent_shell_markdown_overlay_content,
         runtime_command_display_overlay_content, runtime_display_overlay_rendered_selection_start,
-        runtime_display_overlay_selection_rendition, runtime_human_readable_display_lines,
-        wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
-        wrapped_prefixed_agent_terminal_lines,
+        runtime_human_readable_display_lines, wrap_agent_rendered_line_to_width,
+        wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
     use crate::runtime::types::RuntimeDisplayOverlay;
@@ -10575,14 +10627,15 @@ mod tests {
             "{content:?}"
         );
     }
-    /// Verifies selectable pager links use foreground-only bold underlined
-    /// text instead of inverse highlight styling.
+    /// Verifies selectable pager links keep the markdown link styling emitted
+    /// by the CommonMark renderer.
     ///
     /// `/list-sessions` and similar markdown-backed command overlays should
     /// keep links readable as ordinary text links while remaining keyboard and
-    /// mouse selectable.
+    /// mouse selectable, so the overlay must retain the rendered line spans in
+    /// addition to the selection metadata.
     #[test]
-    fn agent_shell_markdown_overlay_styles_selectable_links_without_inverse() {
+    fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
         let ui_theme = crate::terminal::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
@@ -10595,6 +10648,7 @@ mod tests {
         let column = runtime_display_overlay_rendered_selection_start(
             &RuntimeDisplayOverlay {
                 lines: content.lines.clone(),
+                line_style_spans: content.line_style_spans.clone(),
                 scroll_offset: 0,
                 selections: content.selections.clone(),
                 active_selection_index: Some(0),
@@ -10603,16 +10657,20 @@ mod tests {
             selection,
         );
         assert_eq!(&line[column..column + selection.width], "saved");
-        let rendition =
-            runtime_display_overlay_selection_rendition(&ui_theme, selection.kind, true);
-        assert!(rendition.bold, "{rendition:?}");
-        assert!(rendition.underline, "{rendition:?}");
-        assert!(!rendition.inverse, "{rendition:?}");
-        assert!(rendition.background.is_none(), "{rendition:?}");
-        assert_eq!(
-            rendition.foreground,
-            Some(ui_theme.colors.agent_model.foreground),
-            "{rendition:?}"
+        assert!(
+            content.line_style_spans[selection.line_index]
+                .iter()
+                .any(|span| {
+                    span.start == selection.start_column
+                        && span.length == selection.width
+                        && span.rendition.bold
+                        && span.rendition.underline
+                        && !span.rendition.inverse
+                        && span.rendition.background.is_none()
+                        && span.rendition.foreground
+                            == Some(ui_theme.colors.agent_transcript_command.foreground)
+                }),
+            "{content:?}"
         );
     }
 

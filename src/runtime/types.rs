@@ -26,7 +26,7 @@ use super::{
 };
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
-use crate::terminal::{CopyPosition, PaneAgentStatusField};
+use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalStyleSpan};
 use tokio::io::AsyncWriteExt;
 
 // Runtime data types, connection tables, and provider/MCP registries.
@@ -695,6 +695,8 @@ pub(super) struct RuntimeDisplayOverlay {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) lines: Vec<String>,
+    /// Visible terminal styles for `lines`, indexed by rendered line.
+    pub(super) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Stores the scroll offset value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
