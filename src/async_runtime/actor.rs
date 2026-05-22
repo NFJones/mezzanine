@@ -45,6 +45,13 @@ use crate::terminal::TerminalFdInterest;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
+/// Defines the DEFAULT AGENT ANIMATION REFRESH INTERVAL MS const used by this
+/// subsystem.
+///
+/// Active agent status indicators advance their scan phase at this cadence.
+/// Keeping the timer in sync with the renderer prevents status-only frames from
+/// appearing frozen when no pane output or keyboard input is arriving.
+const DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
 /// Defines the DEFAULT SHELL RECOVERY INTERVAL MS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -2600,16 +2607,28 @@ impl AsyncRuntimeSessionActor {
                 .into_iter()
                 .collect());
         }
-        if self.scheduled_status_refresh_timers.contains_key(client_id) {
-            return Ok(Vec::new());
+        let delay_ms = status_refresh_interval_ms_for_config(&config);
+        let next_key = RuntimeTimerKey::new(
+            RuntimeTimerKind::StatusRefresh,
+            client_id,
+            generation_base_ms.saturating_add(delay_ms),
+        );
+        if let Some(existing_key) = self.scheduled_status_refresh_timers.get(client_id) {
+            if existing_key.generation <= next_key.generation {
+                return Ok(Vec::new());
+            }
+            return Ok(vec![
+                RuntimeSideEffect::CancelTimer {
+                    key: existing_key.clone(),
+                },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: next_key,
+                    delay_ms,
+                },
+            ]);
         }
-        let delay_ms = DEFAULT_STATUS_REFRESH_INTERVAL_MS;
         Ok(vec![RuntimeSideEffect::ScheduleTimer {
-            key: RuntimeTimerKey::new(
-                RuntimeTimerKind::StatusRefresh,
-                client_id,
-                generation_base_ms.saturating_add(delay_ms),
-            ),
+            key: next_key,
             delay_ms,
         }])
     }
@@ -3733,6 +3752,15 @@ fn status_refresh_required_by_config(config: &TerminalClientLoopConfig) -> bool 
         active && visible_surface
     });
     window_status_requires_refresh || agent_status_requires_refresh
+}
+
+/// Returns the refresh interval required by one resolved terminal config.
+fn status_refresh_interval_ms_for_config(config: &TerminalClientLoopConfig) -> u64 {
+    if config.frame_context.animation_tick_ms > 0 {
+        DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS
+    } else {
+        DEFAULT_STATUS_REFRESH_INTERVAL_MS
+    }
 }
 
 /// Runs the provider retry delay ms operation for this subsystem.

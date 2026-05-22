@@ -2078,8 +2078,8 @@ async fn async_render_side_effect_service_composes_flush_effects() {
 
 /// Verifies that active agent pane status can drive status refresh timers even
 /// when the window status line is disabled. The running status pill has an
-/// animated scan background, so pane-frame-only configurations still need a
-/// periodic repaint source while agent work is active.
+/// animated scan background, so pane-frame-only configurations need the
+/// animation refresh cadence while agent work is active.
 #[tokio::test(flavor = "current_thread")]
 async fn async_render_side_effect_service_refreshes_active_agent_status_without_window_status() {
     let mut service = test_service();
@@ -2141,9 +2141,119 @@ async fn async_render_side_effect_service_refreshes_active_agent_status_without_
                 RuntimeSideEffect::ScheduleTimer { key, delay_ms }
                     if key.kind == RuntimeTimerKind::StatusRefresh
                         && key.owner_id == primary.to_string()
-                        && *delay_ms == 1000
+                        && *delay_ms == 180
             )),
             "{timers:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed > 0);
+}
+
+/// Verifies that an existing slow status refresh timer is replaced by the
+/// animation cadence when an agent starts running. A window status timer may
+/// already exist before the prompt is submitted, but active agent indicators
+/// should not wait for that slower deadline before animating.
+#[tokio::test(flavor = "current_thread")]
+async fn async_render_side_effect_service_retargets_status_refresh_for_agent_animation() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::PaneOutput,
+            }])
+            .await
+            .unwrap();
+        run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        let initial_timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            initial_timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.to_string()
+                        && *delay_ms == 1000
+            )),
+            "{initial_timers:?}"
+        );
+
+        let start = handle
+            .execute_agent_shell_command(primary.clone(), "summarize the pane".to_string())
+            .await
+            .unwrap();
+        assert!(start.contains(r#""state":"running""#), "{start}");
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::AgentPrompt,
+            }])
+            .await
+            .unwrap();
+        run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        let animation_timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            animation_timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::CancelTimer { key }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.to_string()
+            )),
+            "{animation_timers:?}"
+        );
+        assert!(
+            animation_timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && key.owner_id == primary.to_string()
+                        && *delay_ms == 180
+            )),
+            "{animation_timers:?}"
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),

@@ -7865,14 +7865,19 @@ impl RuntimeSessionService {
             })
             .collect()
     }
-    /// Reports whether the active window currently shows any live agent footer.
-    fn active_window_has_live_agent_footer(&self) -> bool {
+    /// Reports whether the active window currently needs agent animation.
+    fn active_window_has_agent_animation(&self) -> bool {
         self.session
             .active_window()
             .into_iter()
             .flat_map(|window| window.panes().iter())
-            .any(|pane| self.pane_has_live_agent_footer(pane.id.as_str()))
+            .any(|pane| {
+                let pane_id = pane.id.as_str();
+                self.pane_has_live_agent_footer(pane_id)
+                    || self.pane_has_active_agent_frame_status(pane_id)
+            })
     }
+
     /// Reports whether the pane currently renders a live agent footer.
     fn pane_has_live_agent_footer(&self, pane_id: &str) -> bool {
         if self.agent_compacting_panes.contains_key(pane_id) {
@@ -7890,9 +7895,28 @@ impl RuntimeSessionService {
             .iter()
             .any(|turn| turn.turn_id == running_turn_id)
     }
+
+    /// Reports whether a pane has an active-work status in its frame context.
+    fn pane_has_active_agent_frame_status(&self, pane_id: &str) -> bool {
+        if self.agent_compacting_panes.contains_key(pane_id) {
+            return true;
+        }
+        self.agent_turn_ledger
+            .turns()
+            .iter()
+            .rev()
+            .find(|turn| turn.pane_id == pane_id)
+            .is_some_and(|turn| {
+                matches!(
+                    self.runtime_agent_frame_status(turn),
+                    "queued" | "running" | "thinking" | "executing" | "waiting" | "compacting"
+                )
+            })
+    }
+
     /// Builds the animation tick used by terminal frame rendering.
     fn runtime_frame_animation_tick_ms(&self) -> u64 {
-        if self.terminal_reduced_motion || !self.active_window_has_live_agent_footer() {
+        if self.terminal_reduced_motion || !self.active_window_has_agent_animation() {
             0
         } else {
             current_unix_millis()

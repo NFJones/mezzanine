@@ -4665,6 +4665,47 @@ fn runtime_frame_context_animates_live_agent_footer() {
         .unwrap();
     assert!(config.frame_context.animation_tick_ms > 0);
 }
+
+/// Verifies that active pane-frame agent status enables animation even when
+/// the agent shell footer is not visible. Pane headers and live footers share
+/// the same frame tick, so header-only status indicators must not freeze when
+/// no prompt overlay is being rendered.
+#[test]
+fn runtime_frame_context_animates_active_agent_status_without_live_footer() {
+    let mut service = test_runtime_service();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    service
+        .agent_turn_ledger
+        .start_turn(crate::agent::AgentTurnRecord {
+            turn_id: "turn-running".to_string(),
+            agent_id: format!("agent-{pane_id}"),
+            pane_id: pane_id.clone(),
+            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: AgentTurnState::Running,
+        })
+        .unwrap();
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get(&pane_id).unwrap();
+
+    assert_eq!(pane_context.agent_status.as_deref(), Some("running"));
+    assert!(pane_context.agent_prompt.is_none());
+    assert!(config.frame_context.animation_tick_ms > 0);
+}
+
 /// Verifies that callers with an already-resolved terminal loop config can
 /// render the same primary view without rebuilding frame context and mouse hit
 /// regions. This protects the optimized hot path used by control requests that
