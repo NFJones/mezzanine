@@ -8020,18 +8020,24 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
     assert!(
         view.line_style_spans[row].iter().any(|span| {
             span.length == "[paste]".len()
-                && span.rendition.background.is_some_and(|color| {
-                    color == service.ui_theme.colors.agent_reasoning.background
-                })
+                && !span.rendition.inverse
+                && span.rendition.background.is_none()
+                && span.rendition.foreground
+                    == Some(service.ui_theme.colors.agent_reasoning.foreground)
+                && span.rendition.bold
+                && span.rendition.underline
         }),
         "{view:?}"
     );
     assert!(
         view.line_style_spans[row].iter().any(|span| {
             span.length == "[delete]".len()
-                && span.rendition.background.is_some_and(|color| {
-                    color == service.ui_theme.colors.agent_status_failed.background
-                })
+                && !span.rendition.inverse
+                && span.rendition.background.is_none()
+                && span.rendition.foreground
+                    == Some(service.ui_theme.colors.agent_status_failed.foreground)
+                && span.rendition.bold
+                && span.rendition.underline
         }),
         "{view:?}"
     );
@@ -12900,7 +12906,14 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         .iter()
         .find(|line| line.text.contains("link (https://example.com)"))
         .unwrap();
+    assert!(link.style_spans.iter().any(|span| span.rendition.bold));
     assert!(link.style_spans.iter().any(|span| span.rendition.underline));
+    assert!(link.style_spans.iter().any(|span| {
+        !span.rendition.inverse
+            && span.rendition.background.is_none()
+            && span.rendition.foreground
+                == Some(service.ui_theme.colors.agent_transcript_command.foreground)
+    }));
     assert!(link.style_spans.iter().any(|span| span.rendition.dim));
 
     assert!(

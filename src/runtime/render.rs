@@ -1332,9 +1332,18 @@ fn runtime_display_overlay_selection_rendition(
         RuntimeDisplayOverlaySelectionKind::Secondary => ui_theme.colors.agent_reasoning,
         RuntimeDisplayOverlaySelectionKind::Danger => ui_theme.colors.agent_status_failed,
     };
-    let mut rendition = pair.rendition();
+    let mut rendition = GraphicRendition {
+        foreground: Some(pair.foreground),
+        ..GraphicRendition::default()
+    };
     rendition.bold = true;
-    rendition.underline = active;
+    rendition.underline = true;
+    rendition.inverse = false;
+    rendition.background = None;
+    rendition.dim = false;
+    if active {
+        rendition.italic = false;
+    }
     rendition
 }
 
@@ -2355,6 +2364,7 @@ struct AgentMarkdownRenderer {
     image_stack: Vec<String>,
     table: Option<MarkdownTableState>,
     line_copy_prefix: Option<String>,
+    link_foreground: TerminalColor,
     inline_code_foreground: TerminalColor,
     table_alternate_row_foreground: TerminalColor,
     diff_addition_foreground: TerminalColor,
@@ -2482,13 +2492,8 @@ impl AgentMarkdownRenderer {
             }),
             Tag::Link { dest_url, .. } => {
                 self.link_stack.push(dest_url.to_string());
-                if dest_url.starts_with("mez-agent:") {
-                    self.push_style(|_style| {});
-                } else {
-                    self.push_style(|style| {
-                        style.underline = true;
-                    });
-                }
+                let link_style = self.markdown_link_rendition();
+                self.push_style(|style| *style = link_style);
             }
             Tag::Image { dest_url, .. } => {
                 self.image_stack.push(dest_url.to_string());
@@ -2667,6 +2672,16 @@ impl AgentMarkdownRenderer {
         style.italic = true;
         self.append_styled_text(&format!("${}$", sanitized_agent_terminal_line(math)), style);
     }
+    /// Returns the terminal rendition used for visible markdown link labels.
+    fn markdown_link_rendition(&self) -> GraphicRendition {
+        let mut style = self.active;
+        style.foreground = Some(self.link_foreground);
+        style.background = None;
+        style.inverse = false;
+        style.bold = true;
+        style.underline = true;
+        style
+    }
 
     /// Appends display math as a block.
     fn append_display_math(&mut self, math: &str) {
@@ -2833,6 +2848,7 @@ impl AgentMarkdownRenderer {
             image_stack: Vec::new(),
             table: None,
             line_copy_prefix: None,
+            link_foreground: ui_theme.colors.agent_transcript_command.foreground,
             inline_code_foreground: markdown_inline_code_foreground(ui_theme),
             table_alternate_row_foreground: markdown_table_alternate_row_foreground(ui_theme),
             diff_addition_foreground: ui_theme.colors.agent_transcript_user.foreground,
@@ -10074,11 +10090,13 @@ mod tests {
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
         readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
         render_command_markdown_body_lines, runtime_agent_shell_markdown_overlay_content,
-        runtime_command_display_overlay_content, runtime_human_readable_display_lines,
+        runtime_command_display_overlay_content, runtime_display_overlay_rendered_selection_start,
+        runtime_display_overlay_selection_rendition, runtime_human_readable_display_lines,
         wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
         wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
+    use crate::runtime::types::RuntimeDisplayOverlay;
     use crate::terminal::default_ui_theme;
 
     /// Verifies normal-mode mutation result rendering treats patches as the
@@ -10553,6 +10571,46 @@ mod tests {
                 .count(),
             1,
             "{content:?}"
+        );
+    }
+    /// Verifies selectable pager links use foreground-only bold underlined
+    /// text instead of inverse highlight styling.
+    ///
+    /// `/list-sessions` and similar markdown-backed command overlays should
+    /// keep links readable as ordinary text links while remaining keyboard and
+    /// mouse selectable.
+    #[test]
+    fn agent_shell_markdown_overlay_styles_selectable_links_without_inverse() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("list-sessions".to_string()),
+            "- [`saved`](mez-agent:%2Fresume%20saved)",
+            &ui_theme,
+        );
+        assert_eq!(content.selections.len(), 1, "{content:?}");
+        let selection = &content.selections[0];
+        let line = content.lines.get(selection.line_index).unwrap();
+        let column = runtime_display_overlay_rendered_selection_start(
+            &RuntimeDisplayOverlay {
+                lines: content.lines.clone(),
+                scroll_offset: 0,
+                selections: content.selections.clone(),
+                active_selection_index: Some(0),
+                dismiss_on_any_input: false,
+            },
+            selection,
+        );
+        assert_eq!(&line[column..column + selection.width], "saved");
+        let rendition =
+            runtime_display_overlay_selection_rendition(&ui_theme, selection.kind, true);
+        assert!(rendition.bold, "{rendition:?}");
+        assert!(rendition.underline, "{rendition:?}");
+        assert!(!rendition.inverse, "{rendition:?}");
+        assert!(rendition.background.is_none(), "{rendition:?}");
+        assert_eq!(
+            rendition.foreground,
+            Some(ui_theme.colors.agent_model.foreground),
+            "{rendition:?}"
         );
     }
 
