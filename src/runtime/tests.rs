@@ -8689,6 +8689,54 @@ fn runtime_attached_split_mux_action_focuses_new_pane() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies mouse focus uses the same pane-frame row accounting as rendering.
+///
+/// A top pane frame that is merged into an interior divider does not consume the
+/// first content row of the pane below it. Mouse targeting must therefore allow a
+/// click on that first rendered content row to focus the lower pane instead of
+/// treating the row as an inert frame.
+#[test]
+fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 8).unwrap());
+    service.window_frames_enabled = false;
+    service.pane_frames_enabled = true;
+    service.pane_frame_position = crate::terminal::TerminalFramePosition::Top;
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneHorizontal)
+            .unwrap()
+    );
+    service.session.select_pane(&primary, "%1").unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::FocusPaneOnly(CopyPosition { line: 4, column: 0 }),
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(report.view_refresh_required);
+    assert_eq!(
+        service.session().windows()[0].active_pane().id.as_str(),
+        "%2"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that the attached-terminal detach binding runs through the runtime
 /// lifecycle path rather than mutating session client state directly. The
 /// lifecycle helper updates the service state and emits the client-detached

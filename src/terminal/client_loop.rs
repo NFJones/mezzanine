@@ -1222,12 +1222,24 @@ pub(crate) const fn attached_terminal_restore_presentation_frame() -> &'static [
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn cursor_presentation_sequence(_lines: &[String], modes: AttachedTerminalOutputModes) -> String {
+fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputModes) -> String {
     if !cursor_phase_visible(modes) {
         return "\x1b[?25l".to_string();
     }
-    let row = modes.cursor_row.saturating_add(1);
-    let column = modes.cursor_column.saturating_add(1);
+    let row = modes
+        .cursor_row
+        .min(lines.len().saturating_sub(1))
+        .saturating_add(1);
+    let frame_width = lines
+        .iter()
+        .map(|line| terminal_line_width(line))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let column = modes
+        .cursor_column
+        .min(frame_width.saturating_sub(1))
+        .saturating_add(1);
     let style = modes.cursor_style.decscusr_parameter(false);
     format!("\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
 }

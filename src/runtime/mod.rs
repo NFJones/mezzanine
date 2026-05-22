@@ -165,9 +165,10 @@ use crate::terminal::{
     TerminalWindowStatusContext, UiTheme, UiThemeDefinition, WindowFocusTarget, WindowFrameAction,
     agent_prompt_reserved_line_count, builtin_ui_theme_definition, key_chord_input_bytes,
     pane_border_cells_for_geometries, pane_content_size_for_geometry,
-    pane_render_region_size_for_geometry, render_attached_client_view, rendered_pane_geometries,
-    rendered_window_body_size, resolve_ui_theme, route_client_input_actions,
-    valid_color_alias_name, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
+    render_attached_client_view, rendered_pane_geometries, rendered_window_body_size,
+    resolve_ui_theme, route_client_input_actions, valid_color_alias_name,
+    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,

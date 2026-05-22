@@ -834,6 +834,14 @@ fn clipped_style_spans(
 /// terminal output. Terminal content never receives this prefix.
 const MEZ_UI_PREFIX: &str = "▐ ";
 
+/// Clamps a zero-based visible cursor column into the addressable cells of a
+/// rendered row. Terminal cursor addressing is one-based and cannot represent a
+/// visible insertion point after the final cell without relying on emulator
+/// autowrap behavior.
+fn clamp_visible_cursor_column(column: usize, width: usize) -> usize {
+    column.min(width.saturating_sub(1))
+}
+
 /// Runs the render readline prompt status row operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -844,7 +852,9 @@ pub fn render_readline_prompt_status_row(
     width: usize,
 ) -> ReadlinePromptStatusRow {
     let raw_cursor_column = prompt.rendered_cursor_column();
-    let cursor_column = raw_cursor_column.min(width);
+    let cursor_column = raw_cursor_column
+        .saturating_add(2)
+        .min(width.saturating_sub(1));
     ReadlinePromptStatusRow {
         status: ClientStatusLine {
             kind: ClientStatusKind::Plain,
@@ -853,8 +863,8 @@ pub fn render_readline_prompt_status_row(
                 fit_width(&prompt.render_with_shadow_hint(), width.saturating_sub(2))
             ),
         },
-        cursor_column: cursor_column.saturating_add(2),
-        cursor_visible: raw_cursor_column <= width.saturating_sub(2),
+        cursor_column,
+        cursor_visible: width > 0 && raw_cursor_column <= width.saturating_sub(2),
     }
 }
 
@@ -1430,6 +1440,7 @@ fn render_wrapped_prompt_layout(
         }
         cursor_column = width;
     }
+    let cursor_column = clamp_visible_cursor_column(cursor_column, width);
     WrappedPromptLayout {
         lines,
         shadow_spans: visible_shadow_spans,
@@ -3359,8 +3370,8 @@ fn render_agent_live_footer_prompt_layout(
         lines: vec![fit_width(&line, width)],
         shadow_spans: vec![Vec::new()],
         cursor_row: 0,
-        cursor_column: cursor_column.min(width),
-        cursor_visible: cursor_column <= width,
+        cursor_column: clamp_visible_cursor_column(cursor_column, width),
+        cursor_visible: cursor_column < width,
     }
 }
 

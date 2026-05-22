@@ -23,7 +23,8 @@ use super::{
     TerminalWindowFrameContext, TerminalWindowStatusContext, WindowFocusTarget, WindowFrameAction,
     agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds, json_escape,
     key_chord_input_bytes, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    pane_border_cells_for_geometries, pane_content_size_for_geometry, pane_navigation_direction,
+    pane_border_cells_for_geometries, pane_content_size_for_geometry,
+    pane_frame_merges_into_divider, pane_navigation_direction,
     pane_render_region_size_for_geometry, parse_command_sequence, render_attached_client_view,
     rendered_pane_geometries, rendered_window_body_size, runtime_agent_shell_command_response_json,
     runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
@@ -6552,9 +6553,6 @@ impl RuntimeSessionService {
         }
         let body_row = row.checked_sub(window_frame_top_offset)?;
         let geometries = rendered_pane_geometries(&display_window, window_frame_visible).ok()?;
-        let pane_frame_top_offset = u16::from(
-            self.pane_frames_enabled && self.pane_frame_position == TerminalFramePosition::Top,
-        );
         for geometry in &geometries {
             let region_size = pane_render_region_size_for_geometry(geometry, &geometries).ok()?;
             let row_end = geometry.row.saturating_add(region_size.rows);
@@ -6570,10 +6568,16 @@ impl RuntimeSessionService {
                 .panes()
                 .iter()
                 .find(|pane| pane.index == geometry.index)?;
-            if self.pane_frames_enabled
-                && self.pane_frame_position == TerminalFramePosition::Top
-                && body_row == geometry.row
-            {
+            let pane_frame_top_offset = u16::from(
+                self.pane_frames_enabled
+                    && self.pane_frame_position == TerminalFramePosition::Top
+                    && !pane_frame_merges_into_divider(
+                        geometry,
+                        &geometries,
+                        self.pane_frame_position,
+                    ),
+            );
+            if pane_frame_top_offset > 0 && body_row == geometry.row {
                 return None;
             }
             let local_row = body_row

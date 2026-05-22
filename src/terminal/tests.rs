@@ -2319,7 +2319,11 @@ fn attached_terminal_fd_loop_io_blocks_until_input_poll_timeout_when_output_is_w
 #[test]
 fn attached_terminal_output_frame_controls_cursor_presentation() {
     let frame = encode_attached_terminal_output_frame_with_styles(
-        &["pane".to_string()],
+        &[
+            "pane    ".to_string(),
+            "body    ".to_string(),
+            "status  ".to_string(),
+        ],
         &[],
         None,
         AttachedTerminalOutputModes {
@@ -2340,6 +2344,33 @@ fn attached_terminal_output_frame_controls_cursor_presentation() {
     assert!(rendered.ends_with("\x1b[4 q\x1b[3;4H\x1b[?25h"));
 }
 
+/// Verifies attached-terminal cursor presentation clamps to the rendered frame
+/// bounds before emitting one-based terminal coordinates. A visible cursor at the
+/// internal end-of-row insertion point must not become column `width + 1`, since
+/// terminals can wrap or clamp that coordinate differently.
+#[test]
+fn attached_terminal_output_frame_clamps_visible_cursor_to_rendered_bounds() {
+    let frame = encode_attached_terminal_output_frame_with_styles(
+        &["abcde".to_string(), "vwxyz".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: true,
+            cursor_blink: false,
+            cursor_row: 9,
+            cursor_column: 5,
+            ..AttachedTerminalOutputModes::default()
+        },
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(
+        rendered.ends_with("\x1b[2 q\x1b[2;5H\x1b[?25h"),
+        "{rendered:?}"
+    );
+    assert!(!rendered.contains("\x1b[10;6H"), "{rendered:?}");
+}
+
 /// Verifies attached-terminal redraws place the cursor at the screen-model
 /// insertion point even after high Private Use prompt glyphs. Font-specific
 /// width guesses can put the visible cursor one column away from the next
@@ -2348,7 +2379,7 @@ fn attached_terminal_output_frame_controls_cursor_presentation() {
 #[test]
 fn attached_terminal_output_frame_uses_screen_cursor_after_patched_font_prompt_glyph() {
     let frame = encode_attached_terminal_output_frame_with_styles(
-        &["\u{f432}".to_string()],
+        &["\u{f432}       ".to_string()],
         &[],
         None,
         AttachedTerminalOutputModes {
@@ -3418,7 +3449,7 @@ fn readline_prompt_status_row_reports_truncated_cursor() {
     let row = render_readline_prompt_status_row(&prompt, 8);
 
     assert_eq!(row.status.text, "▐ :very-");
-    assert_eq!(row.cursor_column, 10);
+    assert_eq!(row.cursor_column, 7);
     assert!(!row.cursor_visible);
 }
 
@@ -3882,7 +3913,7 @@ fn prompt_region_presentation_expands_agent_prompt_for_long_input() {
 
     assert_eq!(presentation.lines[0], "▐ agent> [200 chars ");
     assert_eq!(presentation.cursor_row, 3);
-    assert_eq!(presentation.cursor_column, 20);
+    assert_eq!(presentation.cursor_column, 19);
     assert!(presentation.cursor_visible);
 }
 
