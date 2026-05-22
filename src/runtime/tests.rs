@@ -19459,10 +19459,21 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
         Some(AgentTurnState::Completed)
     );
     let entries = transcript_store.inspect(&conversation_id).unwrap();
-    assert!(entries.iter().any(
-        |entry| entry.role == crate::transcript::TranscriptRole::Assistant
-            && entry.content == "done"
-    ));
+    let assistant_entry = entries
+        .iter()
+        .find(|entry| entry.role == crate::transcript::TranscriptRole::Assistant)
+        .expect("assistant transcript entry should be persisted");
+    assert!(
+        assistant_entry
+            .content
+            .contains("thinking: test action batch rationale")
+    );
+    assert!(
+        assistant_entry
+            .content
+            .contains("thinking: finish the turn")
+    );
+    assert!(assistant_entry.content.ends_with("done"));
     assert!(
         entries
             .iter()
@@ -20961,6 +20972,15 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     assert!(service.agent_turn_executions.contains_key("turn-1"));
     assert!(service.agent_turn_failure_feedback_attempts.is_empty());
     let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::TranscriptAssistant
+            && block
+                .content
+                .contains("thinking: test action batch rationale")
+            && block
+                .content
+                .contains("thinking: exercise failure feedback")
+    }));
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

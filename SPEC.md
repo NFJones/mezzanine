@@ -1725,6 +1725,9 @@ already the user-visible assistant output for that action. Model-facing action
 guidance SHOULD direct action-batch intent and justification into the
 model-authored batch rationale rather than a redundant progress `say` action
 when executable actions in the same batch already make the progress visible.
+Rendered thinking/rationale lines MUST also be retained as assistant transcript
+content and future model-facing assistant context so continuation requests can
+preserve the model's working thread.
 While a pane has an active agent turn, the visible pane log tail MUST include a
 live foreground-only grayscale footer in the form `<state> (<duration> • esc
 to interrupt)`, where `<state>` is a lowercase human-readable active turn
@@ -3833,10 +3836,12 @@ timed-out, or interrupted action. Batch-level parse or schema failures that
 prevent identifying an action ID MUST be recorded as malformed response errors
 in the agent transcript. Action results MUST be appended to the agent
 transcript. Before the model is asked to continue from an action, Mezzanine
-MUST supply a compact model-facing projection of the result that preserves the
-action identity, action type, status, error code/message, approval prompt when
-blocked, command line, exit/timeout/signal state, truncation state, and bounded
-cleaned output needed for the next decision. The model-facing projection MUST
+MUST supply assistant context for the provider response being continued from,
+including rendered thinking/rationale lines, and a compact model-facing
+projection of the result that preserves the action identity, action type,
+status, error code/message, approval prompt when blocked, command line,
+exit/timeout/signal state, truncation state, and bounded cleaned output needed
+for the next decision. The model-facing projection MUST
 omit nulls, empty arrays/objects, runtime-owned identity duplicates, wrapper
 traffic, and audit-only fields such as matched policy rules, approval audit
 objects for completed actions, pane-dispatch booleans, generated wrapper
@@ -6554,13 +6559,14 @@ Mezzanine MUST persist agent conversation transcripts as JSON Lines or another
 documented structured append-only format.
 
 Durable agent transcripts MUST record only durable conversation facts: current
-user instructions, assistant-visible responses, and action results or
-diagnostics. They MUST NOT persist full model request scaffolding such as system
-prompts, developer policy blocks, passive terminal snapshots, prompt-injected
-action feedback, transcript reference blocks, or recent transcript excerpts.
-Permitted scaffolding blocks MAY be assembled into the next model request, but
-they MUST remain prompt-local so transcript context cannot recursively store or
-multiply itself across provider continuations.
+user instructions, assistant-visible responses, model-authored thinking or
+rationale lines, and action results or diagnostics. They MUST NOT persist full
+model request scaffolding such as system prompts, developer policy blocks,
+passive terminal snapshots, prompt-injected action feedback, transcript
+reference blocks, or recent transcript excerpts. Permitted scaffolding blocks
+MAY be assembled into the next model request, but they MUST remain prompt-local
+so transcript context cannot recursively store or multiply itself across
+provider continuations.
 
 Agent conversation persistence MUST live under the user's configuration
 directory in a parent agent-session directory. Each saved agent session MUST have

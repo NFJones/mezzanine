@@ -47,7 +47,6 @@ use super::{
     shell_command_structured_content_json, transcript_entries_for_execution,
     validate_mmp_payload_metadata,
 };
-use crate::agent::SayStatus;
 #[cfg(test)]
 use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
 use crate::agent::{
@@ -55,6 +54,7 @@ use crate::agent::{
     apply_patch_write_plan_from_read_output, openai_prompt_cache_diagnostics_for_request,
     openai_provider_from_auth_store_with_provider_options,
 };
+use crate::agent::{SayStatus, assistant_context_content_for_execution};
 #[cfg(test)]
 use crate::agent::{
     provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
@@ -5096,6 +5096,42 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Appends the provider response's assistant-visible context to a running
+    /// turn before any action results are observed.
+    ///
+    /// # Parameters
+    /// - `turn`: The running agent turn receiving the assistant context block.
+    /// - `execution`: The provider execution whose rationale and visible
+    ///   assistant text should remain available to later provider requests.
+    fn append_agent_execution_assistant_context(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let content = assistant_context_content_for_execution(execution);
+        if content.trim().is_empty() {
+            return Ok(());
+        }
+        let context = self
+            .agent_turn_contexts
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let label = format!("assistant response for {}", turn.turn_id);
+        if context.blocks.iter().any(|block| {
+            block.source == ContextSourceKind::TranscriptAssistant
+                && block.label == label
+                && block.content == content
+        }) {
+            return Ok(());
+        }
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::TranscriptAssistant,
+            label,
+            content,
+        });
+        Ok(())
+    }
+
     /// Runs the apply agent provider execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -5137,6 +5173,7 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
+        self.append_agent_execution_assistant_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;
@@ -5364,6 +5401,7 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
+        self.append_agent_execution_assistant_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;

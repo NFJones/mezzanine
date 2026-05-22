@@ -560,6 +560,16 @@ pub fn transcript_entries_for_execution(
     Ok(entries)
 }
 
+/// Returns the assistant-history context produced by one model execution.
+///
+/// The returned text is the same assistant content durable transcript storage
+/// would persist for the execution: visible `say` text is retained, non-visible
+/// actions are summarized, and MAAP rationale text is preserved as `thinking:`
+/// lines without retaining raw protocol JSON or inline file payloads.
+pub fn assistant_context_content_for_execution(execution: &AgentTurnExecution) -> String {
+    assistant_transcript_content(execution)
+}
+
 /// Returns durable request text for transcript storage.
 ///
 /// Model requests are assembled from prompt scaffolding: system prompts,
@@ -607,26 +617,56 @@ fn transcript_label_is_expanded_skill(label: &str) -> bool {
 
 /// Returns durable assistant transcript text without copying raw protocol JSON
 /// or inline file payloads into long-lived transcript storage.
+///
+/// MAAP rationale text is persisted as compact `thinking:` lines because it is
+/// the model-authored continuity thread behind the visible action sequence.
 fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return execution.response.raw_text.clone();
     };
+    let mut thinking_lines = assistant_transcript_rationale_lines(batch);
     if !execution.response.raw_text.trim().is_empty()
         && !assistant_raw_text_looks_like_maap_payload(&execution.response.raw_text)
     {
-        return execution.response.raw_text.clone();
+        if thinking_lines.is_empty() {
+            return execution.response.raw_text.clone();
+        }
+        thinking_lines.push(execution.response.raw_text.clone());
+        return thinking_lines.join("\n");
     }
     if let Some(visible_text) = assistant_visible_action_transcript_content(batch) {
-        return visible_text;
+        if thinking_lines.is_empty() {
+            return visible_text;
+        }
+        thinking_lines.push(visible_text);
+        return thinking_lines.join("\n");
     }
-    let mut lines = vec![format!(
+    thinking_lines.push(format!(
         "[assistant emitted MAAP actions; action_count={}]",
         batch.actions.len()
-    )];
+    ));
     for action in &batch.actions {
-        lines.push(format!("- {}", assistant_transcript_action_summary(action)));
+        thinking_lines.push(format!("- {}", assistant_transcript_action_summary(action)));
     }
-    lines.join("\n")
+    thinking_lines.join("\n")
+}
+
+/// Returns model-authored rationale text as transcript-visible thinking lines.
+///
+/// Batch and action rationales are rendered as thinking messages in the pane
+/// UI. Persisting them in the assistant transcript keeps later turns connected
+/// to the model's previous working thread without storing raw MAAP payloads.
+fn assistant_transcript_rationale_lines(batch: &MaapBatch) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !batch.rationale.trim().is_empty() {
+        lines.push(format!("thinking: {}", batch.rationale.trim()));
+    }
+    for action in &batch.actions {
+        if !action.rationale.trim().is_empty() {
+            lines.push(format!("thinking: {}", action.rationale.trim()));
+        }
+    }
+    lines
 }
 
 /// Returns the user-visible assistant text carried by a MAAP action batch.

@@ -3381,7 +3381,7 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
     );
     let action = AgentAction {
         id: "patch-1".to_string(),
-        rationale: String::new(),
+        rationale: "write note file".to_string(),
         payload: AgentActionPayload::ApplyPatch {
             patch: patch.clone(),
             strip: None,
@@ -3444,6 +3444,18 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
         "{}",
         assistant.content
     );
+    assert!(
+        assistant
+            .content
+            .contains("thinking: test action batch rationale"),
+        "{}",
+        assistant.content
+    );
+    assert!(
+        assistant.content.contains("thinking: write note file"),
+        "{}",
+        assistant.content
+    );
     assert!(assistant.content.contains("apply_patch patch_bytes="));
     assert!(!assistant.content.contains("\"actions\""));
     assert!(!assistant.content.contains("large-inline-file-content"));
@@ -3454,7 +3466,8 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
 /// Follow-up prompts often refer to numbered lists or suggested changes the
 /// assistant previously printed. Persisting only the compact MAAP action
 /// summary loses that referent, so user-visible say text must remain intact in
-/// the assistant transcript entry.
+/// the assistant transcript entry while the model's rationale remains available
+/// as thinking context for continuity.
 #[test]
 fn turn_execution_transcript_preserves_visible_say_text() {
     let turn = turn();
@@ -3513,7 +3526,10 @@ fn turn_execution_transcript_preserves_visible_say_text() {
         .find(|entry| entry.role == TranscriptRole::Assistant)
         .unwrap();
 
-    assert_eq!(assistant.content, visible_text);
+    assert_eq!(
+        assistant.content,
+        format!("thinking: test action batch rationale\nthinking: reply to user\n{visible_text}")
+    );
     assert!(
         assistant
             .content
@@ -3708,8 +3724,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Good catch"));
     assert!(prompt.contains("You're right"));
     assert!(prompt.contains("Exactly"));
-    assert!(prompt.contains("Batch rationale is transient execution intent"));
-    assert!(prompt.contains("not the place for durable learned facts or decisions"));
+    assert!(prompt.contains("Batch rationale is persisted as a thinking line for future context"));
+    assert!(prompt.contains("Durable learned facts or decisions"));
+    assert!(prompt.contains("still belong in checkpoint progress say"));
     assert!(prompt.contains("Before every non-final action batch"));
     assert!(prompt.contains("A checkpoint exists when"));
     assert!(prompt.contains("include exactly one progress say in the batch"));
@@ -4005,8 +4022,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     );
     assert!(prompt.contains("Make each rationale additive to recent thinking lines"));
     assert!(prompt.contains("say only what is newly decisive about this batch"));
-    assert!(prompt.contains("Batch rationale is transient execution intent"));
-    assert!(prompt.contains("not the place for durable learned facts or decisions"));
+    assert!(prompt.contains("Batch rationale is persisted as a thinking line for future context"));
+    assert!(prompt.contains("Durable learned facts or decisions"));
+    assert!(prompt.contains("still belong in checkpoint progress say"));
     assert!(prompt.contains("Before every non-final action batch"));
     assert!(prompt.contains("A checkpoint exists when"));
     assert!(prompt.contains("learned a non-obvious fact that changes the working theory"));
@@ -9085,11 +9103,11 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(rationale_description.contains("not a restatement of the user request"));
     assert!(rationale_description.contains("previous rationale"));
     assert!(
-        rationale_description.contains("Batch rationale is transient execution intent"),
+        rationale_description.contains("persists it as future context"),
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("not durable learned facts or decisions"),
+        rationale_description.contains("Keep it compact and focused on execution continuity"),
         "{rationale_description}"
     );
     assert!(

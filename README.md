@@ -109,7 +109,8 @@ transactions.
   directory, conversation state, and live runtime settings.
 - The agent does not passively receive your full screen, scrollback, or other
   panes by default. It sees explicit prompts, configured instructions,
-  compacted conversation context, and explicit action results.
+  compacted conversation context, prior assistant responses including thinking
+  lines, and explicit action results.
 - The agent is policy-gated. Shell, network, destructive, configuration, and
   some MCP actions may require approval depending on the active runtime mode.
 - The agent is not a background daemon with arbitrary host access. It acts
@@ -143,6 +144,8 @@ transactions.
   remote command environment already running in that pane.
 - Model context is action-based. Pane screen contents, scrollback, and
   alternate-screen contents are not passively sent to a model by default.
+  Prior assistant `say` output and model-authored thinking/rationale lines are
+  retained as conversation context.
 - Agent turns can inspect files, run bounded shell commands, request approvals,
   call configured MCP tools, communicate with subagents, and update files
   through Mezzanine actions.
@@ -432,7 +435,8 @@ for repository changes.
 
 No. Default model context excludes passive visible screen contents, scrollback,
 and alternate-screen contents. The model sees explicit user prompts,
-configured instructions, compacted prior context, and explicit action results.
+configured instructions, compacted prior context, prior assistant responses
+including thinking lines, and explicit action results.
 
 ### How do I enter and leave the agent shell?
 
