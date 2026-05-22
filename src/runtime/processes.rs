@@ -3603,7 +3603,30 @@ impl RuntimeSessionService {
                 }
                 PaneReadinessState::FullScreen
                 | PaneReadinessState::PasswordPrompt
-                | PaneReadinessState::InteractiveBlocked => {}
+                | PaneReadinessState::InteractiveBlocked => {
+                    if self.pane_foreground_primary_shell_state(&turn.pane_id) != Some(true) {
+                        continue;
+                    }
+                    self.set_pane_readiness(&turn.pane_id, PaneReadinessState::PromptCandidate);
+                    if self
+                        .pending_agent_provider_tasks
+                        .insert(turn.turn_id.clone())
+                    {
+                        recovered = recovered.saturating_add(1);
+                        self.append_agent_status_text_to_terminal_buffer(
+                            &turn.pane_id,
+                            "agent: shell interactivity block looked stale; retrying pending shell command",
+                        )?;
+                        self.append_agent_trace_turn_event(
+                            &turn.pane_id,
+                            &turn.turn_id,
+                            &format!(
+                                "provider_task queued reason=stale_interactive_blocked_recovery readiness={}",
+                                runtime_pane_readiness_state_name(readiness)
+                            ),
+                        )?;
+                    }
+                }
             }
         }
         Ok(recovered)
@@ -3946,10 +3969,18 @@ impl RuntimeSessionService {
         source: &str,
     ) -> Result<usize> {
         let previous = self.pane_readiness_state(pane_id);
+        let may_recover_interactive_block = matches!(
+            previous,
+            PaneReadinessState::FullScreen
+                | PaneReadinessState::PasswordPrompt
+                | PaneReadinessState::InteractiveBlocked
+        ) && self.pane_foreground_primary_shell_state(pane_id)
+            == Some(true);
         if !matches!(
             previous,
             PaneReadinessState::Unknown | PaneReadinessState::Busy
-        ) {
+        ) && !may_recover_interactive_block
+        {
             return Ok(0);
         }
         self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);

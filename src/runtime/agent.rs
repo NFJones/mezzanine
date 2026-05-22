@@ -6883,6 +6883,57 @@ impl RuntimeSessionService {
                     )?;
                     return Ok(dispatched);
                 }
+                state @ (PaneReadinessState::FullScreen
+                | PaneReadinessState::PasswordPrompt
+                | PaneReadinessState::InteractiveBlocked)
+                    if self.pane_foreground_primary_shell_state(&turn.pane_id) == Some(true) =>
+                {
+                    self.set_pane_readiness(&turn.pane_id, PaneReadinessState::PromptCandidate);
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        "agent: shell interactivity block looked stale; probing before pending shell command",
+                    )?;
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "pane_readiness {} -> prompt-candidate reason=stale_interactive_blocked_dispatch_recovery action={}",
+                            runtime_pane_readiness_state_name(state),
+                            action.id
+                        ),
+                    )?;
+                    if !self.turn_has_running_readiness_probe(&turn.turn_id) {
+                        if let Err(error) = self.dispatch_readiness_probe_to_pane(turn) {
+                            execution.action_results[index] = self
+                                .shell_action_runtime_error_result(
+                                    turn,
+                                    action,
+                                    command,
+                                    "readiness_probe_dispatch",
+                                    &error,
+                                )?;
+                            continue;
+                        }
+                        self.append_agent_trace_turn_event(
+                            &turn.pane_id,
+                            &turn.turn_id,
+                            &format!(
+                                "action {} waiting reason=stale_interactive_blocked_readiness_probe_sent",
+                                action.id
+                            ),
+                        )?;
+                    } else {
+                        self.append_agent_trace_turn_event(
+                            &turn.pane_id,
+                            &turn.turn_id,
+                            &format!(
+                                "action {} waiting reason=stale_interactive_blocked_readiness_probe_already_running",
+                                action.id
+                            ),
+                        )?;
+                    }
+                    return Ok(dispatched);
+                }
                 state => {
                     let message = format!(
                         "pane {} is not ready for agent shell input: {}",

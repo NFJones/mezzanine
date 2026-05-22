@@ -1248,6 +1248,23 @@ fn poll_until_exit(service: &mut RuntimeSessionService) -> Vec<PaneExitUpdate> {
     panic!("pane process did not exit before test timeout");
 }
 
+/// Waits until host process metadata reports that the pane primary shell owns
+/// the foreground process group.
+///
+/// # Parameters
+/// - `service`: The runtime service whose pane process metadata is queried.
+/// - `pane_id`: The pane expected to have an idle foreground shell.
+fn wait_until_primary_shell_foreground(service: &mut RuntimeSessionService, pane_id: &str) {
+    for _ in 0..50 {
+        if service.pane_foreground_primary_shell_state(pane_id) == Some(true) {
+            return;
+        }
+        let _ = service.poll_pane_outputs(4096).unwrap();
+        wait_for_pane_process_activity(service, pane_id, Duration::from_millis(10));
+    }
+    panic!("pane primary shell did not become foreground before test timeout");
+}
+
 /// Runs the poll until turn state operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -15318,6 +15335,142 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
             .any(|event| event.payload.contains(r#""bootstrap":"unparsed""#)),
         "{events:?}"
     );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies shell-integration prompt markers can clear a stale interactive
+/// block after the foreground process has returned to the pane's primary shell.
+///
+/// Alternate-screen and foreground-interactive programs can leave a pane in
+/// `interactive-blocked` even after the user exits back to the shell. The
+/// runtime should trust a prompt marker only when process metadata separately
+/// confirms that the primary shell is foreground again.
+#[test]
+fn runtime_passive_prompt_recovers_stale_interactive_blocked_shell() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let observed = service
+        .observe_passive_shell_prompt_candidate("%1", "osc133-prompt")
+        .unwrap();
+
+    assert_eq!(observed, 1);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies prompt markers alone do not clear an interactive block when the
+/// runtime cannot prove that the pane primary shell is foreground.
+///
+/// This protects the conservative side of readiness recovery: shell-like text
+/// or stale prompt metadata must not cause agent commands to enter an active
+/// foreground program.
+#[test]
+fn runtime_passive_prompt_keeps_interactive_block_without_foreground_shell_proof() {
+    let mut service = test_runtime_service();
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let observed = service
+        .observe_passive_shell_prompt_candidate("%1", "osc133-prompt")
+        .unwrap();
+
+    assert_eq!(observed, 0);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::InteractiveBlocked
+    );
+}
+
+/// Verifies a pending shell action is recovered instead of failed when
+/// `interactive-blocked` is stale and the pane shell is foreground again.
+///
+/// The dispatch path used to turn stale interactive-blocked readiness into a
+/// hard `pane_not_ready` action failure. That was incorrect when host process
+/// metadata already proved the user's shell had returned.
+#[test]
+fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "inspect the working directory".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+            },
+            latest_response_usage: Default::default(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let execution_after_dispatch = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+
+    assert!(execution_after_dispatch.is_some());
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Probing
+    );
+    assert!(
+        service
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
     service.pane_processes_mut().terminate_all().unwrap();
 }
 

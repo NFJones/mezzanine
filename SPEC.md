@@ -1806,11 +1806,12 @@ shows the pane has returned to a prompt candidate. The runtime MUST also detect
 a running turn that has a pending shell action but no running provider task, no
 live shell transaction, and no live readiness probe. If the pane is already
 ready, unknown, prompt-candidate, or degraded, the runtime MUST requeue the
-stored shell action for readiness handling. If the pane still says busy but
-host process metadata shows the primary pane shell is again the foreground
-process, the runtime MUST treat the busy state as stale, move the pane back to
-prompt-candidate, and requeue the stored shell action. This recovery MUST avoid
-spamming visible logs while preserving trace-level state-transition evidence.
+stored shell action for readiness handling. If the pane still says busy or
+interactive-blocked but host process metadata shows the primary pane shell is
+again the foreground process, the runtime MUST treat the blocking state as
+stale, move the pane back to prompt-candidate, and requeue the stored shell
+action. This recovery MUST avoid spamming visible logs while preserving
+trace-level state-transition evidence.
 When an async provider worker claims a provider task, the runtime MUST record a
 finite claim lease before removing the task from the pending-provider queue. A
 claimed provider worker that does not report completion or failure before its
@@ -3090,9 +3091,11 @@ The harness MUST NOT send non-interactive agent commands while the state is
 
 Passive shell-integration markers, including OSC 133 and OSC 633 prompt and
 command markers, MAY move the pane from `unknown` or `busy` to
-`prompt-candidate`. Prompt-looking text without shell-integration markers MAY be
-used only as a user-visible hint and MUST NOT by itself move the pane to
-`ready`.
+`prompt-candidate`. They MAY also move the pane from `interactive-blocked` to
+`prompt-candidate` when host process metadata independently shows the primary
+pane shell is again the foreground process. Prompt-looking text without
+shell-integration markers MAY be used only as a user-visible hint and MUST NOT
+by itself move the pane to `ready`.
 
 The harness MAY send a readiness probe from `unknown`, `prompt-candidate`, or
 `degraded`, after a recent harness-owned transaction whose wrapper reached a
@@ -3129,6 +3132,9 @@ prompts, multi-factor prompts, login banners awaiting user input, full-screen
 terminal applications, alternate-screen applications, and foreground programs
 that have not returned to the shell MUST move the state to
 `interactive-blocked` until the user completes or exits that interaction.
+When process metadata later proves the primary shell is foreground again,
+Mezzanine MAY treat `interactive-blocked` as stale and return to
+`prompt-candidate` before sending any further harness-owned command.
 
 If a probe times out, is echoed without executing, is consumed by a foreground
 program, or produces output inconsistent with the expected token, the state MUST
