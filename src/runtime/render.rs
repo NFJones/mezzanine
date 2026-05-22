@@ -7847,6 +7847,71 @@ impl RuntimeSessionService {
             })
             .collect()
     }
+    /// Reports whether the active window currently shows any live agent footer.
+    fn active_window_has_live_agent_footer(&self) -> bool {
+        self.session
+            .active_window()
+            .into_iter()
+            .flat_map(|window| window.panes().iter())
+            .any(|pane| self.pane_has_live_agent_footer(pane.id.as_str()))
+    }
+    /// Reports whether the pane currently renders a live agent footer.
+    fn pane_has_live_agent_footer(&self, pane_id: &str) -> bool {
+        if self.agent_compacting_panes.contains_key(pane_id) {
+            return true;
+        }
+        let Some(running_turn_id) = self
+            .agent_shell_store
+            .get(pane_id)
+            .and_then(|session| session.running_turn_id.as_deref())
+        else {
+            return false;
+        };
+        self.agent_turn_ledger
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == running_turn_id)
+    }
+    /// Builds the animation tick used by terminal frame rendering.
+    fn runtime_frame_animation_tick_ms(&self) -> u64 {
+        if self.terminal_reduced_motion || !self.active_window_has_live_agent_footer() {
+            0
+        } else {
+            current_unix_millis()
+        }
+    }
+    /// Builds right-status context only for fields the active template uses.
+    fn runtime_window_status_context(&self) -> Option<TerminalWindowStatusContext> {
+        if self.window_frame_right_status_template.trim().is_empty() {
+            return None;
+        }
+        let template = self.window_frame_right_status_template.clone();
+        let active_pane_working_directory = if template.contains("#{pane.pwd}") {
+            self.active_pane_id()
+                .ok()
+                .and_then(|pane_id| self.pane_current_working_directory(&pane_id))
+                .as_deref()
+                .map(Self::runtime_pane_frame_working_directory_display)
+        } else {
+            None
+        };
+        let system_uptime = if template.contains("#{system.uptime}") {
+            runtime_human_system_uptime()
+        } else {
+            String::new()
+        };
+        let datetime_local = if template.contains("#{datetime.local}") {
+            runtime_local_datetime_seconds_string()
+        } else {
+            String::new()
+        };
+        Some(TerminalWindowStatusContext {
+            template,
+            active_pane_working_directory,
+            system_uptime,
+            datetime_local,
+        })
+    }
 
     /// Runs the terminal frame context operation for this subsystem.
     ///
@@ -7874,21 +7939,9 @@ impl RuntimeSessionService {
             policy_mode: Some(policy_mode),
             pending_observer_count,
             pressed_window_action: self.pressed_window_action.clone(),
-            animation_tick_ms: current_unix_millis(),
+            animation_tick_ms: self.runtime_frame_animation_tick_ms(),
             reduced_motion: self.terminal_reduced_motion,
-            window_status: (!self.window_frame_right_status_template.trim().is_empty()).then(
-                || TerminalWindowStatusContext {
-                    template: self.window_frame_right_status_template.clone(),
-                    active_pane_working_directory: self
-                        .active_pane_id()
-                        .ok()
-                        .and_then(|pane_id| self.pane_current_working_directory(&pane_id))
-                        .as_deref()
-                        .map(Self::runtime_pane_frame_working_directory_display),
-                    system_uptime: runtime_human_system_uptime(),
-                    datetime_local: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                },
-            ),
+            window_status: self.runtime_window_status_context(),
             ..TerminalFrameContext::default()
         };
         let active_window_id = self
@@ -9817,6 +9870,14 @@ fn copy_selection_rendition(
     rendition
 }
 
+/// Runs the runtime human system uptime operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn runtime_local_datetime_seconds_string() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
 /// Runs the runtime human system uptime operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

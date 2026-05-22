@@ -329,17 +329,29 @@ where
             }
             continue;
         }
-        let request = if input.bytes.is_empty() {
-            terminal_view_control_request(iteration, client_size)
-        } else {
-            terminal_step_control_request(
-                iteration,
-                &primary_client_id,
+        if input.bytes.is_empty() {
+            if !request_and_render_primary_view_async(
+                stream,
+                terminal_io,
                 client_size,
-                input.bytes.as_slice(),
-                true,
+                iteration,
+                cursor_blink_epoch,
             )
-        };
+            .await?
+            {
+                break Ok(());
+            }
+            render_requested = false;
+            iteration = iteration.saturating_add(1);
+            continue;
+        }
+        let request = terminal_step_control_request(
+            iteration,
+            &primary_client_id,
+            client_size,
+            input.bytes.as_slice(),
+            false,
+        );
         if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
@@ -352,25 +364,19 @@ where
         if control_response_forbidden(body.as_str())? {
             break Ok(());
         }
-        render_requested = false;
-        let lines = terminal_step_response_lines(body.as_str())?;
-        let line_style_spans = terminal_step_response_line_style_spans(body.as_str())?;
-        if !lines.is_empty() {
-            let modes = control_socket_cursor_blink_elapsed(
-                terminal_step_response_output_modes(body.as_str())?.unwrap_or_default(),
-                cursor_blink_epoch,
-            );
-            if !write_styled_output_or_disconnected_async(
+        if (render_requested || terminal_step_response_view_refresh_required(body.as_str())?)
+            && !request_and_render_primary_view_async(
+                stream,
                 terminal_io,
-                &lines,
-                &line_style_spans,
-                modes,
+                client_size,
+                iteration,
+                cursor_blink_epoch,
             )
             .await?
-            {
-                break Ok(());
-            }
+        {
+            break Ok(());
         }
+        render_requested = false;
         iteration = iteration.saturating_add(1);
     }
 }
@@ -415,17 +421,29 @@ where
             }
             continue;
         }
-        let request = if input.bytes.is_empty() {
-            terminal_view_control_request(iteration, client_size)
-        } else {
-            terminal_step_control_request(
-                iteration,
-                &primary_client_id,
+        if input.bytes.is_empty() {
+            if !request_and_render_primary_view_async(
+                stream,
+                terminal_io,
                 client_size,
-                input.bytes.as_slice(),
-                true,
+                iteration,
+                cursor_blink_epoch,
             )
-        };
+            .await?
+            {
+                break Ok(());
+            }
+            render_requested = false;
+            iteration = iteration.saturating_add(1);
+            continue;
+        }
+        let request = terminal_step_control_request(
+            iteration,
+            &primary_client_id,
+            client_size,
+            input.bytes.as_slice(),
+            false,
+        );
         if !write_async_control_body_or_disconnected(stream, &request).await? {
             break Ok(());
         }
@@ -438,25 +456,19 @@ where
         if control_response_forbidden(body.as_str())? {
             break Ok(());
         }
-        render_requested = false;
-        let lines = terminal_step_response_lines(body.as_str())?;
-        let line_style_spans = terminal_step_response_line_style_spans(body.as_str())?;
-        if !lines.is_empty() {
-            let modes = control_socket_cursor_blink_elapsed(
-                terminal_step_response_output_modes(body.as_str())?.unwrap_or_default(),
-                cursor_blink_epoch,
-            );
-            if !write_styled_output_or_disconnected_async(
+        if (render_requested || terminal_step_response_view_refresh_required(body.as_str())?)
+            && !request_and_render_primary_view_async(
+                stream,
                 terminal_io,
-                &lines,
-                &line_style_spans,
-                modes,
+                client_size,
+                iteration,
+                cursor_blink_epoch,
             )
             .await?
-            {
-                break Ok(());
-            }
+        {
+            break Ok(());
         }
+        render_requested = false;
         iteration = iteration.saturating_add(1);
     }
 }
@@ -821,6 +833,48 @@ async fn write_styled_output_or_disconnected_async<I: AsyncAttachedTerminalIo>(
     }
 }
 
+/// Requests an explicit terminal view and writes the rendered frame locally.
+async fn request_and_render_primary_view_async<I: AsyncAttachedTerminalIo>(
+    stream: &mut tokio::net::UnixStream,
+    terminal_io: &mut I,
+    client_size: Size,
+    iteration: u64,
+    cursor_blink_epoch: std::time::Instant,
+) -> Result<bool> {
+    let request = terminal_view_control_request(iteration, client_size);
+    if !write_async_control_body_or_disconnected(stream, &request).await? {
+        return Ok(false);
+    }
+    let Some(response) =
+        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+    else {
+        return Ok(false);
+    };
+    let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+    if control_response_forbidden(body.as_str())? {
+        return Ok(false);
+    }
+    render_primary_view_response_async(terminal_io, body.as_str(), cursor_blink_epoch).await
+}
+
+/// Writes a rendered terminal view response to the attached terminal.
+async fn render_primary_view_response_async<I: AsyncAttachedTerminalIo>(
+    terminal_io: &mut I,
+    body: &str,
+    cursor_blink_epoch: std::time::Instant,
+) -> Result<bool> {
+    let lines = terminal_step_response_lines(body)?;
+    let line_style_spans = terminal_step_response_line_style_spans(body)?;
+    if lines.is_empty() {
+        return Ok(true);
+    }
+    let modes = control_socket_cursor_blink_elapsed(
+        terminal_step_response_output_modes(body)?.unwrap_or_default(),
+        cursor_blink_epoch,
+    );
+    write_styled_output_or_disconnected_async(terminal_io, &lines, &line_style_spans, modes).await
+}
+
 /// Runs the write async control body or disconnected operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1128,6 +1182,30 @@ pub(super) fn terminal_step_response_lines(body: &str) -> Result<Vec<String>> {
                 .ok_or_else(|| MezError::invalid_state("terminal step view line is not a string"))
         })
         .collect()
+}
+
+/// Reports whether a terminal step result requires an immediate explicit view.
+pub(super) fn terminal_step_response_view_refresh_required(body: &str) -> Result<bool> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| MezError::invalid_args("terminal step response is not valid JSON"))?;
+    if let Some(error) = parsed.get("error") {
+        return Err(MezError::invalid_state(format!(
+            "terminal step failed: {}",
+            json_escape(&error.to_string())
+        )));
+    }
+    let application = parsed
+        .get("result")
+        .and_then(|result| result.get("application"));
+    let view_refresh_required = application
+        .and_then(|application| application.get("view_refresh_required"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let full_redraw_required = application
+        .and_then(|application| application.get("full_redraw_required"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    Ok(view_refresh_required || full_redraw_required)
 }
 
 /// Runs the terminal step response line style spans operation for this subsystem.

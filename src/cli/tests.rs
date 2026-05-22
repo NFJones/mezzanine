@@ -2536,7 +2536,7 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
                 .get("params")
                 .and_then(|params| params.get("render"))
                 .and_then(serde_json::Value::as_bool),
-            Some(true)
+            Some(false)
         );
         assert_eq!(
             parsed
@@ -2549,7 +2549,20 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
         );
         server_stream
             .write_all(&encode_control_body(
-                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"view":{"lines":["detached async"],"line_style_spans":[[]],"cursor":{"row":0,"column":14,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"input_bytes":1,"application":{"forwarded_bytes":0,"mux_actions_applied":1,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":true,"full_redraw_required":true,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["detached async"],"line_style_spans":[[]],"cursor":{"row":0,"column":14,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
             ))
             .unwrap();
         server_stream.flush().unwrap();
@@ -2575,6 +2588,88 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
     assert_eq!(io.written_frames[0].modes.cursor_column, 14);
     assert!(io.written_frames[0].modes.cursor_visible);
 }
+
+/// Verifies that once the initial attach redraw has already been satisfied,
+/// a later primary-input step can stay input-only when the runtime reports no
+/// explicit refresh requirement for that input.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_skips_view_after_input_without_refresh_request() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    server_stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["initial"],"line_style_spans":[[]],"cursor":{"row":0,"column":7,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/step")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("render"))
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"input_bytes":1,"application":{"forwarded_bytes":1,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        let mut unexpected = [0u8; 256];
+        match server_stream.read(&mut unexpected) {
+            Ok(0) => {}
+            Ok(read) => panic!(
+                "unexpected follow-up view request: {}",
+                String::from_utf8_lossy(&unexpected[..read])
+            ),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => panic!("unexpected server read error: {error}"),
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_input(b"x".to_vec());
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.written_frames.len(), 1);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+}
+
 /// Verifies that an idle control-socket primary attach renders once for initial
 /// presentation but does not keep sending render requests on repeated terminal
 /// input timeouts. This protects the agent-inactive idle path from recreating

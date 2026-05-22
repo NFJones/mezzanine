@@ -50,3 +50,11 @@ regions, pane frames, and other view data even when nothing visible changed.
 - Added an auxiliary event-socket wakeup path for interactive primary attach so
   runtime events can request a fresh `terminal/view` without restoring periodic
   idle rendering.
+- Split primary attach terminal input from rendering: interactive input now uses
+  `terminal/step` with `render: false`, and the client issues an explicit
+  `terminal/view` only when startup, resize, runtime events, or runtime step
+  refresh flags require an immediate redraw.
+- Throttled frame-context time work: animation ticks now stay static unless the
+  active window shows a live agent footer, and right-status pane path, uptime,
+  and datetime fields are only computed when the configured template references
+  them.

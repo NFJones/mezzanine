@@ -4634,6 +4634,36 @@ fn runtime_applies_cursor_presentation_options_from_config_layers() {
     assert_eq!(config.cursor_blink_interval_ms, 250);
     assert_eq!(config.resize_debounce_ms, 125);
     assert!(config.frame_context.reduced_motion);
+    assert_eq!(config.frame_context.animation_tick_ms, 0);
+}
+/// Verifies that frame-context animation stays static when no live agent footer
+/// is visible in the active window. This keeps idle redraws from paying for
+/// animated footer state when agent mode is inactive or quiescent.
+#[test]
+fn runtime_frame_context_disables_animation_without_live_agent_footer() {
+    let service = test_runtime_service();
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(config.frame_context.animation_tick_ms, 0);
+}
+/// Verifies that a live agent footer re-enables animated frame ticks so active
+/// agent progress indicators keep their motion while work is still running.
+#[test]
+fn runtime_frame_context_animates_live_agent_footer() {
+    let mut service = test_runtime_service();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    service.agent_compacting_panes.insert(pane_id, 1);
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(config.frame_context.animation_tick_ms > 0);
 }
 
 /// Verifies that runtime frame context sources `pane.process_name` from the
@@ -4798,6 +4828,55 @@ fn runtime_frame_context_reports_home_relative_pane_working_directory() {
             .and_then(|status| status.active_pane_working_directory.as_deref()),
         Some(expected.as_str())
     );
+}
+/// Verifies that frame context leaves unused dynamic right-status fields empty
+/// when the configured template only references pane working-directory data.
+/// This avoids repeated uptime and datetime formatting work on redraws that do
+/// not display those fields.
+#[test]
+fn runtime_frame_context_skips_unused_dynamic_window_status_fields() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"#{pane.pwd}\"\n".to_string(),
+        }])
+        .unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from);
+    let path = home
+        .as_ref()
+        .map(|home| home.join("Documents/repos/mezzanine"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/mezzanine"));
+    let expected = home
+        .as_ref()
+        .map(|_| "~/Documents/repos/mezzanine".to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    service
+        .pane_current_working_directories
+        .insert(pane_id, path);
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let status = config.frame_context.window_status.as_ref().unwrap();
+    assert_eq!(
+        status.active_pane_working_directory.as_deref(),
+        Some(expected.as_str())
+    );
+    assert!(status.system_uptime.is_empty());
+    assert!(status.datetime_local.is_empty());
 }
 
 /// Verifies that the pane-frame status reports compaction as its own active
