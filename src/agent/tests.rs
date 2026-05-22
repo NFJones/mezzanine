@@ -3718,8 +3718,13 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
+    assert!(prompt.contains("any other text in the same response"));
     assert!(prompt.contains("omit optional action rationales"));
     assert!(prompt.contains("omit progress say"));
+    assert!(prompt.contains("Use one channel per idea"));
+    assert!(prompt.contains("if progress say records the durable learning"));
+    assert!(prompt.contains("rationale should only name the next executable reason"));
+    assert!(prompt.contains("progress say must not restate it"));
     assert!(prompt.contains("Prefer a short clause"));
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
@@ -3760,6 +3765,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains(
         "Do not use progress say merely to announce, justify, narrate executable actions"
     ));
+    assert!(prompt.contains("duplicate the current batch rationale/action summaries"));
     assert!(prompt.contains("web_search: search external HTTP(S) web/current information"));
     assert!(prompt.contains("fetch_url: fetch an explicit http:// or https:// URL"));
     assert!(prompt.contains("Use shell_command for local inspection"));
@@ -4019,8 +4025,13 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
+    assert!(prompt.contains("any other text in the same response"));
     assert!(prompt.contains("omit optional action rationales"));
     assert!(prompt.contains("omit progress say"));
+    assert!(prompt.contains("Use one channel per idea"));
+    assert!(prompt.contains("if progress say records the durable learning"));
+    assert!(prompt.contains("rationale should only name the next executable reason"));
+    assert!(prompt.contains("progress say must not restate it"));
     assert!(prompt.contains("Prefer a short clause"));
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
@@ -4055,6 +4066,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     ));
     assert!(prompt.contains("omit progress say when it would only announce"));
     assert!(prompt.contains("repeat recent thinking/action-result context"));
+    assert!(prompt.contains("duplicate same-response rationale/action summaries"));
+    assert!(prompt.contains("progress say plus executable actions"));
+    assert!(prompt.contains("must not communicate the same fact"));
     assert!(prompt.contains("Do not omit progress say when it records a substantial checkpoint"));
     assert!(prompt.contains("A checkpoint progress say is required only"));
     assert!(!prompt.contains("For multiphase implementation plans"));
@@ -9122,12 +9136,16 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         "{rationale_description}"
     );
     assert!(
-        rationale_description.contains("Compare against recent thinking lines and action results"),
+        rationale_description.contains("Compare against recent thinking lines, action results"),
         "{rationale_description}"
     );
+    assert!(rationale_description.contains("any progress say in the same response"));
     assert!(rationale_description.contains("if there is no new user-visible update"));
     assert!(rationale_description.contains("do not add a progress say"));
+    assert!(rationale_description.contains("If progress say records the durable learning"));
+    assert!(rationale_description.contains("only name the next executable reason"));
     assert!(rationale_description.contains("Omit optional action rationales"));
+    assert!(rationale_description.contains("progress say, or the action summary"));
     assert!(
         rationale_description.contains("Do not use this as a substitute"),
         "{rationale_description}"
@@ -9215,6 +9233,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         say_status_description.contains("Do not use progress just to announce"),
         "{say_status_description}"
     );
+    assert!(say_status_description.contains("duplicate the batch rationale/action summaries"));
+    assert!(say_status_description.contains("restate prior progress in the same turn"));
     assert!(say_status_description.contains("do not emit progress in every action batch"));
     assert!(
         say_status_description
@@ -9230,6 +9250,10 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_text_description.contains("important fact"));
     assert!(say_text_description.contains("durable learning or a decision, not intended work"));
     assert!(say_text_description.contains("If there is no substantial new user-visible update"));
+    assert!(say_text_description.contains("If progress say is included"));
+    assert!(
+        say_text_description.contains("keep the batch rationale to the next executable reason")
+    );
     assert!(
         say_text_description.contains("Do not format ordinary progress or final text with Plan:"),
         "{say_text_description}"

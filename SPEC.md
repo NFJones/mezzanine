@@ -5987,18 +5987,22 @@ MUST direct them to be additive deltas: each rationale should state only what is
 newly decisive about the next listed actions and should not restate prior
 rationales, the user request, global task goal, loaded context, or visible
 action summaries. The prompt MUST also instruct the model to compare a planned
-rationale or progress `say` against recent thinking lines, visible text, and
-action results; if the text would only repeat existing context, optional
-action-level rationales and progress `say` output MUST be omitted. The prompt
-MUST state that progress `say` output is for substantial checkpoints such as
-significant newly observed progress, evidence-backed direction choices,
-concrete blockers, validation outcomes, or user-requested narration. It MUST
-discourage progress `say` output as a routine action-batch heartbeat, and MUST
-discourage future-tense visible plans, intended-work checklists, and headings
-such as `Plan:`, `Steps:`, `Next:`, `Executed:`, or `Evidence:` when executable
-actions are requested in the same response. When an action rationale is
-present, the prompt SHOULD ask for a concise reason that justifies the
-immediate action and does not duplicate the batch rationale or action summary.
+rationale or progress `say` against recent thinking lines, visible text, action
+results, and other text in the same response; if the text would only repeat
+existing context, optional action-level rationales and progress `say` output
+MUST be omitted. The prompt MUST require one channel per idea: when progress
+`say` records durable learning, batch rationale MUST be limited to the next
+executable reason; when batch rationale or action summaries already explain
+intent, progress `say` MUST NOT restate that intent. The prompt MUST state that
+progress `say` output is for substantial checkpoints such as significant newly
+observed progress, evidence-backed direction choices, concrete blockers,
+validation outcomes, or user-requested narration. It MUST discourage progress
+`say` output as a routine action-batch heartbeat, and MUST discourage
+future-tense visible plans, intended-work checklists, and headings such as
+`Plan:`, `Steps:`, `Next:`, `Executed:`, or `Evidence:` when executable actions
+are requested in the same response. When an action rationale is present, the
+prompt SHOULD ask for a concise reason that justifies the immediate action and
+does not duplicate the batch rationale, progress `say`, or action summary.
 For implementation summaries, the prompt MUST require changed files, successful
 mutation evidence, verification evidence, and skipped validation when relevant.
 The prompt MUST prohibit leading with approval phrases such as "Great
