@@ -7,6 +7,7 @@
 // CLI module tests.
 
 use super::attach::{
+    AttachRenderAction, AttachedRuntimeEventStream,
     run_control_socket_attached_observer_client_loop_async,
     run_control_socket_attached_primary_client_loop_async,
     run_control_socket_attached_primary_client_loop_async_with_runtime_events,
@@ -85,6 +86,17 @@ fn complete_control_frame_count(input: &[u8], max_content_length: usize) -> usiz
         offset += consumed;
     }
     frames
+}
+
+/// Builds one framed JSON-RPC event notification for attach-loop tests.
+///
+/// # Parameters
+/// - `event_type`: The event type to encode in the notification method and
+///   params object.
+fn event_notification_frame(event_type: &str) -> Vec<u8> {
+    encode_control_body(&format!(
+        r#"{{"jsonrpc":"2.0","method":"event/{event_type}","params":{{"event_id":1,"time":"2026-05-21T00:00:00Z","event_type":"{event_type}","session_id":null,"object":{{}}}}}}"#
+    ))
 }
 
 /// Runs the run with operation for this subsystem.
@@ -2770,7 +2782,9 @@ async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
                 .unwrap();
             server_stream.flush().unwrap();
             if expected_id == "cli-terminal-view-0" {
-                event_server_stream.write_all(b"event").unwrap();
+                event_server_stream
+                    .write_all(&event_notification_frame("pane_changed"))
+                    .unwrap();
                 event_server_stream.flush().unwrap();
             }
         }
@@ -2793,9 +2807,187 @@ async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
     }
     server.join().unwrap();
     assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
     assert_eq!(io.written_frames.len(), 2);
     assert_eq!(io.written_frames[0].lines, vec!["initial"]);
     assert_eq!(io.written_frames[1].lines, vec!["event redraw"]);
+}
+
+/// Verifies that generic runtime events do not redraw the attached terminal.
+///
+/// Diagnostic notifications can be emitted as runtime bookkeeping, but they do
+/// not alter the visible attached terminal frame. This protects the idle
+/// efficiency refactor from turning event traffic into flicker.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_ignores_nonvisible_runtime_events() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        assert_eq!(
+            parsed.get("id").and_then(serde_json::Value::as_str),
+            Some("cli-terminal-view-0")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["initial"],"line_style_spans":[[]],"cursor":{"row":0,"column":7,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        event_server_stream
+            .write_all(&event_notification_frame("diagnostic"))
+            .unwrap();
+        event_server_stream.flush().unwrap();
+        drop(event_server_stream);
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
+    assert_eq!(io.written_frames.len(), 1);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+}
+
+/// Verifies that structural runtime events redraw after invalidating the diff
+/// base exactly once.
+///
+/// Layout-changing event notifications can make the previous output frame an
+/// unsafe basis for incremental rendering, so the attach loop should invalidate
+/// only for that stronger event class.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_structural_runtime_event_invalidates_once() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        for (expected_id, response_lines) in [
+            ("cli-terminal-view-0", "initial"),
+            ("cli-terminal-view-1", "window changed"),
+        ] {
+            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                parsed.get("method").and_then(serde_json::Value::as_str),
+                Some("terminal/view")
+            );
+            assert_eq!(
+                parsed.get("id").and_then(serde_json::Value::as_str),
+                Some(expected_id)
+            );
+            server_stream
+                .write_all(&encode_control_body(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"{expected_id}","result":{{"view":{{"lines":["{response_lines}"],"line_style_spans":[[]],"cursor":{{"row":0,"column":14,"visible":true,"style":"bar","blink":false}},"output_modes":{{"application_keypad":false}}}}}}}}"#
+                )))
+                .unwrap();
+            server_stream.flush().unwrap();
+            if expected_id == "cli-terminal-view-0" {
+                event_server_stream
+                    .write_all(&event_notification_frame("window_changed"))
+                    .unwrap();
+                event_server_stream.flush().unwrap();
+            }
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 1);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+    assert_eq!(io.written_frames[1].lines, vec!["window changed"]);
+}
+
+/// Verifies that event stream decoding buffers split frames across socket reads.
+///
+/// Runtime event notifications use the same framed protocol as control
+/// responses, so the attach client must not assume that one socket read contains
+/// one complete event.
+#[tokio::test(flavor = "current_thread")]
+async fn attached_runtime_event_stream_buffers_split_frames() {
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let mut event_stream = AttachedRuntimeEventStream::new(event_client_stream);
+    let frame = event_notification_frame("pane_changed");
+    let split_at = frame.len() / 2;
+    event_server_stream.write_all(&frame[..split_at]).unwrap();
+    event_server_stream.flush().unwrap();
+    assert_eq!(
+        event_stream.read_render_action().await.unwrap(),
+        AttachRenderAction::None
+    );
+    event_server_stream.write_all(&frame[split_at..]).unwrap();
+    event_server_stream.flush().unwrap();
+    assert_eq!(
+        event_stream.read_render_action().await.unwrap(),
+        AttachRenderAction::View
+    );
+}
+
+/// Verifies that a burst of runtime events is coalesced into the strongest
+/// single render action.
+///
+/// A pane update followed by a structural event should not produce multiple
+/// immediate redraw requests; the attach loop only needs the strongest action
+/// from the burst.
+#[tokio::test(flavor = "current_thread")]
+async fn attached_runtime_event_stream_coalesces_event_burst() {
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let mut event_stream = AttachedRuntimeEventStream::new(event_client_stream);
+    let mut burst = event_notification_frame("pane_changed");
+    burst.extend_from_slice(&event_notification_frame("window_changed"));
+    event_server_stream.write_all(&burst).unwrap();
+    event_server_stream.flush().unwrap();
+    assert_eq!(
+        event_stream.read_render_action().await.unwrap(),
+        AttachRenderAction::InvalidateAndView
+    );
 }
 
 /// Verifies interactive control-socket attachment exits cleanly when the daemon

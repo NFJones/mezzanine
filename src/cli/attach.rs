@@ -19,6 +19,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 // Attach clients and interactive control-socket attachment helpers.
 
+/// Maximum JSON-RPC event notification body accepted from the auxiliary event
+/// stream.
+const ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
+
+/// Maximum bytes read from the auxiliary event stream in one socket read.
+const ATTACH_EVENT_STREAM_READ_BUFFER_BYTES: usize = 8192;
+
 /// Runs the run list operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -391,7 +398,7 @@ pub(super) async fn run_control_socket_attached_primary_client_loop_async_with_r
     terminal_io: &mut I,
     primary_client_id: ClientId,
     mut client_size: Size,
-    mut event_stream: Option<tokio::net::UnixStream>,
+    event_stream: Option<tokio::net::UnixStream>,
 ) -> Result<()>
 where
     I: AsyncAttachedTerminalIo,
@@ -400,6 +407,7 @@ where
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
+    let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
@@ -411,9 +419,16 @@ where
         if input.eof {
             break Ok(());
         }
-        if input.render_requested {
-            terminal_io.invalidate_output_frame().await?;
-            render_requested = true;
+        match input.render_action {
+            AttachRenderAction::None => {}
+            AttachRenderAction::View => {
+                render_requested = true;
+            }
+            AttachRenderAction::InvalidateAndView => {
+                terminal_io.invalidate_output_frame().await?;
+                render_requested = true;
+            }
+            AttachRenderAction::Disconnect => break Ok(()),
         }
         if input.bytes.is_empty() && !render_requested {
             if control_socket_disconnected_without_pending_response(stream)? {
@@ -627,11 +642,42 @@ struct AttachedClientInputPoll {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     eof: bool,
-    /// Stores whether a runtime event requested a fresh render.
-    ///
-    /// The field distinguishes event-driven redraw wakeups from no-input
-    /// terminal timeouts that should stay idle.
-    render_requested: bool,
+    /// Render action requested by an auxiliary runtime event.
+    render_action: AttachRenderAction,
+}
+
+/// Render action requested by an attached runtime event stream notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AttachRenderAction {
+    /// No visible attached-terminal redraw is needed.
+    None,
+    /// Request a fresh `terminal/view` while preserving the diff-render base.
+    View,
+    /// Invalidate the diff-render base before requesting a fresh view.
+    InvalidateAndView,
+    /// The auxiliary event stream disconnected.
+    Disconnect,
+}
+
+impl AttachRenderAction {
+    /// Combines two actions, preserving the strongest action for an event burst.
+    const fn combine(self, other: Self) -> Self {
+        if self.rank() >= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+
+    /// Returns the precedence rank for this action.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::View => 1,
+            Self::InvalidateAndView => 2,
+            Self::Disconnect => 3,
+        }
+    }
 }
 
 /// Runs the read attached client input or timeout operation for this subsystem.
@@ -652,18 +698,18 @@ async fn read_attached_client_input_or_timeout<I: AsyncAttachedTerminalIo>(
         Ok(Ok(bytes)) if bytes.is_empty() => Ok(AttachedClientInputPoll {
             bytes,
             eof: true,
-            render_requested: false,
+            render_action: AttachRenderAction::None,
         }),
         Ok(Ok(bytes)) => Ok(AttachedClientInputPoll {
             bytes,
             eof: false,
-            render_requested: false,
+            render_action: AttachRenderAction::None,
         }),
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(AttachedClientInputPoll {
             bytes: Vec::new(),
             eof: false,
-            render_requested: false,
+            render_action: AttachRenderAction::None,
         }),
     }
 }
@@ -675,7 +721,7 @@ async fn read_attached_client_input_or_timeout<I: AsyncAttachedTerminalIo>(
 /// - `max_bytes`: Maximum terminal input bytes to read.
 async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>(
     terminal_io: &mut I,
-    event_stream: Option<&mut tokio::net::UnixStream>,
+    event_stream: Option<&mut AttachedRuntimeEventStream>,
     max_bytes: usize,
 ) -> Result<AttachedClientInputPoll> {
     let Some(event_stream) = event_stream else {
@@ -683,38 +729,195 @@ async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>
     };
     tokio::select! {
         input = read_attached_client_input_or_timeout(terminal_io, max_bytes) => input,
-        event_open = read_runtime_event_stream_wakeup(event_stream) => {
-            if event_open? {
-                Ok(AttachedClientInputPoll {
-                    bytes: Vec::new(),
-                    eof: false,
-                    render_requested: true,
-                })
-            } else {
-                Ok(AttachedClientInputPoll {
-                    bytes: Vec::new(),
-                    eof: true,
-                    render_requested: false,
-                })
-            }
+        render_action = read_runtime_event_stream_action(event_stream) => {
+            let render_action = render_action?;
+            Ok(AttachedClientInputPoll {
+                bytes: Vec::new(),
+                eof: false,
+                render_action,
+            })
         }
     }
 }
 
-/// Reads one runtime event stream chunk and reports whether the stream remains open.
-async fn read_runtime_event_stream_wakeup(stream: &mut tokio::net::UnixStream) -> Result<bool> {
-    let mut buffer = [0u8; 8192];
-    match stream.read(&mut buffer).await {
-        Ok(0) => Ok(false),
-        Ok(_) => Ok(true),
-        Err(error) => {
-            let error = MezError::from(error);
-            if attached_terminal_output_disconnected(&error) {
-                Ok(false)
-            } else {
-                Err(error)
+/// Reads auxiliary runtime event notifications and returns the coalesced action.
+async fn read_runtime_event_stream_action(
+    stream: &mut AttachedRuntimeEventStream,
+) -> Result<AttachRenderAction> {
+    stream.read_render_action().await
+}
+
+/// Stateful auxiliary runtime event stream decoder.
+pub(super) struct AttachedRuntimeEventStream {
+    /// Auxiliary event stream socket.
+    stream: tokio::net::UnixStream,
+    /// Buffered bytes that have not yet formed a complete control frame.
+    pending: Vec<u8>,
+}
+
+impl AttachedRuntimeEventStream {
+    /// Creates a stateful decoder for one auxiliary event stream.
+    pub(super) fn new(stream: tokio::net::UnixStream) -> Self {
+        Self {
+            stream,
+            pending: Vec::new(),
+        }
+    }
+
+    /// Reads one event burst and returns the strongest render action it implies.
+    pub(super) async fn read_render_action(&mut self) -> Result<AttachRenderAction> {
+        let mut action = AttachRenderAction::None;
+        if !self.pending_contains_complete_frame() {
+            match self.read_event_stream_chunk().await? {
+                RuntimeEventStreamRead::Read => {}
+                RuntimeEventStreamRead::Disconnected => return Ok(AttachRenderAction::Disconnect),
+                RuntimeEventStreamRead::Pending => return Ok(AttachRenderAction::None),
             }
         }
+        action = action.combine(self.drain_complete_event_frames()?);
+        loop {
+            match self.try_read_event_stream_chunk()? {
+                RuntimeEventStreamRead::Read => {
+                    action = action.combine(self.drain_complete_event_frames()?);
+                }
+                RuntimeEventStreamRead::Pending => return Ok(action),
+                RuntimeEventStreamRead::Disconnected => {
+                    return Ok(action.combine(AttachRenderAction::Disconnect));
+                }
+            }
+        }
+    }
+
+    /// Reports whether the pending byte buffer begins with a complete frame.
+    fn pending_contains_complete_frame(&self) -> bool {
+        decode_control_frame(
+            self.pending.as_slice(),
+            ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH,
+        )
+        .is_ok()
+    }
+
+    /// Reads one awaited chunk from the event stream into the pending buffer.
+    async fn read_event_stream_chunk(&mut self) -> Result<RuntimeEventStreamRead> {
+        let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
+        match self.stream.read(&mut buffer).await {
+            Ok(0) => Ok(RuntimeEventStreamRead::Disconnected),
+            Ok(read) => {
+                self.push_pending_event_bytes(&buffer[..read])?;
+                Ok(RuntimeEventStreamRead::Read)
+            }
+            Err(error) if runtime_event_stream_disconnected(error.kind()) => {
+                Ok(RuntimeEventStreamRead::Disconnected)
+            }
+            Err(error) => Err(MezError::from(error)),
+        }
+    }
+
+    /// Reads one immediately available chunk from the event stream.
+    fn try_read_event_stream_chunk(&mut self) -> Result<RuntimeEventStreamRead> {
+        let mut buffer = [0u8; ATTACH_EVENT_STREAM_READ_BUFFER_BYTES];
+        match self.stream.try_read(&mut buffer) {
+            Ok(0) => Ok(RuntimeEventStreamRead::Disconnected),
+            Ok(read) => {
+                self.push_pending_event_bytes(&buffer[..read])?;
+                Ok(RuntimeEventStreamRead::Read)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Ok(RuntimeEventStreamRead::Pending)
+            }
+            Err(error) if runtime_event_stream_disconnected(error.kind()) => {
+                Ok(RuntimeEventStreamRead::Disconnected)
+            }
+            Err(error) => Err(MezError::from(error)),
+        }
+    }
+
+    /// Appends bytes to the pending buffer while enforcing a bounded frame size.
+    fn push_pending_event_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.pending.extend_from_slice(bytes);
+        if self.pending.len() > ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH + 1024 {
+            return Err(MezError::invalid_state(
+                "runtime event stream frame exceeds limit",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Drains all complete frames from the pending buffer into one render action.
+    fn drain_complete_event_frames(&mut self) -> Result<AttachRenderAction> {
+        let mut action = AttachRenderAction::None;
+        loop {
+            let Ok((body, consumed)) = decode_control_frame(
+                self.pending.as_slice(),
+                ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH,
+            ) else {
+                return Ok(action);
+            };
+            if consumed == 0 {
+                return Ok(action);
+            }
+            action = action.combine(attach_render_action_for_event_body(body.as_str()));
+            self.pending.drain(..consumed);
+        }
+    }
+}
+
+/// Result of one auxiliary event stream socket read attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeEventStreamRead {
+    /// Bytes were read and appended to the pending buffer.
+    Read,
+    /// No bytes are currently available without awaiting the socket.
+    Pending,
+    /// The auxiliary event stream disconnected.
+    Disconnected,
+}
+
+/// Reports whether an event stream I/O error should be treated as disconnect.
+fn runtime_event_stream_disconnected(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+    )
+}
+
+/// Classifies one event notification body into an attach render action.
+fn attach_render_action_for_event_body(body: &str) -> AttachRenderAction {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return AttachRenderAction::None;
+    };
+    let Some(event_type) = event_type_from_notification(&value) else {
+        return AttachRenderAction::None;
+    };
+    attach_render_action_for_event_type(event_type)
+}
+
+/// Extracts an event type from a JSON-RPC event notification.
+fn event_type_from_notification(value: &serde_json::Value) -> Option<&str> {
+    if let Some(event_type) = value
+        .get("params")
+        .and_then(|params| params.get("event_type"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(event_type);
+    }
+    value
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|method| method.strip_prefix("event/"))
+}
+
+/// Maps a runtime event type onto the attached client's render needs.
+fn attach_render_action_for_event_type(event_type: &str) -> AttachRenderAction {
+    match event_type {
+        "diagnostic" | "snapshot_changed" => AttachRenderAction::None,
+        "client_attached" | "client_detached" | "config_changed" | "observer_decided"
+        | "window_changed" => AttachRenderAction::InvalidateAndView,
+        "agent_status" | "approval_changed" | "hook_failed" | "mcp_server_changed" | "message"
+        | "observer_requested" | "pane_changed" => AttachRenderAction::View,
+        _ => AttachRenderAction::View,
     }
 }
 
