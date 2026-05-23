@@ -51,7 +51,9 @@ use super::{
 use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
 use crate::agent::{
     ApplyPatchTransactionPhase, MaapBatch, apply_patch_error_plan, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output, openai_prompt_cache_diagnostics_for_request,
+    apply_patch_write_plan_from_read_output,
+    deepseek_provider_from_auth_store_with_provider_options,
+    openai_prompt_cache_diagnostics_for_request,
     openai_provider_from_auth_store_with_provider_options,
 };
 use crate::agent::{SayStatus, assistant_context_content_for_execution};
@@ -6475,6 +6477,49 @@ impl RuntimeSessionService {
                     Err(error) => {
                         self.append_credential_access_audit(
                             "openai",
+                            &provider_config.auth_profile,
+                            "provider_request",
+                            "denied",
+                        )?;
+                        return Err(error);
+                    }
+                }
+            }
+            "deepseek" => {
+                self.append_credential_access_audit(
+                    "deepseek",
+                    &provider_config.auth_profile,
+                    "provider_request",
+                    "requested",
+                )?;
+                let auth_store = self.auth_store.as_ref().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "DeepSeek provider execution requires an attached auth store",
+                    )
+                })?;
+                let endpoint_override = provider_config
+                    .base_url
+                    .as_deref()
+                    .filter(|endpoint| !endpoint.is_empty());
+                let provider_result = deepseek_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                );
+                match provider_result {
+                    Ok(provider) => {
+                        self.append_credential_access_audit(
+                            "deepseek",
+                            &provider_config.auth_profile,
+                            "provider_request",
+                            "granted",
+                        )?;
+                        RuntimeAgentProviderDispatchProvider::DeepSeek(provider)
+                    }
+                    Err(error) => {
+                        self.append_credential_access_audit(
+                            "deepseek",
                             &provider_config.auth_profile,
                             "provider_request",
                             "denied",

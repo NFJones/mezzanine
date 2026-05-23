@@ -27,6 +27,11 @@ use std::pin::Pin;
 pub const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
 /// Default direct OpenAI model catalog endpoint used with API-key auth.
 pub const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
+/// Default DeepSeek Chat Completions API endpoint.
+pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/v1/chat/completions";
+/// Default DeepSeek models listing endpoint.
+#[allow(dead_code)]
+pub const DEEPSEEK_MODELS_ENDPOINT: &str = "https://api.deepseek.com/v1/models";
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 /// OpenAI project routing header for project-scoped API accounting.
@@ -430,6 +435,69 @@ pub trait AsyncModelProvider: Send + Sync {
                 self.provider_id()
             )))
         })
+    }
+}
+
+/// Declares which request fields and features a provider supports.
+///
+/// Capability flags drive request construction, retry mutation, and fallback
+/// selection: Mezzanine skips fields the provider does not advertise, and
+/// fail-fast rules treat unsupported-parameter rejections as permanent errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    /// Whether the provider accepts the OpenAI Responses API body shape.
+    pub supports_responses_api: bool,
+    /// Whether max_output_tokens is accepted by the provider.
+    pub supports_max_output_tokens: bool,
+    /// Whether reasoning effort controls are accepted.
+    pub supports_reasoning_controls: bool,
+    /// Whether the service_tier field is accepted.
+    pub supports_service_tier: bool,
+    /// Whether prompt cache retention is supported.
+    pub supports_prompt_cache_retention: bool,
+    /// Whether streaming (SSE) is supported.
+    pub supports_streaming: bool,
+    /// Whether function tool calling is supported.
+    pub supports_tool_calls: bool,
+    /// Whether the provider supports parallel tool calls.
+    pub supports_parallel_tool_calls: bool,
+}
+
+impl ProviderCapabilities {
+    /// Returns the capabilities for a known provider kind string.
+    pub fn for_kind(kind: &str) -> Self {
+        match kind {
+            "openai" => Self {
+                supports_responses_api: true,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: true,
+                supports_service_tier: true,
+                supports_prompt_cache_retention: true,
+                supports_streaming: true,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: true,
+            },
+            "deepseek" => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: true,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
+            _ => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: false,
+                supports_reasoning_controls: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: false,
+                supports_tool_calls: false,
+                supports_parallel_tool_calls: false,
+            },
+        }
     }
 }
 
@@ -1216,6 +1284,211 @@ pub fn openai_provider_from_auth_store_with_options<T>(
     )
 }
 
+/// Carries Deep Seek Chat Completions Provider state.
+#[derive(Debug, Clone)]
+pub struct DeepSeekChatCompletionsProvider<T> {
+    pub(super) api_key: SecretString,
+    pub(super) endpoint: String,
+    pub(super) stream: bool,
+    pub(super) timeout_ms: u64,
+    pub(super) transport: T,
+}
+
+impl<T> DeepSeekChatCompletionsProvider<T> {
+    /// Creates a new DeepSeek Chat Completions provider with the given API key.
+    pub fn new(api_key: impl Into<SecretString>, transport: T) -> Result<Self> {
+        let api_key = api_key.into();
+        validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
+        Ok(Self {
+            api_key,
+            endpoint: DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT.to_string(),
+            stream: false,
+            timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
+            transport,
+        })
+    }
+
+    /// Enables or disables streaming for this provider.
+    pub fn with_stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
+
+    /// Overrides the default endpoint URL for this provider.
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
+    /// Sets the request timeout in milliseconds.
+    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+}
+
+#[cfg(test)]
+impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider<T> {
+    fn provider_id(&self) -> &str {
+        "deepseek"
+    }
+
+    fn list_models(&self) -> Result<ProviderModelCatalog> {
+        let http_request = build_deepseek_models_http_request(
+            self.api_key.expose_secret(),
+            &self.endpoint,
+            self.timeout_ms,
+        )?;
+        let response = self.transport.send(&http_request)?;
+        if !(200..300).contains(&response.status_code) {
+            return Err(MezError::invalid_state(format!(
+                "DeepSeek Models API returned status {}: {}",
+                response.status_code,
+                openai_provider_error_detail(&response.body)
+            ))
+            .with_provider_failure_json(openai_provider_failure_json(
+                Some(response.status_code),
+                &response.body,
+            )));
+        }
+        let models = parse_openai_models_http_body(&response.body)?;
+        let reasoning_levels = provider_catalog_reasoning_levels(&models);
+        let quota_usage = provider_quota_usage_from_headers(&response.headers);
+        Ok(ProviderModelCatalog {
+            provider: ModelProvider::provider_id(self).to_string(),
+            source: "provider".to_string(),
+            models,
+            reasoning_levels,
+            quota_usage,
+        })
+    }
+
+    fn send_request(&self, request: &ModelRequest) -> Result<ModelResponse> {
+        if request.provider != ModelProvider::provider_id(self) {
+            return Err(MezError::invalid_args(
+                "DeepSeek provider received a request for a different provider",
+            ));
+        }
+        let http_request = build_deepseek_chat_completions_http_request(
+            request,
+            self.api_key.expose_secret(),
+            &self.endpoint,
+            self.stream,
+            self.timeout_ms,
+        )?;
+        let response = self.transport.send(&http_request)?;
+        if !(200..300).contains(&response.status_code) {
+            return Err(MezError::invalid_state(format!(
+                "DeepSeek Chat Completions API returned status {}: {}",
+                response.status_code,
+                openai_provider_error_detail(&response.body)
+            ))
+            .with_provider_failure_json(openai_provider_failure_json(
+                Some(response.status_code),
+                &response.body,
+            )));
+        }
+        let body = response.body;
+        if self.stream {
+            let actions = parse_deepseek_chat_completions_stream_body(&body, request)?;
+            return Ok(ModelResponse {
+                provider: ModelProvider::provider_id(self).to_string(),
+                model: request.model.clone(),
+                raw_text: actions,
+                usage: Default::default(),
+                quota_usage: provider_quota_usage_from_headers(&response.headers),
+                action_batch: None,
+            });
+        }
+        parse_deepseek_chat_completions_response_body(&body, request)
+    }
+}
+
+impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletionsProvider<T> {
+    fn provider_id(&self) -> &str {
+        "deepseek"
+    }
+
+    fn list_models_async<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderModelCatalog>> + Send + 'a>> {
+        Box::pin(async move {
+            let http_request = build_deepseek_models_http_request(
+                self.api_key.expose_secret(),
+                &self.endpoint,
+                self.timeout_ms,
+            )?;
+            let response = self.transport.send_async(&http_request).await?;
+            if !(200..300).contains(&response.status_code) {
+                return Err(MezError::invalid_state(format!(
+                    "DeepSeek Models API returned status {}: {}",
+                    response.status_code,
+                    openai_provider_error_detail(&response.body)
+                ))
+                .with_provider_failure_json(openai_provider_failure_json(
+                    Some(response.status_code),
+                    &response.body,
+                )));
+            }
+            let models = parse_openai_models_http_body(&response.body)?;
+            let reasoning_levels = provider_catalog_reasoning_levels(&models);
+            let quota_usage = provider_quota_usage_from_headers(&response.headers);
+            Ok(ProviderModelCatalog {
+                provider: AsyncModelProvider::provider_id(self).to_string(),
+                source: "provider".to_string(),
+                models,
+                reasoning_levels,
+                quota_usage,
+            })
+        })
+    }
+
+    fn send_request_async<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            if request.provider != AsyncModelProvider::provider_id(self) {
+                return Err(MezError::invalid_args(
+                    "DeepSeek provider received a request for a different provider",
+                ));
+            }
+            let http_request = build_deepseek_chat_completions_http_request(
+                request,
+                self.api_key.expose_secret(),
+                &self.endpoint,
+                self.stream,
+                self.timeout_ms,
+            )?;
+            let response = self.transport.send_async(&http_request).await?;
+            if !(200..300).contains(&response.status_code) {
+                return Err(MezError::invalid_state(format!(
+                    "DeepSeek Chat Completions API returned status {}: {}",
+                    response.status_code,
+                    openai_provider_error_detail(&response.body)
+                ))
+                .with_provider_failure_json(openai_provider_failure_json(
+                    Some(response.status_code),
+                    &response.body,
+                )));
+            }
+            let body = response.body;
+            if self.stream {
+                let actions = parse_deepseek_chat_completions_stream_body(&body, request)?;
+                return Ok(ModelResponse {
+                    provider: AsyncModelProvider::provider_id(self).to_string(),
+                    model: request.model.clone(),
+                    raw_text: actions,
+                    usage: Default::default(),
+                    quota_usage: provider_quota_usage_from_headers(&response.headers),
+                    action_batch: None,
+                });
+            }
+            parse_deepseek_chat_completions_response_body(&body, request)
+        })
+    }
+}
+
 /// Builds an OpenAI provider from auth metadata plus non-secret provider options.
 ///
 /// Direct API-key requests use the documented OpenAI REST endpoints and may
@@ -1275,6 +1548,34 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
             )
         }
     }
+}
+
+/// Builds a DeepSeek Chat Completions provider from auth metadata.
+///
+/// DeepSeek only supports direct API-key authentication. Endpoint overrides
+/// are passed through to the provider.
+pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
+    auth_store: &AuthStore,
+    base_url_override: Option<&str>,
+    timeout_ms: u64,
+    transport: T,
+) -> Result<DeepSeekChatCompletionsProvider<T>> {
+    let metadata = auth_store
+        .read_metadata()?
+        .ok_or_else(|| MezError::invalid_state("DeepSeek provider is not authenticated"))?;
+    if metadata.provider != "deepseek" {
+        return Err(MezError::invalid_state(format!(
+            "auth metadata is for provider `{}`",
+            metadata.provider
+        )));
+    }
+    let credential = auth_store.provider_secret("deepseek")?;
+    let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
+    if let Some(endpoint) = base_url_override.filter(|e| !e.trim().is_empty()) {
+        provider = provider.with_endpoint(endpoint);
+    }
+    provider = provider.with_timeout(timeout_ms).with_stream(true);
+    Ok(provider)
 }
 
 /// Builds documented OpenAI REST routing headers for direct API-key requests.
@@ -1662,6 +1963,248 @@ pub fn build_openai_models_http_request_with_headers(
     Ok(ProviderHttpRequest {
         method: "GET".to_string(),
         url: openai_models_endpoint_for_responses_endpoint(responses_endpoint)?,
+        headers,
+        body: String::new(),
+        timeout_ms,
+        max_response_bytes: None,
+    })
+}
+
+/// Builds a DeepSeek Chat Completions HTTP request.
+pub fn build_deepseek_chat_completions_http_request(
+    request: &ModelRequest,
+    api_key: &str,
+    endpoint: &str,
+    stream: bool,
+    timeout_ms: u64,
+) -> Result<ProviderHttpRequest> {
+    validate_non_empty("DeepSeek provider bearer credential", api_key)?;
+    validate_non_empty("DeepSeek Chat Completions endpoint", endpoint)?;
+    if timeout_ms == 0 {
+        return Err(MezError::invalid_args(
+            "DeepSeek provider timeout must be greater than zero",
+        ));
+    }
+    let body = deepseek_chat_completions_request_body(request, stream)?;
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "Accept".to_string(),
+        if stream {
+            "text/event-stream".to_string()
+        } else {
+            "application/json".to_string()
+        },
+    );
+    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    Ok(ProviderHttpRequest {
+        method: "POST".to_string(),
+        url: endpoint.to_string(),
+        headers,
+        body,
+        timeout_ms,
+        max_response_bytes: None,
+    })
+}
+
+/// Builds the JSON body for a DeepSeek Chat Completions request.
+fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) -> Result<String> {
+    let capabilities = ProviderCapabilities::for_kind("deepseek");
+    let messages: Vec<serde_json::Value> = request
+        .messages
+        .iter()
+        .map(|message| {
+            let role = match message.role {
+                ModelMessageRole::System => "system",
+                ModelMessageRole::User => "user",
+                ModelMessageRole::Assistant => "assistant",
+                _ => "user",
+            };
+            serde_json::json!({
+                "role": role,
+                "content": message.content
+            })
+        })
+        .collect();
+    let mut body = serde_json::json!({
+        "model": request.model,
+        "messages": messages,
+        "stream": stream,
+    });
+    if let Some(max_output_tokens) = request
+        .max_output_tokens
+        .filter(|tokens| *tokens > 0)
+        .filter(|_| capabilities.supports_max_output_tokens)
+    {
+        body["max_tokens"] = serde_json::json!(max_output_tokens);
+    }
+    if capabilities.supports_tool_calls {
+        let tool_choice = if request.allowed_actions.actions.is_empty()
+            || request.allowed_actions == AllowedActionSet::say_only()
+        {
+            serde_json::json!("none")
+        } else {
+            serde_json::json!("auto")
+        };
+        body["tool_choice"] = tool_choice;
+        if !request.allowed_actions.actions.is_empty()
+            && request.allowed_actions != AllowedActionSet::say_only()
+        {
+            let maap_tool = serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                    "description": "Submit one validated MAAP/1 action batch for execution.",
+                    "parameters": maap_action_batch_schema(
+                        &request.allowed_actions,
+                        &request.available_mcp_tools
+                    ),
+                    "strict": false
+                }
+            });
+            body["tools"] = serde_json::json!([maap_tool]);
+        }
+    }
+    serde_json::to_string(&body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "DeepSeek Chat Completions request encoding failed: {error}"
+        ))
+    })
+}
+
+/// Parses a DeepSeek Chat Completions non-streaming response body.
+fn parse_deepseek_chat_completions_response_body(
+    body: &str,
+    request: &ModelRequest,
+) -> Result<ModelResponse> {
+    let root: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "DeepSeek Chat Completions response body is invalid JSON: {error}"
+        ))
+    })?;
+    let model = root
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&request.model)
+        .to_string();
+    let choices = root
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            MezError::invalid_state("DeepSeek Chat Completions response has no choices array")
+        })?;
+    let first_choice = choices.first().ok_or_else(|| {
+        MezError::invalid_state("DeepSeek Chat Completions response has empty choices array")
+    })?;
+    let message = first_choice.get("message").ok_or_else(|| {
+        MezError::invalid_state("DeepSeek Chat Completions choice has no message")
+    })?;
+    let raw_text = message
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let action_batch = if let Some(parsed) = message
+        .get("tool_calls")
+        .and_then(|tool_calls| tool_calls.as_array())
+        .filter(|tool_calls| !tool_calls.is_empty())
+    {
+        let maap_json = parsed
+            .iter()
+            .find_map(|call| {
+                let name = call.get("function")?.get("name")?.as_str()?;
+                if name == OPENAI_MAAP_FUNCTION_TOOL_NAME {
+                    call.get("function")?.get("arguments")?.as_str()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("");
+        if maap_json.is_empty() {
+            None
+        } else {
+            parse_maap_action_batch_json_for_turn(maap_json, &request.turn_id, &request.agent_id)
+                .ok()
+        }
+    } else {
+        None
+    };
+    let usage = root
+        .get("usage")
+        .map(parse_deepseek_usage)
+        .unwrap_or_default();
+    Ok(ModelResponse {
+        provider: request.provider.clone(),
+        model,
+        raw_text,
+        usage,
+        quota_usage: Vec::new(),
+        action_batch,
+    })
+}
+
+/// Parses usage statistics from a DeepSeek Chat Completions response.
+fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
+    ModelTokenUsage {
+        input_tokens: usage
+            .get("prompt_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        output_tokens: usage
+            .get("completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        reasoning_tokens: usage
+            .get("reasoning_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        cached_input_tokens: usage
+            .get("prompt_cache_hit_tokens")
+            .and_then(serde_json::Value::as_u64),
+    }
+}
+
+/// Parses a DeepSeek Chat Completions streaming (SSE) response body.
+fn parse_deepseek_chat_completions_stream_body(
+    body: &str,
+    _request: &ModelRequest,
+) -> Result<String> {
+    let mut text_content = String::new();
+    for line in body.lines() {
+        let data = line.strip_prefix("data: ").unwrap_or(line);
+        if data == "[DONE]" || data.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
+            continue;
+        };
+        if let Some(choices) = event.get("choices").and_then(serde_json::Value::as_array) {
+            for choice in choices {
+                if let Some(delta) = choice.get("delta")
+                    && let Some(content) = delta.get("content").and_then(serde_json::Value::as_str)
+                {
+                    text_content.push_str(content);
+                }
+            }
+        }
+    }
+    Ok(text_content)
+}
+
+/// Builds a DeepSeek models listing HTTP request.
+pub fn build_deepseek_models_http_request(
+    api_key: &str,
+    chat_endpoint: &str,
+    timeout_ms: u64,
+) -> Result<ProviderHttpRequest> {
+    validate_non_empty("DeepSeek model listing credential", api_key)?;
+    let models_endpoint = chat_endpoint.replace("/chat/completions", "/models");
+    let mut headers = BTreeMap::new();
+    headers.insert("Accept".to_string(), "application/json".to_string());
+    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    Ok(ProviderHttpRequest {
+        method: "GET".to_string(),
+        url: models_endpoint,
         headers,
         body: String::new(),
         timeout_ms,
@@ -4216,19 +4759,20 @@ mod tests {
             description: "Echo test input".to_string(),
             approval_required: false,
             input_schema_json: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "data": {
-                        "type": "object",
-                        "properties": {
-                            "uri": {
-                                "type": "string",
-                                "format": "uri"
-                            }
-                        }
-                    }
+                            "type": "object",
+                            "properties": {
+                                "data": {
+                                    "type": "object",
+                                    "properties": {
+                                        "uri": {
+                                            "type": "string",
+                                            "format": "uri"
                 }
-            })
+            }
+
+                                }
+                            }
+                        })
             .to_string(),
         };
         let schema = maap_mcp_call_action_schema_for_tool(&tool);

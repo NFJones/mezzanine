@@ -3793,6 +3793,11 @@ fn provider_failure_is_retryable(
         return true;
     }
     if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
+        if status_code == 400
+            && (message.contains("Unsupported") || message.contains("unsupported"))
+        {
+            return false;
+        }
         return status_code == 429 || (500..=599).contains(&status_code);
     }
     matches!(kind, "io" | "Io")

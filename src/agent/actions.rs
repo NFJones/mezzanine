@@ -2698,6 +2698,11 @@ fn provider_error_should_retry_without_summary(error: &MezError) -> bool {
         return true;
     }
     if let Some(status_code) = provider_failure_status_code(error.provider_failure_json()) {
+        if status_code == 400
+            && (error.message().contains("Unsupported") || error.message().contains("unsupported"))
+        {
+            return false;
+        }
         return status_code == 429 || (500..=599).contains(&status_code);
     }
     if error.kind() == crate::error::MezErrorKind::Io {

@@ -8,21 +8,21 @@ use super::{
     ActionStatus, AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentShellVisibility,
     AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
     AuditDeferredWrite, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
-    ConfigScope, ControlIdempotencyCache, CopyMode, DiscoveredInstructionFile, Duration,
-    EnvironmentSignature, EventAudience, EventLog, File, FocusedShellHookDispatch,
-    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
-    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
-    MezError, ModelProfile, ModelRequest, ModelTokenUsage, OpenAiResponsesProvider, OpenOptions,
-    OsString, PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore,
-    PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, ScopeRegistry,
-    Session, SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
-    SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle,
-    TerminalFramePosition, TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry,
-    UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid,
-    encode_control_body, encode_event_notification, encode_mmp_body,
-    execute_streamable_http_exchange, parse_mcp_tools_call_response,
+    ConfigScope, ControlIdempotencyCache, CopyMode, DeepSeekChatCompletionsProvider,
+    DiscoveredInstructionFile, Duration, EnvironmentSignature, EventAudience, EventLog, File,
+    FocusedShellHookDispatch, FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan,
+    HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry,
+    McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse,
+    MessageService, MezError, ModelProfile, ModelRequest, ModelTokenUsage, OpenAiResponsesProvider,
+    OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager,
+    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes,
+    PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result,
+    ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore, SessionRecord,
+    SessionRegistry, Size, SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration,
+    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
+    ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write,
+    delivery_batch_json, effective_uid, encode_control_body, encode_event_notification,
+    encode_mmp_body, execute_streamable_http_exchange, parse_mcp_tools_call_response,
 };
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
@@ -2908,6 +2908,11 @@ pub enum RuntimeAgentProviderDispatchProvider {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     OpenAi(OpenAiResponsesProvider<ReqwestProviderHttpTransport>),
+    /// Represents the Deep Seek case for this enumeration.
+    ///
+    /// Callers use this variant to describe one explicit state or command path
+    /// without relying on stringly typed status values.
+    DeepSeek(DeepSeekChatCompletionsProvider<ReqwestProviderHttpTransport>),
 }
 
 impl RuntimeAgentProviderDispatchProvider {
@@ -2919,6 +2924,7 @@ impl RuntimeAgentProviderDispatchProvider {
     pub fn provider_id(&self) -> &'static str {
         match self {
             Self::OpenAi(_) => "openai",
+            Self::DeepSeek(_) => "deepseek",
         }
     }
 }

@@ -1292,6 +1292,20 @@ async fn execute_runtime_agent_provider_dispatch(
             };
             runner.run_turn_async(&mut ledger, turn, context).await
         }
+        RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+            let mut ledger = AgentTurnLedger::new(false);
+            let runner = AgentTurnRunner {
+                provider: &provider,
+                model_profile,
+                permissions: &permission_policy,
+                approvals: &session_approvals,
+                path_scopes: path_scopes.as_ref(),
+                subagent_scope: subagent_scope.as_ref(),
+                available_mcp_servers,
+                available_mcp_tools: &available_mcp_tools,
+            };
+            runner.run_turn_async(&mut ledger, turn, context).await
+        }
     }
 }
 
@@ -1302,6 +1316,9 @@ async fn execute_runtime_agent_compaction_dispatch(
     let RuntimeAgentCompactionDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+            provider.send_request_async(&task.request).await
+        }
+        RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             provider.send_request_async(&task.request).await
         }
     }

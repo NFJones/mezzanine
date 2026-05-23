@@ -226,6 +226,19 @@ default_model = "gpt-5.5"
 # organization_id = "org_..."
 # project_id = "proj_..."
 
+[providers.deepseek]
+kind = "deepseek"
+auth_profile = "default"
+# Optional API base URL, such as "https://api.deepseek.com".
+# Mezzanine derives /chat/completions and /models endpoints from this base.
+base_url = ""
+# DeepSeek model IDs supported by the default coding-agent harness profile.
+models = [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+]
+default_model = "deepseek-v4-pro"
+
 [model_profiles.default]
 provider = "openai"
 model = "gpt-5.5"
@@ -315,6 +328,40 @@ approval_policy = "ask"
 fallback_profiles = []
 
 [model_profiles.auto-size-large.provider_options]
+reasoning_effort = "high"
+
+[model_profiles.deepseek-default]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+reasoning_profile = "high"
+latency_preference = "default"
+multimodal_required = false
+context_window_tokens = 524288
+# max_output_tokens = 32768
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.deepseek-default.provider_options]
+reasoning_effort = "high"
+
+[model_profiles.deepseek-fast]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+reasoning_profile = "high"
+latency_preference = "fast"
+multimodal_required = false
+context_window_tokens = 524288
+# max_output_tokens = 32768
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.deepseek-fast.provider_options]
 reasoning_effort = "high"
 
 [permissions]
