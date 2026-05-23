@@ -4638,24 +4638,12 @@ impl RuntimeSessionService {
         let router_profile = self
             .provider_registry
             .resolve_profile(&config.router_model_profile)?;
-        if router_profile.provider != default_profile.provider {
-            return Ok(None);
-        }
-        let small = self.runtime_auto_sizing_target_profile(
-            "small",
-            &config.small_model_profile,
-            &default_profile.provider,
-        )?;
-        let medium = self.runtime_auto_sizing_target_profile(
-            "medium",
-            &config.medium_model_profile,
-            &default_profile.provider,
-        )?;
-        let large = self.runtime_auto_sizing_target_profile(
-            "large",
-            &config.large_model_profile,
-            &default_profile.provider,
-        )?;
+        let small =
+            self.runtime_auto_sizing_target_profile("small", &config.small_model_profile)?;
+        let medium =
+            self.runtime_auto_sizing_target_profile("medium", &config.medium_model_profile)?;
+        let large =
+            self.runtime_auto_sizing_target_profile("large", &config.large_model_profile)?;
         Ok(Some(RuntimeAutoSizingDispatch {
             router_profile_name: config.router_model_profile.clone(),
             router_profile,
@@ -4711,15 +4699,8 @@ impl RuntimeSessionService {
         &self,
         size: &str,
         profile_name: &str,
-        expected_provider: &str,
     ) -> Result<RuntimeAutoSizingTargetProfile> {
         let profile = self.provider_registry.resolve_profile(profile_name)?;
-        if profile.provider != expected_provider {
-            return Err(MezError::config(format!(
-                "auto-sizing {size} profile `{profile_name}` uses provider `{}`, but active provider is `{expected_provider}`",
-                profile.provider
-            )));
-        }
         let provider_config = self.provider_registry.provider(&profile.provider);
         Ok(RuntimeAutoSizingTargetProfile {
             size: size.to_string(),
@@ -6560,6 +6541,53 @@ impl RuntimeSessionService {
                 "agent: auto reasoning selecting model and reasoning effort",
             )?;
         }
+        let auto_sizing_provider = if let Some(auto_sizing) = auto_sizing.as_ref()
+            && auto_sizing.router_profile.provider != model_profile.provider
+        {
+            let router_provider_config = self
+                .provider_registry
+                .provider(&auto_sizing.router_profile.provider)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::config(format!(
+                        "auto-sizing router provider `{}` is not configured",
+                        auto_sizing.router_profile.provider
+                    ))
+                })?;
+            let router_auth_store = self.auth_store.as_ref().ok_or_else(|| {
+                MezError::invalid_state(
+                    "auto-sizing router provider requires an attached auth store",
+                )
+            })?;
+            let endpoint_override = router_provider_config
+                .base_url
+                .as_deref()
+                .filter(|endpoint| !endpoint.is_empty());
+            let result = match router_provider_config.kind.as_str() {
+                "openai" => openai_provider_from_auth_store_with_provider_options(
+                    router_auth_store,
+                    endpoint_override,
+                    &router_provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::OpenAi),
+                "deepseek" => deepseek_provider_from_auth_store_with_provider_options(
+                    router_auth_store,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::DeepSeek),
+                _ => Err(MezError::config(format!(
+                    "auto-sizing router provider `{}` has unsupported kind `{}`",
+                    auto_sizing.router_profile.provider, router_provider_config.kind
+                ))),
+            };
+            Some(result?)
+        } else {
+            None
+        };
         if let Some(block) = self.run_configured_pre_action_hooks(
             HookEvent::AgentTurnStart,
             &runtime_agent_turn_start_hook_payload(&turn, &model_profile),
@@ -6648,6 +6676,7 @@ impl RuntimeSessionService {
             context,
             model_profile,
             auto_sizing,
+            auto_sizing_provider,
             provider,
             permission_policy,
             session_approvals: self.session_approvals.clone(),

@@ -2952,6 +2952,9 @@ pub struct RuntimeAgentProviderDispatch {
     pub model_profile: ModelProfile,
     /// Optional automatic sizing context for the worker's first provider step.
     pub auto_sizing: Option<RuntimeAutoSizingDispatch>,
+    /// Optional router provider for auto-sizing when different from the main
+    /// turn provider. When set, auto-sizing requests use this provider.
+    pub auto_sizing_provider: Option<RuntimeAgentProviderDispatchProvider>,
     /// Stores the provider value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

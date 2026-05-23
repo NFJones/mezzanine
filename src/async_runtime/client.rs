@@ -1258,6 +1258,7 @@ async fn execute_runtime_agent_provider_dispatch(
         context,
         mut model_profile,
         auto_sizing,
+        auto_sizing_provider,
         provider,
         permission_policy,
         session_approvals,
@@ -1266,9 +1267,39 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_servers,
         available_mcp_tools,
     } = dispatch;
+    if let Some(auto_sizing) = auto_sizing.as_ref()
+        && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
+    {
+        match auto_sizing_provider {
+            RuntimeAgentProviderDispatchProvider::OpenAi(router_provider) => {
+                let (selected_profile, _decision, _fallback) =
+                    runtime_execute_auto_sizing_with_async_provider(
+                        router_provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await;
+                model_profile = selected_profile;
+            }
+            RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
+                let (selected_profile, _decision, _fallback) =
+                    runtime_execute_auto_sizing_with_async_provider(
+                        router_provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await;
+                model_profile = selected_profile;
+            }
+        }
+    }
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            if let Some(auto_sizing) = auto_sizing.as_ref() {
+            if auto_sizing_provider.is_none()
+                && let Some(auto_sizing) = auto_sizing.as_ref()
+            {
                 let (selected_profile, _decision, _fallback) =
                     runtime_execute_auto_sizing_with_async_provider(
                         &provider,
