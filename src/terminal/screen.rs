@@ -842,6 +842,10 @@ impl TerminalScreen {
         }
 
         if !self.alternate.active() && self.scroll_region.is_none() {
+            if self.normal_screen_viewport_is_cleared() {
+                self.resize_cleared_normal_screen(size);
+                return;
+            }
             if self.size.columns == size.columns {
                 self.resize_normal_screen_rows_only(size);
                 return;
@@ -851,6 +855,28 @@ impl TerminalScreen {
         }
 
         self.resize_grid_preserving_cells(size);
+    }
+    /// Returns whether the live normal-screen viewport is intentionally blank.
+    ///
+    /// Pane-local clears such as `Ctrl+L` move visible rows into scrollback and
+    /// reset the cursor to the origin. Subsequent resizes must preserve that
+    /// cleared viewport instead of pulling scrollback back into view.
+    fn normal_screen_viewport_is_cleared(&self) -> bool {
+        self.last_significant_row().is_none() && self.cursor.row == 0 && self.cursor.column == 0
+    }
+    /// Resizes an intentionally cleared normal-screen viewport.
+    ///
+    /// The resize keeps scrollback untouched and preserves the blank live pane
+    /// presentation expected after pane-local clear operations.
+    fn resize_cleared_normal_screen(&mut self, size: Size) {
+        self.size = size;
+        self.clear_screen();
+        let max_row = self.max_row();
+        let max_column = self.max_column();
+        if let Some(cursor) = self.saved_cursor.as_mut() {
+            cursor.row = cursor.row.min(max_row);
+            cursor.column = cursor.column.min(max_column);
+        }
     }
 
     /// Runs the resize grid preserving cells operation for this subsystem.

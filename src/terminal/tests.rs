@@ -4297,6 +4297,37 @@ fn terminal_screen_clear_visible_into_history_preserves_log_rows() {
         Some(TerminalColor::Indexed(1))
     );
 }
+/// Verifies pane-local clear operations keep the live viewport blank across
+/// subsequent pane splits and resizes.
+///
+/// `Ctrl+L` scrolls the visible rows into scrollback and clears the pane
+/// without deleting copyable history. Later width-changing and row-only
+/// resizes must preserve that empty viewport instead of repopulating it from
+/// history.
+#[test]
+fn terminal_screen_resize_preserves_blank_viewport_after_clear_visible_into_history() {
+    let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
+    screen.feed(b"one\ntwo\nthree");
+    screen.clear_visible_into_history();
+
+    screen.resize(Size::new(5, 3).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["", "", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 0);
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec!["one", "two", "three"]
+    );
+
+    screen.resize(Size::new(5, 4).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["", "", "", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 0);
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec!["one", "two", "three"]
+    );
+}
 
 /// Verifies terminal screen handles erase line variants.
 ///
