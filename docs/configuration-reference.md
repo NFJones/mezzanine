@@ -192,7 +192,7 @@ Default `frames.window.visible_fields`:
 Default `frames.pane.visible_fields`:
 
 ```toml
-["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.latency", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 ```
 
 ### Frame template fields
@@ -207,7 +207,7 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.index`, `pane.title`, `pane.active`, `pane.size`, `pane.primary_pid`,
 `pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `agent.id`,
 `agent.name`, `agent.status`, `agent.model`, `agent.reasoning`,
-`agent.auto_reasoning`, `agent.context_usage`, `policy.mode`,
+`agent.auto_reasoning`, `agent.latency`, `agent.context_usage`, `policy.mode`,
 `observer.pending_count`, and `history.position`.
 
 ### `theme`
@@ -395,7 +395,7 @@ Default `providers.openai.models`:
 | `model_profiles.<name>.model` | string | required for custom profiles | Provider model id. |
 | `model_profiles.<name>.reasoning_profile` | string | profile-specific | Human-level reasoning profile. |
 | `model_profiles.<name>.reasoning_effort` | string | omitted | Compatibility scalar for reasoning effort. |
-| `model_profiles.<name>.latency_preference` | string | profile-specific | Model selection latency preference. |
+| `model_profiles.<name>.latency_preference` | string | profile-specific | Latency/cost routing preference: `slow`, `default`, or `fast`. `slow` maps to provider cost-saving tier, `fast` maps to premium priority tier. |
 | `model_profiles.<name>.multimodal_required` | boolean | profile-specific | Require multimodal model capability. |
 | `model_profiles.<name>.multimodal` | boolean | omitted | Compatibility multimodal capability flag. |
 | `model_profiles.<name>.context_window_tokens` | integer | profile-specific | Display and compaction context denominator. |
@@ -417,7 +417,7 @@ Default model profiles:
 | `default` | `provider` | `"openai"` |
 | `default` | `model` | `"gpt-5.5"` |
 | `default` | `reasoning_profile` | `"medium"` |
-| `default` | `latency_preference` | `"balanced"` |
+| `default` | `latency_preference` | `"default"` |
 | `default` | `multimodal_required` | `false` |
 | `default` | `context_window_tokens` | `1050000` |
 | `default` | `safety_tier` | `"high"` |
@@ -453,7 +453,7 @@ Default model profiles:
 | `auto-size-medium` | `provider` | `"openai"` |
 | `auto-size-medium` | `model` | `"gpt-5.4"` |
 | `auto-size-medium` | `reasoning_profile` | `"medium"` |
-| `auto-size-medium` | `latency_preference` | `"balanced"` |
+| `auto-size-medium` | `latency_preference` | `"default"` |
 | `auto-size-medium` | `multimodal_required` | `false` |
 | `auto-size-medium` | `context_window_tokens` | `1050000` |
 | `auto-size-medium` | `safety_tier` | `"high"` |
@@ -465,7 +465,7 @@ Default model profiles:
 | `auto-size-large` | `provider` | `"openai"` |
 | `auto-size-large` | `model` | `"gpt-5.5"` |
 | `auto-size-large` | `reasoning_profile` | `"high"` |
-| `auto-size-large` | `latency_preference` | `"quality"` |
+| `auto-size-large` | `latency_preference` | `"default"` |
 | `auto-size-large` | `multimodal_required` | `false` |
 | `auto-size-large` | `context_window_tokens` | `1050000` |
 | `auto-size-large` | `safety_tier` | `"high"` |

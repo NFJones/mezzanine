@@ -7825,6 +7825,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
                 .provider_options
@@ -7966,6 +7967,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
                 .provider_options
@@ -8129,6 +8131,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
                 .provider_options
@@ -8820,6 +8823,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
                 .provider_options
@@ -9067,6 +9071,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     .get("reasoning_effort")
                     .cloned()
                     .or_else(|| task.model_profile.reasoning_profile.clone()),
+                latency_preference: task.model_profile.latency_preference.clone(),
                 prompt_cache_retention: task
                     .model_profile
                     .provider_options
@@ -9205,6 +9210,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     .get("reasoning_effort")
                     .cloned()
                     .or_else(|| next_task.model_profile.reasoning_profile.clone()),
+                latency_preference: next_task.model_profile.latency_preference.clone(),
                 prompt_cache_retention: next_task
                     .model_profile
                     .provider_options
@@ -9365,6 +9371,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
                 .provider_options
@@ -9530,6 +9537,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
                 .provider_options

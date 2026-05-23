@@ -2249,6 +2249,11 @@ fn openai_responses_request_body_with_stream(
     {
         body["reasoning"] = serde_json::json!({ "effort": effort });
     }
+    if let Some(service_tier) =
+        openai_service_tier_for_latency_preference(request.latency_preference.as_deref())?
+    {
+        body["service_tier"] = serde_json::json!(service_tier);
+    }
     if let Some(max_output_tokens) = request
         .max_output_tokens
         .filter(|max_output_tokens| *max_output_tokens > 0)
@@ -2299,6 +2304,19 @@ fn openai_responses_request_body_with_stream(
     serde_json::to_string(&body).map_err(|error| {
         MezError::invalid_state(format!("OpenAI request encoding failed: {error}"))
     })
+}
+/// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
+fn openai_service_tier_for_latency_preference(
+    preference: Option<&str>,
+) -> Result<Option<&'static str>> {
+    match preference.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("slow") => Ok(Some("flex")),
+        Some("default") | None => Ok(None),
+        Some("fast") => Ok(Some("priority")),
+        Some(other) => Err(MezError::invalid_args(format!(
+            "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
+        ))),
+    }
 }
 
 /// Reports whether one OpenAI model id is known to support extended prompt

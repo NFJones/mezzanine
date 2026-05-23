@@ -961,6 +961,11 @@ pub struct ModelRequest {
     /// The field is runtime-owned per request so temporary turn sizing can
     /// adjust reasoning without mutating saved model profiles.
     pub reasoning_effort: Option<String>,
+    /// Latency/cost preference for provider request routing, when configured.
+    ///
+    /// The value is runtime-owned per request so pane-local profile overrides
+    /// can select provider service tiers without mutating saved profiles.
+    pub latency_preference: Option<String>,
     /// Provider prompt-cache retention policy, when configured.
     ///
     /// OpenAI-compatible providers use this to request longer-lived prefix
@@ -1580,6 +1585,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
             .get("reasoning_effort")
             .cloned()
             .or_else(|| profile.reasoning_profile.clone()),
+        latency_preference: profile.latency_preference.clone(),
         prompt_cache_retention: profile
             .provider_options
             .get("prompt_cache_retention")

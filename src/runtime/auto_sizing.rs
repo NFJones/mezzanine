@@ -159,6 +159,7 @@ fn runtime_auto_sizing_request(
             .get("reasoning_effort")
             .cloned()
             .or_else(|| auto_sizing.router_profile.reasoning_profile.clone()),
+        latency_preference: auto_sizing.router_profile.latency_preference.clone(),
         prompt_cache_retention: auto_sizing
             .router_profile
             .provider_options

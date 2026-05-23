@@ -322,9 +322,10 @@ use commands_support::{
     runtime_write_agent_patches_for_pane, runtime_write_agent_trace_log_for_pane,
 };
 use config::{
-    json_escape, optional_i32_json, runtime_agent_action_failure_retry_limit_from_config,
-    runtime_agent_auto_compact_from_config, runtime_agent_auto_compact_threshold_from_config,
-    runtime_agent_auto_reasoning_from_config, runtime_agent_auto_sizing_from_config,
+    RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json,
+    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_compact_from_config,
+    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_reasoning_from_config,
+    runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_personality_profiles_from_config,
     runtime_agent_turn_start_hook_payload, runtime_approval_decision_name_to_kind,
@@ -355,7 +356,7 @@ use config::{
     runtime_terminal_render_rate_limit_fps_from_config,
     runtime_terminal_resize_debounce_ms_from_config, runtime_terminal_term_from_config,
     runtime_trust_decision_name, runtime_trust_decision_param, runtime_user_prompt_hook_payload,
-    runtime_window_frame_position_from_config,
+    runtime_validate_latency_preference, runtime_window_frame_position_from_config,
     runtime_window_frame_right_status_template_from_config, runtime_window_frame_style_from_config,
     runtime_window_frame_template_from_config, runtime_window_frame_visible_fields_from_config,
     runtime_window_frames_enabled_from_config,

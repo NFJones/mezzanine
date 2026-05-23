@@ -11,11 +11,11 @@ use super::{
     CommandInvocation, ConfigFormat, ConfigScope, ContextBlock, ContextSourceKind,
     DEFAULT_AUTO_SIZING_ROUTER_PROFILE, DeferredAgentPromptHistoryWrite,
     DeferredProjectInstructionWrite, EventKind, HookEvent, MemoryRecord, MemoryScope, MemorySource,
-    MezError, ModelProfile, ModelProfileOverrides, Path, PathBuf, Result,
-    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentPromptTurnStart,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentTurnSteering, RuntimeAgentTurnStop,
-    RuntimeModelProfileOverrideScope, RuntimeSessionService, ScheduledWork, ScheduledWorkKind,
-    SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision, Value,
+    MezError, ModelProfile, ModelProfileOverrides, Path, PathBuf, RUNTIME_LATENCY_PREFERENCES,
+    Result, RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
+    RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatchProvider, RuntimeAgentTurnSteering,
+    RuntimeAgentTurnStop, RuntimeModelProfileOverrideScope, RuntimeSessionService, ScheduledWork,
+    ScheduledWorkKind, SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision, Value,
     agent_shell_visibility_json_name, agent_subshell_enter_command, compose_effective_config,
     current_unix_seconds, discover_project_root, execute_agent_shell_command_with_context,
     execute_command, execute_runtime_command_sequence, execute_runtime_command_sequence_async,
@@ -29,9 +29,10 @@ use super::{
     runtime_model_override_scope_for_args, runtime_model_override_scope_name,
     runtime_model_profile_display, runtime_permission_preset_name, runtime_permissions_command,
     runtime_remove_command_rule, runtime_string_array_json, runtime_user_prompt_hook_payload,
-    runtime_write_agent_context_for_pane, runtime_write_agent_copy_output_for_pane,
-    runtime_write_agent_patches_for_pane, runtime_write_agent_trace_log_for_pane,
-    select_model_profile, session_state_name, shell_command_from_argv, unix_seconds_to_rfc3339,
+    runtime_validate_latency_preference, runtime_write_agent_context_for_pane,
+    runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
+    runtime_write_agent_trace_log_for_pane, select_model_profile, session_state_name,
+    shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::agent::{
     AgentActionPayload, AllowedActionSet, AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -740,6 +741,17 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&model_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "latency"
+                {
+                    let latency_outcome =
+                        self.execute_agent_shell_latency_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&latency_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "compact"
                 {
                     let compact_outcome =
@@ -1152,6 +1164,17 @@ impl RuntimeSessionService {
             }
             if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                 outcome.as_ref()
+                && command == "latency"
+            {
+                let latency_outcome = self.execute_agent_shell_latency_command(&pane_id, input)?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&latency_outcome),
+                ));
+            }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
                 && command == "compact"
             {
                 let compact_outcome = self
@@ -1403,6 +1426,7 @@ impl RuntimeSessionService {
                 &active_profile.provider,
                 requested,
                 args.reasoning_profile.as_deref(),
+                None,
                 &catalog,
             )?
         };
@@ -1510,6 +1534,7 @@ impl RuntimeSessionService {
                 &active_profile.provider,
                 requested,
                 args.reasoning_profile.as_deref(),
+                None,
                 &catalog,
             )?
         };
@@ -1524,6 +1549,74 @@ impl RuntimeSessionService {
                 profile.provider,
                 profile.model,
                 profile.reasoning_profile.as_deref().unwrap_or("none")
+            ),
+            visibility: self
+                .agent_shell_store
+                .get(pane_id)
+                .map(|session| session.visibility)
+                .unwrap_or(AgentShellVisibility::Hidden),
+        })
+    }
+
+    /// Executes `/latency` as a pane-local model-profile latency preference override.
+    pub(super) fn execute_agent_shell_latency_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("latency command must be a slash command"))?;
+        let agent_id = format!("agent-{pane_id}");
+        let (active_name, active_profile) =
+            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        let args = invocation.args.trim();
+        if args.is_empty() || matches!(args, "status" | "show") {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "latency".to_string(),
+                body: format!(
+                    "active_profile={} provider={} model={} reasoning_profile={} latency_preference={} available={}",
+                    active_name,
+                    active_profile.provider,
+                    active_profile.model,
+                    active_profile
+                        .reasoning_profile
+                        .as_deref()
+                        .unwrap_or("none"),
+                    active_profile
+                        .latency_preference
+                        .as_deref()
+                        .unwrap_or("default"),
+                    RUNTIME_LATENCY_PREFERENCES.join(",")
+                ),
+            });
+        }
+        if args.split_whitespace().count() != 1 {
+            return Err(MezError::invalid_args(
+                "latency command accepts at most one preference",
+            ));
+        }
+        let latency = runtime_validate_latency_preference(args)?;
+        let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
+        let profile_name = self.runtime_generated_profile_for_provider_model(
+            &active_profile.provider,
+            &active_profile.model,
+            active_profile.reasoning_profile.as_deref(),
+            Some(latency),
+            &catalog,
+        )?;
+        let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
+        self.set_model_profile_override(scope.clone(), &profile_name)?;
+        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "latency".to_string(),
+            body: format!(
+                "scope={} profile={} provider={} model={} reasoning_profile={} latency_preference={} source=runtime-latency-selection",
+                runtime_model_override_scope_name(&scope),
+                profile_name,
+                profile.provider,
+                profile.model,
+                profile.reasoning_profile.as_deref().unwrap_or("none"),
+                profile.latency_preference.as_deref().unwrap_or("default")
             ),
             visibility: self
                 .agent_shell_store
@@ -1587,6 +1680,7 @@ impl RuntimeSessionService {
                 &active_profile.provider,
                 requested,
                 args.reasoning_profile,
+                None,
                 &catalog,
             )?
         };
@@ -1647,6 +1741,7 @@ impl RuntimeSessionService {
                 &active_profile.provider,
                 requested,
                 args.reasoning_profile,
+                None,
                 &catalog,
             )?
         };
@@ -1802,6 +1897,46 @@ impl RuntimeSessionService {
         self.apply_pane_model_picker_profile(pane_id, &model_name, Some(reasoning), &catalog)
     }
 
+    /// Applies a latency preference selected from the pane-frame latency picker.
+    pub(super) fn apply_pane_latency_picker_selection(
+        &mut self,
+        pane_id: &str,
+        latency: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let agent_id = format!("agent-{pane_id}");
+        let (_active_name, active_profile) =
+            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        let latency = runtime_validate_latency_preference(latency)?;
+        let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
+        let profile_name = self.runtime_generated_profile_for_provider_model(
+            &active_profile.provider,
+            &active_profile.model,
+            active_profile.reasoning_profile.as_deref(),
+            Some(latency),
+            &catalog,
+        )?;
+        let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
+        self.set_model_profile_override(scope.clone(), &profile_name)?;
+        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "latency".to_string(),
+            body: format!(
+                "scope={} profile={} provider={} model={} reasoning_profile={} latency_preference={} source=runtime-latency-picker",
+                runtime_model_override_scope_name(&scope),
+                profile_name,
+                profile.provider,
+                profile.model,
+                profile.reasoning_profile.as_deref().unwrap_or("none"),
+                profile.latency_preference.as_deref().unwrap_or("default")
+            ),
+            visibility: self
+                .agent_shell_store
+                .get(pane_id)
+                .map(|session| session.visibility)
+                .unwrap_or(AgentShellVisibility::Hidden),
+        })
+    }
+
     /// Applies a generated pane-scoped model profile for picker selections.
     fn apply_pane_model_picker_profile(
         &mut self,
@@ -1815,6 +1950,7 @@ impl RuntimeSessionService {
             &provider_id,
             model_name,
             reasoning,
+            None,
             catalog,
         )?;
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
@@ -2123,6 +2259,7 @@ impl RuntimeSessionService {
         provider_id: &str,
         model_name: &str,
         reasoning_profile: Option<&str>,
+        latency_preference: Option<&str>,
         catalog: &RuntimeModelCatalog,
     ) -> Result<String> {
         if model_name.trim().is_empty() {
@@ -2158,11 +2295,15 @@ impl RuntimeSessionService {
         if let Some(reasoning) = reasoning_profile {
             provider_options.insert("reasoning_effort".to_string(), reasoning.to_string());
         }
+        let latency_preference = latency_preference
+            .map(runtime_validate_latency_preference)
+            .transpose()?
+            .map(str::to_string);
         let profile = ModelProfile {
             provider: provider_id.to_string(),
             model: model_name.to_string(),
             reasoning_profile: reasoning_profile.map(str::to_string),
-            latency_preference: None,
+            latency_preference,
             multimodal_required: false,
             provider_options,
             safety_tier: None,
@@ -5390,9 +5531,17 @@ fn runtime_generated_model_profile_name(
     reasoning_profile: Option<&str>,
     profile: &ModelProfile,
 ) -> String {
-    let preferred = match reasoning_profile {
+    let base = match reasoning_profile {
         Some(reasoning) => format!("{model}:{reasoning}"),
         None => model.to_string(),
+    };
+    let preferred = match profile
+        .latency_preference
+        .as_deref()
+        .filter(|latency| *latency != "default")
+    {
+        Some(latency) => format!("{base}:{latency}"),
+        None => base,
     };
     if runtime_profile_name_available_or_matching(registry, &preferred, profile) {
         return preferred;
@@ -5424,6 +5573,8 @@ fn runtime_profile_name_available_or_matching(
         existing.provider == profile.provider
             && existing.model == profile.model
             && existing.reasoning_profile == profile.reasoning_profile
+            && existing.latency_preference.as_deref().unwrap_or("default")
+                == profile.latency_preference.as_deref().unwrap_or("default")
     })
 }
 
@@ -5810,6 +5961,7 @@ fn runtime_model_compaction_request(
             .cloned()
             .or_else(|| profile.reasoning_profile.clone()),
         prompt_cache_retention: profile.provider_options.get("prompt_cache_retention").cloned(),
+        latency_preference: profile.latency_preference.clone(),
         max_output_tokens: profile.max_output_tokens(),
         turn_id,
         agent_id,

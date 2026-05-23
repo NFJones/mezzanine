@@ -67,7 +67,7 @@ enabled = true
 position = "border"
 template = " #{pane.index} #{pane.title} "
 style = "default"
-visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.latency", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 
 [theme]
 active = "kanagawa"
@@ -218,7 +218,7 @@ default_model = "gpt-5.5"
 provider = "openai"
 model = "gpt-5.5"
 reasoning_profile = "medium"
-latency_preference = "balanced"
+latency_preference = "default"
 multimodal_required = false
 context_window_tokens = 1050000
 # Optional provider output-token cap. Mezzanine may temporarily raise this for
@@ -275,7 +275,7 @@ reasoning_effort = "medium"
 provider = "openai"
 model = "gpt-5.4"
 reasoning_profile = "medium"
-latency_preference = "balanced"
+latency_preference = "default"
 multimodal_required = false
 context_window_tokens = 1050000
 # max_output_tokens = 16384
@@ -292,7 +292,7 @@ reasoning_effort = "medium"
 provider = "openai"
 model = "gpt-5.5"
 reasoning_profile = "high"
-latency_preference = "quality"
+latency_preference = "default"
 multimodal_required = false
 context_window_tokens = 1050000
 # max_output_tokens = 32768

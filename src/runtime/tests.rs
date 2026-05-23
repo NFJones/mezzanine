@@ -963,6 +963,7 @@ fn runtime_model_request_fixture_for_agent(
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
         reasoning_effort: None,
+        latency_preference: None,
         prompt_cache_retention: None,
         max_output_tokens: None,
         turn_id: turn_id.to_string(),
@@ -4465,7 +4466,7 @@ fn runtime_applies_named_model_profile_fields_and_safe_fallbacks() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-work\", \"gpt-safe\", \"gpt-weak\", \"gpt-external\"]\ndefault_model = \"gpt-work\"\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"gpt-work\"\nreasoning_profile = \"high\"\nlatency_preference = \"balanced\"\nmultimodal_required = true\nsafety_tier = \"high\"\nprivacy_tier = \"strict\"\nresidency = \"us\"\napproval_policy = \"ask\"\nfallback_profiles = [\"safe\", \"weak\", \"external\"]\n[model_profiles.work.provider_options]\nreasoning_effort = \"high\"\n[model_profiles.safe]\nprovider = \"openai\"\nmodel = \"gpt-safe\"\nsafety_tier = \"high\"\nprivacy_tier = \"strict\"\nresidency = \"us\"\napproval_policy = \"ask\"\n[model_profiles.weak]\nprovider = \"openai\"\nmodel = \"gpt-weak\"\nsafety_tier = \"medium\"\nprivacy_tier = \"strict\"\nresidency = \"us\"\napproval_policy = \"ask\"\n[model_profiles.external]\nprovider = \"openai\"\nmodel = \"gpt-external\"\nsafety_tier = \"high\"\nprivacy_tier = \"external\"\nresidency = \"eu\"\napproval_policy = \"full-access\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"work\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-work\", \"gpt-safe\", \"gpt-weak\", \"gpt-external\"]\ndefault_model = \"gpt-work\"\n[model_profiles.work]\nprovider = \"openai\"\nmodel = \"gpt-work\"\nreasoning_profile = \"high\"\nlatency_preference = \"default\"\nmultimodal_required = true\nsafety_tier = \"high\"\nprivacy_tier = \"strict\"\nresidency = \"us\"\napproval_policy = \"ask\"\nfallback_profiles = [\"safe\", \"weak\", \"external\"]\n[model_profiles.work.provider_options]\nreasoning_effort = \"high\"\n[model_profiles.safe]\nprovider = \"openai\"\nmodel = \"gpt-safe\"\nsafety_tier = \"high\"\nprivacy_tier = \"strict\"\nresidency = \"us\"\napproval_policy = \"ask\"\n[model_profiles.weak]\nprovider = \"openai\"\nmodel = \"gpt-weak\"\nsafety_tier = \"medium\"\nprivacy_tier = \"strict\"\nresidency = \"us\"\napproval_policy = \"ask\"\n[model_profiles.external]\nprovider = \"openai\"\nmodel = \"gpt-external\"\nsafety_tier = \"high\"\nprivacy_tier = \"external\"\nresidency = \"eu\"\napproval_policy = \"full-access\"\n"
                 .to_string(),
         }])
         .unwrap();
@@ -4475,7 +4476,7 @@ fn runtime_applies_named_model_profile_fields_and_safe_fallbacks() {
     assert_eq!(profile.provider, "openai");
     assert_eq!(profile.model, "gpt-work");
     assert_eq!(profile.reasoning_profile.as_deref(), Some("high"));
-    assert_eq!(profile.latency_preference.as_deref(), Some("balanced"));
+    assert_eq!(profile.latency_preference.as_deref(), Some("default"));
     assert!(profile.multimodal_required);
     assert_eq!(profile.safety_tier.as_deref(), Some("high"));
     assert_eq!(
@@ -13627,6 +13628,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 reasoning_effort: None,
+                latency_preference: None,
                 prompt_cache_retention: None,
                 max_output_tokens: None,
                 turn_id: "turn-1".to_string(),
@@ -15876,6 +15878,239 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         Some("gpt-provider-only")
     );
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
+}
+
+/// Verifies that the pane agent status latency selector opens, populates with
+/// the three allowed latency values, applies a selection as a pane-local
+/// override, closes after selection, and surfaces the latency value in the
+/// pane-frame context for pill rendering.
+#[test]
+fn runtime_pane_agent_status_selector_applies_latency_preference() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\nlatency_preference = \"default\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "openai",
+        vec![crate::agent::ProviderModelInfo {
+            id: "gpt-5.5".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["low".to_string()],
+        }],
+        vec!["low".to_string(), "high".to_string()],
+    );
+
+    let open_report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Latency,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(open_report.view_refresh_required);
+    assert!(!open_report.full_redraw_required);
+    let latency_items = service
+        .pane_agent_status_selector
+        .as_ref()
+        .map(|selector| selector.items.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        latency_items,
+        vec![
+            "slow".to_string(),
+            "default".to_string(),
+            "fast".to_string()
+        ]
+    );
+    let fast_index = latency_items
+        .iter()
+        .position(|item| item == "fast")
+        .expect("latency selector should include fast");
+    let select_report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::SelectPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Latency,
+                        item_index: fast_index,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(select_report.view_refresh_required);
+    assert!(service.pane_agent_status_selector.is_none());
+    let (_name, latency_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(latency_profile.model, "gpt-5.5");
+    assert_eq!(latency_profile.reasoning_profile.as_deref(), Some("low"));
+    assert_eq!(latency_profile.latency_preference.as_deref(), Some("fast"));
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(pane_context.agent_latency.as_deref(), Some("fast"));
+    assert_eq!(pane_context.agent_model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(pane_context.agent_reasoning.as_deref(), Some("low"));
+}
+
+/// Verifies that the /latency slash command displays the current setting when
+/// called without args and applies a pane-local override when given a valid
+/// value.
+#[test]
+fn runtime_slash_command_latency_displays_and_applies_override() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"high\"\nlatency_preference = \"default\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "openai",
+        vec![crate::agent::ProviderModelInfo {
+            id: "gpt-5.5".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["high".to_string()],
+        }],
+        vec!["high".to_string()],
+    );
+
+    let status_outcome = service
+        .execute_agent_shell_latency_command("%1", "/latency")
+        .unwrap();
+    let status_text = match status_outcome {
+        super::AgentShellCommandOutcome::Display { body, .. } => body,
+        other => panic!("expected Display outcome for /latency without args, got {other:?}"),
+    };
+    assert!(
+        status_text.contains("latency_preference=default"),
+        "status should show default: {status_text}"
+    );
+
+    let apply_outcome = service
+        .execute_agent_shell_latency_command("%1", "/latency slow")
+        .unwrap();
+    let apply_text = match apply_outcome {
+        super::AgentShellCommandOutcome::Mutated { body, .. } => body,
+        other => panic!("expected Mutated outcome for /latency slow, got {other:?}"),
+    };
+    assert!(
+        apply_text.contains("latency_preference=slow"),
+        "outcome should show slow: {apply_text}"
+    );
+
+    let (_name, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(profile.latency_preference.as_deref(), Some("slow"));
+}
+
+/// Verifies that generated runtime model profiles produce distinct identities
+/// when latency preference differs so pane-local overrides for the same
+/// provider/model/reasoning tuple do not collapse together.
+#[test]
+fn runtime_generated_profile_identity_differs_by_latency_preference() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"high\"\nlatency_preference = \"default\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "openai",
+        vec![crate::agent::ProviderModelInfo {
+            id: "gpt-5.5".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["high".to_string()],
+        }],
+        vec!["high".to_string()],
+    );
+
+    let default_outcome = service
+        .execute_agent_shell_latency_command("%1", "/latency default")
+        .unwrap();
+    let default_text = match default_outcome {
+        super::AgentShellCommandOutcome::Mutated { body, .. } => body,
+        other => panic!("expected Mutated outcome, got {other:?}"),
+    };
+    assert!(default_text.contains("latency_preference=default"));
+
+    let slow_outcome = service
+        .execute_agent_shell_latency_command("%1", "/latency slow")
+        .unwrap();
+    let slow_text = match slow_outcome {
+        super::AgentShellCommandOutcome::Mutated { body, .. } => body,
+        other => panic!("expected Mutated outcome, got {other:?}"),
+    };
+    assert!(slow_text.contains("latency_preference=slow"));
+
+    let (_name, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(
+        profile.latency_preference.as_deref(),
+        Some("slow"),
+        "last applied latency should be slow"
+    );
 }
 
 /// Verifies that clickable pane-frame agent status pills cover live toggles
@@ -23173,6 +23408,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             reasoning_effort: None,
+            latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,
             turn_id: "turn-1".to_string(),

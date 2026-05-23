@@ -1607,6 +1607,7 @@ fn runtime_pane_agent_selector_rendition(
             PaneAgentStatusField::Reasoning => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::AutoReasoning => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::ApprovalPolicy => ui_theme.colors.agent_status_blocked,
+            PaneAgentStatusField::Latency => ui_theme.colors.agent_reasoning,
         }
     } else {
         ui_theme.colors.display_overlay
@@ -6458,6 +6459,13 @@ impl RuntimeSessionService {
                     "full-access".to_string(),
                 ]
             }
+            PaneAgentStatusField::Latency => {
+                vec![
+                    "slow".to_string(),
+                    "default".to_string(),
+                    "fast".to_string(),
+                ]
+            }
             PaneAgentStatusField::AutoReasoning => Vec::new(),
         };
         if items.is_empty() {
@@ -6547,6 +6555,9 @@ impl RuntimeSessionService {
                 return Ok(());
             }
             PaneAgentStatusField::AutoReasoning => return Ok(()),
+            PaneAgentStatusField::Latency => {
+                self.apply_pane_latency_picker_selection(&selector.pane_id, &value)?
+            }
         };
         let response = runtime_agent_shell_command_response_json(
             &selector.pane_id,
@@ -6555,6 +6566,7 @@ impl RuntimeSessionService {
                 PaneAgentStatusField::Reasoning => "/model reasoning",
                 PaneAgentStatusField::AutoReasoning => "/auto-reasoning",
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
+                PaneAgentStatusField::Latency => "/latency",
             },
             Some(&outcome),
         );
@@ -6598,6 +6610,15 @@ impl RuntimeSessionService {
             PaneAgentStatusField::ApprovalPolicy => Some(
                 runtime_approval_policy_name(self.permission_policy.approval_policy).to_string(),
             ),
+            PaneAgentStatusField::Latency => {
+                let agent_id = format!("agent-{pane_id}");
+                let (_active_name, profile) = self
+                    .active_model_profile_for_pane(pane_id, &agent_id, None)
+                    .ok()?;
+                profile
+                    .latency_preference
+                    .or_else(|| Some("default".to_string()))
+            }
         }
     }
 
@@ -8368,6 +8389,17 @@ impl RuntimeSessionService {
                         "auto:off".to_string()
                     }
                 });
+                let agent_latency = latest_turn
+                    .and_then(|turn| {
+                        self.agent_turn_model_profiles
+                            .get(&turn.turn_id)
+                            .and_then(|profile| profile.latency_preference.clone())
+                    })
+                    .or_else(|| {
+                        active_agent_profile
+                            .as_ref()
+                            .and_then(|(_name, profile)| profile.latency_preference.clone())
+                    });
                 let agent_context_usage = agent_session.and_then(|session| {
                     self.agent_context_usage_by_conversation
                         .get(&session.session_id)
@@ -8410,6 +8442,7 @@ impl RuntimeSessionService {
                         agent_model,
                         agent_reasoning,
                         agent_auto_reasoning,
+                        agent_latency,
                         agent_context_usage,
                         history_position,
                         agent_prompt: agent_session

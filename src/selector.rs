@@ -757,6 +757,7 @@ fn common_target_flags() -> &'static [&'static str] {
 /// on duplicated control-flow logic.
 fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
     let candidates = match command {
+        "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
             let mut candidates = value_candidates(&["ask", "auto-allow", "full-access"]);

@@ -4650,6 +4650,12 @@ The baseline command capabilities are:
 - `/quit`: Alias for `/exit`.
 - `/init`: Generate a project instruction scaffold using the explicit
   control-plane scaffold exception defined in Section 10.2.
+- `/latency`: Inspect or change the pane-local latency/cost preference. It MUST
+  accept `slow`, `default`, or `fast` as explicit value arguments, and MUST
+  display the active setting when invoked without arguments or with `status` or
+  `show`. The command MUST apply a pane-scoped model-profile override that
+  includes the selected latency preference without changing the provider, model,
+  or reasoning profile.
 - `/logout`: Log out of a provider account.
 - `/list-mcp`: List configured Model Context Protocol servers and tools.
 - `/model`: Inspect and change the active model and reasoning settings. The

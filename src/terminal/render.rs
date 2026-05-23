@@ -53,6 +53,7 @@ pub const DEFAULT_PANE_FRAME_RIGHT_ALIGNED: &[&str] = &[
     "agent.model",
     "agent.reasoning",
     "agent.auto_reasoning",
+    "agent.latency",
     "policy.mode",
     "agent.context_usage",
     "agent.status",
@@ -2670,6 +2671,7 @@ fn pane_frame_right_status_rendition(
         "agent.auto_reasoning" => {
             pane_frame_agent_auto_reasoning_rendition(&segment.value, ui_theme)
         }
+        "agent.latency" => pane_frame_latency_rendition(&segment.value, ui_theme),
         "agent.name" => ui_theme.colors.agent_model.rendition(),
         "agent.context_usage" => pane_frame_agent_context_usage_rendition(&segment.value, ui_theme),
         "agent.status" => pane_frame_agent_status_rendition(&segment.value, ui_theme),
@@ -2684,6 +2686,15 @@ fn pane_frame_agent_auto_reasoning_rendition(value: &str, ui_theme: &UiTheme) ->
         "auto:on" => ui_theme.colors.agent_reasoning.rendition(),
         "auto:off" => ui_theme.colors.agent_status_idle.rendition(),
         _ => ui_theme.colors.scroll_indicator.rendition(),
+    }
+}
+
+/// Returns the latency-preference pill rendition for a pane-local value.
+fn pane_frame_latency_rendition(value: &str, ui_theme: &UiTheme) -> GraphicRendition {
+    match value {
+        "slow" => ui_theme.colors.agent_status_idle.rendition(),
+        "fast" => ui_theme.colors.agent_status_running.rendition(),
+        _ => ui_theme.colors.agent_model.rendition(),
     }
 }
 
@@ -4246,6 +4257,7 @@ fn pane_frame_right_aligned_display_value(field: &str, value: String) -> String 
             | "agent.model"
             | "agent.reasoning"
             | "agent.auto_reasoning"
+            | "agent.latency"
             | "agent.name"
             | "agent.context_usage"
             | "agent.status"
@@ -4807,6 +4819,7 @@ fn pane_agent_status_field_from_frame_field(field: &str) -> Option<PaneAgentStat
         "agent.model" => Some(PaneAgentStatusField::Model),
         "agent.reasoning" => Some(PaneAgentStatusField::Reasoning),
         "agent.auto_reasoning" => Some(PaneAgentStatusField::AutoReasoning),
+        "agent.latency" => Some(PaneAgentStatusField::Latency),
         "policy.mode" => Some(PaneAgentStatusField::ApprovalPolicy),
         _ => None,
     }
@@ -5195,6 +5208,9 @@ fn pane_frame_field_value(
         "agent.auto_reasoning" => {
             optional_pane_context_value(pane_context, |ctx| &ctx.agent_auto_reasoning)
                 .unwrap_or_default()
+        }
+        "agent.latency" => {
+            optional_pane_context_value(pane_context, |ctx| &ctx.agent_latency).unwrap_or_default()
         }
         "agent.context_usage" => {
             optional_pane_context_value(pane_context, |ctx| &ctx.agent_context_usage)

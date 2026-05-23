@@ -766,6 +766,23 @@ pub(super) fn runtime_model_override_scope_name(
         RuntimeModelProfileOverrideScope::Subagent(id) => format!("subagent:{id}"),
     }
 }
+/// Supported pane-local model latency preferences in display order.
+pub(super) const RUNTIME_LATENCY_PREFERENCES: &[&str] = &["slow", "default", "fast"];
+
+/// Validates a user-facing latency preference value.
+pub(super) fn runtime_validate_latency_preference(value: &str) -> Result<&str> {
+    let value = value.trim();
+    if RUNTIME_LATENCY_PREFERENCES
+        .iter()
+        .any(|allowed| allowed == &value)
+    {
+        Ok(value)
+    } else {
+        Err(MezError::invalid_args(format!(
+            "latency preference must be slow, default, or fast, got {value:?}"
+        )))
+    }
+}
 
 /// Runs the runtime model profile display operation for this subsystem.
 ///
@@ -783,8 +800,15 @@ pub(super) fn runtime_model_profile_display(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "active_profile={} provider={} model={} profiles={}",
-        active_name, active_profile.provider, active_profile.model, available
+        "active_profile={} provider={} model={} latency_preference={} profiles={}",
+        active_name,
+        active_profile.provider,
+        active_profile.model,
+        active_profile
+            .latency_preference
+            .as_deref()
+            .unwrap_or("default"),
+        available
     )
 }
 
@@ -2642,7 +2666,7 @@ pub(super) fn runtime_provider_registry_from_config(
             provider: default_provider.to_string(),
             model: default_model,
             reasoning_profile: default_config.options.get("reasoning_effort").cloned(),
-            latency_preference: None,
+            latency_preference: Some("default".to_string()),
             multimodal_required: false,
             provider_options: std::collections::BTreeMap::new(),
             safety_tier: None,
@@ -2661,7 +2685,7 @@ pub(super) fn runtime_provider_registry_from_config(
                     provider: provider_id.clone(),
                     model: model.clone(),
                     reasoning_profile: config.options.get("reasoning_effort").cloned(),
-                    latency_preference: None,
+                    latency_preference: Some("default".to_string()),
                     multimodal_required: false,
                     provider_options: std::collections::BTreeMap::new(),
                     safety_tier: None,
@@ -2789,8 +2813,12 @@ pub(super) fn runtime_model_profile_from_config(
             reasoning_profile: runtime_json_string(object.get("reasoning_profile"))
                 .or_else(|| runtime_json_string(object.get("reasoning_effort")))
                 .map(str::to_string),
-            latency_preference: runtime_json_string(object.get("latency_preference"))
-                .map(str::to_string),
+            latency_preference: Some(
+                runtime_validate_latency_preference(
+                    runtime_json_string(object.get("latency_preference")).unwrap_or("default"),
+                )?
+                .to_string(),
+            ),
             multimodal_required: runtime_json_bool(object.get("multimodal_required"))
                 .or_else(|| runtime_json_bool(object.get("multimodal")))
                 .unwrap_or(false),
