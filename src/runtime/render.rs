@@ -317,8 +317,13 @@ fn runtime_agent_shell_markdown_overlay_content(
     let hidden_links = agent_command_links_in_markdown(markdown);
     let mut linked_hidden_commands = BTreeSet::new();
     for rendered in render_command_markdown_body_lines(markdown, ui_theme) {
+        let AgentRenderedLine {
+            display,
+            mut style_spans,
+            copy_text: _,
+        } = rendered;
         let line_index = content.lines.len();
-        for (start_column, width, command) in agent_command_links_in_line(&rendered.display) {
+        for (start_column, width, command) in agent_command_links_in_line(&display) {
             content.selections.push(RuntimeDisplayOverlaySelection {
                 line_index,
                 start_column,
@@ -331,8 +336,8 @@ fn runtime_agent_shell_markdown_overlay_content(
             if linked_hidden_commands.contains(command) {
                 continue;
             }
-            if let Some(byte_start) = rendered.display.find(label) {
-                let start_column = UnicodeWidthStr::width(&rendered.display[..byte_start]);
+            if let Some(byte_start) = display.find(label) {
+                let start_column = UnicodeWidthStr::width(&display[..byte_start]);
                 let width = UnicodeWidthStr::width(label.as_str());
                 let duplicate = content.selections.iter().any(|selection| {
                     selection.line_index == line_index
@@ -350,10 +355,18 @@ fn runtime_agent_shell_markdown_overlay_content(
                     });
                     linked_hidden_commands.insert(command.clone());
                 }
+                push_or_extend_style_span(
+                    &mut style_spans,
+                    TerminalStyleSpan {
+                        start: start_column,
+                        length: width,
+                        rendition: runtime_display_overlay_link_rendition(ui_theme),
+                    },
+                );
             }
         }
-        content.line_style_spans.push(rendered.style_spans);
-        content.lines.push(rendered.display);
+        content.line_style_spans.push(style_spans);
+        content.lines.push(display);
     }
     content
 }
@@ -1351,6 +1364,17 @@ fn runtime_display_overlay_selection_rendition(
         rendition.italic = false;
     }
     rendition
+}
+/// Returns the markdown-style rendition used for command-overlay links.
+fn runtime_display_overlay_link_rendition(ui_theme: &UiTheme) -> GraphicRendition {
+    GraphicRendition {
+        foreground: Some(ui_theme.colors.agent_transcript_command.foreground),
+        bold: true,
+        underline: true,
+        inverse: false,
+        background: None,
+        ..GraphicRendition::default()
+    }
 }
 /// Returns the shifted, clipped markdown/body spans for one overlay line.
 fn runtime_display_overlay_body_style_spans(
@@ -10801,6 +10825,58 @@ mod tests {
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
         let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        for column in start..start.saturating_add(selection.width) {
+            let rendition = rendered_line_rendition_at(&spans, column);
+            assert!(
+                rendition.bold,
+                "column {column} lost bold styling: {spans:?}"
+            );
+            assert!(
+                rendition.underline,
+                "column {column} lost underline styling: {spans:?}"
+            );
+            assert!(
+                !rendition.inverse,
+                "column {column} became inverse: {spans:?}"
+            );
+            assert!(
+                rendition.background.is_none(),
+                "column {column} gained background styling: {spans:?}"
+            );
+            assert_eq!(
+                rendition.foreground,
+                Some(ui_theme.colors.agent_transcript_command.foreground),
+                "column {column} lost link foreground: {spans:?}"
+            );
+        }
+    }
+    /// Verifies an active saved-session UUID row keeps link styling on the
+    /// final visible UUID character.
+    ///
+    /// `/list-sessions` rows are emitted as hidden `mez-agent:` resume links
+    /// with bold UUID labels. The command overlay must preserve that link
+    /// rendition across the full visible UUID when the row is selected,
+    /// including the final character that previously fell back to plain text.
+    #[test]
+    fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("list-sessions".to_string()),
+            &format!("- [**{session_id}**](mez-agent:%2Fresume%20{session_id})"),
+            &ui_theme,
+        );
+        let overlay = RuntimeDisplayOverlay {
+            lines: content.lines.clone(),
+            line_style_spans: content.line_style_spans.clone(),
+            scroll_offset: 0,
+            selections: content.selections.clone(),
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+        };
+        let selection = &overlay.selections[0];
+        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
         for column in start..start.saturating_add(selection.width) {
             let rendition = rendered_line_rendition_at(&spans, column);
             assert!(
