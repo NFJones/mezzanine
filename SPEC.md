@@ -631,9 +631,9 @@ lost when a pane is narrowed and later expanded. Width-changing resizes MUST
 keep split latency bounded by reflowing the visible viewport and adjacent
 scrollback tail instead of synchronously rebuilding all retained history; older
 scrollback MAY remain stored in its existing physical wrapping. If a pane-local
-clear has intentionally blanked the live viewport while moving its prior rows
-into scrollback, subsequent resizes MUST preserve that blank viewport instead
-of repopulating it from history.
+clear or terminal full-screen erase such as shell `Ctrl+L` has intentionally
+detached the live viewport from retained scrollback, subsequent resizes MUST
+preserve the live viewport position instead of repopulating it from history.
 
 When a pane's primary PID exits, Mezzanine MUST close the containing pane.
 

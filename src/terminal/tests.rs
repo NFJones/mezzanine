@@ -4329,6 +4329,42 @@ fn terminal_screen_resize_preserves_blank_viewport_after_clear_visible_into_hist
     );
 }
 
+/// Verifies terminal full-screen clears detach the visible viewport from the
+/// adjacent scrollback tail while preserving copyable history.
+///
+/// Shell `Ctrl+L` commonly emits cursor-home plus `CSI 2 J` instead of calling
+/// Mezzanine's pane-local clear helper. After large wrapped output, a
+/// subsequent width-changing split must reflow only the prompt/visible rows and
+/// must not pull the retained random-output tail back up from history.
+#[test]
+fn terminal_screen_resize_after_shell_clear_does_not_pull_history_tail_into_view() {
+    let mut screen = TerminalScreen::new(Size::new(12, 4).unwrap(), 256).unwrap();
+    for index in 0..40 {
+        screen.feed(format!("tail-{index:02}-abcdefghijklmnopqrstuvwxyz\r\n").as_bytes());
+    }
+    let history_before_clear = screen
+        .history()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    screen.feed(b"\x1b[H\x1b[2J$ ");
+    assert_eq!(screen.visible_lines(), vec!["$", "", "", ""]);
+
+    screen.resize(Size::new(8, 4).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["$", "", "", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 2);
+    assert_eq!(
+        screen
+            .history()
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        history_before_clear
+    );
+}
+
 /// Verifies terminal screen handles erase line variants.
 ///
 /// This regression scenario documents the behavior being protected so a

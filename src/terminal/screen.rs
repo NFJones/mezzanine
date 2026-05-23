@@ -756,6 +756,9 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) history: HistoryBuffer,
+    /// Whether the normal-screen viewport was detached from scrollback by a
+    /// full-screen clear such as shell `Ctrl+L`.
+    pub(super) normal_viewport_detached_from_history: bool,
     /// Stores the activity events value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -811,6 +814,7 @@ impl TerminalScreen {
             scroll_region: None,
             alternate: AlternateScreenState::new(),
             history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
+            normal_viewport_detached_from_history: false,
             activity_events: 0,
             bell_events: 0,
         })
@@ -842,6 +846,10 @@ impl TerminalScreen {
         }
 
         if !self.alternate.active() && self.scroll_region.is_none() {
+            if self.normal_viewport_detached_from_history {
+                self.resize_detached_normal_screen(size);
+                return;
+            }
             if self.normal_screen_viewport_is_cleared() {
                 self.resize_cleared_normal_screen(size);
                 return;
@@ -873,6 +881,69 @@ impl TerminalScreen {
         self.clear_screen();
         let max_row = self.max_row();
         let max_column = self.max_column();
+        if let Some(cursor) = self.saved_cursor.as_mut() {
+            cursor.row = cursor.row.min(max_row);
+            cursor.column = cursor.column.min(max_column);
+        }
+    }
+
+    /// Resizes a normal-screen viewport that has been detached from scrollback.
+    ///
+    /// Shell clears such as `Ctrl+L` erase the live viewport while preserving
+    /// scrollback. Until new output scrolls the pane again, resizes must reflow
+    /// only the live rows and must not pull adjacent history rows back into the
+    /// visible grid.
+    fn resize_detached_normal_screen(&mut self, size: Size) {
+        let old_rows = self.cells.len();
+        let new_rows = usize::from(size.rows);
+        let preserve_bottom = new_rows < old_rows
+            && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
+        let source_rows = self.current_visible_rows();
+        let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
+        let logical_lines = merge_wrapped_physical_lines(&source_rows);
+        let physical_rows = reflow_logical_lines(&logical_lines, usize::from(size.columns));
+        let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
+            physical_rows.len().saturating_sub(new_rows)
+        } else {
+            0
+        };
+
+        self.size = size;
+        self.cells = blank_cells(size);
+        self.renditions = blank_renditions(size, GraphicRendition::default());
+        self.line_wraps = vec![false; new_rows];
+        self.line_copy_texts = vec![None; new_rows];
+        for (row_index, row) in physical_rows
+            .iter()
+            .skip(visible_start)
+            .take(new_rows)
+            .enumerate()
+        {
+            write_styled_line_to_row(
+                &row.line,
+                &mut self.cells[row_index],
+                &mut self.renditions[row_index],
+            );
+            self.line_wraps[row_index] = row.wraps_to_next;
+            self.line_copy_texts[row_index] = row.line.copy_text.clone();
+        }
+
+        let max_row = self.max_row();
+        let max_column = self.max_column();
+        if let Some((logical_line, logical_column)) = cursor {
+            let (absolute_row, column) = physical_position_for_logical_cursor(
+                &logical_lines,
+                logical_line,
+                logical_column,
+                usize::from(size.columns),
+            );
+            self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
+            self.cursor.column = column.min(max_column);
+        } else {
+            self.cursor.row = self.cursor.row.min(max_row);
+            self.cursor.column = self.cursor.column.min(max_column);
+        }
+        self.wrap_pending = false;
         if let Some(cursor) = self.saved_cursor.as_mut() {
             cursor.row = cursor.row.min(max_row);
             cursor.column = cursor.column.min(max_column);
@@ -1358,6 +1429,7 @@ impl TerminalScreen {
     /// on duplicated control-flow logic.
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.normal_viewport_detached_from_history = false;
     }
 
     /// Scrolls the used normal-screen viewport into history and blanks it.
@@ -1384,6 +1456,7 @@ impl TerminalScreen {
             }
         }
         self.clear_screen();
+        self.normal_viewport_detached_from_history = true;
     }
 
     /// Runs the restore normal content operation for this subsystem.
@@ -1448,6 +1521,7 @@ impl TerminalScreen {
         self.focus_events_enabled = false;
         self.saved_dec_private_modes.clear();
         self.scroll_region = None;
+        self.normal_viewport_detached_from_history = false;
 
         let rows = usize::from(self.size.rows);
         let start = visible_lines.len().saturating_sub(rows);
@@ -2093,6 +2167,7 @@ impl TerminalScreen {
         let count = count.min(bottom.saturating_sub(top).saturating_add(1));
         for _ in 0..count {
             if top == 0 && bottom == self.max_row() && self.alternate.should_record_to_history() {
+                self.normal_viewport_detached_from_history = false;
                 self.history.push_styled_line_with_wrap(
                     styled_line_from_row_with_copy_text(
                         &self.cells[0],
@@ -2420,9 +2495,13 @@ impl TerminalScreen {
                 for row in 0..=self.max_row() {
                     self.erase_line_range(row, 0, self.max_column());
                 }
+                if !self.alternate.active() {
+                    self.normal_viewport_detached_from_history = true;
+                }
             }
             3 if !self.alternate.active() => {
                 self.history.clear();
+                self.normal_viewport_detached_from_history = false;
             }
             _ => {}
         }
@@ -3087,6 +3166,17 @@ fn physical_position_in_line(
         }
         current_width = current_width.saturating_add(width);
         source_column = source_column.saturating_add(width);
+    }
+    while source_column < logical_column {
+        if current_width >= columns {
+            row = row.saturating_add(1);
+            current_width = agent_gutter_prefix
+                .as_deref()
+                .map(prefix_width)
+                .unwrap_or(0);
+        }
+        current_width = current_width.saturating_add(1);
+        source_column = source_column.saturating_add(1);
     }
     (row, current_width.min(columns.saturating_sub(1)))
 }
