@@ -90,6 +90,9 @@ const RUNTIME_PROGRESS_SAY_LEDGER_LABEL: &str = "current-turn progress say ledge
 const RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT: usize = 3;
 /// Maximum characters retained from one progress `say` entry.
 const RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT: usize = 512;
+/// Minimum shared significant tokens for treating two progress updates as the
+/// same sequence point.
+const RUNTIME_PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
 
 /// Extracts normalized progress `say` text from one provider execution.
 ///
@@ -171,7 +174,10 @@ fn runtime_merge_progress_say_entries(
 ) -> Vec<String> {
     let mut entries = previous;
     for entry in new_entries {
-        if let Some(position) = entries.iter().position(|existing| existing == &entry) {
+        if let Some(position) = entries
+            .iter()
+            .position(|existing| runtime_progress_say_entries_are_redundant(existing, &entry))
+        {
             entries.remove(position);
         }
         entries.push(entry);
@@ -181,6 +187,161 @@ fn runtime_merge_progress_say_entries(
     } else {
         entries
     }
+}
+
+/// Reports whether a progress entry repeats one already visible in the turn.
+///
+/// # Parameters
+/// - `entry`: The candidate progress text.
+/// - `existing_entries`: Bounded progress entries already shown this turn.
+fn runtime_progress_say_entry_repeats_existing(entry: &str, existing_entries: &[String]) -> bool {
+    existing_entries
+        .iter()
+        .any(|existing| runtime_progress_say_entries_are_redundant(existing, entry))
+}
+
+/// Reports whether two progress entries communicate the same sequence point.
+///
+/// This intentionally stays conservative: exact normalized matches are always
+/// redundant, while paraphrases need substantial significant-token overlap so a
+/// later update can still mention the same component when it adds a new result.
+///
+/// # Parameters
+/// - `left`: Previously emitted progress text.
+/// - `right`: Candidate progress text.
+fn runtime_progress_say_entries_are_redundant(left: &str, right: &str) -> bool {
+    let Some(left) = runtime_normalize_progress_say_entry(left) else {
+        return false;
+    };
+    let Some(right) = runtime_normalize_progress_say_entry(right) else {
+        return false;
+    };
+    let left = left.to_ascii_lowercase();
+    let right = right.to_ascii_lowercase();
+    if left == right {
+        return true;
+    }
+    if left.chars().count().min(right.chars().count()) >= 48
+        && (left.contains(&right) || right.contains(&left))
+    {
+        return true;
+    }
+    let left_tokens = runtime_progress_say_significant_tokens(&left);
+    let right_tokens = runtime_progress_say_significant_tokens(&right);
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return false;
+    }
+    let shared = left_tokens.intersection(&right_tokens).count();
+    if shared < RUNTIME_PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR {
+        return false;
+    }
+    let smaller = left_tokens.len().min(right_tokens.len());
+    let total = left_tokens.len().saturating_add(right_tokens.len());
+    shared.saturating_mul(100) >= smaller.saturating_mul(72)
+        && shared.saturating_mul(200) >= total.saturating_mul(55)
+}
+
+/// Extracts significant comparison tokens from one progress update.
+///
+/// # Parameters
+/// - `text`: Normalized progress text to tokenize.
+fn runtime_progress_say_significant_tokens(text: &str) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    let mut token = String::new();
+    for character in text.chars() {
+        if character.is_alphanumeric() {
+            for lowered in character.to_lowercase() {
+                token.push(lowered);
+            }
+        } else {
+            runtime_push_progress_say_token(&mut tokens, &mut token);
+        }
+    }
+    runtime_push_progress_say_token(&mut tokens, &mut token);
+    tokens
+}
+
+/// Adds one pending token to a progress comparison set when significant.
+///
+/// # Parameters
+/// - `tokens`: The token set being built.
+/// - `token`: The pending token buffer.
+fn runtime_push_progress_say_token(tokens: &mut BTreeSet<String>, token: &mut String) {
+    if token.is_empty() {
+        return;
+    }
+    let stemmed = runtime_progress_say_stem_token(token);
+    token.clear();
+    if stemmed.len() < 3 || runtime_progress_say_token_is_stopword(&stemmed) {
+        return;
+    }
+    tokens.insert(stemmed);
+}
+
+/// Applies light suffix normalization for progress comparison tokens.
+///
+/// # Parameters
+/// - `token`: Lowercase token extracted from progress text.
+fn runtime_progress_say_stem_token(token: &str) -> String {
+    let mut stemmed = token.to_string();
+    for suffix in ["ing", "ed", "es", "s"] {
+        if stemmed.len() > suffix.len().saturating_add(4) && stemmed.ends_with(suffix) {
+            stemmed.truncate(stemmed.len() - suffix.len());
+            break;
+        }
+    }
+    stemmed
+}
+
+/// Reports whether one token is too common to prove progress-update identity.
+///
+/// # Parameters
+/// - `token`: Lowercase token extracted from progress text.
+fn runtime_progress_say_token_is_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "about"
+            | "after"
+            | "again"
+            | "already"
+            | "also"
+            | "and"
+            | "are"
+            | "before"
+            | "being"
+            | "but"
+            | "can"
+            | "current"
+            | "does"
+            | "doing"
+            | "done"
+            | "for"
+            | "from"
+            | "has"
+            | "have"
+            | "here"
+            | "into"
+            | "its"
+            | "just"
+            | "more"
+            | "need"
+            | "now"
+            | "only"
+            | "rather"
+            | "same"
+            | "should"
+            | "still"
+            | "than"
+            | "that"
+            | "the"
+            | "then"
+            | "there"
+            | "this"
+            | "through"
+            | "with"
+            | "without"
+            | "would"
+    )
 }
 
 /// Formats the active-turn progress ledger for model context.
@@ -5284,6 +5445,111 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Returns progress `say` entries already visible during an active turn.
+    ///
+    /// # Parameters
+    /// - `turn_id`: Active turn whose current progress ledger should be read.
+    fn current_turn_progress_say_entries(&self, turn_id: &str) -> Vec<String> {
+        let Some(context) = self.agent_turn_contexts.get(turn_id) else {
+            return Vec::new();
+        };
+        context
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.source == ContextSourceKind::LocalMessage
+                    && block.label == RUNTIME_PROGRESS_SAY_LEDGER_LABEL
+            })
+            .flat_map(|block| runtime_progress_say_entries_from_ledger(&block.content))
+            .collect()
+    }
+
+    /// Suppresses progress `say` actions that repeat an already visible update.
+    ///
+    /// The provider still receives a successful action result explaining the
+    /// suppression, but the duplicate text is removed before user display,
+    /// assistant context, copy retention, and progress-ledger updates.
+    ///
+    /// # Parameters
+    /// - `turn`: Active turn receiving the provider execution.
+    /// - `execution`: Provider execution whose progress actions may be filtered.
+    fn suppress_redundant_progress_say_actions(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
+        let mut visible_entries = self.current_turn_progress_say_entries(&turn.turn_id);
+        let Some(batch) = execution.response.action_batch.as_mut() else {
+            return Ok(0);
+        };
+        if let Some(rationale_entry) = runtime_normalize_progress_say_entry(&batch.rationale)
+            && runtime_progress_say_entry_repeats_existing(&rationale_entry, &visible_entries)
+        {
+            batch.rationale.clear();
+        }
+        let mut suppressed_actions = Vec::new();
+        let mut suppressed_action_ids = Vec::new();
+        for action in &mut batch.actions {
+            let AgentActionPayload::Say {
+                status,
+                text,
+                content_type: _,
+            } = &mut action.payload
+            else {
+                continue;
+            };
+            if *status != SayStatus::Progress {
+                continue;
+            }
+            let Some(entry) = runtime_normalize_progress_say_entry(text) else {
+                continue;
+            };
+            if runtime_progress_say_entry_repeats_existing(&entry, &visible_entries) {
+                text.clear();
+                action.rationale.clear();
+                suppressed_action_ids.push(action.id.clone());
+                suppressed_actions.push(action.clone());
+            } else {
+                visible_entries.push(entry);
+            }
+        }
+        for action_id in &suppressed_action_ids {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "action {action_id} progress_say suppressed reason=repeated_current_turn_progress"
+                ),
+            )?;
+        }
+        for action in &suppressed_actions {
+            if let Some(result) = execution
+                .action_results
+                .iter_mut()
+                .find(|result| result.action_id == action.id)
+            {
+                *result = ActionResult::succeeded(
+                    turn,
+                    action,
+                    vec![
+                        "progress say suppressed because it repeated an already visible current-turn update; continue with only materially new progress".to_string(),
+                    ],
+                    Some(
+                        r#"{"kind":"say","status":"progress","display":"suppressed_duplicate_progress","reason":"repeated_current_turn_progress"}"#
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+        if !suppressed_actions.is_empty() {
+            execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            );
+        }
+        Ok(suppressed_actions.len())
+    }
+
     /// Runs the apply agent provider execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -5324,6 +5590,7 @@ impl RuntimeSessionService {
         );
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
+        self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
@@ -5553,6 +5820,7 @@ impl RuntimeSessionService {
         );
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
+        self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
@@ -8055,6 +8323,9 @@ impl RuntimeSessionService {
                     text,
                     content_type,
                 } => {
+                    if text.trim().is_empty() {
+                        continue;
+                    }
                     if has_runtime_visible_action && *status != SayStatus::Progress {
                         pending_runtime_visible_action = true;
                     } else {
@@ -8132,7 +8403,7 @@ impl RuntimeSessionService {
                 content_type,
             } = &action.payload
             {
-                if *status == SayStatus::Progress {
+                if *status == SayStatus::Progress || text.trim().is_empty() {
                     continue;
                 }
                 self.append_agent_assistant_content_to_terminal_buffer(

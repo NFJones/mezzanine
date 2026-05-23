@@ -19633,6 +19633,136 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert!(!service.agent_turn_contexts.contains_key("turn-1"));
 }
 
+/// Verifies runtime suppresses repeated progress `say` updates during a turn.
+///
+/// Progress messages are user-visible sequence points. When a later provider
+/// batch paraphrases an already displayed owner or diagnosis, the duplicate
+/// should not be rendered, copied, retained in assistant context, or added back
+/// into the progress ledger. The action still succeeds with compact feedback so
+/// the model can continue without entering a correction loop.
+#[test]
+fn runtime_agent_suppresses_redundant_progress_say_updates() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 20).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-redundant-progress","input":"fix the selector"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let first_progress = "The selector bug is in the real resume pager path.";
+    let first_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "progress".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "record the owner".to_string(),
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "say-progress-1".to_string(),
+                    rationale: "tell the user the selector owner".to_string(),
+                    payload: crate::agent::AgentActionPayload::Say {
+                        status: crate::agent::SayStatus::Progress,
+                        text: first_progress.to_string(),
+                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            .to_string(),
+                    },
+                }],
+                final_turn: false,
+            }),
+        },
+    };
+    let first_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &first_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(first_execution.terminal_state, AgentTurnState::Running);
+
+    let duplicate_progress = "The surviving selector bug is still in the real resume pager path.";
+    let final_text = "The fix is complete.";
+    let second_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: duplicate_progress.to_string(),
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![
+                    crate::agent::AgentAction {
+                        id: "say-progress-2".to_string(),
+                        rationale: "repeat the selector owner".to_string(),
+                        payload: crate::agent::AgentActionPayload::Say {
+                            status: crate::agent::SayStatus::Progress,
+                            text: duplicate_progress.to_string(),
+                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    },
+                    crate::agent::AgentAction {
+                        id: "say-final".to_string(),
+                        rationale: "finish the reply".to_string(),
+                        payload: crate::agent::AgentActionPayload::Say {
+                            status: crate::agent::SayStatus::Final,
+                            text: final_text.to_string(),
+                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    },
+                ],
+                final_turn: true,
+            }),
+        },
+    };
+    let executions = service
+        .poll_agent_provider_tasks_with_provider(&second_provider, 1)
+        .unwrap();
+    assert_eq!(executions.len(), 1);
+    assert_eq!(executions[0].terminal_state, AgentTurnState::Completed);
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains(first_progress), "{pane_text}");
+    assert!(!pane_text.contains(duplicate_progress), "{pane_text}");
+    assert!(pane_text.contains(final_text), "{pane_text}");
+    assert!(
+        executions[0].action_results.iter().any(|result| {
+            result.action_id == "say-progress-2"
+                && result
+                    .structured_content_json
+                    .as_deref()
+                    .is_some_and(|content| content.contains("suppressed_duplicate_progress"))
+        }),
+        "{:?}",
+        executions[0].action_results
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies runtime treats a same-pane prompt submitted mid-turn as steering.
 ///
 /// This regression scenario documents the behavior being protected so a

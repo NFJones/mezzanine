@@ -3787,6 +3787,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("[current-turn progress say ledger]"));
     assert!(prompt.contains("already-shown progress"));
     assert!(prompt.contains("progress_say line"));
+    assert!(prompt.contains("Do not rewrite the same update with different verbs"));
+    assert!(prompt.contains("Progress say should be a delta"));
+    assert!(prompt.contains("if no one-clause delta exists, omit it"));
     assert!(prompt.contains("omit optional action rationales"));
     assert!(prompt.contains("omit progress say"));
     assert!(prompt.contains("Use one channel per idea"));
@@ -9304,6 +9307,14 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         rationale_description.contains("do not add progress say when it would restate"),
         "{rationale_description}"
     );
+    assert!(
+        rationale_description.contains("Do not rewrite the same progress update"),
+        "{rationale_description}"
+    );
+    assert!(
+        rationale_description.contains("write only the changed fact or omit progress"),
+        "{rationale_description}"
+    );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
         2,
@@ -9379,6 +9390,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_status_description.contains("unless it materially changed"));
     assert!(say_status_description.contains("current-turn progress say ledger"));
     assert!(say_status_description.contains("already-shown progress"));
+    assert!(say_status_description.contains("Progress say should be a delta"));
+    assert!(say_status_description.contains("write only the changed fact or omit progress"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("routine inspection"));
     assert!(say_status_description.contains("owner localization"));
@@ -9407,6 +9420,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_text_description.contains("same owner, same diagnosis, same path, or same phase"));
     assert!(say_text_description.contains("current-turn progress say ledger"));
     assert!(say_text_description.contains("planned text would paraphrase one"));
+    assert!(say_text_description.contains("Do not rewrite the same update with different verbs"));
+    assert!(say_text_description.contains("write only the new delta"));
     assert!(say_text_description.contains("durable learning or a decision, not intended work"));
     assert!(say_text_description.contains("If there is no new sequence-point update"));
     assert!(say_text_description.contains("If progress say is included"));
