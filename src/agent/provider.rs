@@ -1574,7 +1574,7 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
     if let Some(endpoint) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider = provider.with_endpoint(endpoint);
     }
-    provider = provider.with_timeout(timeout_ms).with_stream(true);
+    provider = provider.with_timeout(timeout_ms);
     Ok(provider)
 }
 
@@ -2102,8 +2102,15 @@ fn parse_deepseek_chat_completions_response_body(
     let raw_text = message
         .get("content")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if message.get("tool_calls").is_some() {
+                "executing".to_string()
+            } else {
+                "(empty)".to_string()
+            }
+        });
     let action_batch = if let Some(parsed) = message
         .get("tool_calls")
         .and_then(|tool_calls| tool_calls.as_array())
