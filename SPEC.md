@@ -6008,7 +6008,10 @@ command-wrapper lookup, `"now patching"` updates, and headings such as `Plan:`,
 requested in the same response. Refining file or test anchors, checking
 command-wrapper usage, routine owner localization, or confirming the same
 symptom after it was already stated MUST NOT be treated as a new progress `say`
-sequence point. When an action rationale is
+sequence point. The prompt MUST state that a sequence point is consumed once it
+has been stated, and MUST prohibit later progress `say` output from paraphrasing
+the same owner, diagnosis, direction, phase transition, blocker, or validation
+result unless that fact materially changed. When an action rationale is
 present, the prompt SHOULD ask for a concise reason that justifies the
 immediate action and does not duplicate the batch rationale, progress `say`, or
 action summary.

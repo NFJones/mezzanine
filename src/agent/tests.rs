@@ -3742,6 +3742,12 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("validation changed the plan"));
     assert!(prompt.contains("blocker or uncertainty changed the next step"));
     assert!(prompt.contains("For non-trivial multi-step work, include a progress say"));
+    assert!(prompt.contains("Before emitting progress say, answer"));
+    assert!(prompt.contains("what changed since the last progress say in this turn"));
+    assert!(prompt.contains("only more evidence for the same conclusion"));
+    assert!(prompt.contains("A sequence point is consumed once stated"));
+    assert!(prompt.contains("later batches in the same phase use rationale only"));
+    assert!(prompt.contains("do not restate the same owner, diagnosis, direction"));
     assert!(prompt.contains("include at most one"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
     assert!(prompt.contains("Routine inspection"));
@@ -4074,6 +4080,12 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("validation changed the plan"));
     assert!(prompt.contains("blocker or uncertainty changed the next step"));
     assert!(prompt.contains("For non-trivial multi-step work, include a progress say"));
+    assert!(prompt.contains("Before emitting progress say, answer"));
+    assert!(prompt.contains("what changed since the last progress say in this turn"));
+    assert!(prompt.contains("only more evidence for the same conclusion"));
+    assert!(prompt.contains("A sequence point is consumed once stated"));
+    assert!(prompt.contains("later batches in the same phase use rationale only"));
+    assert!(prompt.contains("do not restate the same owner, diagnosis, direction"));
     assert!(prompt.contains("include at most one"));
     assert!(prompt.contains("state durable learning or a decision, not intended work"));
     assert!(prompt.contains("Routine inspection"));
@@ -4102,12 +4114,18 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("editing-to-validation transition"));
     assert!(prompt.contains("validation changed the plan"));
     assert!(prompt.contains("Otherwise omit progress say"));
+    assert!(prompt.contains(
+        "not already clear from recent thinking/action-result context or prior progress say"
+    ));
+    assert!(
+        prompt.contains("Never use progress say to restate a previously stated sequence point")
+    );
     assert!(prompt.contains("repeat recent thinking/action-result context"));
     assert!(prompt.contains("duplicate the current batch rationale/action summaries"));
     assert!(prompt.contains("progress say plus executable actions"));
     assert!(prompt.contains("must not communicate the same fact"));
     assert!(prompt.contains("include at most one progress say only"));
-    assert!(prompt.contains("Never use progress say to announce routine inspection"));
+    assert!(prompt.contains("announce routine inspection"));
     assert!(!prompt.contains("For multiphase implementation plans"));
     assert!(!prompt.contains("short checkbox list before implementation starts"));
     assert!(prompt.contains("For final summaries after code work"));
@@ -9199,6 +9217,14 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         rationale_description.contains("validation outcome"),
         "{rationale_description}"
     );
+    assert!(
+        rationale_description.contains("A sequence point is consumed once stated"),
+        "{rationale_description}"
+    );
+    assert!(
+        rationale_description.contains("do not add progress say when it would restate"),
+        "{rationale_description}"
+    );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
         2,
@@ -9269,6 +9295,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_status_description.contains("editing to validation"));
     assert!(say_status_description.contains("validation changes the plan"));
     assert!(say_status_description.contains("blocker or uncertainty changes the next step"));
+    assert!(say_status_description.contains("A sequence point is consumed once stated"));
+    assert!(say_status_description.contains("do not restate the same owner"));
+    assert!(say_status_description.contains("unless it materially changed"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("routine inspection"));
     assert!(say_status_description.contains("owner localization"));
@@ -9292,6 +9321,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_text_description.contains("progress for a sequence-point update"));
     assert!(say_text_description.contains("1-2 compact sentences"));
     assert!(say_text_description.contains("important fact"));
+    assert!(say_text_description.contains("Before writing progress, answer what changed"));
+    assert!(say_text_description.contains("only more evidence for the same conclusion"));
+    assert!(say_text_description.contains("same owner, same diagnosis, same path, or same phase"));
     assert!(say_text_description.contains("durable learning or a decision, not intended work"));
     assert!(say_text_description.contains("If there is no new sequence-point update"));
     assert!(say_text_description.contains("If progress say is included"));
