@@ -8397,16 +8397,17 @@ fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
         vec!["11111", "22222", "33333", "44444"]
     );
 }
-/// Verifies that width-changing pane resizes keep latency bounded by leaving
-/// older scrollback in its stored physical rows. Side-by-side pane splits halve
-/// columns, so they must not synchronously rebuild every retained history row
-/// before the new viewport can be presented.
+/// Verifies that width-changing pane resizes keep latency bounded and preserve
+/// viewport position by leaving scrollback in its stored physical rows.
+/// Side-by-side pane splits halve columns, so they must not synchronously
+/// rebuild retained history or pull the retained tail into the new viewport.
 #[test]
-fn terminal_screen_width_resize_reflows_only_bounded_history_tail() {
+fn terminal_screen_width_resize_reflows_only_live_viewport() {
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 600).unwrap();
     for index in 0..520 {
         screen.feed(format!("old-{index:03}-abcdefghijkl\r\n").as_bytes());
     }
+    screen.feed(b"live-one\r\nlive-two\r\nlive-three\r\nlive-four");
     let before_history_len = screen.history().len();
     let before_prefix = screen
         .history()
@@ -8425,12 +8426,14 @@ fn terminal_screen_width_resize_reflows_only_bounded_history_tail() {
             .collect::<Vec<_>>(),
         before_prefix
     );
-    assert_eq!(screen.visible_lines().len(), 4);
+    let visible_lines = screen.visible_lines();
+    assert_eq!(visible_lines.len(), 4);
+    assert!(visible_lines.iter().any(|line| line.contains("live-one")));
+    assert!(visible_lines.iter().any(|line| line.contains("live-two")));
     assert!(
-        screen
-            .visible_lines()
+        visible_lines
             .iter()
-            .all(|line| terminal_text_width(line) <= 10)
+            .all(|line| terminal_text_width(line) <= 10 && !line.contains("old-"))
     );
 }
 

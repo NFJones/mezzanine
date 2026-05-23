@@ -628,12 +628,13 @@ regions.
 Normal-screen live pane content that was soft-wrapped by terminal autowrap MUST
 be reflowed across pane width changes so temporarily obscured cells are not
 lost when a pane is narrowed and later expanded. Width-changing resizes MUST
-keep split latency bounded by reflowing the visible viewport and adjacent
-scrollback tail instead of synchronously rebuilding all retained history; older
-scrollback MAY remain stored in its existing physical wrapping. If a pane-local
-clear or terminal full-screen erase such as shell `Ctrl+L` has intentionally
-detached the live viewport from retained scrollback, subsequent resizes MUST
-preserve the live viewport position instead of repopulating it from history.
+keep split latency bounded by reflowing only the visible viewport instead of
+synchronously rebuilding retained history, and they MUST NOT pull retained
+scrollback into the new visible viewport; older scrollback MAY remain stored in
+its existing physical wrapping. If a pane-local clear or terminal full-screen
+erase such as shell `Ctrl+L` has intentionally detached the live viewport from
+retained scrollback, subsequent resizes MUST preserve the live viewport
+position instead of repopulating it from history.
 
 When a pane's primary PID exits, Mezzanine MUST close the containing pane.
 
