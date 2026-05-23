@@ -8304,6 +8304,31 @@ fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     assert_eq!(screen.visible_lines()[0], "▐ agent> a");
     assert_eq!(screen.visible_lines()[1], "▐ bcdefghi");
 }
+/// Verifies that row-only pane resizes preserve scrollback and visible content
+/// without reflowing wrapped history. Pane splits change height but keep width,
+/// so this protects the fast path used when large scrollback buffers exist.
+#[test]
+fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
+    let mut screen = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
+    screen.feed(b"11111\r\n22222\r\n33333\r\n44444");
+
+    screen.resize(Size::new(5, 2).unwrap());
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec!["11111", "22222"]
+    );
+    assert_eq!(screen.visible_lines(), vec!["33333", "44444"]);
+
+    screen.resize(Size::new(5, 4).unwrap());
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec![] as Vec<&str>
+    );
+    assert_eq!(
+        screen.visible_lines(),
+        vec!["11111", "22222", "33333", "44444"]
+    );
+}
 
 /// Verifies resize cursor restoration counts display-only agent gutter
 /// continuations. Without this, the cursor below a long agent transcript could

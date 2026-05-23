@@ -114,6 +114,21 @@ impl HistoryBuffer {
         self.line_wraps.push_back(wraps);
         self.enforce_limit();
     }
+    /// Removes and returns the newest history line with its display metadata.
+    pub(super) fn pop_styled_line(&mut self) -> Option<(TerminalStyledLine, bool)> {
+        let text = self.lines.pop_back()?;
+        let style_spans = self.line_style_spans.pop_back().unwrap_or_default();
+        let copy_text = self.line_copy_texts.pop_back().flatten();
+        let wraps = self.line_wraps.pop_back().unwrap_or(false);
+        Some((
+            TerminalStyledLine {
+                text,
+                style_spans,
+                copy_text,
+            },
+            wraps,
+        ))
+    }
 
     /// Runs the set limit operation for this subsystem.
     ///

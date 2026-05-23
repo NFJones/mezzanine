@@ -836,6 +836,10 @@ impl TerminalScreen {
         }
 
         if !self.alternate.active() && self.scroll_region.is_none() {
+            if self.size.columns == size.columns {
+                self.resize_normal_screen_rows_only(size);
+                return;
+            }
             self.resize_normal_screen_reflowing(size);
             return;
         }
@@ -890,6 +894,87 @@ impl TerminalScreen {
         self.wrap_pending = false;
         if let Some(cursor) = self.saved_cursor.as_mut() {
             cursor.row = cursor.row.saturating_sub(row_offset).min(max_row);
+            cursor.column = cursor.column.min(max_column);
+        }
+    }
+    /// Resizes a normal screen when only the row count changes.
+    ///
+    /// With a stable column count the physical wrap boundaries do not change, so
+    /// the resize can move whole rows between visible cells and scrollback
+    /// history instead of reflowing every retained history line.
+    fn resize_normal_screen_rows_only(&mut self, size: Size) {
+        let old_rows = self.cells.len();
+        let new_rows = usize::from(size.rows);
+        let preserve_bottom = new_rows < old_rows
+            && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
+        if new_rows == old_rows {
+            self.size = size;
+            return;
+        }
+
+        let mut visible_rows = self.current_visible_rows();
+        let visible_len = visible_rows.len();
+        let visible_start = if preserve_bottom || visible_len > new_rows {
+            visible_len.saturating_sub(new_rows)
+        } else {
+            0
+        };
+        let moved_to_history = visible_start;
+        let retained_visible = visible_rows.len().saturating_sub(visible_start);
+        let pulled_from_history = new_rows.saturating_sub(retained_visible);
+        let history_append_rows = visible_rows.drain(..moved_to_history).collect::<Vec<_>>();
+
+        let mut next_visible_rows = Vec::with_capacity(new_rows);
+        let mut restored_history_rows = Vec::with_capacity(pulled_from_history);
+        for _ in 0..pulled_from_history {
+            let Some((line, wraps_to_next)) = self.history.pop_styled_line() else {
+                break;
+            };
+            restored_history_rows.push(PhysicalStyledLine {
+                line,
+                wraps_to_next,
+            });
+        }
+        restored_history_rows.reverse();
+        let restored_history_row_count = restored_history_rows.len();
+        next_visible_rows.extend(restored_history_rows);
+        next_visible_rows.extend(visible_rows);
+
+        self.size = size;
+        for row in &history_append_rows {
+            self.history
+                .push_styled_line_with_wrap(row.line.clone(), row.wraps_to_next);
+        }
+        self.cells = blank_cells(size);
+        self.renditions = blank_renditions(size, GraphicRendition::default());
+        self.line_wraps = vec![false; new_rows];
+        self.line_copy_texts = vec![None; new_rows];
+        for (row_index, row) in next_visible_rows.iter().take(new_rows).enumerate() {
+            write_styled_line_to_row(
+                &row.line,
+                &mut self.cells[row_index],
+                &mut self.renditions[row_index],
+            );
+            self.line_wraps[row_index] = row.wraps_to_next;
+            self.line_copy_texts[row_index] = row.line.copy_text.clone();
+        }
+
+        let max_row = self.max_row();
+        let max_column = self.max_column();
+        self.cursor.row = self
+            .cursor
+            .row
+            .saturating_add(restored_history_row_count)
+            .saturating_sub(moved_to_history)
+            .min(max_row);
+        self.cursor.column = self.cursor.column.min(max_column);
+        self.wrap_pending = false;
+        if let Some(cursor) = self.saved_cursor.as_mut() {
+            cursor.row = cursor
+                .row
+                .saturating_add(restored_history_row_count)
+                .saturating_sub(moved_to_history)
+                .min(max_row);
             cursor.column = cursor.column.min(max_column);
         }
     }
@@ -961,6 +1046,24 @@ impl TerminalScreen {
             cursor.row = cursor.row.min(max_row);
             cursor.column = cursor.column.min(max_column);
         }
+    }
+    /// Returns the currently visible physical rows with their style metadata.
+    fn current_visible_rows(&self) -> Vec<PhysicalStyledLine> {
+        let last_visible_row = self
+            .last_significant_row()
+            .map(|row| row.max(self.cursor.row))
+            .unwrap_or(self.cursor.row)
+            .min(self.cells.len().saturating_sub(1));
+        (0..=last_visible_row)
+            .map(|row| PhysicalStyledLine {
+                line: styled_line_from_row_with_copy_text(
+                    &self.cells[row],
+                    &self.renditions[row],
+                    self.line_copy_texts.get(row).cloned().flatten(),
+                ),
+                wraps_to_next: self.line_wraps.get(row).copied().unwrap_or(false),
+            })
+            .collect()
     }
 
     /// Runs the normal reflow source rows operation for this subsystem.
