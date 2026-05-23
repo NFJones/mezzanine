@@ -6018,6 +6018,12 @@ result unless that fact materially changed. When an action rationale is
 present, the prompt SHOULD ask for a concise reason that justifies the
 immediate action and does not duplicate the batch rationale, progress `say`, or
 action summary.
+The runtime MUST add a bounded, turn-volatile context block that lists recent
+progress `say` messages already emitted during the active turn before subsequent
+provider continuations. The block MUST be framed as already-shown progress, not
+as a new user request. It MUST be excluded from stable prompt-cache prefix
+material, MUST be cleared when the active turn completes, and SHOULD retain only
+the most recent entries needed to prevent redundant progress narration.
 For implementation summaries, the prompt MUST require changed files, successful
 mutation evidence, verification evidence, and skipped validation when relevant.
 The prompt MUST prohibit leading with approval phrases such as "Great

@@ -84,6 +84,118 @@ const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 2;
 const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT: u32 = 2;
 /// Label for ephemeral active-turn context that guides output-limit retries.
 const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL: &str = "provider output-limit retry guidance";
+/// Label for ephemeral active-turn context that tracks visible progress output.
+const RUNTIME_PROGRESS_SAY_LEDGER_LABEL: &str = "current-turn progress say ledger";
+/// Maximum progress `say` entries retained for one active turn.
+const RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT: usize = 3;
+/// Maximum characters retained from one progress `say` entry.
+const RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT: usize = 512;
+
+/// Extracts normalized progress `say` text from one provider execution.
+///
+/// # Parameters
+/// - `execution`: The provider execution whose MAAP actions may include visible
+///   progress text.
+fn runtime_progress_say_entries_for_execution(execution: &AgentTurnExecution) -> Vec<String> {
+    let Some(batch) = execution.response.action_batch.as_ref() else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    for action in &batch.actions {
+        let AgentActionPayload::Say { status, text, .. } = &action.payload else {
+            continue;
+        };
+        if *status != SayStatus::Progress {
+            continue;
+        }
+        let Some(entry) = runtime_normalize_progress_say_entry(text) else {
+            continue;
+        };
+        if !entries.iter().any(|existing| existing == &entry) {
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+/// Normalizes one progress `say` text for compact context reuse.
+///
+/// # Parameters
+/// - `text`: The model-authored visible progress text.
+fn runtime_normalize_progress_say_entry(text: &str) -> Option<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(runtime_truncate_context_entry(
+        &normalized,
+        RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT,
+    ))
+}
+
+/// Truncates one context entry without splitting UTF-8.
+///
+/// # Parameters
+/// - `text`: The context entry to bound.
+/// - `limit`: The maximum number of Unicode scalar values to retain before
+///   adding an ASCII truncation marker.
+fn runtime_truncate_context_entry(text: &str, limit: usize) -> String {
+    let mut output = text.chars().take(limit).collect::<String>();
+    if text.chars().count() > limit {
+        output.push_str("...");
+    }
+    output
+}
+
+/// Parses progress entries from an existing active-turn ledger block.
+///
+/// # Parameters
+/// - `content`: The previous ledger block content.
+fn runtime_progress_say_entries_from_ledger(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| line.strip_prefix("progress_say: "))
+        .filter_map(runtime_normalize_progress_say_entry)
+        .collect()
+}
+
+/// Merges previous and newly emitted progress entries under the active-turn cap.
+///
+/// # Parameters
+/// - `previous`: The previous ledger entries.
+/// - `new_entries`: The progress entries emitted by the latest provider
+///   execution.
+fn runtime_merge_progress_say_entries(
+    previous: Vec<String>,
+    new_entries: Vec<String>,
+) -> Vec<String> {
+    let mut entries = previous;
+    for entry in new_entries {
+        if let Some(position) = entries.iter().position(|existing| existing == &entry) {
+            entries.remove(position);
+        }
+        entries.push(entry);
+    }
+    if entries.len() > RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT {
+        entries.split_off(entries.len() - RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT)
+    } else {
+        entries
+    }
+}
+
+/// Formats the active-turn progress ledger for model context.
+///
+/// # Parameters
+/// - `entries`: The bounded progress entries to include.
+fn runtime_progress_say_ledger_content(entries: &[String]) -> String {
+    let mut content = vec![
+        "This is a bounded ledger of user-visible progress say messages already emitted during the current turn.".to_string(),
+        "It is not a user request. Before emitting another progress say, compare against these lines and omit progress if it would restate the same owner, diagnosis, direction, phase, blocker, or validation result.".to_string(),
+    ];
+    content.extend(entries.iter().map(|entry| format!("progress_say: {entry}")));
+    content.join("\n")
+}
+
 /// Returns the remaining turn-wide shell execution budget.
 ///
 /// Individual model actions do not choose their own timeout. Shell-backed
@@ -5132,6 +5244,46 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Appends or updates the active-turn progress `say` ledger.
+    ///
+    /// # Parameters
+    /// - `turn`: The running agent turn receiving the ledger context block.
+    /// - `execution`: The provider execution whose progress `say` actions should
+    ///   become explicit context for later continuations.
+    fn append_agent_execution_progress_say_ledger_context(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let new_entries = runtime_progress_say_entries_for_execution(execution);
+        if new_entries.is_empty() {
+            return Ok(());
+        }
+        let context = self
+            .agent_turn_contexts
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let mut previous_entries = Vec::new();
+        context.blocks.retain(|block| {
+            let is_progress_say_ledger = block.source == ContextSourceKind::LocalMessage
+                && block.label == RUNTIME_PROGRESS_SAY_LEDGER_LABEL;
+            if is_progress_say_ledger {
+                previous_entries.extend(runtime_progress_say_entries_from_ledger(&block.content));
+            }
+            !is_progress_say_ledger
+        });
+        let entries = runtime_merge_progress_say_entries(previous_entries, new_entries);
+        if entries.is_empty() {
+            return Ok(());
+        }
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::LocalMessage,
+            label: RUNTIME_PROGRESS_SAY_LEDGER_LABEL.to_string(),
+            content: runtime_progress_say_ledger_content(&entries),
+        });
+        Ok(())
+    }
+
     /// Runs the apply agent provider execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -5174,6 +5326,7 @@ impl RuntimeSessionService {
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
+        self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;
@@ -5402,6 +5555,7 @@ impl RuntimeSessionService {
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
+        self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;

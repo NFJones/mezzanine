@@ -3784,6 +3784,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
     assert!(prompt.contains("any other text in the same response"));
+    assert!(prompt.contains("[current-turn progress say ledger]"));
+    assert!(prompt.contains("already-shown progress"));
+    assert!(prompt.contains("progress_say line"));
     assert!(prompt.contains("omit optional action rationales"));
     assert!(prompt.contains("omit progress say"));
     assert!(prompt.contains("Use one channel per idea"));
@@ -4124,6 +4127,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
     assert!(prompt.contains("any other text in the same response"));
+    assert!(prompt.contains("[current-turn progress say ledger]"));
+    assert!(prompt.contains("already-shown progress"));
+    assert!(prompt.contains("progress_say line"));
     assert!(prompt.contains("omit optional action rationales"));
     assert!(prompt.contains("omit progress say"));
     assert!(prompt.contains("Use one channel per idea"));
@@ -4187,7 +4193,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("validation changed the plan"));
     assert!(prompt.contains("Otherwise omit progress say"));
     assert!(prompt.contains(
-        "not already clear from recent thinking/action-result context or prior progress say"
+        "not already clear from recent thinking/action-result context, the [current-turn progress say ledger], or prior progress say"
     ));
     assert!(
         prompt.contains("Never use progress say to restate a previously stated sequence point")
@@ -9266,6 +9272,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         rationale_description.contains("Compare against recent thinking lines, action results"),
         "{rationale_description}"
     );
+    assert!(rationale_description.contains("current-turn progress say ledger"));
     assert!(rationale_description.contains("any progress say in the same response"));
     assert!(rationale_description.contains("if there is no new user-visible update"));
     assert!(rationale_description.contains("do not add a progress say"));
@@ -9370,6 +9377,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_status_description.contains("A sequence point is consumed once stated"));
     assert!(say_status_description.contains("do not restate the same owner"));
     assert!(say_status_description.contains("unless it materially changed"));
+    assert!(say_status_description.contains("current-turn progress say ledger"));
+    assert!(say_status_description.contains("already-shown progress"));
     assert!(say_status_description.contains("future-tense plans"));
     assert!(say_status_description.contains("routine inspection"));
     assert!(say_status_description.contains("owner localization"));
@@ -9396,6 +9405,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(say_text_description.contains("Before writing progress, answer what changed"));
     assert!(say_text_description.contains("only more evidence for the same conclusion"));
     assert!(say_text_description.contains("same owner, same diagnosis, same path, or same phase"));
+    assert!(say_text_description.contains("current-turn progress say ledger"));
+    assert!(say_text_description.contains("planned text would paraphrase one"));
     assert!(say_text_description.contains("durable learning or a decision, not intended work"));
     assert!(say_text_description.contains("If there is no new sequence-point update"));
     assert!(say_text_description.contains("If progress say is included"));
