@@ -4639,13 +4639,7 @@ impl RuntimeSessionService {
             .provider_registry
             .resolve_profile(&config.router_model_profile)?;
         if router_profile.provider != default_profile.provider {
-            return Err(MezError::config(format!(
-                "auto-sizing router profile `{}` uses provider `{}`, but active profile `{}` uses provider `{}`",
-                config.router_model_profile,
-                router_profile.provider,
-                turn.model_profile,
-                default_profile.provider
-            )));
+            return Ok(None);
         }
         let small = self.runtime_auto_sizing_target_profile(
             "small",
