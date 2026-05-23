@@ -1804,34 +1804,50 @@ impl RuntimeSessionService {
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let active_model_label = format!("{}: {}", active_profile.provider, active_profile.model);
-        let provider_ids: Vec<String> =
+        let mut provider_ids: Vec<String> =
             self.provider_registry.providers().keys().cloned().collect();
+        if let Some(auth_store) = self.auth_store.as_ref()
+            && let Ok(Some(auth_metadata)) = auth_store.read_metadata()
+            && !provider_ids.contains(&auth_metadata.provider)
+        {
+            provider_ids.push(auth_metadata.provider);
+        }
         let mut models = Vec::new();
         for provider_id in &provider_ids {
-            let provider_config = self
-                .provider_registry
-                .provider(provider_id)
-                .cloned()
-                .ok_or_else(|| {
-                    MezError::config(format!("provider `{provider_id}` is not configured"))
-                })?;
-            let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
-            for model in &catalog.models {
-                let label = format!("{provider_id}: {}", model.id);
-                if !models.iter().any(|m: &String| m == &label) {
-                    models.push(label);
+            let models_for_provider: Vec<String> = if let Some(provider_config) =
+                self.provider_registry.provider(provider_id).cloned()
+            {
+                let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
+                let mut items: Vec<String> = catalog
+                    .models
+                    .iter()
+                    .map(|model| format!("{provider_id}: {}", model.id))
+                    .collect();
+                let configured_items: Vec<String> = if provider_config.models.is_empty() {
+                    runtime_default_models_for_provider(&provider_config.kind)
+                        .map(|models| models.iter().map(|m| m.to_string()).collect())
+                        .unwrap_or_default()
+                } else {
+                    provider_config.models.clone()
                 }
-            }
-            let configured_models: Vec<String> = if provider_config.models.is_empty() {
-                runtime_default_models_for_provider(&provider_config.kind)
-                    .map(|models| models.iter().map(|m| m.to_string()).collect())
-                    .unwrap_or_default()
+                .iter()
+                .map(|m| format!("{provider_id}: {m}"))
+                .filter(|label| !items.iter().any(|i| i == label))
+                .collect();
+                items.extend(configured_items);
+                items
             } else {
-                provider_config.models.clone()
+                runtime_default_models_for_provider(provider_id)
+                    .map(|models| {
+                        models
+                            .iter()
+                            .map(|m| format!("{provider_id}: {m}"))
+                            .collect()
+                    })
+                    .unwrap_or_default()
             };
-            for model in &configured_models {
-                let label = format!("{provider_id}: {model}");
-                if !models.iter().any(|m| m == &label) {
+            for label in models_for_provider {
+                if !models.iter().any(|m: &String| m == &label) {
                     models.push(label);
                 }
             }
