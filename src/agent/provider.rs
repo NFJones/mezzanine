@@ -2036,22 +2036,19 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
         body["thinking"] = serde_json::json!({"type": "enabled"});
     }
     if capabilities.supports_tool_calls {
-        let tool_choice = if request.allowed_actions.actions.is_empty()
-            || request.allowed_actions == AllowedActionSet::say_only()
-        {
-            serde_json::json!("none")
+        let use_maap_tool = request.interaction_kind != ModelInteractionKind::AutoSizing
+            && !request.allowed_actions.actions.is_empty();
+        body["tool_choice"] = if use_maap_tool {
+            deepseek_maap_tool_choice()
         } else {
-            serde_json::json!("auto")
+            serde_json::json!("none")
         };
-        body["tool_choice"] = tool_choice;
-        if !request.allowed_actions.actions.is_empty()
-            && request.allowed_actions != AllowedActionSet::say_only()
-        {
+        if use_maap_tool {
             let maap_tool = serde_json::json!({
                 "type": "function",
                 "function": {
                     "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-                    "description": "Submit one validated MAAP/1 action batch for execution.",
+                    "description": deepseek_maap_tool_description(&request.allowed_actions),
                     "parameters": maap_action_batch_schema(
                         &request.allowed_actions,
                         &request.available_mcp_tools
@@ -2067,6 +2064,34 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
             "DeepSeek Chat Completions request encoding failed: {error}"
         ))
     })
+}
+
+/// Returns the DeepSeek tool choice that forces the MAAP function call.
+///
+/// # Behavior
+/// DeepSeek's Chat Completions API defaults `tool_choice` to `auto` when tools
+/// are present, which allows a prose answer instead of a MAAP action batch.
+/// Mezzanine requires a structured action batch for every non-auto-sizing
+/// provider turn, so executable and response-only turns force the single MAAP
+/// tool explicitly.
+fn deepseek_maap_tool_choice() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+        }
+    })
+}
+
+/// Builds concise provider-facing guidance for DeepSeek's single MAAP tool.
+///
+/// # Parameters
+/// - `allowed_actions`: The current controller-approved action surface.
+fn deepseek_maap_tool_description(allowed_actions: &AllowedActionSet) -> String {
+    format!(
+        "Submit exactly one MAAP/1 action batch through this function. Current allowed action types: {}. Use only the action objects in this function schema. If the needed action is absent and request_capability is available, request that capability instead of answering in prose.",
+        allowed_actions.action_type_names().join(",")
+    )
 }
 
 /// Maps Mezzanine reasoning effort levels to DeepSeek-supported values.

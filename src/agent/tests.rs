@@ -29,8 +29,8 @@ use super::{
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
     append_scheduler_context, apply_patch_write_plan_from_read_output, assemble_model_request,
     baseline_slash_commands, bootstrap_script, bootstrap_script_for_classification,
-    build_agent_system_prompt, compact_model_context_for_budget,
-    compact_model_context_for_budget_with_retained_tail_percent,
+    build_agent_system_prompt, build_deepseek_chat_completions_http_request,
+    compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
     decide_bootstrap_before_user_prompt, decode_shell_output_transport,
     discover_tools_through_pane_shell, execute_agent_shell_command,
     execute_agent_shell_command_with_mcp, execute_agent_shell_command_with_permissions,
@@ -7832,6 +7832,153 @@ fn openai_tool_action_types(tool: &serde_json::Value) -> Vec<String> {
                 .map(str::to_string)
         })
         .collect()
+}
+
+/// Finds the single MAAP function tool in a DeepSeek Chat Completions request.
+fn deepseek_maap_function_tool(body: &serde_json::Value) -> &serde_json::Value {
+    body["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("DeepSeek request body does not contain tools: {body}"))
+        .iter()
+        .find(|tool| tool["function"]["name"].as_str() == Some(OPENAI_MAAP_FUNCTION_TOOL_NAME))
+        .unwrap_or_else(|| panic!("DeepSeek request body does not contain MAAP tool: {body}"))
+}
+
+/// Returns the MAAP action type names advertised by one DeepSeek function tool.
+fn deepseek_tool_action_types(tool: &serde_json::Value) -> Vec<String> {
+    tool["function"]["parameters"]["properties"]["actions"]["items"]["anyOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("DeepSeek tool does not contain MAAP action variants: {tool}"))
+        .iter()
+        .filter_map(|schema| {
+            schema["properties"]["type"]["enum"][0]
+                .as_str()
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Verifies DeepSeek capability-decision requests force the MAAP tool call
+/// instead of allowing an ordinary prose response.
+///
+/// The DeepSeek Chat Completions API defaults to `tool_choice=auto` whenever a
+/// tool list is present. Mezzanine's first provider turn still requires a
+/// structured MAAP batch so the model can request the missing coarse capability
+/// rather than narrating that it might try an action name. This regression
+/// protects the forced named-tool choice and the narrow say/request-capability
+/// schema used by the initial turn.
+#[test]
+fn deepseek_chat_completions_request_body_forces_maap_tool_for_capability_decision() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "spawn two subagents".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/v1/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+    let tool = deepseek_maap_function_tool(&value);
+    let action_types = deepseek_tool_action_types(tool);
+
+    assert_eq!(
+        value["tool_choice"],
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+            }
+        })
+    );
+    assert_eq!(value["tools"].as_array().unwrap().len(), 1);
+    assert!(action_types.contains(&"say".to_string()));
+    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(!action_types.contains(&"spawn_agent".to_string()));
+}
+
+/// Verifies DeepSeek subagent execution requests force the MAAP tool and expose
+/// the concrete subagent action variants.
+///
+/// After the controller grants subagent capability, the provider-visible schema
+/// must make `spawn_agent` and `send_message` explicit while still forcing the
+/// single MAAP function call. Without a forced named tool, DeepSeek can legally
+/// return normal assistant text even though Mezzanine needs executable local
+/// actions for the turn to progress.
+#[test]
+fn deepseek_chat_completions_request_body_forces_maap_tool_for_subagent_actions() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "spawn two subagents".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/v1/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+    let tool = deepseek_maap_function_tool(&value);
+    let action_types = deepseek_tool_action_types(tool);
+
+    assert_eq!(
+        value["tool_choice"],
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+            }
+        })
+    );
+    assert!(action_types.contains(&"say".to_string()));
+    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(action_types.contains(&"send_message".to_string()));
+    assert!(action_types.contains(&"spawn_agent".to_string()));
+    assert!(
+        tool["function"]["description"].as_str().unwrap().contains(
+            "Current allowed action types: say,request_capability,send_message,spawn_agent"
+        )
+    );
 }
 
 /// Recursively validates strict-schema object requirements with a path that
