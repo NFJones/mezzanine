@@ -1,5 +1,21 @@
 <div align="center">
-<img src="./resources/mezzanine-logo-small.png" width="200" alt="Mezzanine logo">
+<p align="center">
+  <picture>
+    <source
+      srcset="./resources/mezzanine-logo-light.png"
+      media="(prefers-color-scheme: dark)"
+    />
+    <source
+      srcset="./resources/mezzanine-logo-dark.png"
+      media="(prefers-color-scheme: light)"
+    />
+    <img
+      src="./resources/mezzanine-logo-dark.png"
+      width="200"
+      alt="Mezzanine logo"
+    />
+  </picture>
+</p>
 <h1>Mezzanine</h1>
 <p align="center">
   <a href="https://github.com/NFJones/mezzanine/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/NFJones/mezzanine?style=flat-square"></a>
