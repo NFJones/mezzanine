@@ -274,10 +274,10 @@ impl ContextBlock {
             ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant => ContextStability::SessionStable,
+            | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool => ContextStability::SessionStable,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
-            | ContextSourceKind::TranscriptTool
             | ContextSourceKind::ActionResult => ContextStability::TurnVolatile,
         }
     }
@@ -293,7 +293,8 @@ impl ContextBlock {
             | ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant => {
+            | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool => {
                 if self.stability() == ContextStability::TurnVolatile {
                     ContextCachePolicy::Ineligible
                 } else if self.source == ContextSourceKind::ProjectGuidance {
@@ -304,7 +305,6 @@ impl ContextBlock {
             }
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
-            | ContextSourceKind::TranscriptTool
             | ContextSourceKind::ActionResult => ContextCachePolicy::Ineligible,
         }
     }

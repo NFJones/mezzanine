@@ -2242,6 +2242,11 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
         label: "action result".to_string(),
         content: "command output".to_string(),
     };
+    let transcript_tool = ContextBlock {
+        source: ContextSourceKind::TranscriptTool,
+        label: "historical tool result".to_string(),
+        content: "prior command output".to_string(),
+    };
     let pane_identity = ContextBlock {
         source: ContextSourceKind::Configuration,
         label: "pane identity".to_string(),
@@ -2257,6 +2262,9 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
     assert_eq!(scheduler.stability(), ContextStability::TurnVolatile);
     assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
     assert!(!scheduler.stable_prefix_eligible());
+    assert_eq!(transcript_tool.stability(), ContextStability::SessionStable);
+    assert_eq!(transcript_tool.cache_policy(), ContextCachePolicy::Eligible);
+    assert!(transcript_tool.stable_prefix_eligible());
     assert_eq!(pane_identity.stability(), ContextStability::TurnVolatile);
     assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
     assert!(!pane_identity.stable_prefix_eligible());
@@ -9807,6 +9815,179 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         stable_a_diagnostics.cacheable_prefix_sha256,
         stable_b_diagnostics.cacheable_prefix_sha256
     );
+}
+/// Verifies immutable historical tool transcript entries stay inside the
+/// OpenAI reusable prefix while the new user request remains in the volatile
+/// suffix.
+///
+/// Historical tool outputs are replayed transcript evidence, so changing the
+/// latest user prompt should not invalidate cache reuse for that prior tool
+/// material. Current-turn action results remain volatile and are covered by a
+/// dedicated regression below.
+#[test]
+fn openai_historical_tool_results_stay_in_stable_prefix() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let first = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptUser,
+                label: "transcript user".to_string(),
+                content: "previous request".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                label: "transcript assistant".to_string(),
+                content: "previous answer".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                label: "historical tool result".to_string(),
+                content: "action_id=action-7\ncommand: rg cache\noutput: stable evidence"
+                    .to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "first follow-up".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let second = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptUser,
+                label: "transcript user".to_string(),
+                content: "previous request".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                label: "transcript assistant".to_string(),
+                content: "previous answer".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                label: "historical tool result".to_string(),
+                content: "action_id=action-7\ncommand: rg cache\noutput: stable evidence"
+                    .to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "second follow-up".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let first_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&first).unwrap()).unwrap();
+    let first_input = first_body["input"].as_array().unwrap();
+    let historical_tool_text = first_input
+        .iter()
+        .find_map(|message| {
+            let text = message["content"][0]["text"].as_str()?;
+            text.contains("[historical tool result]").then_some(text)
+        })
+        .expect("historical tool result should be rendered into input");
+    assert!(historical_tool_text.contains("stable evidence"));
+    assert!(historical_tool_text.contains("not a new user request"));
+    let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
+    let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
+    assert!(first_prefix.contains("[historical tool result]"));
+    assert!(first_prefix.contains("stable evidence"));
+    assert_eq!(first_prefix, second_prefix);
+    let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
+    let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
+    assert!(first_diagnostics.stable_input_bytes > 2);
+    assert_eq!(
+        first_diagnostics.stable_input_sha256,
+        second_diagnostics.stable_input_sha256
+    );
+    assert_ne!(
+        first_diagnostics.volatile_input_sha256,
+        second_diagnostics.volatile_input_sha256
+    );
+}
+/// Verifies current-turn action results remain outside the OpenAI reusable
+/// prefix even when historical tool transcript entries become cache-eligible.
+///
+/// Execution evidence for the active instruction must stay in the volatile
+/// suffix so the provider sees it after the latest user request and does not
+/// reuse it as immutable prefix material.
+#[test]
+fn openai_current_action_results_remain_volatile_suffix() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let request = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                label: "historical tool result".to_string(),
+                content: "action_id=action-3\noutput: cached evidence".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "use the prior output".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result".to_string(),
+                content: "action_id=action-4\noutput: fresh evidence".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
+    let input = body["input"].as_array().unwrap();
+    let user_index = input
+        .iter()
+        .position(|message| {
+            message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("use the prior output"))
+        })
+        .expect("user instruction should be rendered into input");
+    let action_index = input
+        .iter()
+        .position(|message| {
+            message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("[current action result]"))
+        })
+        .expect("current action result should be rendered into input");
+    assert!(action_index > user_index);
+    let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
+    assert!(prefix.contains("[historical tool result]"));
+    assert!(!prefix.contains("[current action result]"));
+    let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+    assert!(diagnostics.stable_input_bytes > 2);
+    assert!(diagnostics.volatile_input_bytes > 2);
 }
 
 /// Verifies volatile controller state remains out of OpenAI `instructions` and
