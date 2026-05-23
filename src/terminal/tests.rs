@@ -8305,8 +8305,9 @@ fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     assert_eq!(screen.visible_lines()[1], "▐ bcdefghi");
 }
 /// Verifies that row-only pane resizes preserve scrollback and visible content
-/// without reflowing wrapped history. Pane splits change height but keep width,
-/// so this protects the fast path used when large scrollback buffers exist.
+/// without reflowing wrapped history. Horizontal pane splits change height but
+/// keep width, so this protects the fast path used when large scrollback
+/// buffers exist.
 #[test]
 fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
     let mut screen = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
@@ -8327,6 +8328,42 @@ fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
     assert_eq!(
         screen.visible_lines(),
         vec!["11111", "22222", "33333", "44444"]
+    );
+}
+/// Verifies that width-changing pane resizes keep latency bounded by leaving
+/// older scrollback in its stored physical rows. Side-by-side pane splits halve
+/// columns, so they must not synchronously rebuild every retained history row
+/// before the new viewport can be presented.
+#[test]
+fn terminal_screen_width_resize_reflows_only_bounded_history_tail() {
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 600).unwrap();
+    for index in 0..520 {
+        screen.feed(format!("old-{index:03}-abcdefghijkl\r\n").as_bytes());
+    }
+    let before_history_len = screen.history().len();
+    let before_prefix = screen
+        .history()
+        .lines()
+        .take(8)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    screen.resize(Size::new(10, 4).unwrap());
+    assert_eq!(screen.history().len(), before_history_len);
+    assert_eq!(
+        screen
+            .history()
+            .lines()
+            .take(8)
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        before_prefix
+    );
+    assert_eq!(screen.visible_lines().len(), 4);
+    assert!(
+        screen
+            .visible_lines()
+            .iter()
+            .all(|line| terminal_text_width(line) <= 10)
     );
 }
 

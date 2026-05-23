@@ -625,9 +625,12 @@ Panes MUST be resizable. When a pane is resized, Mezzanine MUST update layout
 state and resynchronize affected pane pseudoterminals to their visible content
 regions.
 
-Normal-screen pane content that was soft-wrapped by terminal autowrap MUST be
-reflowed across pane width changes so temporarily obscured cells are not lost
-when a pane is narrowed and later expanded.
+Normal-screen live pane content that was soft-wrapped by terminal autowrap MUST
+be reflowed across pane width changes so temporarily obscured cells are not
+lost when a pane is narrowed and later expanded. Width-changing resizes MUST
+keep split latency bounded by reflowing the visible viewport and adjacent
+scrollback tail instead of synchronously rebuilding all retained history; older
+scrollback MAY remain stored in its existing physical wrapping.
 
 When a pane's primary PID exits, Mezzanine MUST close the containing pane.
 

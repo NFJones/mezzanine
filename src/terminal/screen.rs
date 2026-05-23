@@ -38,6 +38,12 @@ pub fn tracked_dec_private_mode(mode: u16) -> bool {
 /// Display-only gutter prefix used for pane-local Mezzanine agent transcript
 /// lines.
 const AGENT_TRANSCRIPT_GUTTER_PREFIX: &str = "▐ ";
+/// Maximum number of history rows synchronously reflowed during a width-changing resize.
+///
+/// Older scrollback is already outside the live viewport, so it remains stored
+/// in its existing physical wrapping instead of making pane splits pay a cost
+/// proportional to the configured history limit.
+const NORMAL_RESIZE_REFLOW_HISTORY_TAIL_ROWS: usize = 256;
 
 /// One styled terminal cell from a display-only prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -979,19 +985,22 @@ impl TerminalScreen {
         }
     }
 
-    /// Runs the resize normal screen reflowing operation for this subsystem.
+    /// Reflows live normal-screen rows after a width-changing resize.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Resize latency must not scale with the configured scrollback limit. The
+    /// live viewport and a bounded tail of adjacent history are reflowed so the
+    /// currently visible content and near-page-up context follow the new pane
+    /// width, while older history remains stored in its existing physical row
+    /// form until it naturally scrolls out or is replaced.
     fn resize_normal_screen_reflowing(&mut self, size: Size) {
         let old_rows = self.cells.len();
         let new_rows = usize::from(size.rows);
         let preserve_bottom = new_rows < old_rows
             && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
-        let history_rows = self.history.len();
-        let source_cursor_row = history_rows.saturating_add(self.cursor.row);
-        let source_rows = self.normal_reflow_source_rows();
+        let history_tail_rows = self.normal_reflow_history_tail_rows(new_rows);
+        let history_tail_capacity = history_tail_rows.len();
+        let source_cursor_row = history_tail_capacity.saturating_add(self.cursor.row);
+        let source_rows = self.normal_reflow_source_rows(history_tail_rows);
         let cursor = cursor_logical_position(&source_rows, source_cursor_row, self.cursor.column);
         let logical_lines = merge_wrapped_physical_lines(&source_rows);
         let physical_rows = reflow_logical_lines(&logical_lines, usize::from(size.columns));
@@ -1002,8 +1011,12 @@ impl TerminalScreen {
         };
 
         self.size = size;
-        self.history.clear();
-        for row in physical_rows.iter().take(visible_start) {
+        let retained_history_start = visible_start.saturating_sub(history_tail_capacity);
+        for row in physical_rows
+            .iter()
+            .take(visible_start)
+            .skip(retained_history_start)
+        {
             self.history
                 .push_styled_line_with_wrap(row.line.clone(), row.wraps_to_next);
         }
@@ -1066,20 +1079,29 @@ impl TerminalScreen {
             .collect()
     }
 
-    /// Runs the normal reflow source rows operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn normal_reflow_source_rows(&self) -> Vec<PhysicalStyledLine> {
-        let mut rows = self
-            .history
-            .styled_lines_with_wraps()
-            .map(|(line, wraps_to_next)| PhysicalStyledLine {
+    /// Removes the bounded history tail that participates in a live resize reflow.
+    fn normal_reflow_history_tail_rows(&mut self, new_rows: usize) -> Vec<PhysicalStyledLine> {
+        let tail_limit = NORMAL_RESIZE_REFLOW_HISTORY_TAIL_ROWS.max(new_rows.saturating_mul(2));
+        let tail_count = self.history.len().min(tail_limit);
+        let mut rows = Vec::with_capacity(tail_count);
+        for _ in 0..tail_count {
+            let Some((line, wraps_to_next)) = self.history.pop_styled_line() else {
+                break;
+            };
+            rows.push(PhysicalStyledLine {
                 line,
                 wraps_to_next,
-            })
-            .collect::<Vec<_>>();
+            });
+        }
+        rows.reverse();
+        rows
+    }
+    /// Returns the bounded normal-screen rows that participate in resize reflow.
+    fn normal_reflow_source_rows(
+        &self,
+        history_tail_rows: Vec<PhysicalStyledLine>,
+    ) -> Vec<PhysicalStyledLine> {
+        let mut rows = history_tail_rows;
         let last_visible_row = self
             .last_significant_row()
             .map(|row| row.max(self.cursor.row))
