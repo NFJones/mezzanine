@@ -120,7 +120,7 @@ pub use network::{
 };
 pub use prompt::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile,
-    build_agent_system_prompt,
+    build_agent_system_prompt, build_agent_system_prompt_with_repository_instructions,
 };
 pub use provider::{
     AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER,

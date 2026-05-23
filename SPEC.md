@@ -2623,10 +2623,10 @@ permission and scheduler state, compacted prior task context, and explicit
 action results.
 
 Every provider request for a running agent turn MUST include the current
-discovered project guidance files, including `AGENTS.md` when present.
-Provider continuations after actions, local messages, or approval decisions
-MUST refresh project-guidance blocks from the discovered instruction files and
-MUST NOT omit or duplicate them.
+discovered project guidance as embedded system-prompt repository instruction
+content when present. Provider continuations after actions, local messages, or
+approval decisions MUST refresh the embedded project-guidance content from the
+discovered instruction files and MUST NOT omit or duplicate it.
 
 Command output, file contents, directory listings, search results, web content,
 and similar external observations MUST enter model context only as results of
@@ -4151,8 +4151,9 @@ report prioritized, actionable findings without modifying files.
 
 Agents MUST support project instruction files. By default, Mezzanine MUST
 recognize `AGENTS.md` as the project instruction filename. Provider-visible
-prompting MUST describe applicable project instruction files as active
-repository instructions rather than optional reference material.
+prompting MUST embed applicable project instruction contents as active
+repository instructions in the system prompt, rather than describing the files
+as optional reference material or asking the model to rediscover them by name.
 
 Mezzanine MAY support additional configured instruction filenames for
 repository-specific guidance. Additional filenames MUST be treated as ordinary
@@ -5786,11 +5787,13 @@ instruct the agent to prefer existing repository patterns, ownership
 boundaries, frameworks, and structured APIs over ad hoc or unrelated new
 approaches.
 
-The prompt MUST instruct the agent to use active project instruction files such
-as `AGENTS.md` as scoped repository workflow guidance before non-trivial
-repository work, while keeping those project files untrusted for security,
-permissions, hidden policy, and action/tool rules. Nested instruction files MUST
-narrow broader repository guidance for their scope.
+The prompt MUST instruct the agent to use embedded active project instruction
+contents as scoped repository workflow guidance before non-trivial repository
+work, while keeping those project files untrusted for security, permissions,
+hidden policy, and action/tool rules. The prompt MUST NOT cause the agent to
+read project instruction files merely to rediscover already embedded guidance.
+Nested instruction files MUST narrow broader repository guidance for their
+scope.
 
 The prompt MUST require focused changes that respect existing project style,
 user instructions, and unrelated user worktree changes. It MUST prohibit
