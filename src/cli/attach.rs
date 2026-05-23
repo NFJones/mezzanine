@@ -62,6 +62,18 @@ impl PrimaryViewRenderOutcome {
         }
     }
 }
+/// Outcome from notifying the runtime about a primary terminal resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PrimaryResizeRequestOutcome {
+    /// Whether the control connection is still usable.
+    connected: bool,
+}
+impl PrimaryResizeRequestOutcome {
+    /// Builds an outcome for a disconnected control endpoint.
+    const fn disconnected() -> Self {
+        Self { connected: false }
+    }
+}
 
 /// Tracks the local animation refresh deadline for a control-socket attach.
 #[derive(Debug, Default)]
@@ -414,6 +426,12 @@ where
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            if !request_primary_resize_async(stream, &primary_client_id, client_size, iteration)
+                .await?
+                .connected
+            {
+                break Ok(());
+            }
             render_requested = true;
         }
         let input = read_attached_client_input_or_deadline(
@@ -516,6 +534,12 @@ where
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
+            if !request_primary_resize_async(stream, &primary_client_id, client_size, iteration)
+                .await?
+                .connected
+            {
+                break Ok(());
+            }
             render_requested = true;
         }
         let input = read_attached_client_input_or_runtime_event(
@@ -1151,6 +1175,19 @@ pub(super) fn terminal_step_control_request(
         input_bytes
     )
 }
+/// Builds a mutation-only terminal-step request for a detected terminal resize.
+fn terminal_resize_control_request(
+    iteration: u64,
+    primary_client_id: &ClientId,
+    client_size: Size,
+) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":"cli-terminal-resize-{iteration}","method":"terminal/step","params":{{"idempotency_key":"cli-{}-terminal-resize-{iteration}","client_size":{{"columns":{},"rows":{}}},"render":false,"input_bytes":[]}}}}"#,
+        json_escape(primary_client_id.as_str()),
+        client_size.columns,
+        client_size.rows,
+    )
+}
 
 /// Runs the refresh attached client size async operation for this subsystem.
 ///
@@ -1214,6 +1251,29 @@ async fn request_and_render_primary_view_async<I: AsyncAttachedTerminalIo>(
         return Ok(PrimaryViewRenderOutcome::disconnected());
     }
     render_primary_view_response_async(terminal_io, body.as_str(), cursor_blink_epoch).await
+}
+/// Notifies the runtime that the attached primary terminal size changed.
+async fn request_primary_resize_async(
+    stream: &mut tokio::net::UnixStream,
+    primary_client_id: &ClientId,
+    client_size: Size,
+    iteration: u64,
+) -> Result<PrimaryResizeRequestOutcome> {
+    let request = terminal_resize_control_request(iteration, primary_client_id, client_size);
+    if !write_async_control_body_or_disconnected(stream, &request).await? {
+        return Ok(PrimaryResizeRequestOutcome::disconnected());
+    }
+    let Some(response) =
+        read_async_control_response_frames_or_disconnected(stream, 1024 * 1024, 1).await?
+    else {
+        return Ok(PrimaryResizeRequestOutcome::disconnected());
+    };
+    let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
+    if control_response_forbidden(body.as_str())? {
+        return Ok(PrimaryResizeRequestOutcome::disconnected());
+    }
+    let _ = terminal_step_response_refresh_requirement(body.as_str())?;
+    Ok(PrimaryResizeRequestOutcome { connected: true })
 }
 
 /// Writes a rendered terminal view response to the attached terminal.

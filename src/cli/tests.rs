@@ -3029,10 +3029,99 @@ async fn control_socket_primary_attach_loop_refreshes_idle_resize_without_input(
     let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
     let server = thread::spawn(move || {
         let _event_server_stream = event_server_stream;
-        for (expected_id, expected_columns, expected_rows, response_lines) in [
-            ("cli-terminal-view-0", 80, 24, "initial"),
-            ("cli-terminal-view-1", 100, 30, "resized"),
-        ] {
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        assert_eq!(
+            parsed.get("id").and_then(serde_json::Value::as_str),
+            Some("cli-terminal-view-0")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("client_size"))
+                .and_then(|size| size.get("columns"))
+                .and_then(serde_json::Value::as_u64),
+            Some(80)
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("client_size"))
+                .and_then(|size| size.get("rows"))
+                .and_then(serde_json::Value::as_u64),
+            Some(24)
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["initial"],"line_style_spans":[[]],"cursor":{"row":0,"column":7,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/step")
+        );
+        assert_eq!(
+            parsed.get("id").and_then(serde_json::Value::as_str),
+            Some("cli-terminal-resize-1")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("idempotency_key"))
+                .and_then(serde_json::Value::as_str),
+            Some("cli-c1-terminal-resize-1")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("render"))
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("input_bytes"))
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::is_empty),
+            Some(true)
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("client_size"))
+                .and_then(|size| size.get("columns"))
+                .and_then(serde_json::Value::as_u64),
+            Some(100)
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("client_size"))
+                .and_then(|size| size.get("rows"))
+                .and_then(serde_json::Value::as_u64),
+            Some(30)
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-resize-1","result":{"input_bytes":0,"application":{"forwarded_bytes":0,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+
+        {
+            let (expected_id, expected_columns, expected_rows, response_lines) =
+                ("cli-terminal-view-1", 100, 30, "resized");
             let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
             let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
