@@ -1002,8 +1002,15 @@ impl TerminalScreen {
     fn resize_normal_screen_rows_only(&mut self, size: Size) {
         let old_rows = self.cells.len();
         let new_rows = usize::from(size.rows);
-        let preserve_bottom = new_rows < old_rows
-            && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
+        let live_bottom = self
+            .last_significant_row()
+            .map(|row| row.max(self.cursor.row))
+            .unwrap_or(self.cursor.row);
+        if new_rows < old_rows && live_bottom < new_rows {
+            self.resize_grid_preserving_cells(size);
+            return;
+        }
+        let preserve_bottom = new_rows < old_rows && live_bottom >= new_rows;
         if new_rows == old_rows {
             self.size = size;
             return;

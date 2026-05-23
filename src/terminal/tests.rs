@@ -8397,6 +8397,33 @@ fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
         vec!["11111", "22222", "33333", "44444"]
     );
 }
+/// Verifies that shrinking a pane height without cutting into the visible tail
+/// keeps the live viewport stationary instead of filling newly exposed rows
+/// from scrollback.
+///
+/// Over/under splits reduce only the row count. When the currently visible
+/// content already fits within the new height, the shrink must drop blank rows
+/// from the bottom of the grid and leave retained history untouched.
+#[test]
+fn terminal_screen_row_only_resize_keeps_stationary_view_when_tail_fits() {
+    let mut screen = TerminalScreen::new(Size::new(5, 5).unwrap(), 10).unwrap();
+    screen.restore_normal_content(
+        &[
+            "old-1".to_string(),
+            "old-2".to_string(),
+            "old-3".to_string(),
+        ],
+        &["live1".to_string(), "live2".to_string()],
+    );
+    screen.resize(Size::new(5, 3).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["live1", "live2", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 0);
+    assert_eq!(
+        screen.history().lines().collect::<Vec<_>>(),
+        vec!["old-1", "old-2", "old-3"]
+    );
+}
 /// Verifies that width-changing pane resizes keep latency bounded and preserve
 /// viewport position by leaving scrollback in its stored physical rows.
 /// Side-by-side pane splits halve columns, so they must not synchronously
