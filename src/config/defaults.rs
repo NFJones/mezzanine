@@ -79,7 +79,7 @@ enabled = true
 position = "border"
 template = " #{pane.index} #{pane.title} "
 style = "default"
-visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.latency", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 
 [theme]
 active = "kanagawa"
@@ -363,6 +363,22 @@ fallback_profiles = []
 
 [model_profiles.deepseek-fast.provider_options]
 reasoning_effort = "high"
+
+[model_presets.openai]
+default_model_profile = "default"
+auto_sizing_router_model_profile = "auto-size-router"
+auto_sizing_small_model_profile = "auto-size-small"
+auto_sizing_medium_model_profile = "auto-size-medium"
+auto_sizing_large_model_profile = "auto-size-large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+
+[model_presets.deepseek]
+default_model_profile = "deepseek-fast"
+auto_sizing_router_model_profile = "deepseek-fast"
+auto_sizing_small_model_profile = "deepseek-fast"
+auto_sizing_medium_model_profile = "deepseek-default"
+auto_sizing_large_model_profile = "deepseek-default"
+allowed_reasoning_efforts = ["high", "max"]
 
 [permissions]
 approval_policy = "ask"

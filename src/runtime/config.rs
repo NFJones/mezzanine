@@ -21,14 +21,14 @@ use super::{
     PaneId, Path, PathBuf, PermissionPolicy, PermissionPreset, ProjectTrustRecord, Recipient,
     Result, RuleDecision, RuleMatch, RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig,
     RuntimeAutoSizingFallbackPolicy, RuntimeCommandBinding, RuntimeConfigApplyReport,
-    RuntimeModelProfileOverrideScope, RuntimeProviderConfig, RuntimeProviderRegistry,
-    RuntimeSessionService, SubagentProfile, SubagentScopeDeclaration, SubagentWaitPolicy,
-    TerminalCursorStyle, TrustDecision, UiTheme, UiThemeDefinition, Value, WindowId,
-    builtin_subagent_profiles, builtin_ui_theme_definition, ensure_absolute, exact_command_sha256,
-    fs, key_chord_notation, optional_path_json, optional_string_json, parse_command_sequence,
-    resolve_ui_theme, runtime_cooperation_mode, runtime_cooperation_mode_name,
-    runtime_json_string_field, runtime_json_value, unix_seconds_to_rfc3339, valid_color_alias_name,
-    validate_config_text,
+    RuntimeModelPreset, RuntimeModelProfileOverrideScope, RuntimePresetRegistry,
+    RuntimeProviderConfig, RuntimeProviderRegistry, RuntimeSessionService, SubagentProfile,
+    SubagentScopeDeclaration, SubagentWaitPolicy, TerminalCursorStyle, TrustDecision, UiTheme,
+    UiThemeDefinition, Value, WindowId, builtin_subagent_profiles, builtin_ui_theme_definition,
+    ensure_absolute, exact_command_sha256, fs, key_chord_notation, optional_path_json,
+    optional_string_json, parse_command_sequence, resolve_ui_theme, runtime_cooperation_mode,
+    runtime_cooperation_mode_name, runtime_json_string_field, runtime_json_value,
+    unix_seconds_to_rfc3339, valid_color_alias_name, validate_config_text,
 };
 
 // Runtime config parsing and project trust helpers.
@@ -2720,6 +2720,62 @@ pub(super) fn runtime_provider_registry_from_config(
         }
     }
 
+    Ok(registry)
+}
+
+/// Parses model presets from the config root.
+pub(super) fn runtime_preset_registry_from_config(
+    root: &Value,
+    profiles: &BTreeMap<String, ModelProfile>,
+) -> Result<RuntimePresetRegistry> {
+    let mut registry = RuntimePresetRegistry::default();
+    let Some(presets) = runtime_json_object(root, "model_presets") else {
+        return Ok(registry);
+    };
+    for (preset_name, value) in presets {
+        let object = value.as_object().ok_or_else(|| {
+            MezError::config(format!("model_presets.{preset_name} must be a table"))
+        })?;
+        let default_model_profile = runtime_json_string(object.get("default_model_profile"))
+            .ok_or_else(|| {
+                MezError::config(format!(
+                    "model_presets.{preset_name}.default_model_profile is required"
+                ))
+            })?;
+        if !profiles.contains_key(default_model_profile) {
+            return Err(MezError::config(format!(
+                "model_presets.{preset_name}.default_model_profile `{default_model_profile}` is not configured in model_profiles"
+            )));
+        }
+        let preset = RuntimeModelPreset {
+            default_model_profile: default_model_profile.to_string(),
+            auto_sizing_router_model_profile: runtime_json_string(
+                object.get("auto_sizing_router_model_profile"),
+            )
+            .unwrap_or(default_model_profile)
+            .to_string(),
+            auto_sizing_small_model_profile: runtime_json_string(
+                object.get("auto_sizing_small_model_profile"),
+            )
+            .unwrap_or(default_model_profile)
+            .to_string(),
+            auto_sizing_medium_model_profile: runtime_json_string(
+                object.get("auto_sizing_medium_model_profile"),
+            )
+            .unwrap_or(default_model_profile)
+            .to_string(),
+            auto_sizing_large_model_profile: runtime_json_string(
+                object.get("auto_sizing_large_model_profile"),
+            )
+            .unwrap_or(default_model_profile)
+            .to_string(),
+            allowed_reasoning_efforts: runtime_json_string_array(
+                object.get("allowed_reasoning_efforts"),
+            )?
+            .unwrap_or_default(),
+        };
+        registry.presets.insert(preset_name.clone(), preset);
+    }
     Ok(registry)
 }
 

@@ -8,10 +8,10 @@ use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap, COMMAND_RULE_KEYS,
     CONTROL_KEYS, ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS,
     INSTRUCTION_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS,
-    MCP_SERVER_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
-    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS,
-    SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256,
-    normalize_exact_command_text,
+    MCP_SERVER_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS,
+    PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS, SHELL_KEYS,
+    SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+    exact_command_sha256, normalize_exact_command_text,
 };
 use crate::terminal::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
@@ -299,6 +299,7 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
         "history" => validate_static_table_path(&segments, "history", HISTORY_KEYS, &[]),
         "agents" => validate_agents_path(&segments),
         "model_profiles" => validate_model_profile_path(&segments),
+        "model_presets" => validate_model_preset_path(&segments),
         "providers" => validate_provider_path(&segments),
         "subagents" => validate_subagent_profile_path(&segments),
         "personalities" => validate_personality_profile_path(&segments),
@@ -554,6 +555,25 @@ pub(super) fn validate_model_profile_path(segments: &[&str]) -> Option<String> {
     }
     if segments.len() > 3 {
         return Some("scalar model profile setting must not contain nested keys".to_string());
+    }
+    None
+}
+
+/// Runs the validate model preset path operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn validate_model_preset_path(segments: &[&str]) -> Option<String> {
+    if segments.len() <= 2 {
+        return None;
+    }
+    let key = segments[2];
+    if !MODEL_PRESET_KEYS.contains(&key) {
+        return Some("unknown model preset configuration key".to_string());
+    }
+    if segments.len() > 3 {
+        return Some("scalar model preset setting must not contain nested keys".to_string());
     }
     None
 }

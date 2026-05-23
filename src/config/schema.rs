@@ -30,6 +30,7 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "history",
     "agents",
     "model_profiles",
+    "model_presets",
     "permissions",
     "providers",
     "subagents",
@@ -521,6 +522,19 @@ pub(super) const MODEL_PROFILE_KEYS: &[&str] = &[
     "approval",
     "approval_policy",
     "fallback_profiles",
+];
+
+/// Defines the MODEL PRESET KEYS const used by this subsystem.
+///
+/// Keeping this value documented makes the contract explicit at the module
+/// boundary and avoids relying on call-site inference.
+pub(super) const MODEL_PRESET_KEYS: &[&str] = &[
+    "default_model_profile",
+    "auto_sizing_router_model_profile",
+    "auto_sizing_small_model_profile",
+    "auto_sizing_medium_model_profile",
+    "auto_sizing_large_model_profile",
+    "allowed_reasoning_efforts",
 ];
 
 /// Defines the SUBAGENT PROFILE KEYS const used by this subsystem.

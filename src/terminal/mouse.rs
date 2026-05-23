@@ -371,6 +371,8 @@ pub enum PaneAgentStatusField {
     ApprovalPolicy,
     /// Active latency preference shown in the pane-frame status pills.
     Latency,
+    /// Active model preset shown in the pane-frame status pills.
+    Preset,
 }
 
 impl PaneAgentStatusField {
@@ -382,6 +384,7 @@ impl PaneAgentStatusField {
             Self::AutoReasoning => "agent.auto_reasoning",
             Self::ApprovalPolicy => "policy.mode",
             Self::Latency => "agent.latency",
+            Self::Preset => "agent.preset",
         }
     }
 }

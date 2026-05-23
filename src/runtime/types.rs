@@ -2744,6 +2744,42 @@ impl RuntimeProviderRegistry {
     }
 }
 
+/// Carries Runtime Model Preset state for this subsystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeModelPreset {
+    /// Primary model profile to use.
+    pub default_model_profile: String,
+    /// Auto-sizing router model profile.
+    pub auto_sizing_router_model_profile: String,
+    /// Auto-sizing small model profile.
+    pub auto_sizing_small_model_profile: String,
+    /// Auto-sizing medium model profile.
+    pub auto_sizing_medium_model_profile: String,
+    /// Auto-sizing large model profile.
+    pub auto_sizing_large_model_profile: String,
+    /// Reasoning efforts allowed for auto-sizing.
+    pub allowed_reasoning_efforts: Vec<String>,
+}
+
+/// Carries Runtime Preset Registry state for this subsystem.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimePresetRegistry {
+    /// Named model presets keyed by preset identity.
+    pub presets: BTreeMap<String, RuntimeModelPreset>,
+}
+
+impl RuntimePresetRegistry {
+    /// Returns true when at least one preset is defined.
+    pub fn has_presets(&self) -> bool {
+        !self.presets.is_empty()
+    }
+
+    /// Resolves a preset by name.
+    pub fn resolve(&self, name: &str) -> Option<&RuntimeModelPreset> {
+        self.presets.get(name)
+    }
+}
+
 /// Carries Runtime Agent Provider Task state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -3414,6 +3450,8 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) provider_registry: RuntimeProviderRegistry,
+    /// Stores the preset registry value for this data structure.
+    pub(super) preset_registry: RuntimePresetRegistry,
     /// Stores the subagent profiles value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

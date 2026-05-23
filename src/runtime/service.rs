@@ -22,16 +22,17 @@ use super::{
     PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf, PermissionAuthorityChange,
     PermissionPolicy, ProjectTrustStore, Result, RuntimeConfigApplyReport,
     RuntimeHttpMcpTransportState, RuntimeLifecycleState, RuntimeMcpRetryReport,
-    RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore, RuntimeProviderConfig,
-    RuntimeProviderRegistry, RuntimeRegistryUpdatePlan, RuntimeSessionService, ScopeRegistry,
-    Session, SessionApprovalStore, SessionMemoryStore, SessionRegistry, TerminalScreen,
-    ToolDiscoveryCache, TrustDecision, Value, agent_shell_visibility_json_name,
-    apply_registry_update, builtin_subagent_profiles, compare_approval_policy_authority,
-    compose_effective_config, current_unix_seconds, discover_existing_overlays,
-    discover_project_root, discover_streamable_http_mcp_server, ensure_absolute,
-    ensure_no_mez_separator, fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
-    runtime_agent_auto_compact_from_config, runtime_agent_auto_compact_threshold_from_config,
-    runtime_agent_auto_reasoning_from_config, runtime_agent_auto_sizing_from_config,
+    RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore, RuntimePresetRegistry,
+    RuntimeProviderConfig, RuntimeProviderRegistry, RuntimeRegistryUpdatePlan,
+    RuntimeSessionService, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
+    SessionRegistry, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
+    agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
+    compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
+    discover_existing_overlays, discover_project_root, discover_streamable_http_mcp_server,
+    ensure_absolute, ensure_no_mez_separator, fs, json_escape,
+    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_compact_from_config,
+    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_reasoning_from_config,
+    runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_personality_profiles_from_config,
     runtime_approval_policy_name, runtime_audit_config_present, runtime_audit_log_from_config,
@@ -47,9 +48,9 @@ use super::{
     runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
     runtime_pane_frame_visible_fields_from_config, runtime_pane_frames_enabled_from_config,
     runtime_parse_approval_policy, runtime_permission_policy_from_config,
-    runtime_provider_registry_from_config, runtime_subagent_profiles_from_config,
-    runtime_subagent_wait_policy_from_config, runtime_terminal_clipboard_from_config,
-    runtime_terminal_cursor_blink_from_config,
+    runtime_preset_registry_from_config, runtime_provider_registry_from_config,
+    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
+    runtime_terminal_clipboard_from_config, runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_reduced_motion_from_config,
     runtime_terminal_render_rate_limit_fps_from_config,
@@ -241,6 +242,7 @@ impl RuntimeSessionService {
             provider_registry: runtime_provider_registry_from_config(&Value::Object(
                 serde_json::Map::new(),
             ))?,
+            preset_registry: RuntimePresetRegistry::default(),
             subagent_profiles: builtin_subagent_profiles(),
             agent_personality_profiles: BTreeMap::new(),
             default_agent_personality: None,
@@ -748,6 +750,8 @@ impl RuntimeSessionService {
             }
         }
         self.provider_registry = provider_registry;
+        self.preset_registry =
+            runtime_preset_registry_from_config(&structured, &self.provider_registry.profiles)?;
         // Synthesize provider entries for authenticated providers not in config.
         if let Some(auth_store) = self.auth_store.as_ref()
             && let Ok(Some(auth_metadata)) = auth_store.read_metadata()

@@ -1948,6 +1948,66 @@ impl RuntimeSessionService {
         self.apply_pane_model_picker_profile(pane_id, &model_name, Some(reasoning), &catalog)
     }
 
+    /// Applies a model preset selected from the pane-frame preset picker.
+    pub(super) fn apply_preset_selection(
+        &mut self,
+        pane_id: &str,
+        preset_name: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let Some(preset) = self.preset_registry.resolve(preset_name).cloned() else {
+            return Err(MezError::invalid_args(format!(
+                "model preset `{preset_name}` is not configured"
+            )));
+        };
+        let agent_id = format!("agent-{pane_id}");
+        let (_active_name, _active_profile) =
+            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        let new_profile = self
+            .provider_registry
+            .resolve_profile(&preset.default_model_profile)?;
+        let provider_id = new_profile.provider.clone();
+        let model_name = new_profile.model.clone();
+        let new_reasoning = new_profile.reasoning_profile.clone();
+        let new_latency = new_profile.latency_preference.clone();
+        let catalog = self.runtime_model_catalog_for_provider(&provider_id)?;
+        let profile_name = self.runtime_generated_profile_for_provider_model(
+            &provider_id,
+            &model_name,
+            new_reasoning.as_deref(),
+            new_latency.as_deref(),
+            &catalog,
+        )?;
+        let router = preset.auto_sizing_router_model_profile.clone();
+        let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
+        self.set_model_profile_override(scope.clone(), &profile_name)?;
+        self.agent_auto_sizing.router_model_profile = router.clone();
+        self.agent_auto_sizing.small_model_profile = preset.auto_sizing_small_model_profile.clone();
+        self.agent_auto_sizing.medium_model_profile =
+            preset.auto_sizing_medium_model_profile.clone();
+        self.agent_auto_sizing.large_model_profile = preset.auto_sizing_large_model_profile.clone();
+        self.agent_auto_sizing.allowed_reasoning_efforts = preset.allowed_reasoning_efforts.clone();
+        let resolved = self.provider_registry.resolve_profile(&profile_name)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "preset".to_string(),
+            body: format!(
+                "scope={} preset={} profile={} provider={} model={} reasoning_profile={} latency_preference={} router={} source=runtime-preset-selection",
+                runtime_model_override_scope_name(&scope),
+                preset_name,
+                profile_name,
+                resolved.provider,
+                resolved.model,
+                resolved.reasoning_profile.as_deref().unwrap_or("none"),
+                resolved.latency_preference.as_deref().unwrap_or("default"),
+                router,
+            ),
+            visibility: self
+                .agent_shell_store
+                .get(pane_id)
+                .map(|session| session.visibility)
+                .unwrap_or(AgentShellVisibility::Hidden),
+        })
+    }
+
     /// Applies a latency preference selected from the pane-frame latency picker.
     pub(super) fn apply_pane_latency_picker_selection(
         &mut self,

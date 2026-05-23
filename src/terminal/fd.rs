@@ -134,6 +134,8 @@ pub struct TerminalPaneFrameContext {
     pub agent_auto_reasoning: Option<String>,
     /// Active latency preference shown by `agent.latency`.
     pub agent_latency: Option<String>,
+    /// Active model preset name shown by `agent.preset`.
+    pub agent_preset: Option<String>,
     /// Last known provider input context usage shown by `agent.context_usage`.
     pub agent_context_usage: Option<String>,
     /// Scrollback position shown by `history.position` when not at the live bottom.

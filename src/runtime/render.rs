@@ -1608,6 +1608,7 @@ fn runtime_pane_agent_selector_rendition(
             PaneAgentStatusField::AutoReasoning => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::ApprovalPolicy => ui_theme.colors.agent_status_blocked,
             PaneAgentStatusField::Latency => ui_theme.colors.agent_reasoning,
+            PaneAgentStatusField::Preset => ui_theme.colors.agent_model,
         }
     } else {
         ui_theme.colors.display_overlay
@@ -6466,6 +6467,7 @@ impl RuntimeSessionService {
                     "fast".to_string(),
                 ]
             }
+            PaneAgentStatusField::Preset => self.preset_registry.presets.keys().cloned().collect(),
             PaneAgentStatusField::AutoReasoning => Vec::new(),
         };
         if items.is_empty() {
@@ -6558,6 +6560,9 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Latency => {
                 self.apply_pane_latency_picker_selection(&selector.pane_id, &value)?
             }
+            PaneAgentStatusField::Preset => {
+                self.apply_preset_selection(&selector.pane_id, &value)?
+            }
         };
         let response = runtime_agent_shell_command_response_json(
             &selector.pane_id,
@@ -6567,6 +6572,7 @@ impl RuntimeSessionService {
                 PaneAgentStatusField::AutoReasoning => "/auto-reasoning",
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
                 PaneAgentStatusField::Latency => "/latency",
+                PaneAgentStatusField::Preset => "/preset",
             },
             Some(&outcome),
         );
@@ -6621,6 +6627,7 @@ impl RuntimeSessionService {
                     .latency_preference
                     .or_else(|| Some("default".to_string()))
             }
+            PaneAgentStatusField::Preset => None,
         }
     }
 
@@ -8445,6 +8452,7 @@ impl RuntimeSessionService {
                         agent_reasoning,
                         agent_auto_reasoning,
                         agent_latency,
+                        agent_preset: None,
                         agent_context_usage,
                         history_position,
                         agent_prompt: agent_session

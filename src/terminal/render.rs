@@ -54,6 +54,7 @@ pub const DEFAULT_PANE_FRAME_RIGHT_ALIGNED: &[&str] = &[
     "agent.reasoning",
     "agent.auto_reasoning",
     "agent.latency",
+    "agent.preset",
     "policy.mode",
     "agent.context_usage",
     "agent.status",
@@ -2672,6 +2673,7 @@ fn pane_frame_right_status_rendition(
             pane_frame_agent_auto_reasoning_rendition(&segment.value, ui_theme)
         }
         "agent.latency" => pane_frame_latency_rendition(&segment.value, ui_theme),
+        "agent.preset" => ui_theme.colors.agent_model.rendition(),
         "agent.name" => ui_theme.colors.agent_model.rendition(),
         "agent.context_usage" => pane_frame_agent_context_usage_rendition(&segment.value, ui_theme),
         "agent.status" => pane_frame_agent_status_rendition(&segment.value, ui_theme),
@@ -4258,6 +4260,7 @@ fn pane_frame_right_aligned_display_value(field: &str, value: String) -> String 
             | "agent.reasoning"
             | "agent.auto_reasoning"
             | "agent.latency"
+            | "agent.preset"
             | "agent.name"
             | "agent.context_usage"
             | "agent.status"
@@ -4820,6 +4823,7 @@ fn pane_agent_status_field_from_frame_field(field: &str) -> Option<PaneAgentStat
         "agent.reasoning" => Some(PaneAgentStatusField::Reasoning),
         "agent.auto_reasoning" => Some(PaneAgentStatusField::AutoReasoning),
         "agent.latency" => Some(PaneAgentStatusField::Latency),
+        "agent.preset" => Some(PaneAgentStatusField::Preset),
         "policy.mode" => Some(PaneAgentStatusField::ApprovalPolicy),
         _ => None,
     }
@@ -5150,80 +5154,82 @@ fn pane_frame_field_value(
     field: &str,
 ) -> String {
     let pane_context = frame_context.panes.get(pane.id.as_str());
-    let value = match field {
-        "session.id" => frame_context.session_id.clone().unwrap_or_default(),
-        "window.id" => window.id.to_string(),
-        "window.index" => window.index.to_string(),
-        "window.title" => window.title(),
-        "window.name" => window.name.clone(),
-        "window.active" => "true".to_string(),
-        "window.pane_count" => window.panes().len().to_string(),
-        "window.buttons" | "window.actions" => {
-            window_frame_pillbox_text_from_entries(&window_action_pillbox_entries(frame_context))
-        }
-        "system.uptime" => frame_context
-            .window_status
-            .as_ref()
-            .map(|status| status.system_uptime.clone())
-            .unwrap_or_default(),
-        "datetime.local" => frame_context
-            .window_status
-            .as_ref()
-            .map(|status| status.datetime_local.clone())
-            .unwrap_or_default(),
-        "pane.id" => pane.id.to_string(),
-        "pane.index" => pane.index.to_string(),
-        "pane.title" => pane.title.clone(),
-        "pane.active" => pane.active.to_string(),
-        "pane.size" => format!("{}x{}", pane.size.columns, pane.size.rows),
-        "pane.primary_pid" => {
-            optional_u32_frame_value(pane_context.and_then(|ctx| ctx.primary_pid))
-        }
-        "pane.process_name" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.process_name).unwrap_or_default()
-        }
-        "pane.exit_status" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.exit_status).unwrap_or_default()
-        }
-        "pane.pwd" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.current_working_directory)
-                .unwrap_or_default()
-        }
-        "pane.mode" => optional_pane_context_value(pane_context, |ctx| &ctx.mode)
-            .unwrap_or_else(|| "normal".to_string()),
-        "agent.id" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_id).unwrap_or_default()
-        }
-        "agent.name" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_name).unwrap_or_default()
-        }
-        "agent.status" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_status).unwrap_or_default()
-        }
-        "agent.model" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_model).unwrap_or_default()
-        }
-        "agent.reasoning" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_reasoning)
-            .unwrap_or_default(),
-        "agent.auto_reasoning" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_auto_reasoning)
-                .unwrap_or_default()
-        }
-        "agent.latency" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_latency).unwrap_or_default()
-        }
-        "agent.context_usage" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.agent_context_usage)
-                .unwrap_or_default()
-        }
-        "policy.mode" => frame_context.policy_mode.clone().unwrap_or_default(),
-        "observer.pending_count" => frame_context.pending_observer_count.to_string(),
-        "history.position" => {
-            optional_pane_context_value(pane_context, |ctx| &ctx.history_position)
-                .unwrap_or_default()
-        }
-        _ => String::new(),
-    };
+    let value =
+        match field {
+            "session.id" => frame_context.session_id.clone().unwrap_or_default(),
+            "window.id" => window.id.to_string(),
+            "window.index" => window.index.to_string(),
+            "window.title" => window.title(),
+            "window.name" => window.name.clone(),
+            "window.active" => "true".to_string(),
+            "window.pane_count" => window.panes().len().to_string(),
+            "window.buttons" | "window.actions" => window_frame_pillbox_text_from_entries(
+                &window_action_pillbox_entries(frame_context),
+            ),
+            "system.uptime" => frame_context
+                .window_status
+                .as_ref()
+                .map(|status| status.system_uptime.clone())
+                .unwrap_or_default(),
+            "datetime.local" => frame_context
+                .window_status
+                .as_ref()
+                .map(|status| status.datetime_local.clone())
+                .unwrap_or_default(),
+            "pane.id" => pane.id.to_string(),
+            "pane.index" => pane.index.to_string(),
+            "pane.title" => pane.title.clone(),
+            "pane.active" => pane.active.to_string(),
+            "pane.size" => format!("{}x{}", pane.size.columns, pane.size.rows),
+            "pane.primary_pid" => {
+                optional_u32_frame_value(pane_context.and_then(|ctx| ctx.primary_pid))
+            }
+            "pane.process_name" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.process_name)
+                    .unwrap_or_default()
+            }
+            "pane.exit_status" => optional_pane_context_value(pane_context, |ctx| &ctx.exit_status)
+                .unwrap_or_default(),
+            "pane.pwd" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.current_working_directory)
+                    .unwrap_or_default()
+            }
+            "pane.mode" => optional_pane_context_value(pane_context, |ctx| &ctx.mode)
+                .unwrap_or_else(|| "normal".to_string()),
+            "agent.id" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_id).unwrap_or_default()
+            }
+            "agent.name" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_name).unwrap_or_default()
+            }
+            "agent.status" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_status)
+                .unwrap_or_default(),
+            "agent.model" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_model)
+                .unwrap_or_default(),
+            "agent.reasoning" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_reasoning)
+                    .unwrap_or_default()
+            }
+            "agent.auto_reasoning" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_auto_reasoning)
+                    .unwrap_or_default()
+            }
+            "agent.latency" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_latency)
+                .unwrap_or_default(),
+            "agent.preset" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_preset)
+                .unwrap_or_default(),
+            "agent.context_usage" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_context_usage)
+                    .unwrap_or_default()
+            }
+            "policy.mode" => frame_context.policy_mode.clone().unwrap_or_default(),
+            "observer.pending_count" => frame_context.pending_observer_count.to_string(),
+            "history.position" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.history_position)
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        };
     sanitize_frame_text(&value)
 }
 
