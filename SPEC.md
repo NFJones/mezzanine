@@ -635,9 +635,10 @@ its existing physical wrapping. If a pane-local clear or terminal full-screen
 erase such as shell `Ctrl+L` has intentionally detached the live viewport from
 retained scrollback, subsequent resizes MUST preserve the live viewport
 position instead of repopulating it from history. Row-only height changes MUST
-leave the live viewport stationary when the currently visible tail already fits
-within the new height, and they MAY bottom-anchor only when the shrink would
-otherwise truncate that visible tail.
+leave the live viewport stationary on both pane shrink and pane growth unless a
+shrink would otherwise truncate the currently visible tail; only that
+truncating shrink MAY bottom-anchor the visible tail, and later growth MUST
+NOT pull retained scrollback back into the live viewport.
 
 When a pane's primary PID exits, Mezzanine MUST close the containing pane.
 

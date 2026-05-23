@@ -884,10 +884,15 @@ impl TerminalScreen {
     /// Resizes a normal-screen viewport that has been detached from scrollback.
     ///
     /// Shell clears such as `Ctrl+L` erase the live viewport while preserving
-    /// scrollback. Until new output scrolls the pane again, resizes must reflow
-    /// only the live rows and must not pull adjacent history rows back into the
-    /// visible grid.
+    /// scrollback. Until new output scrolls the pane again, row-only resizes
+    /// must preserve the exact live viewport position, and width changes must
+    /// reflow only the live rows without pulling adjacent history rows back
+    /// into the visible grid.
     fn resize_detached_normal_screen(&mut self, size: Size) {
+        if self.size.columns == size.columns {
+            self.resize_grid_preserving_cells(size);
+            return;
+        }
         let old_rows = self.cells.len();
         let new_rows = usize::from(size.rows);
         let preserve_bottom = new_rows < old_rows
@@ -996,12 +1001,17 @@ impl TerminalScreen {
     }
     /// Resizes a normal screen when only the row count changes.
     ///
-    /// With a stable column count the physical wrap boundaries do not change, so
-    /// the resize can move whole rows between visible cells and scrollback
-    /// history instead of reflowing every retained history line.
+    /// With a stable column count the physical wrap boundaries do not change.
+    /// Pane growth must keep the currently rendered viewport stationary, while
+    /// pane shrink may bottom-anchor only when the visible tail would otherwise
+    /// be truncated.
     fn resize_normal_screen_rows_only(&mut self, size: Size) {
         let old_rows = self.cells.len();
         let new_rows = usize::from(size.rows);
+        if new_rows > old_rows {
+            self.resize_grid_preserving_cells(size);
+            return;
+        }
         let live_bottom = self
             .last_significant_row()
             .map(|row| row.max(self.cursor.row))

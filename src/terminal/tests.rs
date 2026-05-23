@@ -4364,6 +4364,39 @@ fn terminal_screen_resize_after_shell_clear_does_not_pull_history_tail_into_view
         history_before_clear
     );
 }
+/// Verifies shell-cleared panes keep their detached viewport stationary when a
+/// neighboring pane closes and restores extra height.
+///
+/// Closing an over/under split increases only the pane height. After a shell
+/// `Ctrl+L`, that growth must leave the visible prompt rows where they already
+/// were instead of repopulating the pane from retained scrollback.
+#[test]
+fn terminal_screen_row_only_expand_after_shell_clear_keeps_stationary_viewport() {
+    let mut screen = TerminalScreen::new(Size::new(12, 4).unwrap(), 256).unwrap();
+    for index in 0..40 {
+        screen.feed(format!("tail-{index:02}-abcdefghijklmnopqrstuvwxyz\r\n").as_bytes());
+    }
+    let history_before_clear = screen
+        .history()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    screen.feed(b"\x1b[H\x1b[2J$ ");
+    screen.resize(Size::new(12, 2).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["$", ""]);
+    screen.resize(Size::new(12, 5).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["$", "", "", "", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 2);
+    assert_eq!(
+        screen
+            .history()
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        history_before_clear
+    );
+}
 
 /// Verifies terminal screen handles erase line variants.
 ///
@@ -8372,9 +8405,12 @@ fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     assert_eq!(screen.visible_lines()[1], "▐ bcdefghi");
 }
 /// Verifies that row-only pane resizes preserve scrollback and visible content
-/// without reflowing wrapped history. Horizontal pane splits change height but
-/// keep width, so this protects the fast path used when large scrollback
-/// buffers exist.
+/// without reflowing wrapped history or pulling retained scrollback back into
+/// view when the pane later grows.
+///
+/// Horizontal pane splits and pane-closure expansion change only the height.
+/// Once a shrink has chosen the visible tail, later growth must leave that
+/// rendered tail stationary unless a further shrink would otherwise truncate it.
 #[test]
 fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
     let mut screen = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
@@ -8390,12 +8426,9 @@ fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
     screen.resize(Size::new(5, 4).unwrap());
     assert_eq!(
         screen.history().lines().collect::<Vec<_>>(),
-        vec![] as Vec<&str>
+        vec!["11111", "22222"]
     );
-    assert_eq!(
-        screen.visible_lines(),
-        vec!["11111", "22222", "33333", "44444"]
-    );
+    assert_eq!(screen.visible_lines(), vec!["33333", "44444", "", ""]);
 }
 /// Verifies that shrinking a pane height without cutting into the visible tail
 /// keeps the live viewport stationary instead of filling newly exposed rows
