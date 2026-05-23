@@ -2935,7 +2935,7 @@ pub(super) fn runtime_provider_config_from_config(
 /// The returned slice is used when a provider's configured `models` list is
 /// empty, keeping local model selection useful without requiring a live
 /// provider catalog request.
-pub(super) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static [&'static str]> {
+pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static [&'static str]> {
     match kind {
         "openai" => Ok(&[
             "gpt-5.5",

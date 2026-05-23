@@ -22,25 +22,26 @@ use super::{
     PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf, PermissionAuthorityChange,
     PermissionPolicy, ProjectTrustStore, Result, RuntimeConfigApplyReport,
     RuntimeHttpMcpTransportState, RuntimeLifecycleState, RuntimeMcpRetryReport,
-    RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore, RuntimeProviderRegistry,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, ScopeRegistry, Session, SessionApprovalStore,
-    SessionMemoryStore, SessionRegistry, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
-    agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
-    compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
-    discover_existing_overlays, discover_project_root, discover_streamable_http_mcp_server,
-    ensure_absolute, ensure_no_mez_separator, fs, json_escape,
-    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_compact_from_config,
-    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_reasoning_from_config,
-    runtime_agent_auto_sizing_from_config,
+    RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore, RuntimeProviderConfig,
+    RuntimeProviderRegistry, RuntimeRegistryUpdatePlan, RuntimeSessionService, ScopeRegistry,
+    Session, SessionApprovalStore, SessionMemoryStore, SessionRegistry, TerminalScreen,
+    ToolDiscoveryCache, TrustDecision, Value, agent_shell_visibility_json_name,
+    apply_registry_update, builtin_subagent_profiles, compare_approval_policy_authority,
+    compose_effective_config, current_unix_seconds, discover_existing_overlays,
+    discover_project_root, discover_streamable_http_mcp_server, ensure_absolute,
+    ensure_no_mez_separator, fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
+    runtime_agent_auto_compact_from_config, runtime_agent_auto_compact_threshold_from_config,
+    runtime_agent_auto_reasoning_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_personality_profiles_from_config,
     runtime_approval_policy_name, runtime_audit_config_present, runtime_audit_log_from_config,
     runtime_command_bindings_from_effective, runtime_default_agent_personality_from_config,
-    runtime_effective_config_value, runtime_history_limit_from_config,
-    runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
-    runtime_host_clipboard_from_config, runtime_key_bindings_from_config,
-    runtime_max_concurrent_agents_from_config, runtime_max_root_subagents_from_config,
-    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
+    runtime_default_models_for_provider, runtime_effective_config_value,
+    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
+    runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
+    runtime_key_bindings_from_config, runtime_max_concurrent_agents_from_config,
+    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
+    runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_pane_by_id, runtime_pane_frame_position_from_config,
     runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
@@ -747,6 +748,33 @@ impl RuntimeSessionService {
             }
         }
         self.provider_registry = provider_registry;
+        // Synthesize provider entries for authenticated providers not in config.
+        if let Some(auth_store) = self.auth_store.as_ref()
+            && let Ok(Some(auth_metadata)) = auth_store.read_metadata()
+        {
+            let auth_provider = &auth_metadata.provider;
+            if !self.provider_registry.providers.contains_key(auth_provider)
+                && let Ok(default_models) = runtime_default_models_for_provider(auth_provider)
+            {
+                self.provider_registry.providers.insert(
+                    auth_provider.clone(),
+                    RuntimeProviderConfig {
+                        provider_id: auth_provider.clone(),
+                        kind: auth_provider.clone(),
+                        auth_profile: "default".to_string(),
+                        base_url: None,
+                        models: default_models.iter().map(|m| (*m).to_string()).collect(),
+                        default_model: Some(
+                            default_models
+                                .first()
+                                .map(|m| (*m).to_string())
+                                .unwrap_or_default(),
+                        ),
+                        options: BTreeMap::new(),
+                    },
+                );
+            }
+        }
         self.provider_model_catalog_cache.clear();
         self.subagent_profiles = runtime_subagent_profiles_from_config(&structured)?;
         self.agent_personality_profiles =
