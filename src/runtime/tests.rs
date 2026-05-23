@@ -15746,7 +15746,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             selector
                 .items
                 .iter()
-                .position(|item| item == "gpt-provider-only")
+                .position(|item| item == "openai: gpt-provider-only")
         })
         .expect("model selector should include live provider catalog models");
     let select_model = AttachedTerminalClientStepPlan {
@@ -16330,7 +16330,7 @@ fn runtime_pane_agent_status_selector_accepts_keyboard_navigation() {
                 selector
                     .items
                     .iter()
-                    .position(|item| item == "gpt-5.4")
+                    .position(|item| item == "openai: gpt-5.4")
                     .expect("model selector should include gpt-5.4"),
             )
         })

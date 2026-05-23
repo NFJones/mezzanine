@@ -1803,16 +1803,43 @@ impl RuntimeSessionService {
         let agent_id = format!("agent-{pane_id}");
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
-        let mut models = catalog
-            .models
-            .into_iter()
-            .map(|model| model.id)
-            .collect::<Vec<_>>();
-        if !models.iter().any(|model| model == &active_profile.model) {
-            models.insert(0, active_profile.model);
+        let active_model_label = format!("{}: {}", active_profile.provider, active_profile.model);
+        let provider_ids: Vec<String> =
+            self.provider_registry.providers().keys().cloned().collect();
+        let mut models = Vec::new();
+        for provider_id in &provider_ids {
+            let provider_config = self
+                .provider_registry
+                .provider(provider_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::config(format!("provider `{provider_id}` is not configured"))
+                })?;
+            let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
+            for model in &catalog.models {
+                let label = format!("{provider_id}: {}", model.id);
+                if !models.iter().any(|m: &String| m == &label) {
+                    models.push(label);
+                }
+            }
+            let configured_models: Vec<String> = if provider_config.models.is_empty() {
+                runtime_default_models_for_provider(&provider_config.kind)
+                    .map(|models| models.iter().map(|m| m.to_string()).collect())
+                    .unwrap_or_default()
+            } else {
+                provider_config.models.clone()
+            };
+            for model in &configured_models {
+                let label = format!("{provider_id}: {model}");
+                if !models.iter().any(|m| m == &label) {
+                    models.push(label);
+                }
+            }
         }
-        Ok(dedupe_runtime_strings(models))
+        if !models.iter().any(|m| m == &active_model_label) {
+            models.insert(0, active_model_label);
+        }
+        Ok(models)
     }
 
     /// Returns configured reasoning choices for a pane model picker.
@@ -1856,15 +1883,21 @@ impl RuntimeSessionService {
     pub(super) fn apply_pane_model_picker_selection(
         &mut self,
         pane_id: &str,
-        model_name: &str,
+        model_label: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let agent_id = format!("agent-{pane_id}");
-        let (_active_name, active_profile) =
-            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
-        let requested_reasoning = active_profile
-            .reasoning_profile
-            .as_deref()
+        let (provider_id, model_name) = parse_picker_model_label(model_label);
+        let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
+        let requested_reasoning = self
+            .active_model_profile_for_pane(pane_id, &agent_id, None)
+            .ok()
+            .and_then(|(_name, active_profile)| {
+                if active_profile.provider == provider_id {
+                    active_profile.reasoning_profile
+                } else {
+                    None
+                }
+            })
             .filter(|reasoning| {
                 catalog
                     .models
@@ -1876,11 +1909,13 @@ impl RuntimeSessionService {
                         } else {
                             model.reasoning_levels.as_slice()
                         };
-                        levels.is_empty() || levels.iter().any(|level| level == *reasoning)
+                        levels.is_empty() || levels.iter().any(|level| level == reasoning)
                     })
                     .unwrap_or(false)
             });
-        self.apply_pane_model_picker_profile(pane_id, model_name, requested_reasoning, &catalog)
+        let model_name = model_name.to_string();
+        let requested_reasoning = requested_reasoning.as_deref();
+        self.apply_pane_model_picker_profile(pane_id, &model_name, requested_reasoning, &catalog)
     }
 
     /// Applies a reasoning level selected from the pane-frame reasoning picker.
@@ -1973,12 +2008,17 @@ impl RuntimeSessionService {
                 .unwrap_or(AgentShellVisibility::Hidden),
         })
     }
+}
 
-    /// Runs the runtime model catalog for provider operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+/// Parses a picker model label in `provider: model` format.
+fn parse_picker_model_label(label: &str) -> (&str, &str) {
+    match label.split_once(": ") {
+        Some((provider, model)) => (provider, model),
+        None => ("openai", label),
+    }
+}
+
+impl RuntimeSessionService {
     fn runtime_model_catalog_for_provider(
         &mut self,
         provider_id: &str,

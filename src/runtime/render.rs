@@ -6589,7 +6589,9 @@ impl RuntimeSessionService {
                     .active_model_profile_for_pane(pane_id, &agent_id, None)
                     .ok()?;
                 match field {
-                    PaneAgentStatusField::Model => Some(profile.model),
+                    PaneAgentStatusField::Model => {
+                        Some(format!("{}: {}", profile.provider, profile.model))
+                    }
                     PaneAgentStatusField::Reasoning => profile.reasoning_profile,
                     _ => None,
                 }
