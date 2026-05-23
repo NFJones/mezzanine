@@ -2310,8 +2310,7 @@ fn openai_service_tier_for_latency_preference(
     preference: Option<&str>,
 ) -> Result<Option<&'static str>> {
     match preference.map(str::trim).filter(|value| !value.is_empty()) {
-        Some("slow") => Ok(Some("flex")),
-        Some("default") | None => Ok(None),
+        Some("slow") | Some("default") | None => Ok(None),
         Some("fast") => Ok(Some("priority")),
         Some(other) => Err(MezError::invalid_args(format!(
             "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
