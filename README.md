@@ -16,7 +16,23 @@
     />
   </picture>
 </p>
-<h1>Mezzanine</h1>
+<p align="center">
+  <picture>
+    <source
+      srcset="./resources/mezzanine-title-light.png"
+      media="(prefers-color-scheme: dark)"
+    />
+    <source
+      srcset="./resources/mezzanine-title-dark.png"
+      media="(prefers-color-scheme: light)"
+    />
+    <img
+      src="./resources/mezzanine-title-dark.png"
+      width="600"
+      alt="Mezzanine title"
+    />
+  </picture>
+</p>
 <p align="center">
   <a href="https://github.com/NFJones/mezzanine/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/NFJones/mezzanine?style=flat-square"></a>
   <a href="https://github.com/NFJones/mezzanine/forks"><img alt="GitHub forks" src="https://img.shields.io/github/forks/NFJones/mezzanine?style=flat-square"></a>
