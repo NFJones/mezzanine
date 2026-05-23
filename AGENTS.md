@@ -56,6 +56,7 @@ subsystem modules rather than expanding `src/main.rs`.
 - Commit changes at major sequence points with long form commit messages to describe what has changed.
 - When working on a research task, document your results in `docs/reference/`.
 - When working on very large multi-phase refactors, write a refactor progress document out to `docs/reference/` and keep it up to date throughout the refactor.
+- Never stage or commit documents contained in `docs/reference/`. They are for local use only.
 - When decomposing a module into multiple compilation units, prefer to create a `mod.rs` in the module directory rather than leaving a `<mod_name>.rs` source in the parent directory.
 
 ## Testing Requirements
