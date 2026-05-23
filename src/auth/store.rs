@@ -88,6 +88,36 @@ impl AuthStore {
         plan
     }
 
+    /// Runs the plan provider flow operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn plan_provider_flow(&self, provider: &str, method: AuthMethod) -> AuthFlowPlan {
+        let credential_store = self.credential_store_plan(provider);
+        AuthFlowPlan {
+            provider: provider.to_string(),
+            method,
+            credential_target: String::new(),
+            credential_store,
+            prompt: AuthInteractivePromptPlan {
+                prompt_id: String::new(),
+                action: AuthPromptAction::CollectSecret,
+                label: String::new(),
+                secret_input: true,
+                required: false,
+                persist_via_credential_store: false,
+            },
+            browser: None,
+            entitlement: ProviderEntitlementPlan {
+                validation: ProviderEntitlementValidation::DeferredUntilCredentialValidation,
+                requested_entitlements: Vec::new(),
+                persistence: ProviderEntitlementPersistence::CredentialStoreReferenceOnly,
+            },
+            user_instruction: String::new(),
+        }
+    }
+
     /// Runs the plan openai flow with os store operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -317,6 +347,49 @@ impl AuthStore {
         metadata.credential_store_ref = Some(reference);
         self.write_metadata(&metadata)?;
         Ok(metadata)
+    }
+
+    /// Runs the login provider api key operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn login_provider_api_key(
+        &self,
+        provider: &str,
+        selected_model_profile: &str,
+        api_key: &str,
+        credential_store: &dyn CredentialStore,
+    ) -> Result<AuthMetadata> {
+        self.login_with_api_key(provider, selected_model_profile, api_key, credential_store)
+    }
+
+    /// Runs the login provider api key with default os store operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn login_provider_api_key_with_default_os_store(
+        &self,
+        provider: &str,
+        selected_model_profile: &str,
+        api_key: &str,
+    ) -> Result<AuthMetadata> {
+        let native_store = NativeSecretServiceCredentialStore::new();
+        if matches!(
+            native_store.availability(),
+            CredentialStoreAvailability::Available
+        ) {
+            return self.login_provider_api_key(
+                provider,
+                selected_model_profile,
+                api_key,
+                &native_store,
+            );
+        }
+
+        let command_store = CommandBackedCredentialStore::secret_tool();
+        self.login_provider_api_key(provider, selected_model_profile, api_key, &command_store)
     }
 
     /// Runs the login openai api key operation for this subsystem.

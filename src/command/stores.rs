@@ -397,16 +397,17 @@ pub(super) fn execute_auth_login(
     invocation: &CommandInvocation,
 ) -> Result<String> {
     let method = auth_login_method(&invocation.args)?;
+    let provider = flag_value(&invocation.args, "--provider").unwrap_or("openai");
     if method != AuthMethod::ApiKey {
         return Ok(format!(
-            "provider=openai method={} authenticated=false action=interactive-required reason=run-mez-auth-login source=auth-store",
+            "provider={provider} method={} authenticated=false action=interactive-required reason=run-mez-auth-login source=auth-store",
             auth_method_display_name(method)
         ));
     }
 
     let selected_profile = flag_value(&invocation.args, "--profile").unwrap_or("default");
     let Some(api_key_path) = flag_value(&invocation.args, "--api-key-file") else {
-        let plan = auth_store.plan_openai_flow(AuthMethod::ApiKey);
+        let plan = auth_store.plan_provider_flow(provider, AuthMethod::ApiKey);
         return Ok(format!(
             "provider={} method=api-key credential_target={} action=prompt-required source=auth-store",
             plan.provider, plan.credential_target
@@ -417,24 +418,39 @@ pub(super) fn execute_auth_login(
 
     let metadata = match flag_value(&invocation.args, "--credential-store") {
         Some("file") => {
-            let credential_store = auth_store.file_credential_store("openai")?;
-            auth_store.login_openai_api_key(selected_profile, api_key, &credential_store)?
+            let credential_store = auth_store.file_credential_store(provider)?;
+            auth_store.login_provider_api_key(
+                provider,
+                selected_profile,
+                api_key,
+                &credential_store,
+            )?
         }
-        Some("os") => {
-            auth_store.login_openai_api_key_with_default_os_store(selected_profile, api_key)?
-        }
+        Some("os") => auth_store.login_provider_api_key_with_default_os_store(
+            provider,
+            selected_profile,
+            api_key,
+        )?,
         Some(other) => {
             return Err(MezError::invalid_args(format!(
                 "unknown credential store `{other}`"
             )));
         }
-        None => match auth_store.credential_store_plan("openai") {
-            CredentialStorePlan::OperatingSystem { .. } => {
-                auth_store.login_openai_api_key_with_default_os_store(selected_profile, api_key)?
-            }
+        None => match auth_store.credential_store_plan(provider) {
+            CredentialStorePlan::OperatingSystem { .. } => auth_store
+                .login_provider_api_key_with_default_os_store(
+                    provider,
+                    selected_profile,
+                    api_key,
+                )?,
             CredentialStorePlan::PrivateFileFallback { .. } => {
-                let credential_store = auth_store.file_credential_store("openai")?;
-                auth_store.login_openai_api_key(selected_profile, api_key, &credential_store)?
+                let credential_store = auth_store.file_credential_store(provider)?;
+                auth_store.login_provider_api_key(
+                    provider,
+                    selected_profile,
+                    api_key,
+                    &credential_store,
+                )?
             }
         },
     };

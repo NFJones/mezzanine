@@ -839,7 +839,7 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "set-theme" => Some(" <theme>"),
         "source-file" => Some(" <path>"),
         "agent-shell" => Some(" <show|hide|toggle>"),
-        "auth-login" => Some(" [--browser|--device-code|--api-key]"),
+        "auth-login" => Some(" [--provider <openai|deepseek>] [--browser|--device-code|--api-key]"),
         "mcp-add" => Some(" <name> --transport <stdio|streamable-http>"),
         "mcp-remove" | "mcp-retry" => Some(" <name>"),
         "snapshot-session" | "resume-session" => Some(" [--snapshot id|--latest]"),

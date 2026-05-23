@@ -42,6 +42,7 @@ pub(super) async fn run_auth<W: Write>(
         }
         AuthCliCommand::Login(login) => {
             let method = login.method()?;
+            let provider = login.provider.clone();
             let selected_profile = login.profile.clone();
             let credential_store = login.credential_store.clone();
             match method {
@@ -53,9 +54,11 @@ pub(super) async fn run_auth<W: Write>(
                             let store = store.clone();
                             let selected_profile = selected_profile.to_string();
                             let credential_store = credential_store.clone();
+                            let provider = provider.clone();
                             move || {
-                                login_openai_api_key_for_cli(
+                                login_provider_api_key_for_cli(
                                     &store,
+                                    &provider,
                                     &selected_profile,
                                     &secret,
                                     credential_store.as_deref(),
@@ -67,21 +70,23 @@ pub(super) async fn run_auth<W: Write>(
                         return Ok(());
                     }
                     if interactive {
-                        let secret =
-                            rpassword::prompt_password("OpenAI API key: ").map_err(|error| {
-                                MezError::new(
-                                    crate::error::MezErrorKind::Io,
-                                    format!("failed to read API key: {error}"),
-                                )
-                            })?;
+                        let prompt = format!("{provider} API key: ");
+                        let secret = rpassword::prompt_password(prompt).map_err(|error| {
+                            MezError::new(
+                                crate::error::MezErrorKind::Io,
+                                format!("failed to read API key: {error}"),
+                            )
+                        })?;
                         let secret = secret.trim().to_string();
                         let metadata = run_auth_store_operation({
                             let store = store.clone();
                             let selected_profile = selected_profile.to_string();
                             let credential_store = credential_store.clone();
+                            let provider = provider.clone();
                             move || {
-                                login_openai_api_key_for_cli(
+                                login_provider_api_key_for_cli(
                                     &store,
+                                    &provider,
                                     &selected_profile,
                                     &secret,
                                     credential_store.as_deref(),
@@ -92,9 +97,21 @@ pub(super) async fn run_auth<W: Write>(
                         write_auth_login(stdout, output_format, &metadata)?;
                         return Ok(());
                     }
-                    return Err(noninteractive_api_key_login_error());
+                    return Err(if provider == "openai" {
+                        noninteractive_api_key_login_error()
+                    } else {
+                        MezError::invalid_args(format!(
+                            "auth login for `{provider}` requires an API key in noninteractive mode; \
+                             pass --api-key-file PATH or run from an interactive terminal"
+                        ))
+                    });
                 }
                 AuthMethod::Browser => {
+                    if provider != "openai" {
+                        return Err(MezError::invalid_args(
+                            "browser-based login is only supported for OpenAI; use `mez auth login --provider deepseek --api-key`",
+                        ));
+                    }
                     if !interactive {
                         return Err(noninteractive_browser_login_error());
                     }
@@ -117,6 +134,11 @@ pub(super) async fn run_auth<W: Write>(
                     write_auth_login(stdout, output_format, &metadata)?;
                 }
                 AuthMethod::DeviceCode => {
+                    if provider != "openai" {
+                        return Err(MezError::invalid_args(
+                            "device-code login is only supported for OpenAI; use `mez auth login --provider deepseek --api-key`",
+                        ));
+                    }
                     let credential = run_openai_device_code_login_async().await?;
                     let metadata = run_auth_store_operation({
                         let store = store.clone();
@@ -172,6 +194,9 @@ enum AuthCliCommand {
 /// Typed process CLI arguments for `mez auth login`.
 #[derive(Debug, Clone, clap::Args)]
 pub(super) struct AuthLoginCliArgs {
+    /// Provider kind to authenticate against.
+    #[arg(long, default_value = "openai")]
+    provider: String,
     /// Selects API-key authentication.
     #[arg(long)]
     api_key: bool,
@@ -285,33 +310,35 @@ fn noninteractive_browser_login_error() -> MezError {
     )
 }
 
-/// Runs the login openai api key for cli operation for this subsystem.
+/// Runs the login provider api key for cli operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn login_openai_api_key_for_cli(
+pub(super) fn login_provider_api_key_for_cli(
     store: &AuthStore,
+    provider: &str,
     selected_profile: &str,
     secret: &str,
     credential_store: Option<&str>,
 ) -> Result<crate::auth::AuthMetadata> {
     match credential_store {
         Some("file") => {
-            let credential_store = store.file_credential_store("openai")?;
-            store.login_openai_api_key(selected_profile, secret, &credential_store)
+            let credential_store = store.file_credential_store(provider)?;
+            store.login_provider_api_key(provider, selected_profile, secret, &credential_store)
         }
-        Some("os") => store.login_openai_api_key_with_default_os_store(selected_profile, secret),
+        Some("os") => {
+            store.login_provider_api_key_with_default_os_store(provider, selected_profile, secret)
+        }
         Some(other) => Err(MezError::invalid_args(format!(
             "unknown credential store `{other}`"
         ))),
-        None => match store.credential_store_plan("openai") {
-            CredentialStorePlan::OperatingSystem { .. } => {
-                store.login_openai_api_key_with_default_os_store(selected_profile, secret)
-            }
+        None => match store.credential_store_plan(provider) {
+            CredentialStorePlan::OperatingSystem { .. } => store
+                .login_provider_api_key_with_default_os_store(provider, selected_profile, secret),
             CredentialStorePlan::PrivateFileFallback { .. } => {
-                let credential_store = store.file_credential_store("openai")?;
-                store.login_openai_api_key(selected_profile, secret, &credential_store)
+                let credential_store = store.file_credential_store(provider)?;
+                store.login_provider_api_key(provider, selected_profile, secret, &credential_store)
             }
         },
     }
