@@ -117,6 +117,66 @@ pub(super) fn decode_metadata(data: &str) -> Result<AuthMetadata> {
     Ok(metadata)
 }
 
+/// Encodes all provider metadata entries into a single TOML-like key=value
+/// document using `[provider]` table headers.
+pub(super) fn encode_all_metadata(map: &BTreeMap<String, AuthMetadata>) -> String {
+    let mut text = String::new();
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort();
+    for (index, provider) in keys.iter().enumerate() {
+        let metadata = &map[*provider];
+        if index > 0 {
+            text.push('\n');
+        }
+        text.push_str(&format!("[{}]\n", toml_escape(provider)));
+        text.push_str(&encode_metadata(metadata));
+    }
+    text
+}
+
+/// Decodes a multi-provider metadata document into a map keyed by provider.
+pub(super) fn decode_all_metadata(data: &str) -> Result<BTreeMap<String, AuthMetadata>> {
+    let trimmed = data.trim();
+    if trimmed.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    if !trimmed.contains('[') {
+        return decode_metadata(data).map(|entry| {
+            let mut map = BTreeMap::new();
+            map.insert(entry.provider.clone(), entry);
+            map
+        });
+    }
+    let mut map = BTreeMap::new();
+    let mut current_provider: Option<String> = None;
+    let mut current_fields = String::new();
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(inner) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            if let Some(provider) = current_provider.take() {
+                let metadata = decode_metadata(&current_fields)?;
+                map.insert(provider, metadata);
+                current_fields = String::new();
+            }
+            current_provider = Some(parse_toml_bare_key(inner)?);
+        } else if current_provider.is_some() {
+            current_fields.push_str(line);
+            current_fields.push('\n');
+        }
+    }
+    if let Some(provider) = current_provider {
+        let metadata = decode_metadata(&current_fields)?;
+        map.insert(provider, metadata);
+    }
+    Ok(map)
+}
+
 /// Runs the parse credential kind operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -224,4 +284,15 @@ fn toml_escape(value: &str) -> String {
         }
     }
     escaped
+}
+
+/// Parses a bare TOML key or table header value (without quotes).
+fn parse_toml_bare_key(value: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(MezError::config(
+            "auth metadata provider name must not be empty",
+        ));
+    }
+    Ok(value.to_string())
 }

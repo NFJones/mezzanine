@@ -1806,11 +1806,13 @@ impl RuntimeSessionService {
         let active_model_label = format!("{}: {}", active_profile.provider, active_profile.model);
         let mut provider_ids: Vec<String> =
             self.provider_registry.providers().keys().cloned().collect();
-        if let Some(auth_store) = self.auth_store.as_ref()
-            && let Ok(Some(auth_metadata)) = auth_store.read_metadata()
-            && !provider_ids.contains(&auth_metadata.provider)
-        {
-            provider_ids.push(auth_metadata.provider);
+        if let Some(auth_store) = self.auth_store.as_ref() {
+            let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
+            for auth_provider in all_metadata.keys() {
+                if !provider_ids.contains(auth_provider) {
+                    provider_ids.push(auth_provider.clone());
+                }
+            }
         }
         let mut models = Vec::new();
         for provider_id in &provider_ids {

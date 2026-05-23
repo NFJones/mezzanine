@@ -1503,14 +1503,8 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
     transport: T,
 ) -> Result<OpenAiResponsesProvider<T>> {
     let metadata = auth_store
-        .read_metadata()?
+        .read_metadata_for_provider("openai")?
         .ok_or_else(|| MezError::invalid_state("OpenAI provider is not authenticated"))?;
-    if metadata.provider != "openai" {
-        return Err(MezError::invalid_state(format!(
-            "auth metadata is for provider `{}`",
-            metadata.provider
-        )));
-    }
     let credential = auth_store.provider_secret("openai")?;
     match metadata.credential_kind {
         AuthCredentialKind::ApiKey => {
@@ -1560,15 +1554,9 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
     timeout_ms: u64,
     transport: T,
 ) -> Result<DeepSeekChatCompletionsProvider<T>> {
-    let metadata = auth_store
-        .read_metadata()?
+    let _metadata = auth_store
+        .read_metadata_for_provider("deepseek")?
         .ok_or_else(|| MezError::invalid_state("DeepSeek provider is not authenticated"))?;
-    if metadata.provider != "deepseek" {
-        return Err(MezError::invalid_state(format!(
-            "auth metadata is for provider `{}`",
-            metadata.provider
-        )));
-    }
     let credential = auth_store.provider_secret("deepseek")?;
     let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
     if let Some(endpoint) = base_url_override.filter(|e| !e.trim().is_empty()) {

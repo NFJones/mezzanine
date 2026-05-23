@@ -3,6 +3,7 @@
 //! AuthStore coordinates metadata persistence, auth-flow planning, provider login,
 //! credential loading, credential-state reporting, and logout cleanup.
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use super::file_store::PrivateFileCredentialStore;
 use super::fs::{
     ensure_private_dir, path_is_under_directory, set_private_file, validate_safe_name,
 };
-use super::metadata::{decode_metadata, encode_metadata};
+use super::metadata::{decode_all_metadata, encode_all_metadata};
 use super::openai_oauth::{OpenAiProviderCredential, refresh_openai_provider_credential_async};
 use super::secret_service::NativeSecretServiceCredentialStore;
 use super::types::{
@@ -269,30 +270,40 @@ impl AuthStore {
     /// on duplicated control-flow logic.
     pub fn write_metadata(&self, metadata: &AuthMetadata) -> Result<PathBuf> {
         metadata.validate_non_secret()?;
+        let mut existing = self.read_all_metadata()?;
+        existing.insert(metadata.provider.clone(), metadata.clone());
         ensure_private_dir(self.paths.root())?;
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(self.paths.auth_file())?;
-        file.write_all(encode_metadata(metadata).as_bytes())?;
+        file.write_all(encode_all_metadata(&existing).as_bytes())?;
         file.sync_all()?;
         set_private_file(self.paths.auth_file())?;
         Ok(self.paths.auth_file().to_path_buf())
     }
 
-    /// Runs the read metadata operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn read_metadata(&self) -> Result<Option<AuthMetadata>> {
+    /// Reads all provider metadata entries from the auth file.
+    pub fn read_all_metadata(&self) -> Result<BTreeMap<String, AuthMetadata>> {
         if !self.paths.auth_file().exists() {
-            return Ok(None);
+            return Ok(BTreeMap::new());
         }
         let mut data = String::new();
         fs::File::open(self.paths.auth_file())?.read_to_string(&mut data)?;
-        Ok(Some(decode_metadata(&data)?))
+        decode_all_metadata(&data)
+    }
+
+    /// Reads metadata for a specific provider.
+    pub fn read_metadata_for_provider(&self, provider: &str) -> Result<Option<AuthMetadata>> {
+        Ok(self.read_all_metadata()?.remove(provider))
+    }
+
+    /// Runs the read metadata operation for this subsystem.
+    ///
+    /// Returns metadata for the first available provider.
+    pub fn read_metadata(&self) -> Result<Option<AuthMetadata>> {
+        Ok(self.read_all_metadata()?.into_values().next())
     }
 
     /// Runs the status operation for this subsystem.

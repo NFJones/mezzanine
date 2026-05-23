@@ -753,30 +753,30 @@ impl RuntimeSessionService {
         self.preset_registry =
             runtime_preset_registry_from_config(&structured, &self.provider_registry.profiles)?;
         // Synthesize provider entries for authenticated providers not in config.
-        if let Some(auth_store) = self.auth_store.as_ref()
-            && let Ok(Some(auth_metadata)) = auth_store.read_metadata()
-        {
-            let auth_provider = &auth_metadata.provider;
-            if !self.provider_registry.providers.contains_key(auth_provider)
-                && let Ok(default_models) = runtime_default_models_for_provider(auth_provider)
-            {
-                self.provider_registry.providers.insert(
-                    auth_provider.clone(),
-                    RuntimeProviderConfig {
-                        provider_id: auth_provider.clone(),
-                        kind: auth_provider.clone(),
-                        auth_profile: "default".to_string(),
-                        base_url: None,
-                        models: default_models.iter().map(|m| (*m).to_string()).collect(),
-                        default_model: Some(
-                            default_models
-                                .first()
-                                .map(|m| (*m).to_string())
-                                .unwrap_or_default(),
-                        ),
-                        options: BTreeMap::new(),
-                    },
-                );
+        if let Some(auth_store) = self.auth_store.as_ref() {
+            let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
+            for auth_provider in all_metadata.keys() {
+                if !self.provider_registry.providers.contains_key(auth_provider)
+                    && let Ok(default_models) = runtime_default_models_for_provider(auth_provider)
+                {
+                    self.provider_registry.providers.insert(
+                        auth_provider.clone(),
+                        RuntimeProviderConfig {
+                            provider_id: auth_provider.clone(),
+                            kind: auth_provider.clone(),
+                            auth_profile: "default".to_string(),
+                            base_url: None,
+                            models: default_models.iter().map(|m| (*m).to_string()).collect(),
+                            default_model: Some(
+                                default_models
+                                    .first()
+                                    .map(|m| (*m).to_string())
+                                    .unwrap_or_default(),
+                            ),
+                            options: BTreeMap::new(),
+                        },
+                    );
+                }
             }
         }
         self.provider_model_catalog_cache.clear();
