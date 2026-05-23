@@ -840,6 +840,167 @@ fn provider_secret_loads_referenced_secret_without_metadata_leakage() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies provider secret lookup selects metadata by provider name rather
+/// than by metadata-file iteration order.
+///
+/// Multi-provider auth files are sorted by provider id when persisted, so a
+/// file containing both DeepSeek and OpenAI metadata lists `deepseek` first.
+/// This regression protects concurrent provider credentials by proving OpenAI
+/// lookup still uses the OpenAI metadata entry and DeepSeek lookup still uses
+/// the DeepSeek entry.
+#[test]
+fn provider_secret_uses_requested_provider_metadata() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-provider-secret-multi-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let openai_store = store.file_credential_store("openai").unwrap();
+    let deepseek_store = store.file_credential_store("deepseek").unwrap();
+    store
+        .login_openai_api_key("default", "sk-openai-secret", &openai_store)
+        .unwrap();
+    store
+        .login_provider_api_key(
+            "deepseek",
+            "deepseek-default",
+            "sk-deepseek-secret",
+            &deepseek_store,
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.provider_secret("openai").unwrap().expose_secret(),
+        "sk-openai-secret"
+    );
+    assert_eq!(
+        store.provider_secret("deepseek").unwrap().expose_secret(),
+        "sk-deepseek-secret"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies OpenAI refresh scheduling reads OpenAI metadata even when another
+/// provider sorts first in the multi-provider auth file.
+///
+/// The refresh probe runs during daemon startup and should not be disabled just
+/// because a DeepSeek credential is present in the same metadata file.
+#[test]
+fn openai_refresh_needed_soon_uses_openai_metadata_entry() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-openai-refresh-multi-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let deepseek_store = store.file_credential_store("deepseek").unwrap();
+    store
+        .login_provider_api_key(
+            "deepseek",
+            "deepseek-default",
+            "sk-deepseek-secret",
+            &deepseek_store,
+        )
+        .unwrap();
+    let mut openai = AuthMetadata::new("openai", "default");
+    openai.credential_kind = AuthCredentialKind::ChatGpt;
+    openai.credential_store_ref = Some("file:/tmp/openai-access".to_string());
+    openai.refresh_credential_store_ref = Some("file:/tmp/openai-refresh".to_string());
+    openai.token_expires_at = Some("1".to_string());
+    store.write_metadata(&openai).unwrap();
+
+    assert!(store.openai_refresh_needed_soon().unwrap());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies auth status reports an available provider credential even when an
+/// earlier provider entry has a missing secret.
+///
+/// Provider metadata is sorted by provider id, which means DeepSeek is checked
+/// before OpenAI. This regression keeps a broken DeepSeek secret from hiding a
+/// valid OpenAI credential in multi-provider auth status.
+#[test]
+fn auth_status_uses_first_available_provider_secret() {
+    let root = std::env::temp_dir().join(format!("mez-auth-status-multi-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let openai_store = store.file_credential_store("openai").unwrap();
+    store
+        .login_openai_api_key("default", "sk-openai-secret", &openai_store)
+        .unwrap();
+    let missing_deepseek_secret = store
+        .paths()
+        .secret_directory()
+        .join("deepseek")
+        .join("missing.secret");
+    let mut deepseek = AuthMetadata::new("deepseek", "deepseek-default");
+    deepseek.credential_store_ref = Some(format!("file:{}", missing_deepseek_secret.display()));
+    store.write_metadata(&deepseek).unwrap();
+
+    let status = store.status().unwrap();
+
+    assert!(status.authenticated);
+    assert_eq!(
+        status
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.provider.as_str()),
+        Some("openai")
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies global logout removes secrets for every provider in the metadata
+/// file before deleting the metadata document.
+///
+/// A multi-provider auth file may contain separate private-file secrets. This
+/// regression prevents logout from deleting only the first provider's secret
+/// and orphaning the remaining provider credential.
+#[test]
+fn logout_removes_all_provider_secrets_from_multi_provider_metadata() {
+    let root = std::env::temp_dir().join(format!("mez-auth-logout-multi-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let openai_store = store.file_credential_store("openai").unwrap();
+    let deepseek_store = store.file_credential_store("deepseek").unwrap();
+    let openai = store
+        .login_openai_api_key("default", "sk-openai-secret", &openai_store)
+        .unwrap();
+    let deepseek = store
+        .login_provider_api_key(
+            "deepseek",
+            "deepseek-default",
+            "sk-deepseek-secret",
+            &deepseek_store,
+        )
+        .unwrap();
+    let openai_secret = openai
+        .credential_store_ref
+        .as_deref()
+        .unwrap()
+        .strip_prefix("file:")
+        .unwrap()
+        .to_string();
+    let deepseek_secret = deepseek
+        .credential_store_ref
+        .as_deref()
+        .unwrap()
+        .strip_prefix("file:")
+        .unwrap()
+        .to_string();
+
+    assert!(store.logout().unwrap());
+    assert!(!Path::new(&openai_secret).exists());
+    assert!(!Path::new(&deepseek_secret).exists());
+    assert!(!store.paths().auth_file().exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies api key login rejects empty secret before writing metadata.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -2197,7 +2197,7 @@ impl RuntimeSessionService {
         let Some(auth_store) = self.auth_store.as_ref() else {
             return Some("OpenAI model listing requires an attached auth store".to_string());
         };
-        let metadata = match auth_store.read_metadata() {
+        let metadata = match auth_store.read_metadata_for_provider("openai") {
             Ok(metadata) => metadata,
             Err(error) => return Some(error.message().to_string()),
         };
@@ -2319,9 +2319,11 @@ impl RuntimeSessionService {
                 "OpenAI model listing requires an attached auth store",
             ));
         };
-        let metadata = auth_store.read_metadata()?.ok_or_else(|| {
-            MezError::invalid_state("OpenAI model listing requires an authenticated provider")
-        })?;
+        let metadata = auth_store
+            .read_metadata_for_provider("openai")?
+            .ok_or_else(|| {
+                MezError::invalid_state("OpenAI model listing requires an authenticated provider")
+            })?;
         if metadata.credential_kind == AuthCredentialKind::ChatGpt {
             self.append_credential_access_audit(
                 "openai",

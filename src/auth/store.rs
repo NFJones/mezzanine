@@ -312,14 +312,25 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn status(&self) -> Result<AuthStatus> {
-        let metadata = self.read_metadata()?;
-        let credential_state = self.credential_state(metadata.as_ref())?;
-        let authenticated = credential_state.authenticated();
-        Ok(AuthStatus {
-            authenticated,
-            metadata,
-            credential_state,
-        })
+        let metadata_entries = self.read_all_metadata()?;
+        let mut first_status = None;
+        for metadata in metadata_entries.values() {
+            let credential_state = self.credential_state(Some(metadata))?;
+            let status = AuthStatus {
+                authenticated: credential_state.authenticated(),
+                metadata: Some(metadata.clone()),
+                credential_state,
+            };
+            if status.authenticated {
+                return Ok(status);
+            }
+            first_status.get_or_insert(status);
+        }
+        Ok(first_status.unwrap_or(AuthStatus {
+            authenticated: false,
+            metadata: None,
+            credential_state: AuthCredentialState::LoggedOut,
+        }))
     }
 
     /// Runs the write file secret operation for this subsystem.
@@ -548,7 +559,7 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn openai_refresh_needed_soon(&self) -> Result<bool> {
-        let Some(metadata) = self.read_metadata()? else {
+        let Some(metadata) = self.read_metadata_for_provider(OPENAI_PROVIDER)? else {
             return Ok(false);
         };
         Ok(openai_refresh_needed_at(
@@ -564,7 +575,7 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn refresh_openai_provider_credential_if_needed_async(&self) -> Result<bool> {
-        let Some(mut metadata) = self.read_metadata()? else {
+        let Some(mut metadata) = self.read_metadata_for_provider(OPENAI_PROVIDER)? else {
             return Ok(false);
         };
         if !openai_refresh_needed_at(
@@ -704,15 +715,9 @@ impl AuthStore {
     /// on duplicated control-flow logic.
     pub fn provider_secret(&self, provider: &str) -> Result<SecretString> {
         validate_safe_name(provider, "provider name is not credential-store safe")?;
-        let metadata = self
-            .read_metadata()?
-            .ok_or_else(|| MezError::invalid_state("provider is not authenticated"))?;
-        if metadata.provider != provider {
-            return Err(MezError::invalid_state(format!(
-                "auth metadata is for provider `{}`",
-                metadata.provider
-            )));
-        }
+        let metadata = self.read_metadata_for_provider(provider)?.ok_or_else(|| {
+            MezError::invalid_state(format!("provider `{provider}` is not authenticated"))
+        })?;
         let reference = metadata
             .credential_store_ref
             .as_deref()
@@ -728,9 +733,9 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn logout(&self) -> Result<bool> {
-        let metadata = self.read_metadata()?;
+        let metadata_entries = self.read_all_metadata()?;
         let mut changed = false;
-        if let Some(metadata) = metadata {
+        for metadata in metadata_entries.values() {
             if let Some(reference) = metadata.credential_store_ref.as_deref() {
                 changed |= self.remove_secret(reference)?;
             }

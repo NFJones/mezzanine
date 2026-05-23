@@ -113,19 +113,28 @@ pub(crate) fn runtime_auto_sizing_reasoning_levels_for_profile(
                 .options
                 .get("reasoning_effort")
                 .or_else(|| provider_config.options.get("reasoning_profile"))
-                .cloned(),
+                .map(|effort| runtime_auto_sizing_canonical_reasoning_effort(effort)),
         );
         if provider_config.kind == "openai" {
             levels.extend(openai_default_reasoning_levels_for_model(&profile.model));
         }
         if provider_config.kind == "deepseek" {
-            levels.extend(["high".to_string(), "max".to_string()]);
+            levels.extend(["high".to_string(), "xhigh".to_string()]);
         }
     }
     if let Some(reasoning) = profile.reasoning_profile.clone() {
-        levels.push(reasoning);
+        levels.push(runtime_auto_sizing_canonical_reasoning_effort(&reasoning));
     }
     dedupe_runtime_auto_sizing_strings(levels)
+}
+
+/// Returns the canonical auto-sizing reasoning effort name for provider-native
+/// aliases that share the same internal meaning.
+fn runtime_auto_sizing_canonical_reasoning_effort(effort: &str) -> String {
+    match effort {
+        "max" => "xhigh".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn runtime_auto_sizing_request(
@@ -564,4 +573,47 @@ struct AutoSizingDecisionJson {
     reasoning_effort: String,
     confidence: f64,
     rationale: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// Verifies DeepSeek provider-native `max` reasoning is converted to the
+    /// canonical auto-sizing effort before target support validation.
+    ///
+    /// The router schema only accepts shared effort names. DeepSeek request
+    /// construction translates `xhigh` to provider-native `max` later, so the
+    /// auto-sizing target metadata must not expose `max` as a supported router
+    /// output.
+    #[test]
+    fn deepseek_auto_sizing_reasoning_levels_use_canonical_xhigh() {
+        let mut options = BTreeMap::new();
+        options.insert("reasoning_effort".to_string(), "max".to_string());
+        let provider = RuntimeProviderConfig {
+            provider_id: "deepseek".to_string(),
+            kind: "deepseek".to_string(),
+            auth_profile: "default".to_string(),
+            base_url: None,
+            models: vec!["deepseek-v4-pro".to_string()],
+            default_model: Some("deepseek-v4-pro".to_string()),
+            options,
+        };
+        let profile = ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("max".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: BTreeMap::new(),
+            safety_tier: None,
+        };
+
+        let levels = runtime_auto_sizing_reasoning_levels_for_profile(Some(&provider), &profile);
+
+        assert!(levels.contains(&"high".to_string()));
+        assert!(levels.contains(&"xhigh".to_string()));
+        assert!(!levels.contains(&"max".to_string()));
+    }
 }

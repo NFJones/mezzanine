@@ -204,6 +204,30 @@ fn default_config_matches_documented_example() {
     assert_eq!(DEFAULT_CONFIG_TOML.trim(), documented.trim());
 }
 
+/// Verifies the built-in DeepSeek preset uses canonical auto-sizing effort
+/// names rather than provider-native aliases.
+///
+/// Auto-sizing decisions are parsed through Mezzanine's shared schema before
+/// provider-specific request mapping occurs. Keeping the default preset on
+/// `xhigh` lets the router select maximum DeepSeek thinking while preserving
+/// the shared schema contract.
+#[test]
+fn default_deepseek_preset_uses_canonical_auto_sizing_efforts() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let efforts = parsed
+        .get("model_presets")
+        .and_then(|presets| presets.get("deepseek"))
+        .and_then(|preset| preset.get("allowed_reasoning_efforts"))
+        .and_then(toml::Value::as_array)
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(efforts, vec!["high", "xhigh"]);
+    assert!(!efforts.contains(&"max"));
+}
+
 /// Verifies validates default toml config.
 ///
 /// This regression scenario documents the behavior being protected so a

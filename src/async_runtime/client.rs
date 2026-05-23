@@ -18,7 +18,7 @@ use super::{
     merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop,
     run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
-use crate::agent::AsyncModelProvider;
+use crate::agent::{AgentContext, AgentTurnRecord, AsyncModelProvider, ModelProfile};
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
 use crate::ids::AgentId;
@@ -1297,19 +1297,15 @@ async fn execute_runtime_agent_provider_dispatch(
     }
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            if auto_sizing_provider.is_none()
-                && let Some(auto_sizing) = auto_sizing.as_ref()
-            {
-                let (selected_profile, _decision, _fallback) =
-                    runtime_execute_auto_sizing_with_async_provider(
-                        &provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await;
-                model_profile = selected_profile;
-            }
+            model_profile = runtime_apply_same_provider_auto_sizing_if_needed(
+                &provider,
+                model_profile,
+                auto_sizing_provider.is_some(),
+                auto_sizing.as_ref(),
+                &turn,
+                &context,
+            )
+            .await;
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1324,6 +1320,15 @@ async fn execute_runtime_agent_provider_dispatch(
             runner.run_turn_async(&mut ledger, turn, context).await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+            model_profile = runtime_apply_same_provider_auto_sizing_if_needed(
+                &provider,
+                model_profile,
+                auto_sizing_provider.is_some(),
+                auto_sizing.as_ref(),
+                &turn,
+                &context,
+            )
+            .await;
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1338,6 +1343,27 @@ async fn execute_runtime_agent_provider_dispatch(
             runner.run_turn_async(&mut ledger, turn, context).await
         }
     }
+}
+
+/// Applies auto-sizing with the main provider when no separate router provider
+/// was constructed for the turn.
+async fn runtime_apply_same_provider_auto_sizing_if_needed<P: AsyncModelProvider>(
+    provider: &P,
+    current_profile: ModelProfile,
+    has_separate_router_provider: bool,
+    auto_sizing: Option<&crate::runtime::RuntimeAutoSizingDispatch>,
+    turn: &AgentTurnRecord,
+    context: &AgentContext,
+) -> ModelProfile {
+    if has_separate_router_provider {
+        return current_profile;
+    }
+    let Some(auto_sizing) = auto_sizing else {
+        return current_profile;
+    };
+    let (selected_profile, _decision, _fallback) =
+        runtime_execute_auto_sizing_with_async_provider(provider, auto_sizing, turn, context).await;
+    selected_profile
 }
 
 /// Executes one model-backed conversation compaction request.
@@ -1370,5 +1396,157 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
         MezErrorKind::NotFound => "not_found",
         MezErrorKind::Forbidden => "forbidden",
         MezErrorKind::NotImplemented => "not_implemented",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{
+        AgentContext, AgentTurnRecord, AgentTurnState, AgentTurnTrigger, ContextBlock,
+        ContextSourceKind, ModelInteractionKind, ModelRequest, ModelResponse,
+    };
+    use crate::runtime::{
+        RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
+    };
+    use std::collections::BTreeMap;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+
+    /// Records async provider requests and returns a valid auto-sizing router
+    /// decision. This isolates same-provider routing from network transport so
+    /// the DeepSeek dispatch regression is covered without live provider I/O.
+    #[derive(Clone, Default)]
+    struct SameProviderAutoSizingProvider {
+        /// Provider requests observed by the test.
+        requests: Arc<Mutex<Vec<ModelRequest>>>,
+    }
+
+    impl AsyncModelProvider for SameProviderAutoSizingProvider {
+        /// Returns the test provider id used by the dispatch profile.
+        fn provider_id(&self) -> &str {
+            "deepseek"
+        }
+
+        /// Records the request and returns an internal router decision.
+        fn send_request_async<'a>(
+            &'a self,
+            request: &'a ModelRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                self.requests.lock().unwrap().push(request.clone());
+                Ok(ModelResponse {
+                    provider: self.provider_id().to_string(),
+                    model: request.model.clone(),
+                    raw_text: r#"{"version":1,"size":"large","reasoning_effort":"xhigh","confidence":0.91,"rationale":"deep review"}"#.to_string(),
+                    usage: Default::default(),
+                    quota_usage: Vec::new(),
+                    action_batch: None,
+                })
+            })
+        }
+    }
+
+    /// Builds one model profile for same-provider auto-sizing tests.
+    fn test_model_profile(model: &str, reasoning: Option<&str>) -> ModelProfile {
+        ModelProfile {
+            provider: "deepseek".to_string(),
+            model: model.to_string(),
+            reasoning_profile: reasoning.map(str::to_string),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: BTreeMap::new(),
+            safety_tier: None,
+        }
+    }
+
+    /// Builds one auto-sizing target profile for the synthetic dispatch.
+    fn test_auto_sizing_target(
+        size: &str,
+        profile_name: &str,
+        model: &str,
+    ) -> RuntimeAutoSizingTargetProfile {
+        RuntimeAutoSizingTargetProfile {
+            size: size.to_string(),
+            profile_name: profile_name.to_string(),
+            profile: test_model_profile(model, Some("high")),
+            supported_reasoning_efforts: vec!["high".to_string(), "xhigh".to_string()],
+        }
+    }
+
+    /// Builds the auto-sizing dispatch used by same-provider routing tests.
+    fn test_auto_sizing_dispatch() -> RuntimeAutoSizingDispatch {
+        RuntimeAutoSizingDispatch {
+            router_profile_name: "deepseek-fast".to_string(),
+            router_profile: test_model_profile("deepseek-v4-flash", Some("high")),
+            default_profile_name: "deepseek-default".to_string(),
+            default_profile: test_model_profile("deepseek-v4-pro", Some("high")),
+            small: test_auto_sizing_target("small", "deepseek-fast", "deepseek-v4-flash"),
+            medium: test_auto_sizing_target("medium", "deepseek-default", "deepseek-v4-pro"),
+            large: test_auto_sizing_target("large", "deepseek-default", "deepseek-v4-pro"),
+            turn_metadata: None,
+            allowed_reasoning_efforts: vec!["high".to_string(), "xhigh".to_string()],
+            fallback_policy: RuntimeAutoSizingFallbackPolicy::UseDefaultProfile,
+        }
+    }
+
+    /// Verifies that same-provider automatic sizing is not OpenAI-specific.
+    ///
+    /// The async dispatch path used to execute same-provider routing only for
+    /// the OpenAI branch. This regression covers the factored helper used by
+    /// both OpenAI and DeepSeek provider branches and proves a DeepSeek-shaped
+    /// provider receives the internal router request and applies the selected
+    /// canonical `xhigh` reasoning effort.
+    #[tokio::test]
+    async fn same_provider_auto_sizing_applies_to_deepseek_provider() {
+        let provider = SameProviderAutoSizingProvider::default();
+        let turn = AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "deepseek-default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+        };
+        let context = AgentContext {
+            blocks: vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "latest user prompt".to_string(),
+                content: "deeply inspect the codebase".to_string(),
+            }],
+        };
+        let selected = runtime_apply_same_provider_auto_sizing_if_needed(
+            &provider,
+            test_model_profile("deepseek-v4-pro", Some("high")),
+            false,
+            Some(&test_auto_sizing_dispatch()),
+            &turn,
+            &context,
+        )
+        .await;
+
+        assert_eq!(selected.provider, "deepseek");
+        assert_eq!(selected.model, "deepseek-v4-pro");
+        assert_eq!(selected.reasoning_profile.as_deref(), Some("xhigh"));
+        assert_eq!(
+            selected
+                .provider_options
+                .get("reasoning_effort")
+                .map(String::as_str),
+            Some("xhigh")
+        );
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].interaction_kind,
+            ModelInteractionKind::AutoSizing
+        );
+        assert_eq!(requests[0].provider, "deepseek");
+        assert!(requests[0].turn_id.ends_with(":auto-sizing"));
     }
 }

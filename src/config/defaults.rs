@@ -378,7 +378,7 @@ auto_sizing_router_model_profile = "deepseek-fast"
 auto_sizing_small_model_profile = "deepseek-fast"
 auto_sizing_medium_model_profile = "deepseek-default"
 auto_sizing_large_model_profile = "deepseek-default"
-allowed_reasoning_efforts = ["high", "max"]
+allowed_reasoning_efforts = ["high", "xhigh"]
 
 [permissions]
 approval_policy = "ask"
