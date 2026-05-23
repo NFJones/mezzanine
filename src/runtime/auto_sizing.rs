@@ -118,6 +118,9 @@ pub(crate) fn runtime_auto_sizing_reasoning_levels_for_profile(
         if provider_config.kind == "openai" {
             levels.extend(openai_default_reasoning_levels_for_model(&profile.model));
         }
+        if provider_config.kind == "deepseek" {
+            levels.extend(["high".to_string(), "max".to_string()]);
+        }
     }
     if let Some(reasoning) = profile.reasoning_profile.clone() {
         levels.push(reasoning);

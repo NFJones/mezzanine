@@ -5387,7 +5387,15 @@ fn runtime_configured_reasoning_levels_for_model(
     if provider_config.kind == "openai" {
         levels.extend(openai_default_reasoning_levels_for_model(model));
     }
+    if provider_config.kind == "deepseek" {
+        levels.extend(deepseek_default_reasoning_effort_levels());
+    }
     dedupe_runtime_strings(levels)
+}
+
+/// Returns the reasoning effort levels supported by DeepSeek providers.
+fn deepseek_default_reasoning_effort_levels() -> Vec<String> {
+    vec!["high".to_string(), "max".to_string()]
 }
 
 /// Formats the current secondary auto-sizing model profile.

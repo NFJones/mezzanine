@@ -2038,6 +2038,15 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
+    if let Some(reasoning_effort) = request
+        .reasoning_effort
+        .as_deref()
+        .filter(|effort| !effort.is_empty())
+    {
+        let deepseek_effort = deepseek_reasoning_effort(reasoning_effort);
+        body["reasoning_effort"] = serde_json::json!(deepseek_effort);
+        body["thinking"] = serde_json::json!({"type": "enabled"});
+    }
     if capabilities.supports_tool_calls {
         let tool_choice = if request.allowed_actions.actions.is_empty()
             || request.allowed_actions == AllowedActionSet::say_only()
@@ -2072,6 +2081,15 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
     })
 }
 
+/// Maps Mezzanine reasoning effort levels to DeepSeek-supported values.
+fn deepseek_reasoning_effort(effort: &str) -> &'static str {
+    match effort {
+        "low" | "medium" | "high" => "high",
+        "xhigh" | "max" => "max",
+        _ => "high",
+    }
+}
+
 /// Parses a DeepSeek Chat Completions non-streaming response body.
 fn parse_deepseek_chat_completions_response_body(
     body: &str,
@@ -2102,15 +2120,24 @@ fn parse_deepseek_chat_completions_response_body(
     let raw_text = message
         .get("content")
         .and_then(serde_json::Value::as_str)
-        .filter(|text| !text.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| {
+        .unwrap_or_default();
+    let reasoning_content = message
+        .get("reasoning_content")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    let raw_text = if raw_text.is_empty() {
+        reasoning_content.clone().unwrap_or_else(|| {
             if message.get("tool_calls").is_some() {
                 "executing".to_string()
             } else {
                 "(empty)".to_string()
             }
-        });
+        })
+    } else {
+        raw_text
+    };
     let action_batch = if let Some(parsed) = message
         .get("tool_calls")
         .and_then(|tool_calls| tool_calls.as_array())
