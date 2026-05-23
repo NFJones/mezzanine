@@ -61,6 +61,7 @@ use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc as StdArc, Mutex};
+use std::time::Instant;
 
 use crate::layout::Size;
 use crate::runtime::RuntimeEventConnectionTable;
@@ -527,6 +528,8 @@ struct InvalidatingIdleAsyncAttachedTerminalLoopIo {
     write_notify: StdArc<tokio::sync::Notify>,
     /// Number of times retained differential output state was discarded.
     invalidate_count: StdArc<AtomicUsize>,
+    /// Terminal size responses returned by foreground size polling.
+    terminal_size_batches: Vec<Option<Size>>,
 }
 
 impl InvalidatingIdleAsyncAttachedTerminalLoopIo {
@@ -541,7 +544,14 @@ impl InvalidatingIdleAsyncAttachedTerminalLoopIo {
             write_count,
             write_notify,
             invalidate_count,
+            terminal_size_batches: Vec::new(),
         }
+    }
+
+    /// Replaces the terminal size responses returned by foreground polling.
+    fn with_terminal_size_batches(mut self, terminal_size_batches: Vec<Option<Size>>) -> Self {
+        self.terminal_size_batches = terminal_size_batches;
+        self
     }
 }
 
@@ -590,6 +600,16 @@ impl AsyncAttachedTerminalIo for InvalidatingIdleAsyncAttachedTerminalLoopIo {
         Box::pin(async move {
             self.invalidate_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        })
+    }
+
+    /// Returns the next configured terminal size response for resize polling.
+    fn terminal_size<'a>(&'a mut self) -> super::AsyncTerminalIoFuture<'a, Option<Size>> {
+        Box::pin(async move {
+            if self.terminal_size_batches.is_empty() {
+                return Ok(None);
+            }
+            Ok(self.terminal_size_batches.remove(0))
         })
     }
 }
@@ -11651,6 +11671,89 @@ async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations
 
     let ((), exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 7);
+}
+
+/// Verifies that the foreground attached-terminal service polls terminal
+/// dimensions while otherwise idle.
+///
+/// Some hosting terminals can change cell dimensions without producing an
+/// input or runtime event that wakes the render service. The idle resize poll
+/// should notice that size change, invalidate retained diff state, and repaint
+/// exactly once instead of waiting for user interaction.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_service_polls_terminal_size_while_idle() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+    let invalidate_count = StdArc::new(AtomicUsize::new(0));
+
+    let client = async {
+        let service_handle = handle.clone();
+        let service_primary = primary.clone();
+        let service_write_count = write_count.clone();
+        let service_write_notify = write_notify.clone();
+        let service_invalidate_count = invalidate_count.clone();
+        let service_task = tokio::spawn(async move {
+            let mut io = InvalidatingIdleAsyncAttachedTerminalLoopIo::new(
+                service_write_count,
+                service_write_notify,
+                service_invalidate_count,
+            )
+            .with_terminal_size_batches(vec![None, Some(Size::new(100, 30).unwrap())]);
+            run_async_attached_terminal_client_service(
+                &service_handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Primary,
+                    client_id: service_primary.clone(),
+                    primary_client_id: Some(service_primary),
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
+                },
+                AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+                |_| Ok(None),
+            )
+            .await
+        });
+
+        write_notify.notified().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while write_count.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(write_count.load(Ordering::SeqCst), 2);
+        assert_eq!(invalidate_count.load(Ordering::SeqCst), 1);
+
+        let report = tokio::time::timeout(Duration::from_millis(1), service_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.terminal_resizes, 1);
+        assert_eq!(report.loop_report.output_frames, 2);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 5);
+    assert_eq!(
+        exit.service.session().authoritative_size,
+        Size::new(100, 30).unwrap()
+    );
 }
 
 /// Verifies that resize render invalidations interrupt an already pending

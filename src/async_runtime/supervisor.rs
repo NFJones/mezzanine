@@ -27,7 +27,8 @@ pub const DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 pub const DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION: usize = 100;
 /// Default delay for actor-owned idle cleanup work that replaced tick scans.
 pub const DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL: Duration = Duration::from_millis(16);
-/// Maximum time an attached foreground terminal waits for input before repainting.
+/// Maximum time an attached foreground terminal waits before checking whether
+/// the hosting terminal dimensions changed.
 pub const DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Defines the Async Runtime Service Future type used by this subsystem.

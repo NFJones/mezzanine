@@ -10,8 +10,8 @@ use super::{
     AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPaneIoMode, AsyncRuntimeService,
     AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
     AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, ClientStatusLine, MezError, MouseAction, Result,
-    RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
+    AttachedTerminalFdRole, ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    MezError, MouseAction, Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
     RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, TerminalClientLoopAction,
     empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
@@ -204,12 +204,17 @@ where
         )
         .await?;
         render_requested = false;
-        let AttachedTerminalBatchWake::Readiness {
-            mut readiness,
-            invalidate_output_frame,
-        } = wake
-        else {
-            continue;
+        let size_check_only = matches!(
+            wake,
+            AttachedTerminalBatchWake::TerminalSizeCheck | AttachedTerminalBatchWake::StateChanged
+        );
+        let (mut readiness, invalidate_output_frame) = match wake {
+            AttachedTerminalBatchWake::Readiness {
+                readiness,
+                invalidate_output_frame,
+            } => (readiness, invalidate_output_frame),
+            AttachedTerminalBatchWake::TerminalSizeCheck
+            | AttachedTerminalBatchWake::StateChanged => (Vec::new(), false),
         };
         if invalidate_output_frame {
             io.invalidate_output_frame().await?;
@@ -229,6 +234,9 @@ where
             }
             report.terminal_resizes = report.terminal_resizes.saturating_add(1);
             resized_this_batch = true;
+        }
+        if size_check_only && !resized_this_batch {
+            continue;
         }
         if resized_this_batch {
             if !invalidate_output_frame {
@@ -441,6 +449,12 @@ enum AttachedTerminalBatchWake {
         /// Whether retained differential output must be discarded first.
         invalidate_output_frame: bool,
     },
+    /// Wake only to compare the attached terminal's current dimensions.
+    ///
+    /// This lets foreground clients notice terminal-emulator resize or zoom
+    /// changes that do not arrive as input/runtime events without turning idle
+    /// waits into repeated redraws.
+    TerminalSizeCheck,
     /// Represents the State Changed case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -524,6 +538,9 @@ where
                         });
                     }
                 }
+                _ = sleep(DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT) => {
+                    return Ok(AttachedTerminalBatchWake::TerminalSizeCheck);
+                }
             }
             continue;
         }
@@ -570,6 +587,9 @@ where
             result = lifecycle_watcher.changed() => {
                 let _ = result;
                 return Ok(AttachedTerminalBatchWake::StateChanged);
+            }
+            _ = sleep(DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT) => {
+                return Ok(AttachedTerminalBatchWake::TerminalSizeCheck);
             }
         }
     }
