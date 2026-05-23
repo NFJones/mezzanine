@@ -25,6 +25,14 @@ const ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
 
 /// Maximum bytes read from the auxiliary event stream in one socket read.
 const ATTACH_EVENT_STREAM_READ_BUFFER_BYTES: usize = 8192;
+/// Interval between idle terminal-size probes for attached control clients.
+///
+/// The attach loop should notice local terminal resizes even when the user is
+/// not typing and the daemon has no new runtime events to report. Probing a
+/// few times per second keeps resize-driven redraws responsive without
+/// requiring a fixed-cadence render request.
+const ATTACH_IDLE_TERMINAL_SIZE_REFRESH_INTERVAL: std::time::Duration =
+    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT;
 
 /// Redraw requirements reported by one terminal step response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +89,30 @@ impl AttachAnimationRefresh {
         self.deadline = Some(
             tokio::time::Instant::now() + std::time::Duration::from_millis(refresh_interval_ms),
         );
+    }
+}
+/// Tracks the next local wake deadline for idle terminal-size refresh probes.
+#[derive(Debug)]
+struct AttachTerminalSizeRefresh {
+    /// Next local wake deadline for an idle terminal-size probe.
+    deadline: tokio::time::Instant,
+}
+impl Default for AttachTerminalSizeRefresh {
+    /// Builds the default size-refresh schedule for an attached client loop.
+    fn default() -> Self {
+        Self {
+            deadline: tokio::time::Instant::now() + ATTACH_IDLE_TERMINAL_SIZE_REFRESH_INTERVAL,
+        }
+    }
+}
+impl AttachTerminalSizeRefresh {
+    /// Returns the next idle terminal-size refresh deadline.
+    fn deadline(&self) -> tokio::time::Instant {
+        self.deadline
+    }
+    /// Reschedules the next idle terminal-size refresh from the current time.
+    fn reschedule(&mut self) {
+        self.deadline = tokio::time::Instant::now() + ATTACH_IDLE_TERMINAL_SIZE_REFRESH_INTERVAL;
     }
 }
 
@@ -377,14 +409,21 @@ where
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
     let mut render_requested = true;
+    let mut size_refresh = AttachTerminalSizeRefresh::default();
 
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
             render_requested = true;
         }
-
-        let input = read_attached_client_input_or_timeout(terminal_io, 4096).await?;
+        let input = read_attached_client_input_or_deadline(
+            terminal_io,
+            4096,
+            None,
+            size_refresh.deadline(),
+        )
+        .await?;
+        size_refresh.reschedule();
         if input.eof {
             break Ok(());
         }
@@ -473,6 +512,7 @@ where
     let mut render_requested = true;
     let mut event_stream = event_stream.map(AttachedRuntimeEventStream::new);
     let mut animation_refresh = AttachAnimationRefresh::default();
+    let mut size_refresh = AttachTerminalSizeRefresh::default();
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
@@ -483,8 +523,10 @@ where
             event_stream.as_mut(),
             4096,
             animation_refresh.deadline(),
+            size_refresh.deadline(),
         )
         .await?;
+        size_refresh.reschedule();
         if input.eof {
             break Ok(());
         }
@@ -617,12 +659,20 @@ where
     let mut iteration = 0u64;
     let cursor_blink_epoch = std::time::Instant::now();
     let mut approved = false;
+    let mut size_refresh = AttachTerminalSizeRefresh::default();
 
     loop {
         if refresh_attached_client_size_async(terminal_io, &mut client_size).await? {
             terminal_io.invalidate_output_frame().await?;
         }
-        let input = read_attached_client_input_or_timeout(terminal_io, 4096).await?;
+        let input = read_attached_client_input_or_deadline(
+            terminal_io,
+            4096,
+            None,
+            size_refresh.deadline(),
+        )
+        .await?;
+        size_refresh.reschedule();
         if input.eof {
             break Ok(());
         }
@@ -756,21 +806,18 @@ impl AttachRenderAction {
     }
 }
 
-/// Runs the read attached client input or timeout operation for this subsystem.
+/// Runs the read attached client input or deadline wake operation.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-async fn read_attached_client_input_or_timeout<I: AsyncAttachedTerminalIo>(
+async fn read_attached_client_input_or_deadline<I: AsyncAttachedTerminalIo>(
     terminal_io: &mut I,
     max_bytes: usize,
+    animation_deadline: Option<tokio::time::Instant>,
+    wake_deadline: tokio::time::Instant,
 ) -> Result<AttachedClientInputPoll> {
-    match tokio::time::timeout(
-        DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
-        terminal_io.read_input(max_bytes),
-    )
-    .await
-    {
+    match tokio::time::timeout_at(wake_deadline, terminal_io.read_input(max_bytes)).await {
         Ok(Ok(bytes)) if bytes.is_empty() => Ok(AttachedClientInputPoll {
             bytes,
             eof: true,
@@ -782,11 +829,21 @@ async fn read_attached_client_input_or_timeout<I: AsyncAttachedTerminalIo>(
             render_action: AttachRenderAction::None,
         }),
         Ok(Err(error)) => Err(error),
-        Err(_) => Ok(AttachedClientInputPoll {
+        Err(_) => Ok(idle_deadline_input_poll(animation_deadline)),
+    }
+}
+/// Builds the synthetic input poll produced by an idle local deadline wakeup.
+fn idle_deadline_input_poll(
+    animation_deadline: Option<tokio::time::Instant>,
+) -> AttachedClientInputPoll {
+    if animation_deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now()) {
+        animation_refresh_input_poll()
+    } else {
+        AttachedClientInputPoll {
             bytes: Vec::new(),
             eof: false,
             render_action: AttachRenderAction::None,
-        }),
+        }
     }
 }
 /// Reads terminal input while also accepting runtime event redraw wakeups.
@@ -800,20 +857,21 @@ async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>
     event_stream: Option<&mut AttachedRuntimeEventStream>,
     max_bytes: usize,
     animation_deadline: Option<tokio::time::Instant>,
+    size_refresh_deadline: tokio::time::Instant,
 ) -> Result<AttachedClientInputPoll> {
-    let animation_wakeup = async {
-        match animation_deadline {
-            Some(deadline) => tokio::time::sleep_until(deadline).await,
-            None => std::future::pending::<()>().await,
-        }
-    };
-    tokio::pin!(animation_wakeup);
-    let input = read_attached_client_input_or_timeout(terminal_io, max_bytes);
+    let wake_deadline = animation_deadline
+        .filter(|deadline| *deadline <= size_refresh_deadline)
+        .unwrap_or(size_refresh_deadline);
+    let input = read_attached_client_input_or_deadline(
+        terminal_io,
+        max_bytes,
+        animation_deadline,
+        wake_deadline,
+    );
     tokio::pin!(input);
     let Some(event_stream) = event_stream else {
         return tokio::select! {
             result = &mut input => result,
-            _ = &mut animation_wakeup => Ok(animation_refresh_input_poll()),
         };
     };
     tokio::select! {
@@ -826,7 +884,6 @@ async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>
                 render_action,
             })
         }
-        _ = &mut animation_wakeup => Ok(animation_refresh_input_poll()),
     }
 }
 

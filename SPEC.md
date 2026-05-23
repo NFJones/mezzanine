@@ -1059,6 +1059,10 @@ clients MUST NOT clear and redraw the entire viewport on every stable-size
 frame. They SHOULD update stable-size frames with row or cell diffs. A full clear
 or full redraw remains valid after attach, detach, terminal resize,
 frame-size change, or another invalidation that makes differential output unsafe.
+While otherwise idle, attached foreground clients SHOULD continue polling the
+local terminal size often enough to notice host-terminal resizes without
+waiting for user input or daemon-side runtime events. They SHOULD trigger a
+fresh client-local redraw only when that measured size actually changes.
 After terminal or pane resize activity, attached clients SHOULD wait for the
 configured `terminal.resize_debounce_ms` period before forcing one full-surface
 redraw; the built-in default debounce MUST be `200` milliseconds.

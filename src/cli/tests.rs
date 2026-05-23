@@ -3010,6 +3010,109 @@ async fn control_socket_primary_attach_loop_refreshes_active_animation_without_r
     assert_eq!(io.written_frames[0].lines, vec!["thinking phase one"]);
     assert_eq!(io.written_frames[1].lines, vec!["thinking phase two"]);
 }
+/// Verifies an idle primary control attach notices local terminal resizes and
+/// requests a fresh view without waiting for user input or daemon events.
+///
+/// Terminal resizes are a local presentation concern, so the foreground attach
+/// client should poll terminal size on its own and only invalidate/redraw when
+/// the measured size actually changes.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_refreshes_idle_resize_without_input() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    server_stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let _event_server_stream = event_server_stream;
+        for (expected_id, expected_columns, expected_rows, response_lines) in [
+            ("cli-terminal-view-0", 80, 24, "initial"),
+            ("cli-terminal-view-1", 100, 30, "resized"),
+        ] {
+            let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+            let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                parsed.get("method").and_then(serde_json::Value::as_str),
+                Some("terminal/view")
+            );
+            assert_eq!(
+                parsed.get("id").and_then(serde_json::Value::as_str),
+                Some(expected_id)
+            );
+            assert_eq!(
+                parsed
+                    .get("params")
+                    .and_then(|params| params.get("client_size"))
+                    .and_then(|size| size.get("columns"))
+                    .and_then(serde_json::Value::as_u64),
+                Some(expected_columns)
+            );
+            assert_eq!(
+                parsed
+                    .get("params")
+                    .and_then(|params| params.get("client_size"))
+                    .and_then(|size| size.get("rows"))
+                    .and_then(serde_json::Value::as_u64),
+                Some(expected_rows)
+            );
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": expected_id,
+                "result": {
+                    "view": {
+                        "lines": [response_lines],
+                        "line_style_spans": [[]],
+                        "cursor": {
+                            "row": 0,
+                            "column": 7,
+                            "visible": true,
+                            "style": "bar",
+                            "blink": false,
+                        },
+                        "output_modes": {
+                            "application_keypad": false,
+                        },
+                    },
+                },
+            })
+            .to_string();
+            server_stream
+                .write_all(&encode_control_body(&response))
+                .unwrap();
+            server_stream.flush().unwrap();
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_terminal_size(Some(Size::new(80, 24).unwrap()));
+    io.push_terminal_size(Some(Size::new(100, 30).unwrap()));
+    io.push_pending_input_read();
+    io.push_pending_input_read();
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 1);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+    assert_eq!(io.written_frames[1].lines, vec!["resized"]);
+}
 
 /// Verifies that generic runtime events do not redraw the attached terminal.
 ///
