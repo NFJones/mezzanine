@@ -6584,7 +6584,21 @@ impl RuntimeSessionService {
                     auto_sizing.router_profile.provider, router_provider_config.kind
                 ))),
             };
-            Some(result?)
+            match result {
+                Ok(provider) => Some(provider),
+                Err(error) => {
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "auto_sizing router provider unavailable error_kind={} error={}",
+                            runtime_mezzanine_error_code(error.kind()),
+                            error.message()
+                        ),
+                    )?;
+                    None
+                }
+            }
         } else {
             None
         };
