@@ -395,7 +395,7 @@ Default `providers.openai.models`:
 | `model_profiles.<name>.model` | string | required for custom profiles | Provider model id. |
 | `model_profiles.<name>.reasoning_profile` | string | profile-specific | Human-level reasoning profile. |
 | `model_profiles.<name>.reasoning_effort` | string | omitted | Compatibility scalar for reasoning effort. |
-| `model_profiles.<name>.latency_preference` | string | profile-specific | Latency/cost routing preference: `slow`, `default`, or `fast`. `slow` maps to provider cost-saving tier, `fast` maps to premium priority tier. |
+| `model_profiles.<name>.latency_preference` | string | profile-specific | Latency/cost routing preference: `slow`, `default`, or `fast`. `slow` and `default` both use the standard tier; `fast` uses the premium priority tier. When omitted the API auto-selects. |
 | `model_profiles.<name>.multimodal_required` | boolean | profile-specific | Require multimodal model capability. |
 | `model_profiles.<name>.multimodal` | boolean | omitted | Compatibility multimodal capability flag. |
 | `model_profiles.<name>.context_window_tokens` | integer | profile-specific | Display and compaction context denominator. |
