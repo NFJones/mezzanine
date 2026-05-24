@@ -298,6 +298,7 @@ fn runtime_complete_batch_for(
     crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: turn_id.into(),
         agent_id: agent_id.into(),
         actions: vec![crate::agent::AgentAction {
@@ -365,6 +366,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -436,6 +438,7 @@ fn runtime_provider_completion_accepts_terminal_capability_failure_state() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -499,6 +502,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -605,6 +609,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: Vec::new(),
@@ -827,6 +832,7 @@ fn runtime_capability_response(
         action_batch: Some(crate::agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: request.turn_id.clone(),
             agent_id: request.agent_id.clone(),
             actions: vec![crate::agent::AgentAction {
@@ -916,6 +922,7 @@ fn runtime_say_response_for_agent(
         action_batch: Some(crate::agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn_id.to_string(),
             agent_id: agent_id.to_string(),
             actions: vec![crate::agent::AgentAction {
@@ -2485,6 +2492,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -2644,6 +2652,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -3126,6 +3135,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "set every terminal theme color".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions,
@@ -3232,6 +3242,7 @@ fn runtime_config_change_resumes_after_full_access_change() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "change the requested live configuration".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -11890,6 +11901,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -12443,6 +12455,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -12630,6 +12643,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -12868,6 +12882,7 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -13385,6 +13400,7 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "the task is complete".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -13456,6 +13472,7 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: format!("thinking: {visible}"),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -13540,6 +13557,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "check shell access".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -13678,6 +13696,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
+                    thought: None,
                     turn_id: "turn-1".to_string(),
                     agent_id: "agent-%1".to_string(),
                     actions: vec![action.clone()],
@@ -13864,6 +13883,7 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -13951,6 +13971,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14039,6 +14060,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14126,6 +14148,7 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14224,6 +14247,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14456,6 +14480,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14589,6 +14614,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
+                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![crate::agent::AgentAction {
@@ -14724,6 +14750,7 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14819,6 +14846,7 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -14906,6 +14934,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -15030,6 +15059,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -15146,6 +15176,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -15266,6 +15297,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -15595,6 +15627,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
+                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action.clone()],
@@ -18682,6 +18715,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "load skill authoring context".to_string(),
+                thought: None,
                 turn_id: started.turn_id.clone(),
                 agent_id: started.agent_id.clone(),
                 actions: vec![crate::agent::AgentAction {
@@ -18778,6 +18812,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "check available skill workflows".to_string(),
+                thought: None,
                 turn_id: started.turn_id.clone(),
                 agent_id: started.agent_id.clone(),
                 actions: vec![crate::agent::AgentAction {
@@ -20116,6 +20151,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "record the first sequence point".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -20238,6 +20274,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "record the owner".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -20275,6 +20312,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: duplicate_progress.to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -20329,6 +20367,101 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
         executions[0].action_results
     );
     service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies batch thoughts are durable context notes, not normal-mode pane
+/// chatter.
+///
+/// A model can emit a longer `thought` when that note should help future turns,
+/// but normal users should not see that long-form internal context in routine
+/// logs. Verbose-or-higher logs still render it as `thinking:` text for
+/// diagnostics.
+#[test]
+fn runtime_batch_thought_is_hidden_until_verbose_logging() {
+    fn pane_text_after_thought_response(level: AgentLogLevel) -> String {
+        let mut service = test_runtime_service();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(80, 10).unwrap(), 30).unwrap();
+        screen.feed(b"ready\n");
+        service.pane_screens.insert("%1".to_string(), screen);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .set_log_level("%1", level)
+            .unwrap();
+        let start = service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-thought-display","input":"respond with durable context"}}"#,
+            &primary,
+        );
+        assert!(start.contains(r#""state":"running""#), "{start}");
+        let provider = RuntimeBatchProvider {
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "done".to_string(),
+                usage: Default::default(),
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "respond with the final message".to_string(),
+                    thought: Some(
+                        "The durable note should only be visible in verbose logs.".to_string(),
+                    ),
+                    turn_id: "turn-1".to_string(),
+                    agent_id: "agent-%1".to_string(),
+                    actions: vec![crate::agent::AgentAction {
+                        id: "say-final".to_string(),
+                        rationale: String::new(),
+                        payload: crate::agent::AgentActionPayload::Say {
+                            status: crate::agent::SayStatus::Final,
+                            text: "Done.".to_string(),
+                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                                .to_string(),
+                        },
+                    }],
+                    final_turn: true,
+                }),
+            },
+        };
+        service
+            .execute_agent_turn_with_provider(
+                "turn-1",
+                &provider,
+                runtime_model_profile("runtime-batch", "test"),
+            )
+            .unwrap();
+        let pane_text = service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        service.pane_processes_mut().terminate_all().unwrap();
+        pane_text
+    }
+
+    let normal_text = pane_text_after_thought_response(AgentLogLevel::Normal);
+    assert!(
+        normal_text.contains("thinking: respond with the final message"),
+        "{normal_text}"
+    );
+    assert!(!normal_text.contains("durable note"), "{normal_text}");
+    assert!(normal_text.contains("Done."), "{normal_text}");
+
+    let verbose_text = pane_text_after_thought_response(AgentLogLevel::Verbose);
+    assert!(
+        verbose_text.contains("thinking: respond with the final message"),
+        "{verbose_text}"
+    );
+    assert!(
+        verbose_text.contains("thinking: The durable note should only be visible"),
+        "{verbose_text}"
+    );
+    assert!(verbose_text.contains("Done."), "{verbose_text}");
 }
 
 /// Verifies runtime treats a same-pane prompt submitted mid-turn as steering.
@@ -20591,6 +20724,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
+                    thought: None,
                     turn_id: parent.turn_id.clone(),
                     agent_id: parent.agent_id.clone(),
                     actions: vec![spawn_one.clone(), spawn_two.clone()],
@@ -20750,6 +20884,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
+                    thought: None,
                     turn_id: parent.turn_id.clone(),
                     agent_id: parent.agent_id.clone(),
                     actions: vec![spawn.clone()],
@@ -21064,6 +21199,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -21193,6 +21329,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -21300,6 +21437,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -21398,6 +21536,7 @@ fn execute_runtime_send_message_action(
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -21616,6 +21755,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -21713,6 +21853,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
@@ -21897,6 +22038,7 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -21998,6 +22140,7 @@ fn dispatch_protocol_test_shell_action(
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -22074,6 +22217,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -22285,6 +22429,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -22398,6 +22543,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -22578,6 +22724,7 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -22676,6 +22823,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -22785,6 +22933,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -22905,6 +23054,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -23015,6 +23165,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -23170,6 +23321,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -23363,6 +23515,7 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
+                    thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action],
@@ -23499,6 +23652,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -23609,6 +23763,7 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -23766,6 +23921,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![success_action.clone(), failed_action.clone()],
@@ -23936,6 +24092,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![first_action, second_action],
@@ -24000,6 +24157,7 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
@@ -24107,6 +24265,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![action],
@@ -24238,6 +24397,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![patch_action, read_action],
@@ -24331,6 +24491,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],

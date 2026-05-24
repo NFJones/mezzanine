@@ -7810,6 +7810,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
     let batch = crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![write_action, read_action],
@@ -7952,6 +7953,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
     let response_batch = crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -8116,6 +8118,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
     let response_batch = crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -8808,6 +8811,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
     let response_batch = crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -9056,6 +9060,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         let batch = crate::agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             actions: vec![action.clone()],
@@ -9195,6 +9200,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         let second_batch = crate::agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: next_task.turn_id.clone(),
             agent_id: next_task.agent_id.clone(),
             actions: vec![second_action.clone()],
@@ -9356,6 +9362,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
     let response_batch = crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
@@ -9522,6 +9529,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
     let response_batch = crate::agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         actions: vec![batch_action],

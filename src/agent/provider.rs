@@ -3640,6 +3640,10 @@ fn maap_action_batch_schema(
                 "minLength": 1,
                 "description": "Very terse model-authored rationale for this complete action batch. Mezzanine renders this once as a thinking log before the listed actions and persists it as future context. Write it as an additive delta: only the new reason these actions are next, not a restatement of the user request, global goal, previous rationale, prior say, loaded context, or action summaries. Compare against recent thinking lines, action results, the current-turn progress say ledger when present, and any progress say in the same response; if there is no new user-visible update, keep the rationale minimal and do not add a progress say. If progress say records durable learning, this rationale should only name the next executable reason. Omit optional action rationales that duplicate this batch rationale, progress say, or the action summary. Progress say is for sequence-point updates: include it when a non-trivial task reaches a meaningful boundary such as changed diagnosis, chosen implementation strategy, phase transition, blocker state, validation outcome, or user-requested narration. A sequence point is consumed once stated; do not add progress say when it would restate a previous owner, diagnosis, direction, phase, blocker, or validation result. Do not rewrite the same progress update with different verbs; if the prior update already named the subject, write only the changed fact or omit progress."
             },
+            "thought": {
+                "type": ["string", "null"],
+                "description": "Optional longer durable work note for future model context. Set null unless a substantive learning, decision, invariant, or recovery detail would help a later continuation. It is persisted as thinking context and may appear in verbose-or-higher logs, but it is not shown in normal-mode pane logs. Do not duplicate rationale, progress say, action summaries, or recent thinking lines; do not include secrets, hidden policy, or private chain-of-thought."
+            },
             "actions": {
                 "type": "array",
                 "minItems": 1,
@@ -3647,7 +3651,7 @@ fn maap_action_batch_schema(
                 "items": maap_action_schema(allowed_actions, available_mcp_tools)
             }
         },
-        "required": ["rationale", "actions"],
+        "required": ["rationale", "thought", "actions"],
         "additionalProperties": false
     })
 }

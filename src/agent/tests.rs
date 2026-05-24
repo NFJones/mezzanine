@@ -3528,6 +3528,10 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: Some(
+                    "The patch summary belongs in future model context.\nDo not show this in normal logs."
+                        .to_string(),
+                ),
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
@@ -3557,6 +3561,20 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
         assistant
             .content
             .contains("thinking: test action batch rationale"),
+        "{}",
+        assistant.content
+    );
+    assert!(
+        assistant
+            .content
+            .contains("thinking: The patch summary belongs in future model context."),
+        "{}",
+        assistant.content
+    );
+    assert!(
+        assistant
+            .content
+            .contains("thinking: Do not show this in normal logs."),
         "{}",
         assistant.content
     );
@@ -3617,6 +3635,7 @@ fn turn_execution_transcript_preserves_visible_say_text() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", &visible_text)],
@@ -3823,6 +3842,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("text/plain, text/markdown, or text/x-diff"));
     assert!(prompt.contains("Keep say actions and MAAP batch rationales terse but informative"));
     assert!(prompt.contains("Treat batch rationales as thinking-line deltas"));
+    assert!(prompt.contains("optional top-level thought field"));
+    assert!(prompt.contains("durable work note"));
+    assert!(prompt.contains("may appear only in verbose-or-higher thinking logs"));
     assert!(prompt.contains("add only the new reason for the next action batch"));
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
     assert!(prompt.contains("prior say"));
@@ -3839,7 +3861,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Use one channel per idea"));
     assert!(prompt.contains("if progress say records durable learning"));
     assert!(prompt.contains("rationale should only name the next executable reason"));
-    assert!(prompt.contains("progress say must not restate it"));
+    assert!(prompt.contains("progress say should not repeat it"));
     assert!(prompt.contains("Prefer a short clause"));
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
@@ -4047,6 +4069,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("not that your attempted edit landed"));
     assert!(prompt.contains("preserve unrelated user worktree changes"));
     assert!(prompt.contains("say: user-facing text, progress/final/blocked status"));
+    assert!(prompt.contains("Add the optional top-level thought field only"));
     assert!(prompt.contains("text/plain, text/markdown, or text/x-diff"));
     assert!(prompt.contains("Do not put shell commands or Mezzanine patch blocks in say"));
     assert!(prompt.contains("Text inside say is display-only"));
@@ -4182,7 +4205,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Use one channel per idea"));
     assert!(prompt.contains("if progress say records durable learning"));
     assert!(prompt.contains("rationale should only name the next executable reason"));
-    assert!(prompt.contains("progress say must not restate it"));
+    assert!(prompt.contains("progress say should not repeat it"));
     assert!(prompt.contains("Prefer a short clause"));
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
@@ -4423,6 +4446,7 @@ fn maap_batch_rejects_duplicate_action_ids() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![shell_action("a1"), shell_action("a1")],
@@ -4443,6 +4467,7 @@ fn maap_batch_rejects_empty_batch_rationale() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "   ".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![shell_action("a1")],
@@ -4468,6 +4493,7 @@ fn maap_batch_rejects_empty_shell_command_summary() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![action],
@@ -4498,6 +4524,7 @@ fn maap_batch_rejects_zero_shell_command_timeout() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![action],
@@ -4530,6 +4557,7 @@ fn maap_batch_rejects_shell_command_heredoc_payloads() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![action],
@@ -4841,6 +4869,7 @@ fn maap_parser_fills_compact_provider_defaults() {
 
     assert_eq!(batch.protocol, "maap/1");
     assert_eq!(batch.rationale, "test action batch rationale");
+    assert_eq!(batch.thought, None);
     assert_eq!(batch.turn_id, "turn-1");
     assert_eq!(batch.agent_id, "agent-1");
     assert!(!batch.final_turn);
@@ -4859,6 +4888,32 @@ fn maap_parser_fills_compact_provider_defaults() {
         }
         payload => panic!("unexpected payload: {payload:?}"),
     }
+    batch.validate(&turn(), &[], &[]).unwrap();
+}
+
+/// Verifies compact provider-native MAAP output can carry an optional durable
+/// thought field without making it part of the required compact envelope.
+#[test]
+fn maap_parser_accepts_optional_batch_thought() {
+    let raw_text = serde_json::json!({
+        "rationale": "test action batch rationale",
+        "thought": "  The display path is separate from durable context.  \nUse verbose logs only.",
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "text": "done"
+            }
+        ]
+    })
+    .to_string();
+
+    let batch = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap();
+
+    assert_eq!(
+        batch.thought.as_deref(),
+        Some("The display path is separate from durable context.  \nUse verbose logs only.")
+    );
     batch.validate(&turn(), &[], &[]).unwrap();
 }
 
@@ -4917,6 +4972,7 @@ fn maap_batch_accepts_nonfinal_say_only_actions() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![AgentAction {
@@ -4984,6 +5040,7 @@ fn maap_batch_rejects_unavailable_mcp_server() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![AgentAction {
@@ -5012,6 +5069,7 @@ fn maap_batch_rejects_unavailable_mcp_tool() {
     let batch = MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
+        thought: None,
         turn_id: "turn-1".to_string(),
         agent_id: "agent-1".to_string(),
         actions: vec![AgentAction {
@@ -7688,6 +7746,7 @@ impl ModelProvider for CapabilityBatchProvider {
                 action_batch: Some(MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
+                    thought: None,
                     turn_id: request.turn_id.clone(),
                     agent_id: request.agent_id.clone(),
                     actions: vec![capability_action("capability-1", self.capability)],
@@ -8324,6 +8383,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -8408,6 +8468,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -8428,6 +8489,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-1")],
@@ -8529,6 +8591,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -8544,6 +8607,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "finish after capability grant".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "done")],
@@ -8639,6 +8703,7 @@ fn turn_runner_capability_limit_execution_matches_terminal_batch() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -8725,6 +8790,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![abort_action("abort-1", "need more repository context")],
@@ -8740,6 +8806,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -8755,6 +8822,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],
@@ -8847,6 +8915,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -8863,6 +8932,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -8944,6 +9014,7 @@ fn turn_runner_accepts_say_with_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -8962,6 +9033,7 @@ fn turn_runner_accepts_say_with_capability_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-1")],
@@ -9041,6 +9113,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![
@@ -9060,6 +9133,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-2", "Ready to proceed.")],
@@ -9147,6 +9221,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -9255,6 +9330,7 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
@@ -9334,6 +9410,7 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
@@ -9413,6 +9490,7 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
@@ -9480,6 +9558,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action(
@@ -9498,6 +9577,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "hello")],
@@ -9681,9 +9761,10 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         capability_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "actions"])
+        serde_json::json!(["rationale", "thought", "actions"])
     );
     assert!(schema_properties.contains_key("rationale"));
+    assert!(schema_properties.contains_key("thought"));
     assert!(!schema_properties.contains_key("protocol"));
     assert!(!schema_properties.contains_key("turn_id"));
     assert!(!schema_properties.contains_key("agent_id"));
@@ -9691,6 +9772,10 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(
         capability_tool["parameters"]["properties"]["rationale"]["minLength"],
         1
+    );
+    assert_eq!(
+        capability_tool["parameters"]["properties"]["thought"]["type"],
+        serde_json::json!(["string", "null"])
     );
     let rationale_description =
         capability_tool["parameters"]["properties"]["rationale"]["description"]
@@ -9706,6 +9791,33 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(
         rationale_description.contains("persists it as future context"),
         "{rationale_description}"
+    );
+    let thought_description = capability_tool["parameters"]["properties"]["thought"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        thought_description.contains("Optional longer durable work note"),
+        "{thought_description}"
+    );
+    assert!(
+        thought_description.contains("Set null unless"),
+        "{thought_description}"
+    );
+    assert!(
+        thought_description.contains("future model context"),
+        "{thought_description}"
+    );
+    assert!(
+        thought_description.contains("verbose-or-higher logs"),
+        "{thought_description}"
+    );
+    assert!(
+        thought_description.contains("not shown in normal-mode"),
+        "{thought_description}"
+    );
+    assert!(
+        thought_description.contains("Do not duplicate rationale"),
+        "{thought_description}"
     );
     assert!(
         rationale_description.contains("Compare against recent thinking lines, action results"),
@@ -10874,7 +10986,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert_eq!(value["tool_choice"]["name"], "submit_maap_shell_actions");
     assert_eq!(
         shell_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "actions"])
+        serde_json::json!(["rationale", "thought", "actions"])
     );
     assert_eq!(
         shell_tool["parameters"]["properties"]["rationale"]["minLength"],
@@ -13113,6 +13225,7 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13194,6 +13307,7 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13278,6 +13392,7 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "change the requested live setting".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![config_change_action("config-1")],
@@ -13357,6 +13472,7 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13439,6 +13555,7 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13523,6 +13640,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13611,6 +13729,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13698,6 +13817,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13788,6 +13908,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13873,6 +13994,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -13968,6 +14090,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
@@ -13983,6 +14106,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![AgentAction {
@@ -14006,6 +14130,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "I cannot access that MCP server.")],
@@ -14121,6 +14246,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
@@ -14144,6 +14270,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![heredoc_action],
@@ -14159,6 +14286,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "I will use a file action instead.")],
@@ -14255,6 +14383,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected.")],
@@ -14341,6 +14470,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
@@ -14356,6 +14486,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![AgentAction {
@@ -14379,6 +14510,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
+            thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected asynchronously.")],
@@ -14521,6 +14653,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![mcp_action("mcp-1")],
@@ -14605,6 +14738,7 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -14678,6 +14812,7 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -14763,6 +14898,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -14853,6 +14989,7 @@ fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -14958,6 +15095,7 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![AgentAction {
@@ -15040,6 +15178,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
@@ -15119,6 +15258,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
@@ -15185,6 +15325,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
+                thought: None,
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],

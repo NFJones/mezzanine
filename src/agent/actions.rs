@@ -651,22 +651,39 @@ fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
     thinking_lines.join("\n")
 }
 
-/// Returns model-authored rationale text as transcript-visible thinking lines.
+/// Returns model-authored rationale and thought text as transcript-visible
+/// thinking lines.
 ///
 /// Batch and action rationales are rendered as thinking messages in the pane
-/// UI. Persisting them in the assistant transcript keeps later turns connected
-/// to the model's previous working thread without storing raw MAAP payloads.
+/// UI. Batch thoughts are hidden from normal-mode pane logs but still persisted
+/// here so later turns can reference durable work notes without storing raw
+/// MAAP payloads.
 fn assistant_transcript_rationale_lines(batch: &MaapBatch) -> Vec<String> {
     let mut lines = Vec::new();
     if !batch.rationale.trim().is_empty() {
-        lines.push(format!("thinking: {}", batch.rationale.trim()));
+        lines.extend(assistant_transcript_thinking_lines(&batch.rationale));
+    }
+    if let Some(thought) = batch.thought.as_deref()
+        && !thought.trim().is_empty()
+    {
+        lines.extend(assistant_transcript_thinking_lines(thought));
     }
     for action in &batch.actions {
         if !action.rationale.trim().is_empty() {
-            lines.push(format!("thinking: {}", action.rationale.trim()));
+            lines.extend(assistant_transcript_thinking_lines(&action.rationale));
         }
     }
     lines
+}
+
+/// Prefixes each non-empty line of model-authored thinking text for durable
+/// assistant transcript storage.
+fn assistant_transcript_thinking_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("thinking: {line}"))
+        .collect()
 }
 
 /// Returns the user-visible assistant text carried by a MAAP action batch.
@@ -2558,6 +2575,7 @@ fn failed_capability_request_execution(
             .map(|batch| batch.rationale.clone())
             .filter(|rationale| !rationale.trim().is_empty())
             .unwrap_or_else(|| "capability request failed before execution".to_string()),
+        thought: original_batch.and_then(|batch| batch.thought.clone()),
         turn_id: turn_id.clone(),
         agent_id: agent_id.clone(),
         actions,

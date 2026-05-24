@@ -1744,9 +1744,11 @@ already the user-visible assistant output for that action. Model-facing action
 guidance SHOULD direct action-batch intent and justification into the
 model-authored batch rationale rather than a redundant progress `say` action
 when executable actions in the same batch already make the progress visible.
-Rendered thinking/rationale lines MUST also be retained as assistant transcript
-content and future model-facing assistant context so continuation requests can
-preserve the model's working thread.
+Rendered thinking/rationale lines and non-empty model-authored batch thoughts
+MUST also be retained as assistant transcript content and future model-facing
+assistant context so continuation requests can preserve the model's working
+thread. Batch thoughts MUST NOT be rendered in normal mode, but MUST be
+eligible for `verbose`, `debug`, and `trace` logging as `thinking: ` text.
 While a pane has an active agent turn, the visible pane log tail MUST include a
 live foreground-only grayscale footer in the form `<state> (<duration> • esc
 to interrupt)`, where `<state>` is a lowercase human-readable active turn
@@ -3481,6 +3483,15 @@ The internal/audit action batch MUST be a JSON object with:
   summaries. When no substantive state has changed since the previous
   rationale, the rationale SHOULD be the smallest non-duplicative execution
   delta that explains why the listed actions are next.
+- `thought`: An optional longer durable model-authored work note. When present
+  and non-empty, it MUST be stored in the durable assistant transcript and
+  future model-facing assistant context as `thinking: ` content. It MUST NOT be
+  rendered in normal-mode pane logs. It MAY be rendered in `verbose`, `debug`,
+  or `trace` logs as `thinking: ` text. It SHOULD be used only for substantive
+  learnings, decisions, invariants, or recovery details that would materially
+  help continuation, and it MUST NOT duplicate the batch rationale, visible
+  progress `say`, action summaries, recent thinking lines, secrets, hidden
+  policy, or private chain-of-thought.
 - `turn_id`: The active turn identity.
 - `agent_id`: The proposing agent identity.
 - `actions`: An array of action objects.
@@ -6058,13 +6069,19 @@ MUST direct them to be additive deltas: each rationale should state only what is
 newly decisive about the next listed actions and should not restate prior
 rationales, the user request, global task goal, loaded context, or visible
 action summaries. The prompt MUST also instruct the model to compare a planned
-rationale or progress `say` against recent thinking lines, visible text, action
-results, and other text in the same response; if the text would only repeat
-existing context, optional action-level rationales and progress `say` output
-MUST be omitted. The prompt MUST require one channel per idea: when progress
+rationale, optional batch `thought`, or progress `say` against recent thinking
+lines, visible text, action results, and other text in the same response; if
+the text would only repeat existing context, optional action-level rationales,
+batch `thought`, and progress `say` output MUST be omitted. The prompt MUST
+describe batch `thought` as a durable work note for longer future-useful
+learnings or decisions that is persisted to future context, hidden from
+normal-mode logs, and visible only in verbose-or-higher thinking logs. The
+prompt MUST require one channel per idea: when progress
 `say` records durable learning, batch rationale MUST be limited to the next
-executable reason; when batch rationale or action summaries already explain
-intent, progress `say` MUST NOT restate that intent. The prompt MUST state that
+executable reason; when batch `thought` records durable learning, progress
+`say` SHOULD NOT repeat it unless the user needs to see that sequence point;
+when batch rationale or action summaries already explain intent, progress `say`
+MUST NOT restate that intent. The prompt MUST state that
 progress `say` output is for sequence-point updates during non-trivial
 multi-step work. Valid progress `say` reasons are cases where the first
 evidence pass identifies the real owner or diagnosis, the agent chooses an

@@ -2071,6 +2071,7 @@ fn runtime_maap_batch_trace_json(
     serde_json::json!({
         "protocol": batch.protocol,
         "rationale": batch.rationale,
+        "thought": batch.thought,
         "turn_id": batch.turn_id,
         "agent_id": batch.agent_id,
         "final": batch.final_turn,
@@ -8376,6 +8377,12 @@ impl RuntimeSessionService {
             )
         {
             self.append_agent_thinking_text_to_terminal_buffer(pane_id, batch.rationale.trim())?;
+        }
+        if self.agent_verbose_enabled(pane_id)
+            && let Some(thought) = batch.thought.as_deref()
+            && !thought.trim().is_empty()
+        {
+            self.append_agent_thinking_text_to_terminal_buffer(pane_id, thought.trim())?;
         }
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;
