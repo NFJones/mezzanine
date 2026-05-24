@@ -2,34 +2,17 @@
 <p align="center">
   <picture>
     <source
-      srcset="./resources/mezzanine-logo-light.png"
+      srcset="./resources/mezzanine-combined-light.png"
       media="(prefers-color-scheme: dark)"
     />
     <source
-      srcset="./resources/mezzanine-logo-dark.png"
+      srcset="./resources/mezzanine-combined-dark.png"
       media="(prefers-color-scheme: light)"
     />
     <img
-      src="./resources/mezzanine-logo-dark.png"
-      width="200"
+      src="./resources/mezzanine-combined-dark.png"
+      width="850"
       alt="Mezzanine logo"
-    />
-  </picture>
-</p>
-<p align="center">
-  <picture>
-    <source
-      srcset="./resources/mezzanine-title-light.png"
-      media="(prefers-color-scheme: dark)"
-    />
-    <source
-      srcset="./resources/mezzanine-title-dark.png"
-      media="(prefers-color-scheme: light)"
-    />
-    <img
-      src="./resources/mezzanine-title-dark.png"
-      width="600"
-      alt="Mezzanine title"
     />
   </picture>
 </p>
