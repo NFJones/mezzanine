@@ -73,9 +73,13 @@ use crate::skills::{
 
 mod config_change;
 mod progress;
+mod provider_events;
+mod subagent_output;
 mod trace;
 
 use progress::*;
+use provider_events::*;
+use subagent_output::*;
 use trace::*;
 
 // Agent turn execution, provider polling, action dispatch, and approvals.
@@ -10738,167 +10742,6 @@ impl RuntimeSessionService {
             }
             crate::permissions::ApprovalDecision::Approve => Ok(None),
         }
-    }
-}
-
-/// Builds the message-delivered final output for a subagent task result.
-///
-/// Provider raw text often contains the MAAP JSON envelope rather than useful
-/// user-facing text. Parent agents should receive conversational `say` text on
-/// success, concrete action diagnostics on action failure, and provider error
-/// text when the failure happened before any action result existed.
-fn subagent_task_output_for_execution(execution: &AgentTurnExecution) -> String {
-    let mut lines = Vec::new();
-    for result in &execution.action_results {
-        if let Some(error) = &result.error {
-            lines.push(format!(
-                "{} {} {}: {}",
-                result.action_type,
-                result.action_id,
-                runtime_action_status_name(result.status),
-                error.message
-            ));
-            lines.extend(subagent_failed_action_diagnostic_lines(result));
-            continue;
-        }
-        if result.action_type == "say" {
-            lines.extend(
-                result
-                    .content_texts()
-                    .into_iter()
-                    .filter(|text| !text.trim().is_empty()),
-            );
-        }
-    }
-
-    if !lines.is_empty() {
-        return lines.join("\n");
-    }
-    if execution.terminal_state == AgentTurnState::Completed {
-        "completed without user-facing response".to_string()
-    } else if !execution.response.raw_text.trim().is_empty() {
-        execution.response.raw_text.trim().to_string()
-    } else {
-        "failed without action diagnostics".to_string()
-    }
-}
-
-/// Returns bounded diagnostic lines for a failed subagent action result.
-///
-/// Parent agents rely on final `task_result` payloads to understand why a child
-/// failed. Shell-backed semantic actions often store their useful stderr/stdout
-/// preview in structured content rather than in plain content, so this extracts
-/// both locations without exposing unbounded terminal output.
-fn subagent_failed_action_diagnostic_lines(result: &ActionResult) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(command) = subagent_action_result_structured_string(result, &["command"]) {
-        lines.push(format!(
-            "{} {} command: {}",
-            result.action_type,
-            result.action_id,
-            subagent_bounded_diagnostic_text(command.trim())
-        ));
-    }
-    let output = result
-        .content_texts()
-        .into_iter()
-        .find(|text| !text.trim().is_empty())
-        .or_else(|| {
-            subagent_action_result_structured_string(
-                result,
-                &["terminal_observation", "combined_output_preview"],
-            )
-            .filter(|text| !text.trim().is_empty())
-        });
-    if let Some(output) = output {
-        lines.push(format!(
-            "{} {} output:\n{}",
-            result.action_type,
-            result.action_id,
-            subagent_bounded_diagnostic_text(output.trim())
-        ));
-    }
-    lines
-}
-
-/// Extracts a string from nested action-result structured content.
-fn subagent_action_result_structured_string(
-    result: &ActionResult,
-    path: &[&str],
-) -> Option<String> {
-    let mut value: serde_json::Value =
-        serde_json::from_str(result.structured_content_json.as_deref()?).ok()?;
-    for key in path {
-        value = value.get(*key)?.clone();
-    }
-    value.as_str().map(str::to_string)
-}
-
-/// Bounds diagnostic text included in subagent task results.
-fn subagent_bounded_diagnostic_text(value: &str) -> String {
-    const MAX_SUBAGENT_DIAGNOSTIC_CHARS: usize = 4_000;
-    let mut output = value
-        .chars()
-        .take(MAX_SUBAGENT_DIAGNOSTIC_CHARS)
-        .collect::<String>();
-    if value.chars().count() > MAX_SUBAGENT_DIAGNOSTIC_CHARS {
-        output.push_str("\n[truncated]");
-    }
-    output
-}
-
-/// Runs the runtime provider event error kind operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_provider_event_error_kind(kind: &str) -> crate::error::MezErrorKind {
-    match kind {
-        "invalid_args" | "InvalidArgs" => crate::error::MezErrorKind::InvalidArgs,
-        "config" | "Config" => crate::error::MezErrorKind::Config,
-        "io" | "Io" => crate::error::MezErrorKind::Io,
-        "conflict" | "Conflict" => crate::error::MezErrorKind::Conflict,
-        "not_found" | "NotFound" => crate::error::MezErrorKind::NotFound,
-        "forbidden" | "Forbidden" => crate::error::MezErrorKind::Forbidden,
-        "not_implemented" | "NotImplemented" => crate::error::MezErrorKind::NotImplemented,
-        _ => crate::error::MezErrorKind::InvalidState,
-    }
-}
-
-/// Runs the runtime provider event error operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_provider_event_error(
-    kind: &str,
-    message: &str,
-    provider_failure_json: Option<&str>,
-    provider_raw_text: Option<&str>,
-) -> MezError {
-    let mut error = MezError::new(runtime_provider_event_error_kind(kind), message);
-    if let Some(raw_text) = provider_raw_text {
-        error = error.with_provider_raw_text(raw_text.to_string());
-    }
-    if let Some(failure_json) = provider_failure_json {
-        error = error.with_provider_failure_json(failure_json.to_string());
-    }
-    error
-}
-
-/// Runs the runtime task state suffix operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_task_state_suffix(state: TaskState) -> &'static str {
-    match state {
-        TaskState::Queued => "queued",
-        TaskState::Running => "running",
-        TaskState::Blocked => "blocked",
-        TaskState::Succeeded => "succeeded",
-        TaskState::Failed => "failed",
-        TaskState::Cancelled => "cancelled",
     }
 }
 
