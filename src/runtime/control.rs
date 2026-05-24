@@ -18,8 +18,8 @@ use super::{
     MemoryRecord, MessageConnection, MessageService, MessageServiceSnapshot, MezError,
     PaneCaptureSource, PaneExitRecord, PaneId, PaneProcessStart, PaneReadinessOverrideStore,
     PaneResizeUpdate, Path, PathBuf, ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch,
-    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeAutoSizingConfig, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
+    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
     RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
     SenderIdentity, SessionRecord, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
@@ -5332,6 +5332,12 @@ impl RuntimeSessionService {
             self.agent_auto_reasoning_overrides
                 .insert(started.pane_id.clone(), enabled);
         }
+        if let Some(auto_sizing) =
+            self.inherited_auto_sizing_for_child_agent(&spawn.parent_agent_id)
+        {
+            self.agent_auto_sizing_overrides
+                .insert(started.pane_id.clone(), auto_sizing);
+        }
         if let Some(profile_name) = profile.model_profile.as_deref() {
             self.provider_registry.resolve_profile(profile_name)?;
             self.model_profile_overrides
@@ -5576,6 +5582,18 @@ impl RuntimeSessionService {
     ) -> Option<bool> {
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
         Some(self.agent_auto_reasoning_enabled_for_pane(parent_pane_id.as_str()))
+    }
+
+    /// Returns the auto-sizing configuration a child agent should inherit.
+    pub(super) fn inherited_auto_sizing_for_child_agent(
+        &self,
+        parent_agent_id: &str,
+    ) -> Option<RuntimeAutoSizingConfig> {
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
+        Some(
+            self.runtime_auto_sizing_config_for_pane(parent_pane_id.as_str())
+                .clone(),
+        )
     }
 
     /// Removes subagent bucket ids whose windows no longer exist.

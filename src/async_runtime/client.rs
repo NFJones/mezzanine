@@ -1267,6 +1267,7 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_servers,
         available_mcp_tools,
     } = dispatch;
+    let main_model_provider = model_profile.provider.clone();
     if let Some(auto_sizing) = auto_sizing.as_ref()
         && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
     {
@@ -1280,7 +1281,9 @@ async fn execute_runtime_agent_provider_dispatch(
                         &context,
                     )
                     .await;
-                model_profile = selected_profile;
+                if selected_profile.provider == main_model_provider {
+                    model_profile = selected_profile;
+                }
             }
             RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
                 let (selected_profile, _decision, _fallback) =
@@ -1291,7 +1294,9 @@ async fn execute_runtime_agent_provider_dispatch(
                         &context,
                     )
                     .await;
-                model_profile = selected_profile;
+                if selected_profile.provider == main_model_provider {
+                    model_profile = selected_profile;
+                }
             }
         }
     }
@@ -1361,9 +1366,17 @@ async fn runtime_apply_same_provider_auto_sizing_if_needed<P: AsyncModelProvider
     let Some(auto_sizing) = auto_sizing else {
         return current_profile;
     };
+    let current_provider = current_profile.provider.clone();
+    if auto_sizing.router_profile.provider != current_provider {
+        return current_profile;
+    }
     let (selected_profile, _decision, _fallback) =
         runtime_execute_auto_sizing_with_async_provider(provider, auto_sizing, turn, context).await;
-    selected_profile
+    if selected_profile.provider == current_provider {
+        selected_profile
+    } else {
+        current_profile
+    }
 }
 
 /// Executes one model-backed conversation compaction request.
@@ -1548,5 +1561,59 @@ mod tests {
         );
         assert_eq!(requests[0].provider, "deepseek");
         assert!(requests[0].turn_id.ends_with(":auto-sizing"));
+    }
+
+    /// Verifies that same-provider auto-sizing does not send a router request
+    /// through the active provider when the router profile belongs to another
+    /// provider.
+    ///
+    /// Subagent panes can combine an inherited DeepSeek model profile with a
+    /// stale or default OpenAI auto-sizing configuration when pane-local sizing
+    /// state is not inherited correctly. This regression keeps that mismatch
+    /// from being sent through the DeepSeek provider, which would fail before
+    /// the actual child-agent turn can run.
+    #[tokio::test]
+    async fn same_provider_auto_sizing_skips_mismatched_router_provider() {
+        let provider = SameProviderAutoSizingProvider::default();
+        let mut auto_sizing = test_auto_sizing_dispatch();
+        auto_sizing.router_profile.provider = "openai".to_string();
+        auto_sizing.small.profile.provider = "openai".to_string();
+        auto_sizing.medium.profile.provider = "openai".to_string();
+        auto_sizing.large.profile.provider = "openai".to_string();
+        let turn = AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "deepseek-default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+        };
+        let context = AgentContext {
+            blocks: vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "latest user prompt".to_string(),
+                content: "generate a random number".to_string(),
+            }],
+        };
+        let selected = runtime_apply_same_provider_auto_sizing_if_needed(
+            &provider,
+            test_model_profile("deepseek-v4-pro", Some("high")),
+            false,
+            Some(&auto_sizing),
+            &turn,
+            &context,
+        )
+        .await;
+
+        assert_eq!(selected.provider, "deepseek");
+        assert_eq!(selected.model, "deepseek-v4-pro");
+        assert!(
+            provider.requests.lock().unwrap().is_empty(),
+            "mismatched router requests must not be sent to the active provider"
+        );
     }
 }

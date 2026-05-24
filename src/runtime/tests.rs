@@ -3312,6 +3312,31 @@ fn runtime_subagent_auto_reasoning_inherits_parent_pane_setting() {
     );
 }
 
+/// Verifies subagents inherit the live parent pane auto-sizing configuration.
+///
+/// Auto-sizing uses pane-local model profile names for router and bucket
+/// selection. Child agents must inherit that configuration with the parent
+/// model profile so a DeepSeek parent pane does not spawn children that use the
+/// global OpenAI sizing defaults.
+#[test]
+fn runtime_subagent_auto_sizing_inherits_parent_pane_setting() {
+    let mut service = test_runtime_service();
+    let mut parent_auto_sizing = service.agent_auto_sizing.clone();
+    parent_auto_sizing.router_model_profile = "deepseek-fast".to_string();
+    parent_auto_sizing.small_model_profile = "deepseek-fast".to_string();
+    parent_auto_sizing.medium_model_profile = "deepseek-default".to_string();
+    parent_auto_sizing.large_model_profile = "deepseek-default".to_string();
+    parent_auto_sizing.allowed_reasoning_efforts = vec!["high".to_string(), "xhigh".to_string()];
+    service
+        .agent_auto_sizing_overrides
+        .insert("%1".to_string(), parent_auto_sizing.clone());
+
+    assert_eq!(
+        service.inherited_auto_sizing_for_child_agent("agent-%1"),
+        Some(parent_auto_sizing)
+    );
+}
+
 /// Verifies exiting a parent agent shell closes active child subagent panes.
 ///
 /// Subagent panes are owned by the parent delegation tree. Leaving the parent
