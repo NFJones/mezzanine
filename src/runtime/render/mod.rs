@@ -65,6 +65,13 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod geometry;
+
+use geometry::{
+    clipped_overlay_style_span, overlay_text_cells, range_overlap_u16,
+    remove_overlapping_style_spans,
+};
+
 // Attached terminal input application and client view rendering.
 
 /// Root pane-agent display name shown in pane status surfaces.
@@ -10262,71 +10269,6 @@ fn runtime_format_human_duration(seconds: u64) -> String {
     } else {
         format!("{seconds}s")
     }
-}
-
-/// Runs the overlay text cells operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn overlay_text_cells(row: &mut String, column_start: usize, columns: usize, text: &str) {
-    let mut cells = row.chars().collect::<Vec<_>>();
-    let required = column_start.saturating_add(columns);
-    while cells.len() < required {
-        cells.push(' ');
-    }
-    let fitted = runtime_fit_status_line(text, columns);
-    for (offset, ch) in fitted.chars().take(columns).enumerate() {
-        cells[column_start.saturating_add(offset)] = ch;
-    }
-    *row = cells.into_iter().collect();
-}
-
-/// Runs the remove overlapping style spans operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn remove_overlapping_style_spans(
-    style_spans: &mut Vec<TerminalStyleSpan>,
-    column_start: usize,
-    columns: usize,
-) {
-    let column_end = column_start.saturating_add(columns);
-    style_spans.retain(|span| {
-        let span_end = span.start.saturating_add(span.length);
-        span_end <= column_start || span.start >= column_end
-    });
-}
-
-/// Runs the clipped overlay style span operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn clipped_overlay_style_span(
-    span: TerminalStyleSpan,
-    column_start: usize,
-    columns: usize,
-) -> Option<TerminalStyleSpan> {
-    let start = span.start.min(columns);
-    let end = span.start.saturating_add(span.length).min(columns);
-    (end > start).then(|| TerminalStyleSpan {
-        start: column_start.saturating_add(start),
-        length: end.saturating_sub(start),
-        rendition: span.rendition,
-    })
-}
-
-/// Runs the range overlap u16 operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn range_overlap_u16(first_start: u16, first_end: u16, second_start: u16, second_end: u16) -> u16 {
-    first_end
-        .min(second_end)
-        .saturating_sub(first_start.max(second_start))
 }
 
 #[cfg(test)]
