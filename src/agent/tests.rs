@@ -16,16 +16,16 @@ use super::{
     AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
     AgentTurnState, AgentTurnTrigger, AsyncModelProvider, AsyncProviderHttpTransport, BTreeSet,
     CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextCachePolicy,
-    ContextSourceKind, ContextStability, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,
-    MaapBatch, MarkerToken, McpActionExecutor, ModelMessageRole, ModelProfile,
-    ModelProfileOverrideSource, ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse,
-    ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT,
-    OPENAI_RESPONSES_ENDPOINT, OpenAiResponsesProvider, PaneReadinessOverrideStore,
-    PaneReadinessState, PaneShellExecutor, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderHttpTransport, ReadinessOverrideRevocation, Result, ShellClassification,
-    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
-    ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache, ToolInventory,
-    action_result_context_content, agent_subshell_enter_command, append_mcp_context,
+    ContextSourceKind, ContextStability, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS,
+    DeepSeekChatCompletionsProvider, EnvironmentSignature, MaapBatch, MarkerToken,
+    McpActionExecutor, MezError, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
+    ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
+    OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
+    OpenAiResponsesProvider, PaneReadinessOverrideStore, PaneReadinessState, PaneShellExecutor,
+    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTransport, ReadinessOverrideRevocation,
+    Result, ShellClassification, ShellExecutionOutput, ShellExecutionRequest, ShellTransaction,
+    ShellTransactionInput, ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache,
+    ToolInventory, action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
     append_scheduler_context, apply_patch_write_plan_from_read_output, assemble_model_request,
     baseline_slash_commands, bootstrap_script, bootstrap_script_for_classification,
@@ -181,6 +181,42 @@ impl ProviderHttpTransport for FakeProviderHttpTransport {
     fn send(&self, request: &ProviderHttpRequest) -> Result<ProviderHttpResponse> {
         self.requests.borrow_mut().push(request.clone());
         Ok(self.response.clone())
+    }
+}
+
+/// Carries a sequence of fake provider HTTP responses for retry tests.
+///
+/// The type records each outgoing request and returns responses in declaration
+/// order so provider retry behavior can be asserted without live network I/O.
+#[derive(Debug)]
+struct SequencedFakeProviderHttpTransport {
+    /// Provider requests issued during the test.
+    requests: RefCell<Vec<ProviderHttpRequest>>,
+    /// Responses returned to the provider adapter in FIFO order.
+    responses: RefCell<std::collections::VecDeque<ProviderHttpResponse>>,
+}
+
+impl SequencedFakeProviderHttpTransport {
+    /// Creates a fake transport from an ordered list of responses.
+    ///
+    /// # Parameters
+    /// - `responses`: The responses to return, one per provider request.
+    fn new(responses: Vec<ProviderHttpResponse>) -> Self {
+        Self {
+            requests: RefCell::new(Vec::new()),
+            responses: RefCell::new(responses.into()),
+        }
+    }
+}
+
+impl ProviderHttpTransport for SequencedFakeProviderHttpTransport {
+    /// Records one request and returns the next queued provider response.
+    fn send(&self, request: &ProviderHttpRequest) -> Result<ProviderHttpResponse> {
+        self.requests.borrow_mut().push(request.clone());
+        self.responses
+            .borrow_mut()
+            .pop_front()
+            .ok_or_else(|| MezError::invalid_state("fake provider response queue is empty"))
     }
 }
 
@@ -7998,6 +8034,64 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     );
 }
 
+/// Verifies DeepSeek MAAP requests use the provider's thinking-mode tool-call
+/// pattern when reasoning is configured.
+///
+/// DeepSeek supports tool calls in thinking mode only through model-selected
+/// tool use. Mezzanine therefore advertises the MAAP function without forcing
+/// `tool_choice` when a DeepSeek reasoning effort is present, preserving
+/// DeepSeek reasoning without changing OpenAI's stricter forced-tool path.
+#[test]
+fn deepseek_chat_completions_request_body_uses_auto_maap_tool_with_thinking_when_reasoning_enabled()
+{
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("xhigh".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "spawn two subagents".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/v1/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+    let tool = deepseek_maap_function_tool(&value);
+    let action_types = deepseek_tool_action_types(tool);
+
+    assert_eq!(
+        value["thinking"],
+        serde_json::json!({
+            "type": "enabled"
+        })
+    );
+    assert_eq!(value["reasoning_effort"], "max");
+    assert!(value.get("tool_choice").is_none());
+    assert_eq!(value["tools"].as_array().unwrap().len(), 1);
+    assert!(action_types.contains(&"send_message".to_string()));
+    assert!(action_types.contains(&"spawn_agent".to_string()));
+}
+
 /// Verifies DeepSeek no-tool requests can use thinking mode without sending a
 /// redundant `tool_choice: none` field. This matters because DeepSeek's
 /// thinking mode rejects some `tool_choice` values even when Mezzanine has no
@@ -8045,6 +8139,127 @@ fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking
     assert_eq!(value["reasoning_effort"], "max");
     assert!(value.get("tool_choice").is_none());
     assert!(value.get("tools").is_none());
+}
+
+/// Verifies DeepSeek thinking MAAP requests fall back to strict non-thinking
+/// MAAP when the provider returns prose instead of a tool call.
+///
+/// The first request follows DeepSeek's thinking-mode pattern by advertising
+/// tools without forced `tool_choice`. If the model declines to call the MAAP
+/// function, the adapter retries once with thinking disabled and a forced MAAP
+/// function so the runtime still receives a structured action batch.
+#[test]
+fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "fallback produced structured output",
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = SequencedFakeProviderHttpTransport::new(vec![
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "deepseek-v4-pro",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "reasoning_content": "I should answer somehow.",
+                            "content": "I can help with that."
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "reasoning_tokens": 3
+                }
+            })
+            .to_string(),
+        },
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "deepseek-v4-pro",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": "Now I will call the function.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "arguments": arguments
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 6,
+                    "reasoning_tokens": 0
+                }
+            })
+            .to_string(),
+        },
+    ]);
+    let provider = DeepSeekChatCompletionsProvider::new("deepseek-key", transport).unwrap();
+
+    let response = provider.send_request(&request).unwrap();
+
+    let requests = provider.transport.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    let first_body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
+    let second_body: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
+    assert_eq!(first_body["thinking"]["type"], "enabled");
+    assert!(first_body.get("tool_choice").is_none());
+    assert_eq!(second_body["thinking"]["type"], "disabled");
+    assert_eq!(
+        second_body["tool_choice"]["function"]["name"],
+        OPENAI_MAAP_FUNCTION_TOOL_NAME
+    );
+    assert_eq!(response.usage.input_tokens, 22);
+    assert_eq!(response.usage.output_tokens, 10);
+    assert_eq!(response.usage.reasoning_tokens, 3);
+    let batch = response.action_batch.unwrap();
+    assert_eq!(batch.rationale, "fallback produced structured output");
+    assert!(batch.final_turn);
 }
 
 /// Recursively validates strict-schema object requirements with a path that

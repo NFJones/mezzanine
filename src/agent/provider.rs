@@ -73,6 +73,17 @@ enum OpenAiMaapToolSurface {
     CurrentRequest,
 }
 
+/// DeepSeek request strategy for provider-native MAAP transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeepSeekMaapRequestStrategy {
+    /// No MAAP tool is needed for this provider request.
+    NoTool,
+    /// Use DeepSeek thinking mode and let the model choose the MAAP tool.
+    AutoToolThinking,
+    /// Disable thinking and force the MAAP tool with `tool_choice`.
+    ForcedToolNonThinking,
+}
+
 impl OpenAiMaapToolSurface {
     /// Returns cache-stable surfaces that are always advertised to OpenAI.
     fn stable_surfaces() -> &'static [Self] {
@@ -1369,12 +1380,14 @@ impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider
                 "DeepSeek provider received a request for a different provider",
             ));
         }
-        let http_request = build_deepseek_chat_completions_http_request(
+        let strategy = deepseek_maap_request_strategy(request);
+        let http_request = build_deepseek_chat_completions_http_request_with_strategy(
             request,
             self.api_key.expose_secret(),
             &self.endpoint,
             self.stream,
             self.timeout_ms,
+            strategy,
         )?;
         let response = self.transport.send(&http_request)?;
         if !(200..300).contains(&response.status_code) {
@@ -1388,19 +1401,46 @@ impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider
                 &response.body,
             )));
         }
-        let body = response.body;
-        if self.stream {
-            let actions = parse_deepseek_chat_completions_stream_body(&body, request)?;
-            return Ok(ModelResponse {
-                provider: ModelProvider::provider_id(self).to_string(),
-                model: request.model.clone(),
-                raw_text: actions,
-                usage: Default::default(),
-                quota_usage: provider_quota_usage_from_headers(&response.headers),
-                action_batch: None,
-            });
+        let mut parsed = parse_deepseek_chat_completions_http_response(
+            response,
+            request,
+            ModelProvider::provider_id(self),
+            deepseek_effective_stream(self.stream, strategy),
+        )?;
+        if deepseek_should_retry_with_forced_maap(request, strategy, &parsed) {
+            let fallback_request = build_deepseek_chat_completions_http_request_with_strategy(
+                request,
+                self.api_key.expose_secret(),
+                &self.endpoint,
+                self.stream,
+                self.timeout_ms,
+                DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
+            )?;
+            let fallback_response = self.transport.send(&fallback_request)?;
+            if !(200..300).contains(&fallback_response.status_code) {
+                return Err(MezError::invalid_state(format!(
+                    "DeepSeek Chat Completions API returned status {}: {}",
+                    fallback_response.status_code,
+                    openai_provider_error_detail(&fallback_response.body)
+                ))
+                .with_provider_failure_json(openai_provider_failure_json(
+                    Some(fallback_response.status_code),
+                    &fallback_response.body,
+                )));
+            }
+            let mut fallback = parse_deepseek_chat_completions_http_response(
+                fallback_response,
+                request,
+                ModelProvider::provider_id(self),
+                false,
+            )?;
+            fallback.usage.add_assign(parsed.usage);
+            if fallback.quota_usage.is_empty() {
+                fallback.quota_usage = parsed.quota_usage;
+            }
+            parsed = fallback;
         }
-        parse_deepseek_chat_completions_response_body(&body, request)
+        Ok(parsed)
     }
 }
 
@@ -1453,12 +1493,14 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
                     "DeepSeek provider received a request for a different provider",
                 ));
             }
-            let http_request = build_deepseek_chat_completions_http_request(
+            let strategy = deepseek_maap_request_strategy(request);
+            let http_request = build_deepseek_chat_completions_http_request_with_strategy(
                 request,
                 self.api_key.expose_secret(),
                 &self.endpoint,
                 self.stream,
                 self.timeout_ms,
+                strategy,
             )?;
             let response = self.transport.send_async(&http_request).await?;
             if !(200..300).contains(&response.status_code) {
@@ -1472,19 +1514,46 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
                     &response.body,
                 )));
             }
-            let body = response.body;
-            if self.stream {
-                let actions = parse_deepseek_chat_completions_stream_body(&body, request)?;
-                return Ok(ModelResponse {
-                    provider: AsyncModelProvider::provider_id(self).to_string(),
-                    model: request.model.clone(),
-                    raw_text: actions,
-                    usage: Default::default(),
-                    quota_usage: provider_quota_usage_from_headers(&response.headers),
-                    action_batch: None,
-                });
+            let mut parsed = parse_deepseek_chat_completions_http_response(
+                response,
+                request,
+                AsyncModelProvider::provider_id(self),
+                deepseek_effective_stream(self.stream, strategy),
+            )?;
+            if deepseek_should_retry_with_forced_maap(request, strategy, &parsed) {
+                let fallback_request = build_deepseek_chat_completions_http_request_with_strategy(
+                    request,
+                    self.api_key.expose_secret(),
+                    &self.endpoint,
+                    self.stream,
+                    self.timeout_ms,
+                    DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
+                )?;
+                let fallback_response = self.transport.send_async(&fallback_request).await?;
+                if !(200..300).contains(&fallback_response.status_code) {
+                    return Err(MezError::invalid_state(format!(
+                        "DeepSeek Chat Completions API returned status {}: {}",
+                        fallback_response.status_code,
+                        openai_provider_error_detail(&fallback_response.body)
+                    ))
+                    .with_provider_failure_json(openai_provider_failure_json(
+                        Some(fallback_response.status_code),
+                        &fallback_response.body,
+                    )));
+                }
+                let mut fallback = parse_deepseek_chat_completions_http_response(
+                    fallback_response,
+                    request,
+                    AsyncModelProvider::provider_id(self),
+                    false,
+                )?;
+                fallback.usage.add_assign(parsed.usage);
+                if fallback.quota_usage.is_empty() {
+                    fallback.quota_usage = parsed.quota_usage;
+                }
+                parsed = fallback;
             }
-            parse_deepseek_chat_completions_response_body(&body, request)
+            Ok(parsed)
         })
     }
 }
@@ -1966,6 +2035,25 @@ pub fn build_deepseek_chat_completions_http_request(
     stream: bool,
     timeout_ms: u64,
 ) -> Result<ProviderHttpRequest> {
+    build_deepseek_chat_completions_http_request_with_strategy(
+        request,
+        api_key,
+        endpoint,
+        stream,
+        timeout_ms,
+        deepseek_maap_request_strategy(request),
+    )
+}
+
+/// Builds a DeepSeek Chat Completions HTTP request with an explicit MAAP strategy.
+fn build_deepseek_chat_completions_http_request_with_strategy(
+    request: &ModelRequest,
+    api_key: &str,
+    endpoint: &str,
+    stream: bool,
+    timeout_ms: u64,
+    strategy: DeepSeekMaapRequestStrategy,
+) -> Result<ProviderHttpRequest> {
     validate_non_empty("DeepSeek provider bearer credential", api_key)?;
     validate_non_empty("DeepSeek Chat Completions endpoint", endpoint)?;
     if timeout_ms == 0 {
@@ -1973,7 +2061,8 @@ pub fn build_deepseek_chat_completions_http_request(
             "DeepSeek provider timeout must be greater than zero",
         ));
     }
-    let body = deepseek_chat_completions_request_body(request, stream)?;
+    let stream = deepseek_effective_stream(stream, strategy);
+    let body = deepseek_chat_completions_request_body_with_strategy(request, stream, strategy)?;
     let mut headers = BTreeMap::new();
     headers.insert(
         "Accept".to_string(),
@@ -1995,8 +2084,12 @@ pub fn build_deepseek_chat_completions_http_request(
     })
 }
 
-/// Builds the JSON body for a DeepSeek Chat Completions request.
-fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) -> Result<String> {
+/// Builds the JSON body for a DeepSeek request with an explicit MAAP strategy.
+fn deepseek_chat_completions_request_body_with_strategy(
+    request: &ModelRequest,
+    stream: bool,
+    strategy: DeepSeekMaapRequestStrategy,
+) -> Result<String> {
     let capabilities = ProviderCapabilities::for_kind("deepseek");
     let messages: Vec<serde_json::Value> = request
         .messages
@@ -2026,9 +2119,7 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
-    let use_maap_tool = request.interaction_kind != ModelInteractionKind::AutoSizing
-        && !request.allowed_actions.actions.is_empty();
-    if use_maap_tool {
+    if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking {
         body["thinking"] = serde_json::json!({"type": "disabled"});
     } else if let Some(reasoning_effort) = request
         .reasoning_effort
@@ -2039,8 +2130,10 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
         body["reasoning_effort"] = serde_json::json!(deepseek_effort);
         body["thinking"] = serde_json::json!({"type": "enabled"});
     }
-    if capabilities.supports_tool_calls && use_maap_tool {
-        body["tool_choice"] = deepseek_maap_tool_choice();
+    if capabilities.supports_tool_calls && strategy != DeepSeekMaapRequestStrategy::NoTool {
+        if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking {
+            body["tool_choice"] = deepseek_maap_tool_choice();
+        }
         let maap_tool = serde_json::json!({
             "type": "function",
             "function": {
@@ -2062,15 +2155,59 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
     })
 }
 
+/// Returns the DeepSeek MAAP strategy for one model request.
+///
+/// Thinking mode can use function tools only when DeepSeek chooses the tool
+/// itself. When reasoning is configured, Mezzanine therefore exposes the MAAP
+/// tool without forcing `tool_choice` and falls back to strict non-thinking
+/// mode only if DeepSeek returns prose instead of a MAAP batch.
+fn deepseek_maap_request_strategy(request: &ModelRequest) -> DeepSeekMaapRequestStrategy {
+    if request.interaction_kind == ModelInteractionKind::AutoSizing
+        || request.allowed_actions.actions.is_empty()
+    {
+        return DeepSeekMaapRequestStrategy::NoTool;
+    }
+    if request
+        .reasoning_effort
+        .as_deref()
+        .is_some_and(|effort| !effort.is_empty())
+    {
+        DeepSeekMaapRequestStrategy::AutoToolThinking
+    } else {
+        DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+    }
+}
+
+/// Returns the DeepSeek stream flag after accounting for MAAP tool strategy.
+///
+/// DeepSeek streaming tool-call parsing is not implemented in this adapter, so
+/// MAAP tool requests use unary JSON even when the provider object was created
+/// with streaming enabled.
+fn deepseek_effective_stream(stream: bool, strategy: DeepSeekMaapRequestStrategy) -> bool {
+    stream && strategy == DeepSeekMaapRequestStrategy::NoTool
+}
+
+/// Reports whether a DeepSeek thinking request should retry strict MAAP.
+fn deepseek_should_retry_with_forced_maap(
+    request: &ModelRequest,
+    strategy: DeepSeekMaapRequestStrategy,
+    response: &ModelResponse,
+) -> bool {
+    strategy == DeepSeekMaapRequestStrategy::AutoToolThinking
+        && request.interaction_kind != ModelInteractionKind::AutoSizing
+        && !request.allowed_actions.actions.is_empty()
+        && response.action_batch.is_none()
+}
+
 /// Returns the DeepSeek tool choice that forces the MAAP function call.
 ///
 /// # Behavior
 /// DeepSeek's Chat Completions API defaults `tool_choice` to `auto` when tools
 /// are present, which allows a prose answer instead of a MAAP action batch.
 /// Mezzanine requires a structured action batch for every non-auto-sizing
-/// provider turn, so executable and response-only turns force the single MAAP
-/// tool explicitly. DeepSeek currently rejects forced `tool_choice` in thinking
-/// mode, so callers that use this helper must disable thinking for the request.
+/// provider turn. This helper is therefore reserved for strict fallback
+/// requests with thinking disabled; thinking-mode MAAP requests omit
+/// `tool_choice` and let DeepSeek choose the advertised MAAP tool.
 fn deepseek_maap_tool_choice() -> serde_json::Value {
     serde_json::json!({
         "type": "function",
@@ -2086,7 +2223,7 @@ fn deepseek_maap_tool_choice() -> serde_json::Value {
 /// - `allowed_actions`: The current controller-approved action surface.
 fn deepseek_maap_tool_description(allowed_actions: &AllowedActionSet) -> String {
     format!(
-        "Submit exactly one MAAP/1 action batch through this function. Current allowed action types: {}. Use only the action objects in this function schema. If the needed action is absent and request_capability is available, request that capability instead of answering in prose.",
+        "Submit exactly one MAAP/1 action batch through this function. Current allowed action types: {}. Use only the action objects in this function schema. Do not answer this Mezzanine agent turn in prose outside the function call. If the needed action is absent and request_capability is available, request that capability instead of answering in prose.",
         allowed_actions.action_type_names().join(",")
     )
 }
@@ -2098,6 +2235,37 @@ fn deepseek_reasoning_effort(effort: &str) -> &'static str {
         "xhigh" | "max" => "max",
         _ => "high",
     }
+}
+
+/// Parses one successful DeepSeek HTTP response into a model response.
+///
+/// # Parameters
+/// - `response`: The HTTP response returned by the provider transport.
+/// - `request`: The model request that produced the response.
+/// - `provider_id`: The provider identity to report on the normalized result.
+/// - `stream`: Whether the HTTP body uses DeepSeek SSE streaming format.
+fn parse_deepseek_chat_completions_http_response(
+    response: ProviderHttpResponse,
+    request: &ModelRequest,
+    provider_id: &str,
+    stream: bool,
+) -> Result<ModelResponse> {
+    let ProviderHttpResponse { headers, body, .. } = response;
+    if stream {
+        let actions = parse_deepseek_chat_completions_stream_body(&body, request)?;
+        return Ok(ModelResponse {
+            provider: provider_id.to_string(),
+            model: request.model.clone(),
+            raw_text: actions,
+            usage: Default::default(),
+            quota_usage: provider_quota_usage_from_headers(&headers),
+            action_batch: None,
+        });
+    }
+    let mut parsed = parse_deepseek_chat_completions_response_body(&body, request)?;
+    parsed.provider = provider_id.to_string();
+    parsed.quota_usage = provider_quota_usage_from_headers(&headers);
+    Ok(parsed)
 }
 
 /// Parses a DeepSeek Chat Completions non-streaming response body.

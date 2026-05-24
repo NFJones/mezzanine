@@ -3397,6 +3397,17 @@ arguments MUST be parsed as untrusted MAAP JSON and validated by the same
 identity, schema, permission, and audit rules as any other provider-native action
 batch.
 
+For providers whose reasoning or thinking mode supports tool calls but rejects
+forced function choice, Mezzanine MAY use a provider-specific MAAP strategy that
+advertises the current MAAP function schema, omits forced tool selection, and
+lets the provider choose the tool according to its documented thinking-mode
+tool-call flow. This strategy MUST remain scoped to providers that require it
+and MUST NOT weaken forced-tool behavior for providers that support it. If a
+thinking-mode MAAP request returns prose or otherwise omits a structured MAAP
+tool call, Mezzanine MAY retry the same provider turn once with a stricter
+provider-specific fallback, such as disabling thinking mode and forcing the
+MAAP function when the provider supports that combination.
+
 Provider-native structured action schemas MUST NOT require the model to emit
 runtime-owned identity or bookkeeping fields such as `protocol`, `turn_id`,
 `agent_id`, `final`, or action identifiers. Mezzanine MUST stamp those fields
