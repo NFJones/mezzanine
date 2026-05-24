@@ -23,6 +23,11 @@ mod defaults;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod extract;
+/// Exposes the migration module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod migration;
 /// Exposes the mutation module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -55,6 +60,9 @@ mod types;
 mod validation;
 
 pub use defaults::{DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML};
+pub use migration::{
+    CURRENT_CONFIG_SCHEMA_VERSION, ConfigMigrationPlan, migrate_config_file, migrate_config_text,
+};
 pub use paths::ConfigPaths;
 pub use schema::{
     BASELINE_TOP_LEVEL_KEYS, CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION,
@@ -79,6 +87,7 @@ use extract::{
     validate_command_rule_examples, validate_known_schema_path, validate_mcp_server_path,
     validate_permission_value, validate_permissions_path,
 };
+use migration::parse_config_schema_version;
 use mutation::{
     mutate_json_text, mutate_toml_text, mutate_yaml_text, parse_mutation_path,
     reject_container_target, reject_unsupported_mutation_path,

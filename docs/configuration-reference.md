@@ -20,6 +20,12 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
+The current config schema version is `2`. On launch, Mezzanine migrates an
+older supported primary user config to the current schema before validation,
+backfilling missing defaults, rewriting renamed settings, and removing settings
+that no longer exist. Config files declaring a schema version newer than the
+running binary supports are rejected instead of interpreted best-effort.
+
 Project overlays are intended for `.mezzanine/config.toml` under the project
 root. The project root is the nearest ancestor of the pane working directory
 with a `.git` directory or file; otherwise the pane working directory is used.
@@ -27,10 +33,13 @@ with a `.git` directory or file; otherwise the pane working directory is used.
 Configuration is conservative:
 
 - Unknown top-level keys are rejected unless placed under `extensions`.
-- `session.default_command` is rejected; pass pane commands explicitly when
-  creating windows or panes.
-- `shell.path`, `shell.executable`, and `shell.command` are rejected; the shell
-  executable is resolved from `$SHELL` or `/bin/sh`.
+- `session.default_command` is removed by the v1-to-v2 primary-config
+  migration and rejected if it still appears in a current-schema layer; pass
+  pane commands explicitly when creating windows or panes.
+- `shell.path`, `shell.executable`, and `shell.command` are removed by the
+  v1-to-v2 primary-config migration and rejected if they still appear in a
+  current-schema layer; the shell executable is resolved from `$SHELL` or
+  `/bin/sh`.
 - Secret material is rejected from config. Use `mez auth` and credential stores.
 - Live mutation accepts scalar strings, integers, booleans, and string arrays
   for supported paths.
@@ -51,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `1` | Config schema version. |
+| `version` | integer | `2` | Config schema version. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -110,8 +119,9 @@ entry is shown.
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |
 
-The historical `terminal.nested_muxxer` spelling is accepted as a migration
-alias and is normalized to `terminal.nested_multiplexer` during config loading.
+The historical `terminal.nested_muxxer` spelling is accepted as a version 1
+migration alias and is rewritten to `terminal.nested_multiplexer` before layer
+composition.
 
 ### `shell`
 

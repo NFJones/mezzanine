@@ -661,6 +661,43 @@ fn config_trust_subcommands_persist_project_decisions() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies that runtime startup migrates an existing primary user config
+/// before normal layer composition. This protects launch from failing on
+/// historical keys that are valid migration inputs but invalid current-schema
+/// configuration after migration has completed.
+#[test]
+fn startup_config_layers_migrate_existing_primary_config() {
+    let (env, home) = test_env("startup-primary-migration");
+    let paths = env.config_paths().unwrap();
+    fs::create_dir_all(paths.root()).unwrap();
+    fs::write(
+        paths.root().join("config.toml"),
+        "version = 1\n[terminal]\nnested_muxxer = \"disabled\"\n[session]\ndefault_command = \"vim\"\n",
+    )
+    .unwrap();
+    let project = home.join("repo");
+    fs::create_dir_all(&project).unwrap();
+
+    let layers =
+        load_runtime_config_layers_for_directory(&paths, &ProjectTrustStore::default(), &project)
+            .unwrap();
+    let effective = compose_effective_config(&layers).unwrap();
+    let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
+
+    assert_eq!(layers.len(), 1);
+    assert_eq!(effective.get("version"), Some("2"));
+    assert_eq!(
+        effective.get("terminal.nested_multiplexer"),
+        Some("disabled")
+    );
+    assert!(migrated.contains("version = 2"));
+    assert!(migrated.contains("[model_presets.deepseek]"));
+    assert!(!migrated.contains("nested_muxxer"));
+    assert!(!migrated.contains("default_command"));
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies that runtime startup config assembly discovers project overlays
 /// from the invocation directory up to the project root, leaves them skipped
 /// while trust is pending, and applies them in root-to-leaf precedence once the

@@ -154,6 +154,10 @@ mez config init
 mez auth login
 ```
 
+Existing primary config files are migrated on launch to the current schema
+version before Mezzanine validates them. Newer config schema versions than the
+running binary understands are rejected.
+
 If you are using an API key instead of browser auth:
 
 ```sh

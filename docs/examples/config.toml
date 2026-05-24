@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 1
+version = 2
 
 [session]
 detach_behavior = "keep-running"

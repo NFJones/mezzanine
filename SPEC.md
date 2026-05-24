@@ -2293,16 +2293,32 @@ The top-level configuration object MUST support the following keys:
 - `audit`
 - `extensions`
 
-The `version` key MUST identify the configuration schema version.
+The `version` key MUST identify the configuration schema version. Mezzanine
+schema version 2 is the current configuration schema version for this
+specification revision. Implementations MUST reject a configuration file whose
+declared schema version is greater than the newest schema version understood by
+the binary.
+
+When a primary user configuration file declares an older supported schema
+version, Mezzanine MUST migrate that primary file on launch before validating or
+composing runtime configuration layers. Migrations MUST advance one schema
+version at a time until the file reaches the current schema version, MUST add
+defaults for current settings that were absent in the older file, MUST rewrite
+renamed or moved settings to their canonical current paths, and MUST remove
+settings that no longer exist in the current schema. Project overlay files are
+not durable user-primary configuration and MUST instead be validated against the
+current schema after the primary file has been migrated.
 
 The `session` table MUST support `detach_behavior`, `reattach_behavior`,
 `empty_session_behavior`, and `restore_strategy`.
 
-Mezzanine v1 MUST NOT support `session.default_command`. If configuration
-contains `session.default_command`, Mezzanine MUST reject the configuration
-with an actionable diagnostic. Users who want a pane to run a command instead
-of an interactive shell MUST provide that command explicitly through pane or
-window creation.
+Mezzanine schema version 2 MUST NOT support `session.default_command`. The
+version 1 to version 2 primary-config migration MUST remove
+`session.default_command`. If a current-schema configuration layer still
+contains `session.default_command`, Mezzanine MUST reject the configuration with
+an actionable diagnostic. Users who want a pane to run a command instead of an
+interactive shell MUST provide that command explicitly through pane or window
+creation.
 
 The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
@@ -2325,9 +2341,11 @@ be delayed by this limit. When a newer render is waiting behind the rate gate,
 stale pending bytes from an older incomplete frame SHOULD be superseded by the
 newer frame rather than flushed eagerly.
 
-Implementations MAY accept `terminal.nested_muxxer` as a migration alias for
-`terminal.nested_multiplexer`. When accepted, the alias MUST be normalized to
-the canonical `terminal.nested_multiplexer` setting before layer composition.
+The version 1 to version 2 primary-config migration MUST treat
+`terminal.nested_muxxer` as a migration alias for
+`terminal.nested_multiplexer`. When both keys are present, the canonical
+`terminal.nested_multiplexer` setting MUST take precedence and the alias MUST
+be removed before layer composition.
 
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with

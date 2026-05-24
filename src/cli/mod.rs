@@ -32,7 +32,7 @@ use crate::auth::{
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML,
-    DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, compose_effective_config,
+    DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, compose_effective_config, migrate_config_file,
     persist_config_mutation, validate_config_file, validate_config_text,
 };
 use crate::control::{decode_control_frame, encode_control_body};

@@ -7,10 +7,11 @@
 // Config module tests.
 
 use super::{
-    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
-    ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML, PathBuf, compose_effective_config,
-    extract_config_values, fs, persist_config_mutation, persist_config_mutation_async,
-    plan_config_mutation, validate_config_file, validate_config_file_async, validate_config_text,
+    CURRENT_CONFIG_SCHEMA_VERSION, ConfigFormat, ConfigLayer, ConfigMutation,
+    ConfigMutationOperation, ConfigMutationValue, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML,
+    PathBuf, compose_effective_config, extract_config_values, fs, migrate_config_text,
+    persist_config_mutation, persist_config_mutation_async, plan_config_mutation,
+    validate_config_file, validate_config_file_async, validate_config_text,
 };
 use crate::permissions::{exact_command_sha256, normalize_exact_command_text};
 /// Runs the temp root operation for this subsystem.
@@ -698,6 +699,99 @@ fn canonical_nested_multiplexer_key_overrides_legacy_alias() {
         values.get("terminal.nested_multiplexer"),
         Some(&"disabled".to_string())
     );
+}
+
+/// Verifies that an older primary config document is upgraded to the current
+/// schema by removing deleted keys, normalizing renamed keys, and backfilling
+/// current defaults. This protects daemon startup from rejecting legacy user
+/// files before the migration path has a chance to repair them.
+#[test]
+fn migrates_legacy_primary_config_to_current_schema() {
+    let legacy = r#"
+version = 1
+
+[terminal]
+nested_muxxer = "disabled"
+
+[session]
+default_command = "vim"
+
+[shell]
+path = "/bin/bash"
+
+[frames.pane]
+visible_fields = ["pane.index", "agent.model"]
+"#;
+
+    let plan = migrate_config_text(ConfigFormat::Toml, legacy).unwrap();
+
+    assert_eq!(plan.from_version, 1);
+    assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+    assert!(plan.changed);
+    assert!(plan.text.contains("version = 2"));
+    assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
+    assert!(!plan.text.contains("nested_muxxer"));
+    assert!(!plan.text.contains("default_command"));
+    assert!(!plan.text.contains("path = \"/bin/bash\""));
+    assert!(plan.text.contains("\"agent.preset\""));
+    assert!(plan.text.contains("[model_presets.deepseek]"));
+    assert!(plan.text.contains("[model_presets.openai]"));
+
+    let validation = validate_config_text(ConfigFormat::Toml, &plan.text, ConfigScope::Primary);
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies that non-TOML primary config formats follow the same schema
+/// migration contract as TOML: renamed keys are canonicalized, deleted keys are
+/// removed, and current defaults are backfilled before validation. This keeps
+/// alternate supported config formats from becoming launch-only edge cases.
+#[test]
+fn migrates_json_primary_config_to_current_schema() {
+    let legacy = r#"{
+  "version": 1,
+  "terminal": {
+    "nested_muxxer": "disabled"
+  },
+  "shell": {
+    "command": "zsh"
+  }
+}"#;
+
+    let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
+    let values = extract_config_values(ConfigFormat::Json, &plan.text);
+
+    assert_eq!(values.get("version"), Some(&"2".to_string()));
+    assert_eq!(
+        values.get("terminal.nested_multiplexer"),
+        Some(&"disabled".to_string())
+    );
+    assert!(!values.contains_key("terminal.nested_muxxer"));
+    assert!(!values.contains_key("shell.command"));
+    assert_eq!(
+        values.get("model_presets.deepseek.default_model_profile"),
+        Some(&"deepseek-fast".to_string())
+    );
+
+    let validation = validate_config_text(ConfigFormat::Json, &plan.text, ConfigScope::Primary);
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies that config validation refuses documents written for a newer
+/// schema version than the running binary understands. This prevents older
+/// binaries from silently interpreting keys whose migration or meaning belongs
+/// to a future release.
+#[test]
+fn rejects_newer_config_schema_version() {
+    let validation =
+        validate_config_text(ConfigFormat::Toml, "version = 999\n", ConfigScope::Primary);
+
+    assert!(!validation.valid);
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "version"
+            && diagnostic
+                .message
+                .contains("newer than this mez binary supports")
+    }));
 }
 
 /// Verifies that custom subagent profiles are part of the baseline config

@@ -5,11 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BASELINE_TOP_LEVEL_KEYS, BTreeMap, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
-    ConfigMutationPlan, ConfigScope, ConfigValidation, ConfigValue, EffectiveConfig, MezError,
-    Path, Result, contains_secret_material, extract_config_values, extract_json_paths,
-    extract_toml_paths, extract_yaml_paths, format_diagnostics, fs, mutate_json_text,
-    mutate_toml_text, mutate_yaml_text, parse_mutation_path, reject_container_target,
+    BASELINE_TOP_LEVEL_KEYS, BTreeMap, CURRENT_CONFIG_SCHEMA_VERSION, ConfigDiagnostic,
+    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationPlan, ConfigScope, ConfigValidation,
+    ConfigValue, EffectiveConfig, MezError, Path, Result, contains_secret_material,
+    extract_config_values, extract_json_paths, extract_toml_paths, extract_yaml_paths,
+    format_diagnostics, fs, mutate_json_text, mutate_toml_text, mutate_yaml_text,
+    parse_config_schema_version, parse_mutation_path, reject_container_target,
     reject_unsupported_mutation_path, validate_command_rule_examples, validate_known_schema_path,
     validate_mcp_server_path, validate_permission_value, validate_permissions_path,
     write_private_config_file, write_private_config_file_async,
@@ -166,6 +167,20 @@ pub fn validate_config_text(
         ConfigFormat::Json => extract_json_paths(text),
     };
     let values = extract_config_values(format, text);
+
+    match parse_config_schema_version(values.get("version").map(String::as_str)) {
+        Ok(version) if version <= CURRENT_CONFIG_SCHEMA_VERSION => {}
+        Ok(version) => diagnostics.push(ConfigDiagnostic {
+            path: "version".to_string(),
+            message: format!(
+                "configuration schema version {version} is newer than this mez binary supports ({CURRENT_CONFIG_SCHEMA_VERSION})"
+            ),
+        }),
+        Err(_) => diagnostics.push(ConfigDiagnostic {
+            path: "version".to_string(),
+            message: "configuration schema version must be a positive integer".to_string(),
+        }),
+    }
 
     for path in &paths {
         if let Some(top_level) = path.split('.').next()

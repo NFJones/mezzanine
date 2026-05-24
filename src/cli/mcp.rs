@@ -10,7 +10,7 @@ use super::{
     DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore, Result,
     Subcommand, TrustDecision, Write, compose_effective_config, default_trust_database_path,
     discover_existing_overlays, discover_project_root, fs, json_escape, json_optional,
-    persist_config_mutation, write_json_or_plain,
+    migrate_config_file, persist_config_mutation, write_json_or_plain,
 };
 
 // MCP subcommands and config mutation helpers.
@@ -313,6 +313,7 @@ pub(super) fn load_runtime_config_layers_for_directory(
 /// on duplicated control-flow logic.
 pub(super) fn load_primary_config_layers(paths: &ConfigPaths) -> Result<Vec<ConfigLayer>> {
     let (layer_path, format, text) = if let Some(selected) = paths.select_primary_file()? {
+        migrate_config_file(&selected)?;
         (
             Some(selected.clone()),
             ConfigFormat::from_path(&selected)?,
