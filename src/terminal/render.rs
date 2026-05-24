@@ -39,7 +39,7 @@ pub const DEFAULT_PANE_FRAME_VISIBLE_FIELDS: &[&str] = &[
     "history.position",
     "agent.model",
     "agent.reasoning",
-    "agent.auto_reasoning",
+    "agent.routing",
     "agent.name",
     "agent.context_usage",
     "agent.status",
@@ -52,7 +52,7 @@ pub const DEFAULT_PANE_FRAME_RIGHT_ALIGNED: &[&str] = &[
     "history.position",
     "agent.model",
     "agent.reasoning",
-    "agent.auto_reasoning",
+    "agent.routing",
     "agent.latency",
     "policy.mode",
     "agent.context_usage",
@@ -2668,9 +2668,7 @@ fn pane_frame_right_status_rendition(
         "pane.pwd" => ui_theme.colors.pane_pwd.rendition(),
         "agent.model" => ui_theme.colors.agent_model.rendition(),
         "agent.reasoning" => ui_theme.colors.agent_reasoning.rendition(),
-        "agent.auto_reasoning" => {
-            pane_frame_agent_auto_reasoning_rendition(&segment.value, ui_theme)
-        }
+        "agent.routing" => pane_frame_agent_routing_rendition(&segment.value, ui_theme),
         "agent.latency" => pane_frame_latency_rendition(&segment.value, ui_theme),
         "agent.preset" => ui_theme.colors.agent_model.rendition(),
         "agent.name" => ui_theme.colors.agent_model.rendition(),
@@ -2681,8 +2679,8 @@ fn pane_frame_right_status_rendition(
     }
 }
 
-/// Returns the auto-reasoning pill rendition for a pane-local value.
-fn pane_frame_agent_auto_reasoning_rendition(value: &str, ui_theme: &UiTheme) -> GraphicRendition {
+/// Returns the routing pill rendition for a pane-local value.
+fn pane_frame_agent_routing_rendition(value: &str, ui_theme: &UiTheme) -> GraphicRendition {
     match value {
         "auto:on" => ui_theme.colors.agent_reasoning.rendition(),
         "auto:off" => ui_theme.colors.agent_status_idle.rendition(),
@@ -4257,7 +4255,7 @@ fn pane_frame_right_aligned_display_value(field: &str, value: String) -> String 
         "pane.pwd"
             | "agent.model"
             | "agent.reasoning"
-            | "agent.auto_reasoning"
+            | "agent.routing"
             | "agent.latency"
             | "agent.preset"
             | "agent.name"
@@ -4277,7 +4275,7 @@ fn pane_frame_right_aligned_segment_value(field: &str, value: &str) -> String {
     if field == "agent.name" && value.trim() == "manager" {
         return String::new();
     }
-    if field == "agent.auto_reasoning" && !value.trim().is_empty() {
+    if field == "agent.routing" && !value.trim().is_empty() {
         return "route".to_string();
     }
     value.to_string()
@@ -4823,7 +4821,7 @@ fn pane_agent_status_field_from_frame_field(field: &str) -> Option<PaneAgentStat
     match field {
         "agent.model" => Some(PaneAgentStatusField::Model),
         "agent.reasoning" => Some(PaneAgentStatusField::Reasoning),
-        "agent.auto_reasoning" => Some(PaneAgentStatusField::AutoReasoning),
+        "agent.routing" => Some(PaneAgentStatusField::Routing),
         "agent.latency" => Some(PaneAgentStatusField::Latency),
         "agent.preset" => Some(PaneAgentStatusField::Preset),
         "policy.mode" => Some(PaneAgentStatusField::ApprovalPolicy),
@@ -5212,10 +5210,8 @@ fn pane_frame_field_value(
                 optional_pane_context_value(pane_context, |ctx| &ctx.agent_reasoning)
                     .unwrap_or_default()
             }
-            "agent.auto_reasoning" => {
-                optional_pane_context_value(pane_context, |ctx| &ctx.agent_auto_reasoning)
-                    .unwrap_or_default()
-            }
+            "agent.routing" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_routing)
+                .unwrap_or_default(),
             "agent.latency" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_latency)
                 .unwrap_or_default(),
             "agent.preset" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_preset)

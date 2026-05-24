@@ -3298,28 +3298,28 @@ fn runtime_config_change_resumes_after_full_access_change() {
     let _ = fs::remove_dir_all(config_root);
 }
 
-/// Verifies subagents inherit the live parent pane auto-reasoning decision.
+/// Verifies subagents inherit the live parent pane routing decision.
 ///
 /// Auto-reasoning is a pane-local agent behavior, not just a global default.
 /// Child agents should continue with the parent pane's effective setting so a
 /// user does not have to re-toggle it after spawning helpers.
 #[test]
-fn runtime_subagent_auto_reasoning_inherits_parent_pane_setting() {
+fn runtime_subagent_routing_inherits_parent_pane_setting() {
     let mut service = test_runtime_service();
-    service.agent_auto_reasoning = false;
+    service.agent_routing = false;
     service
-        .agent_auto_reasoning_overrides
+        .agent_routing_overrides
         .insert("%1".to_string(), true);
 
     assert_eq!(
-        service.inherited_auto_reasoning_for_child_agent("agent-%1"),
+        service.inherited_routing_for_child_agent("agent-%1"),
         Some(true)
     );
 
-    service.agent_auto_reasoning_overrides.remove("%1");
-    service.agent_auto_reasoning = true;
+    service.agent_routing_overrides.remove("%1");
+    service.agent_routing = true;
     assert_eq!(
-        service.inherited_auto_reasoning_for_child_agent("agent-%1"),
+        service.inherited_routing_for_child_agent("agent-%1"),
         Some(true)
     );
 }
@@ -5896,7 +5896,7 @@ fn runtime_config_reload_applies_agent_prompt_and_personality_profiles() {
     let path = root.join("config.toml");
     fs::write(
         &path,
-        "[agents]\ncustom_system_prompt = \"Always preserve user work.\"\ndefault_personality = \"careful\"\n[personalities.careful]\nname = \"Careful\"\nsystem_prompt = \"Be exact about evidence.\"\nresponse_style = \"terse\"\nplanning_enabled = true\nauto_reasoning_enabled = true\n",
+        "[agents]\ncustom_system_prompt = \"Always preserve user work.\"\ndefault_personality = \"careful\"\n[personalities.careful]\nname = \"Careful\"\nsystem_prompt = \"Be exact about evidence.\"\nresponse_style = \"terse\"\nplanning_enabled = true\nrouting_enabled = true\n",
     )
     .unwrap();
 
@@ -16623,7 +16623,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.agent_auto_reasoning = false;
+    service.agent_routing = false;
 
     let open_report = service
         .apply_attached_terminal_step_plan(
@@ -16632,7 +16632,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
                 actions: vec![TerminalClientLoopAction::HandleMouse(
                     MouseAction::OpenPaneAgentStatusSelector {
                         pane_index: 0,
-                        field: PaneAgentStatusField::AutoReasoning,
+                        field: PaneAgentStatusField::Routing,
                     },
                 )],
                 output_lines: Vec::new(),
@@ -16646,7 +16646,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
     assert!(!open_report.full_redraw_required);
     assert!(service.pane_agent_status_selector.is_none());
     assert_eq!(
-        service.agent_auto_reasoning_overrides.get("%1").copied(),
+        service.agent_routing_overrides.get("%1").copied(),
         Some(true)
     );
 
@@ -17317,12 +17317,12 @@ fn runtime_agent_shell_model_command_sets_secondary_router_profile() {
     );
 }
 
-/// Verifies that `/auto-reasoning` stores a pane-local override used by
+/// Verifies that `/routing` stores a pane-local override used by
 /// subsequent turns without mutating the global configured default. This covers
 /// the command surface for enabling, toggling, and inspecting automatic model
 /// sizing.
 #[test]
-fn runtime_agent_shell_auto_reasoning_command_sets_pane_override() {
+fn runtime_agent_shell_routing_command_sets_pane_override() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -17333,25 +17333,22 @@ fn runtime_agent_shell_auto_reasoning_command_sets_pane_override() {
         .unwrap();
 
     let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"auto-reasoning-on","method":"agent/shell/command","params":{"idempotency_key":"auto-reasoning-on","input":"/auto-reasoning on"}}"#,
+        r#"{"jsonrpc":"2.0","id":"routing-on","method":"agent/shell/command","params":{"idempotency_key":"routing-on","input":"/routing on"}}"#,
         &primary,
     );
 
     assert!(enabled.contains(r#""kind":"mutated""#), "{enabled}");
-    assert!(
-        enabled.contains(r#""command":"auto-reasoning""#),
-        "{enabled}"
-    );
+    assert!(enabled.contains(r#""command":"routing""#), "{enabled}");
     assert!(enabled.contains("enabled=true"), "{enabled}");
     assert!(enabled.contains("default=false"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     assert_eq!(
-        service.agent_auto_reasoning_overrides.get("%1").copied(),
+        service.agent_routing_overrides.get("%1").copied(),
         Some(true)
     );
 
     let status = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"auto-reasoning-status","method":"agent/shell/command","params":{"idempotency_key":"auto-reasoning-status","input":"/auto-reasoning status"}}"#,
+        r#"{"jsonrpc":"2.0","id":"routing-status","method":"agent/shell/command","params":{"idempotency_key":"routing-status","input":"/routing status"}}"#,
         &primary,
     );
     assert!(status.contains(r#""kind":"display""#), "{status}");
@@ -17359,24 +17356,24 @@ fn runtime_agent_shell_auto_reasoning_command_sets_pane_override() {
     assert!(status.contains("override_present=true"), "{status}");
 
     let toggled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"auto-reasoning-toggle","method":"agent/shell/command","params":{"idempotency_key":"auto-reasoning-toggle","input":"/auto-reasoning toggle"}}"#,
+        r#"{"jsonrpc":"2.0","id":"routing-toggle","method":"agent/shell/command","params":{"idempotency_key":"routing-toggle","input":"/routing toggle"}}"#,
         &primary,
     );
     assert!(toggled.contains(r#""kind":"mutated""#), "{toggled}");
     assert!(toggled.contains("enabled=false"), "{toggled}");
     assert!(toggled.contains("changed=true"), "{toggled}");
     assert_eq!(
-        service.agent_auto_reasoning_overrides.get("%1").copied(),
+        service.agent_routing_overrides.get("%1").copied(),
         Some(false)
     );
 }
 
-/// Verifies that automatic reasoning runs an internal router request before
+/// Verifies that routing runs an internal router request before
 /// the turn provider request, applies the selected model and reasoning effort,
 /// and keeps router prompt/response correspondence out of persisted model
 /// context. Only the effective profile and bounded logs survive.
 #[test]
-fn runtime_agent_turn_auto_reasoning_selects_profile_without_context_leak() {
+fn runtime_agent_turn_routing_selects_profile_without_context_leak() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -17389,7 +17386,7 @@ fn runtime_agent_turn_auto_reasoning_selects_profile_without_context_leak() {
 [agents]
 default_provider = "runtime-batch"
 default_model_profile = "default"
-auto_reasoning = true
+routing = true
 
 [agents.auto_sizing]
 router_model_profile = "router"
@@ -18317,7 +18314,7 @@ max_output_tokens = 4096
     );
 }
 
-/// Verifies auto-reasoning context-limit recovery budgets against the smallest
+/// Verifies routing context-limit recovery budgets against the smallest
 /// possible main-provider target before a router decision has been stored.
 ///
 /// A turn may start with a large default profile while the router is still able
@@ -18325,11 +18322,11 @@ max_output_tokens = 4096
 /// context-limit recovery must therefore compact against the minimum target
 /// window until the synthesized per-turn profile exists.
 #[test]
-fn runtime_auto_reasoning_context_limit_recovery_uses_minimum_target_window() {
+fn runtime_routing_context_limit_recovery_uses_minimum_target_window() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
-            name: "auto-reasoning-context-limit-recovery".to_string(),
+            name: "routing-context-limit-recovery".to_string(),
             path: None,
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
@@ -18338,7 +18335,7 @@ fn runtime_auto_reasoning_context_limit_recovery_uses_minimum_target_window() {
 [agents]
 default_provider = "runtime-batch"
 default_model_profile = "default"
-auto_reasoning = true
+routing = true
 auto_compact = false
 auto_compact_threshold = 0.50
 
@@ -18415,9 +18412,9 @@ context_window_tokens = 100000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
-            label: "synthetic auto-reasoning action result".to_string(),
+            label: "synthetic routing action result".to_string(),
             content: format!(
-                "auto-reasoning-context-pressure- {}",
+                "routing-context-pressure- {}",
                 "context-pressure ".repeat(50_000)
             ),
         });
@@ -18449,11 +18446,11 @@ context_window_tokens = 100000
         .join("\n");
     assert!(stored_context.contains("[context compacted]"));
     assert!(
-        stored_context.contains("label=synthetic auto-reasoning action result"),
+        stored_context.contains("label=synthetic routing action result"),
         "{stored_context}"
     );
     assert!(
-        !stored_context.contains("auto-reasoning-context-pressure-"),
+        !stored_context.contains("routing-context-pressure-"),
         "{stored_context}"
     );
     let pane_text = service
@@ -19717,11 +19714,11 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             cached_input_tokens: Some(123),
         },
     );
-    let auto_reasoning = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"restore-auto-reasoning","method":"agent/shell/command","params":{"idempotency_key":"restore-auto-reasoning","input":"/auto-reasoning on"}}"#,
+    let routing = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"restore-routing","method":"agent/shell/command","params":{"idempotency_key":"restore-routing","input":"/routing on"}}"#,
         &primary,
     );
-    assert!(auto_reasoning.contains("enabled=true"), "{auto_reasoning}");
+    assert!(routing.contains("enabled=true"), "{routing}");
     let approval = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"restore-approval","method":"agent/shell/command","params":{"idempotency_key":"restore-approval","input":"/approval full-access"}}"#,
         &primary,
@@ -19754,7 +19751,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             cached_input_tokens: Some(123),
         }
     );
-    assert_eq!(saved_metadata[0].auto_reasoning_enabled, Some(true));
+    assert_eq!(saved_metadata[0].routing_enabled, Some(true));
     assert_eq!(
         saved_metadata[0].approval_policy.as_deref(),
         Some("full-access")
@@ -19786,7 +19783,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         })
     );
     assert_eq!(
-        restored.agent_auto_reasoning_overrides.get("%1").copied(),
+        restored.agent_routing_overrides.get("%1").copied(),
         Some(true)
     );
     assert_eq!(
@@ -19812,7 +19809,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &[
             String::from("remember this"),
             String::from("/resume saved"),
-            String::from("/auto-reasoning on"),
+            String::from("/routing on"),
             String::from("/approval full-access"),
             String::from("/personality concise"),
             String::from("/log-level trace"),
@@ -19865,7 +19862,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 pane_model_profile: None,
                 planning_enabled: false,
                 response_style: None,
-                auto_reasoning_enabled: Some(true),
+                routing_enabled: Some(true),
                 approval_policy: Some("full-access".to_string()),
                 working_directory: None,
                 project_root: None,
@@ -19897,7 +19894,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         "{resumed}"
     );
     assert_eq!(
-        service.agent_auto_reasoning_overrides.get("%1").copied(),
+        service.agent_routing_overrides.get("%1").copied(),
         Some(true)
     );
     assert_eq!(
@@ -19959,7 +19956,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 pane_model_profile: None,
                 planning_enabled: false,
                 response_style: None,
-                auto_reasoning_enabled: None,
+                routing_enabled: None,
                 approval_policy: Some("ask".to_string()),
                 working_directory: None,
                 project_root: None,
@@ -20005,7 +20002,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 pane_model_profile: None,
                 planning_enabled: false,
                 response_style: None,
-                auto_reasoning_enabled: None,
+                routing_enabled: None,
                 approval_policy: None,
                 working_directory: None,
                 project_root: None,

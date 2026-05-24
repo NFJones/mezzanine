@@ -130,8 +130,8 @@ pub struct TerminalPaneFrameContext {
     pub agent_model: Option<String>,
     /// Active reasoning profile or effort shown by `agent.reasoning`.
     pub agent_reasoning: Option<String>,
-    /// Pane-local automatic reasoning state shown by `agent.auto_reasoning`.
-    pub agent_auto_reasoning: Option<String>,
+    /// Pane-local routing state shown by `agent.routing`.
+    pub agent_routing: Option<String>,
     /// Active latency preference shown by `agent.latency`.
     pub agent_latency: Option<String>,
     /// Active model preset name shown by `agent.preset`.

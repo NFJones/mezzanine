@@ -9,8 +9,8 @@ use super::{
     AuditConfig, AuditLog, AuditRetentionPolicy, BTreeMap, BlockedApprovalRequest, CommandRule,
     CommandRuleScope, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigScope,
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_AUTO_COMPACT,
-    DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_AUTO_REASONING,
-    DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
+    DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
     DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
     DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM,
@@ -2047,16 +2047,16 @@ pub(super) fn runtime_agent_compaction_raw_retention_percent_from_config(
     Ok(percent as usize)
 }
 
-/// Parses whether automatic agent model and reasoning sizing is enabled.
-pub(super) fn runtime_agent_auto_reasoning_from_config(root: &Value) -> Result<bool> {
+/// Parses whether routing model and reasoning sizing is enabled.
+pub(super) fn runtime_agent_routing_from_config(root: &Value) -> Result<bool> {
     let Some(agents) = runtime_json_object(root, "agents") else {
-        return Ok(DEFAULT_AGENT_AUTO_REASONING);
+        return Ok(DEFAULT_AGENT_ROUTING);
     };
-    let Some(value) = agents.get("auto_reasoning") else {
-        return Ok(DEFAULT_AGENT_AUTO_REASONING);
+    let Some(value) = agents.get("routing") else {
+        return Ok(DEFAULT_AGENT_ROUTING);
     };
     runtime_json_bool(Some(value))
-        .ok_or_else(|| MezError::config("agents.auto_reasoning must be a boolean"))
+        .ok_or_else(|| MezError::config("agents.routing must be a boolean"))
 }
 
 /// Parses user-configured system prompt text appended to the base prompt.
@@ -2351,8 +2351,8 @@ pub(super) fn runtime_agent_personality_profiles_from_config(
             model_profile: runtime_json_string(object.get("model_profile")).map(ToOwned::to_owned),
             planning_enabled: runtime_json_bool(object.get("planning_enabled"))
                 .or_else(|| runtime_json_bool(object.get("planning"))),
-            auto_reasoning_enabled: runtime_json_bool(object.get("auto_reasoning_enabled"))
-                .or_else(|| runtime_json_bool(object.get("auto_reasoning"))),
+            routing_enabled: runtime_json_bool(object.get("routing_enabled"))
+                .or_else(|| runtime_json_bool(object.get("routing"))),
         };
         profiles.insert(profile_id.clone(), profile);
     }

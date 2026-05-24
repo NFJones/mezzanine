@@ -714,7 +714,7 @@ fn runtime_custom_human_readable_display_line(record: &RuntimeDisplayRecord) -> 
         return runtime_agent_fork_sentence(record);
     }
     match record.field_value("source")? {
-        "runtime-auto-reasoning" => runtime_auto_reasoning_sentence(record),
+        "runtime-routing" => runtime_routing_sentence(record),
         "runtime-policy" => runtime_policy_sentence(record),
         _ => None,
     }
@@ -768,8 +768,8 @@ fn runtime_agent_fork_sentence(record: &RuntimeDisplayRecord) -> Option<String> 
     }
 }
 
-/// Formats pane-local auto-reasoning status and mutation rows.
-fn runtime_auto_reasoning_sentence(record: &RuntimeDisplayRecord) -> Option<String> {
+/// Formats pane-local routing status and mutation rows.
+fn runtime_routing_sentence(record: &RuntimeDisplayRecord) -> Option<String> {
     let pane = record.field_value("pane")?;
     let enabled = runtime_enabled_phrase(record.field_value("enabled")?);
     let default = runtime_enabled_phrase(record.field_value("default")?);
@@ -780,7 +780,7 @@ fn runtime_auto_reasoning_sentence(record: &RuntimeDisplayRecord) -> Option<Stri
             "unchanged"
         };
         return Some(format!(
-            "auto reasoning is {enabled} for pane {pane}; default is {default}; {change}."
+            "routing is {enabled} for pane {pane}; default is {default}; {change}."
         ));
     }
     if let Some(override_present) = record.field_value("override_present") {
@@ -790,7 +790,7 @@ fn runtime_auto_reasoning_sentence(record: &RuntimeDisplayRecord) -> Option<Stri
             "no pane override"
         };
         return Some(format!(
-            "auto reasoning is {enabled} for pane {pane}; default is {default}; {override_text}."
+            "routing is {enabled} for pane {pane}; default is {default}; {override_text}."
         ));
     }
     None
@@ -1605,7 +1605,7 @@ fn runtime_pane_agent_selector_rendition(
         match field {
             PaneAgentStatusField::Model => ui_theme.colors.agent_model,
             PaneAgentStatusField::Reasoning => ui_theme.colors.agent_reasoning,
-            PaneAgentStatusField::AutoReasoning => ui_theme.colors.agent_reasoning,
+            PaneAgentStatusField::Routing => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::ApprovalPolicy => ui_theme.colors.agent_status_blocked,
             PaneAgentStatusField::Latency => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Preset => ui_theme.colors.agent_model,
@@ -6410,15 +6410,11 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let pane_id = pane.id.to_string();
-        if field == PaneAgentStatusField::AutoReasoning {
+        if field == PaneAgentStatusField::Routing {
             self.pane_agent_status_selector = None;
-            let outcome = self
-                .execute_agent_shell_auto_reasoning_command(&pane_id, "/auto-reasoning toggle")?;
-            let response = runtime_agent_shell_command_response_json(
-                &pane_id,
-                "/auto-reasoning",
-                Some(&outcome),
-            );
+            let outcome = self.execute_agent_shell_routing_command(&pane_id, "/routing toggle")?;
+            let response =
+                runtime_agent_shell_command_response_json(&pane_id, "/routing", Some(&outcome));
             if let Ok(display_output) =
                 runtime_agent_shell_display_output(&response, &self.ui_theme)
             {
@@ -6476,7 +6472,7 @@ impl RuntimeSessionService {
                     Vec::new()
                 }
             }
-            PaneAgentStatusField::AutoReasoning => Vec::new(),
+            PaneAgentStatusField::Routing => Vec::new(),
         };
         if items.is_empty() {
             self.pane_agent_status_selector = None;
@@ -6564,7 +6560,7 @@ impl RuntimeSessionService {
                 }
                 return Ok(());
             }
-            PaneAgentStatusField::AutoReasoning => return Ok(()),
+            PaneAgentStatusField::Routing => return Ok(()),
             PaneAgentStatusField::Latency => {
                 self.apply_pane_latency_picker_selection(&selector.pane_id, &value)?
             }
@@ -6574,7 +6570,7 @@ impl RuntimeSessionService {
             match field {
                 PaneAgentStatusField::Model => "/model",
                 PaneAgentStatusField::Reasoning => "/model reasoning",
-                PaneAgentStatusField::AutoReasoning => "/auto-reasoning",
+                PaneAgentStatusField::Routing => "/routing",
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
                 PaneAgentStatusField::Latency => "/latency",
                 PaneAgentStatusField::Preset => "/model",
@@ -6607,12 +6603,12 @@ impl RuntimeSessionService {
                     _ => None,
                 }
             }
-            PaneAgentStatusField::AutoReasoning => Some(
+            PaneAgentStatusField::Routing => Some(
                 if self
-                    .agent_auto_reasoning_overrides
+                    .agent_routing_overrides
                     .get(pane_id)
                     .copied()
-                    .unwrap_or(self.agent_auto_reasoning)
+                    .unwrap_or(self.agent_routing)
                 {
                     "auto:on"
                 } else {
@@ -8396,12 +8392,12 @@ impl RuntimeSessionService {
                             .as_ref()
                             .and_then(|(_name, profile)| profile.reasoning_profile.clone())
                     });
-                let agent_auto_reasoning = agent_session.map(|_| {
+                let agent_routing = agent_session.map(|_| {
                     if self
-                        .agent_auto_reasoning_overrides
+                        .agent_routing_overrides
                         .get(&pane_id)
                         .copied()
-                        .unwrap_or(self.agent_auto_reasoning)
+                        .unwrap_or(self.agent_routing)
                     {
                         "auto:on".to_string()
                     } else {
@@ -8465,7 +8461,7 @@ impl RuntimeSessionService {
                         agent_status,
                         agent_model,
                         agent_reasoning,
-                        agent_auto_reasoning,
+                        agent_routing,
                         agent_latency,
                         agent_preset: self.agent_preset_display_value_for_pane(pane_id.as_str()),
                         agent_context_usage,
@@ -10558,17 +10554,15 @@ mod tests {
         );
     }
 
-    /// Verifies compact auto-reasoning records render as terse sentences in
+    /// Verifies compact routing records render as terse sentences in
     /// normal agent logs instead of exposing raw key/value fields.
     #[test]
-    fn human_readable_display_lines_format_auto_reasoning_sentence() {
+    fn human_readable_display_lines_format_routing_sentence() {
         assert_eq!(
             runtime_human_readable_display_lines(
-                "pane=%1 enabled=true default=false changed=true source=runtime-auto-reasoning"
+                "pane=%1 enabled=true default=false changed=true source=runtime-routing"
             ),
-            vec![
-                "auto reasoning is enabled for pane %1; default is disabled; changed.".to_string()
-            ]
+            vec!["routing is enabled for pane %1; default is disabled; changed.".to_string()]
         );
     }
 

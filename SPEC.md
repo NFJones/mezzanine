@@ -740,7 +740,7 @@ command pillbox MUST run the command; releasing elsewhere MUST cancel it.
 The generated default window right-status template MUST include padded button
 pillboxes for new-pane, new-window, new-group, and agent-shell commands. The
 default icons for those buttons MUST be `+`, `□`, `⊕`, and `λ`, respectively.
-Pane-local agent status controls own auto-reasoning display and toggling.
+Pane-local agent status controls own routing display and toggling.
 Users MUST be able to remove or replace these buttons by editing the window
 right-status template.
 When more than one window group exists, attached foreground clients MUST render
@@ -816,7 +816,7 @@ Pane frames MUST support the following fields:
 - `agent.status`: Agent state, such as idle, running, waiting, or errored.
 - `agent.model`: Active provider model name when visible by policy.
 - `agent.reasoning`: Active reasoning profile or effort when visible by policy.
-- `agent.auto_reasoning`: Pane-local automatic reasoning enablement state.
+- `agent.routing`: Pane-local routing enablement state.
 - `agent.preset`: Active model preset name when the pane model and
   auto-sizing profile group match a configured preset, or an implementation
   placeholder such as `custom` when presets exist but the pane state does not
@@ -1886,9 +1886,9 @@ When a root turn is blocked only because it is waiting for joined subagents to
 complete, the pane-frame status value SHOULD be `waiting`, the status pill
 SHOULD display `waiting`, and the pill SHOULD use the same themed color and
 subtle gradient scan as running or queued work. The default agent model,
-reasoning, auto-reasoning, context usage, and status pills SHOULD include one
+reasoning, routing, context usage, and status pills SHOULD include one
 visible padding cell on each side of their contained item text. The default
-auto-reasoning pill MUST render the constant text `route` and signal its
+routing pill MUST render the constant text `route` and signal its
 enabled or disabled state through pill color alone. The default model and
 reasoning pills MUST be mouse-selectable controls when the terminal
 mouse protocol is active: clicking the model pill MUST present a drop-down with
@@ -2422,7 +2422,7 @@ The `history` table MUST support `lines`, `rotate_lines`, `persist`, and
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `shell_only`, `auto_compact`, `auto_compact_threshold`,
-`compaction_raw_retention_percent`, `auto_reasoning`, `action_failure_retry_limit`,
+`compaction_raw_retention_percent`, `routing`, `action_failure_retry_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, `max_depth`,
@@ -2431,7 +2431,7 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 `1`, and MUST default to `0.95`.
 `agents.compaction_raw_retention_percent` MUST be an integer from `1` to `100`,
 and MUST default to `10`.
-`agents.auto_reasoning` MUST be a boolean and MUST default to `false`.
+`agents.routing` MUST be a boolean and MUST default to `false`.
 `agents.action_failure_retry_limit` MUST be a positive integer and MUST default
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one
@@ -2516,7 +2516,7 @@ The `personalities` table MUST be a map keyed by user-defined personality
 profile identity. Mezzanine MUST NOT define built-in personality profiles. Each
 profile MAY define `name`, `system_prompt`, `instructions`, `response_style`,
 `style`, `model_profile`, `planning_enabled`, `planning`,
-`auto_reasoning_enabled`, and `auto_reasoning`. The `/personality` command MUST
+`routing_enabled`, and `routing`. The `/personality` command MUST
 select configured profiles by id, MUST offer configured profile ids through
 agent prompt completion, and MAY continue to accept ad hoc response-style text
 for pane-local style preferences. A selected profile's `system_prompt` or
@@ -4198,7 +4198,7 @@ instruction; it SHOULD prefer compacting or omitting recoverable action-result,
 tool, transcript, and other explicit observation context over dropping recent
 user steering wholesale.
 
-Agents MUST support optional auto-reasoning model sizing. When auto-reasoning
+Agents MUST support optional routing model sizing. When routing
 is enabled for a pane, agent, or subagent, the first provider step for each new
 turn MUST be a bounded classification request to the configured auto-sizing
 router model. The router decision MUST select one configured size bucket
@@ -4725,7 +4725,7 @@ The baseline command capabilities are:
   command MUST accept `list` to list models for the active provider, and MUST
   accept a provider model name with an optional reasoning level to select that
   model for the active scope.
-- `/auto-reasoning`: Inspect or change automatic turn model sizing. It MUST
+- `/routing`: Inspect or change automatic turn model sizing. It MUST
   accept `on`, `off`, `toggle`, and `status`. The command MUST update the
   pane-local agent preference and MUST checkpoint that preference with other
   pane-scoped agent shell preferences.
@@ -6983,7 +6983,7 @@ pane-scoped model profile overrides, MUST preserve the current reasoning
 preference when the newly selected model supports it, and MUST NOT block normal
 pane interaction after the drop-down is closed.
 
-When `agents.auto_reasoning` or the pane-local `/auto-reasoning` preference is
+When `agents.routing` or the pane-local `/routing` preference is
 enabled, Mezzanine MUST run an auto-sizing decision before the normal provider
 request for each new root-agent turn and each spawned subagent turn. The
 decision request MUST use `agents.auto_sizing.router_model_profile` and MUST
@@ -7089,9 +7089,9 @@ Auto-sizing MUST preserve existing override precedence. Explicit model
 selection from `/model`, session/window/pane/agent/subagent model overrides,
 and subagent profile model settings define the default profile that is restored
 after the turn. Auto-sizing only chooses an effective model profile for the
-current turn. If auto-reasoning is disabled for a subagent, that subagent MUST
+current turn. If routing is disabled for a subagent, that subagent MUST
 use the model profile selected by ordinary override and inheritance rules. If
-auto-reasoning is enabled for a subagent, the subagent MUST run its own router
+routing is enabled for a subagent, the subagent MUST run its own router
 decision using its subagent task prompt and scope metadata rather than reusing
 the parent turn's router decision.
 

@@ -457,7 +457,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "auto_compact",
     "auto_compact_threshold",
     "compaction_raw_retention_percent",
-    "auto_reasoning",
+    "routing",
     "action_failure_retry_limit",
     "custom_system_prompt",
     "default_personality",
@@ -571,8 +571,8 @@ pub(super) const PERSONALITY_PROFILE_KEYS: &[&str] = &[
     "model_profile",
     "planning_enabled",
     "planning",
-    "auto_reasoning_enabled",
-    "auto_reasoning",
+    "routing_enabled",
+    "routing",
 ];
 
 /// Defines the MESSAGE PROTOCOL KEYS const used by this subsystem.

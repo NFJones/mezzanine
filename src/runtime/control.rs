@@ -5327,9 +5327,8 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
-        if let Some(enabled) = self.inherited_auto_reasoning_for_child_agent(&spawn.parent_agent_id)
-        {
-            self.agent_auto_reasoning_overrides
+        if let Some(enabled) = self.inherited_routing_for_child_agent(&spawn.parent_agent_id) {
+            self.agent_routing_overrides
                 .insert(started.pane_id.clone(), enabled);
         }
         if let Some(auto_sizing) =
@@ -5575,13 +5574,10 @@ impl RuntimeSessionService {
         self.pane_current_working_directory(parent_pane_id.as_str())
     }
 
-    /// Returns the auto-reasoning preference a child agent should inherit.
-    pub(super) fn inherited_auto_reasoning_for_child_agent(
-        &self,
-        parent_agent_id: &str,
-    ) -> Option<bool> {
+    /// Returns the routing preference a child agent should inherit.
+    pub(super) fn inherited_routing_for_child_agent(&self, parent_agent_id: &str) -> Option<bool> {
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
-        Some(self.agent_auto_reasoning_enabled_for_pane(parent_pane_id.as_str()))
+        Some(self.agent_routing_enabled_for_pane(parent_pane_id.as_str()))
     }
 
     /// Returns the auto-sizing configuration a child agent should inherit.

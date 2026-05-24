@@ -794,7 +794,7 @@ fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
         }
         "list-mcp" => Vec::new(),
         "resume" => flag_candidates(&["--latest"]),
-        "auto-reasoning" => value_candidates(&["on", "off", "toggle", "status"]),
+        "routing" => value_candidates(&["on", "off", "toggle", "status"]),
         "personality" => value_candidates(&["list", "status", "show", "clear", "default"]),
         "copy" => value_candidates(&["pane", "buffer", "clipboard"]),
         "copy-context" => value_candidates(&["pane", "buffer", "clipboard"]),
@@ -867,7 +867,7 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "approve" => Some(" <approval-id|latest> [once|session|project|global]"),
         "trust" => Some(" <project-root|latest|list>"),
         "model" => Some(" [--secondary] <list|model> [reasoning]"),
-        "auto-reasoning" => Some(" <on|off|toggle|status>"),
+        "routing" => Some(" <on|off|toggle|status>"),
         "statusline" => Some(" <on|off|toggle>"),
         "log-level" => Some(" <normal|verbose|debug|trace>"),
         "copy" => Some(" <pane|buffer [name]|clipboard>"),
@@ -1249,9 +1249,8 @@ mod tests {
 
         assert_eq!(plan.candidates[0].value, "debug");
 
-        let auto_reasoning_plan =
-            plan_selector(SelectorSurface::AgentCommand, "/auto-reasoning t", 18).unwrap();
-        assert_eq!(auto_reasoning_plan.candidates[0].value, "toggle");
+        let routing_plan = plan_selector(SelectorSurface::AgentCommand, "/routing t", 18).unwrap();
+        assert_eq!(routing_plan.candidates[0].value, "toggle");
 
         let copy_plan = plan_selector(SelectorSurface::AgentCommand, "/copy c", 7).unwrap();
         assert_eq!(copy_plan.candidates[0].value, "clipboard");

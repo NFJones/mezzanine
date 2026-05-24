@@ -202,7 +202,7 @@ Default `frames.window.visible_fields`:
 Default `frames.pane.visible_fields`:
 
 ```toml
-["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.latency", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.routing", "agent.latency", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 ```
 
 ### Frame template fields
@@ -217,7 +217,7 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.index`, `pane.title`, `pane.active`, `pane.size`, `pane.primary_pid`,
 `pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `agent.id`,
 `agent.name`, `agent.status`, `agent.model`, `agent.reasoning`,
-`agent.auto_reasoning`, `agent.latency`, `agent.context_usage`, `policy.mode`,
+`agent.routing`, `agent.latency`, `agent.context_usage`, `policy.mode`,
 `observer.pending_count`, and `history.position`.
 
 ### `theme`
@@ -352,7 +352,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `agents.auto_compact` | boolean | `true` | Enable automatic context compaction. |
 | `agents.auto_compact_threshold` | number | `0.95` | Context usage threshold; must be greater than 0 and at most 1. |
 | `agents.compaction_raw_retention_percent` | integer | `10` | Percent of raw context retained during compaction; 1 to 100. |
-| `agents.auto_reasoning` | boolean | `false` | Enable pane-local automatic reasoning selection by default. |
+| `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
@@ -555,8 +555,8 @@ Command rule fields for each entry in a command rule array:
 | `personalities.<name>.model_profile` | string | omitted | Preferred model profile. |
 | `personalities.<name>.planning_enabled` | boolean | omitted | Enable planning behavior for the profile. |
 | `personalities.<name>.planning` | boolean | omitted | Compatibility planning field. |
-| `personalities.<name>.auto_reasoning_enabled` | boolean | omitted | Enable automatic reasoning for the profile. |
-| `personalities.<name>.auto_reasoning` | boolean | omitted | Compatibility auto-reasoning field. |
+| `personalities.<name>.routing_enabled` | boolean | omitted | Enable routing for the profile. |
+| `personalities.<name>.routing` | boolean | omitted | Compatibility routing field. |
 
 ### `message_protocol`
 

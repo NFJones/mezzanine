@@ -63,7 +63,7 @@ pub const DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD: f64 = 0.95;
 /// Default percent of the active model context retained as uncompacted raw tail.
 pub const DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT: usize = 10;
 /// Whether agent turns use automatic model and reasoning sizing by default.
-pub const DEFAULT_AGENT_AUTO_REASONING: bool = false;
+pub const DEFAULT_AGENT_ROUTING: bool = false;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 /// Default router profile for automatic model and reasoning sizing.
@@ -2275,8 +2275,8 @@ pub(super) struct RuntimeAgentPersonalityProfile {
     pub(super) model_profile: Option<String>,
     /// Optional planning-mode override.
     pub(super) planning_enabled: Option<bool>,
-    /// Optional automatic reasoning override.
-    pub(super) auto_reasoning_enabled: Option<bool>,
+    /// Optional routing override.
+    pub(super) routing_enabled: Option<bool>,
 }
 
 /// Carries Runtime Model Profile Override Scope state for this subsystem.
@@ -3659,12 +3659,11 @@ pub struct RuntimeSessionService {
     pub(super) pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
     /// Model-backed compaction tasks claimed by async provider workers.
     pub(super) claimed_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
-    /// Whether new agent turns use automatic model and reasoning sizing by
-    /// default.
-    pub(super) agent_auto_reasoning: bool,
-    /// Pane-local automatic reasoning overrides. Missing entries inherit the
+    /// Whether new agent turns use routing model and reasoning sizing by default.
+    pub(super) agent_routing: bool,
+    /// Pane-local routing overrides. Missing entries inherit the
     /// configured default.
-    pub(super) agent_auto_reasoning_overrides: BTreeMap<String, bool>,
+    pub(super) agent_routing_overrides: BTreeMap<String, bool>,
     /// Automatic sizing profile and fallback configuration.
     pub(super) agent_auto_sizing: RuntimeAutoSizingConfig,
     /// Pane-local automatic sizing profile overrides selected through model

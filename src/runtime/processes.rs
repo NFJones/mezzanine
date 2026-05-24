@@ -5613,7 +5613,7 @@ impl RuntimeSessionService {
         self.agent_planning_modes.remove(pane_id);
         self.agent_personality_selections.remove(pane_id);
         self.agent_response_styles.remove(pane_id);
-        self.agent_auto_reasoning_overrides.remove(pane_id);
+        self.agent_routing_overrides.remove(pane_id);
         self.agent_copy_outputs.remove(pane_id);
         self.agent_modified_files.remove(pane_id);
         self.active_copy_modes.remove(pane_id);

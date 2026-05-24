@@ -6505,7 +6505,7 @@ fn render_default_pane_frame_right_aligns_context_usage_before_agent_status() {
             agent_status: Some("running".to_string()),
             agent_model: Some("gpt-5.5".to_string()),
             agent_reasoning: Some("high".to_string()),
-            agent_auto_reasoning: Some("auto:on".to_string()),
+            agent_routing: Some("auto:on".to_string()),
             agent_preset: Some("openai".to_string()),
             agent_context_usage: Some("87%".to_string()),
             ..TerminalPaneFrameContext::default()
@@ -7027,7 +7027,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
             agent_status: Some("running".to_string()),
             agent_model: Some("gpt-5.5".to_string()),
             agent_reasoning: Some("high".to_string()),
-            agent_auto_reasoning: Some("auto:on".to_string()),
+            agent_routing: Some("auto:on".to_string()),
             agent_context_usage: Some("42%".to_string()),
             ..TerminalPaneFrameContext::default()
         },
@@ -7047,7 +7047,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
     for field in [
         PaneAgentStatusField::Model,
         PaneAgentStatusField::Reasoning,
-        PaneAgentStatusField::AutoReasoning,
+        PaneAgentStatusField::Routing,
         PaneAgentStatusField::ApprovalPolicy,
     ] {
         assert!(
@@ -7056,10 +7056,10 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
         );
     }
     let approval_columns = cells_for_field(&cells, PaneAgentStatusField::ApprovalPolicy);
-    let status_columns = cells_for_field(&cells, PaneAgentStatusField::AutoReasoning);
+    let status_columns = cells_for_field(&cells, PaneAgentStatusField::Routing);
     assert!(
         approval_columns.iter().max() > status_columns.iter().min(),
-        "approval and auto-reasoning pills should occupy distinct cells: {cells:?}"
+        "approval and routing pills should occupy distinct cells: {cells:?}"
     );
 }
 

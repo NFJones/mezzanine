@@ -224,7 +224,7 @@ pub enum WindowFrameAction {
     /// Show or hide the focused pane's agent shell.
     AgentShell,
     /// Toggle automatic model/reasoning sizing for the focused pane's agent.
-    AutoReasoning,
+    Routing,
     /// Run an arbitrary terminal command from a templated status button.
     TerminalCommand {
         /// Stable identity for press/release matching.
@@ -283,7 +283,7 @@ impl WindowFrameAction {
             Self::NewWindow => "□",
             Self::NewGroup => "⊕",
             Self::AgentShell => "λ",
-            Self::AutoReasoning => "Δ",
+            Self::Routing => "Δ",
             Self::TerminalCommand { icon, .. } | Self::AgentCommand { icon, .. } => icon,
         }
     }
@@ -295,7 +295,7 @@ impl WindowFrameAction {
             Self::NewWindow => "new-window",
             Self::NewGroup => "new-group",
             Self::AgentShell => "agent-shell",
-            Self::AutoReasoning => "auto-reasoning",
+            Self::Routing => "routing",
             Self::TerminalCommand { id, .. } | Self::AgentCommand { id, .. } => id,
         }
     }
@@ -303,7 +303,7 @@ impl WindowFrameAction {
     /// Returns the command dispatcher kind for this status-bar action.
     pub const fn command_kind(&self) -> WindowFrameCommandKind {
         match self {
-            Self::AutoReasoning | Self::AgentCommand { .. } => WindowFrameCommandKind::Agent,
+            Self::Routing | Self::AgentCommand { .. } => WindowFrameCommandKind::Agent,
             Self::NewPane
             | Self::NewWindow
             | Self::NewGroup
@@ -319,7 +319,7 @@ impl WindowFrameAction {
             Self::NewWindow => "new-window",
             Self::NewGroup => "new-group",
             Self::AgentShell => "agent-shell",
-            Self::AutoReasoning => "/auto-reasoning toggle",
+            Self::Routing => "/routing toggle",
             Self::TerminalCommand { command, .. } | Self::AgentCommand { command, .. } => command,
         }
     }
@@ -331,7 +331,7 @@ impl WindowFrameAction {
             Self::NewWindow,
             Self::NewGroup,
             Self::AgentShell,
-            Self::AutoReasoning,
+            Self::Routing,
         ]
     }
 }
@@ -365,8 +365,8 @@ pub enum PaneAgentStatusField {
     Model,
     /// Active reasoning profile or effort shown in the pane-frame status pills.
     Reasoning,
-    /// Pane-local automatic reasoning state shown in the pane-frame status pills.
-    AutoReasoning,
+    /// Pane-local routing state shown in the pane-frame status pills.
+    Routing,
     /// Active approval mode shown in the pane-frame status pills.
     ApprovalPolicy,
     /// Active latency preference shown in the pane-frame status pills.
@@ -381,7 +381,7 @@ impl PaneAgentStatusField {
         match self {
             Self::Model => "agent.model",
             Self::Reasoning => "agent.reasoning",
-            Self::AutoReasoning => "agent.auto_reasoning",
+            Self::Routing => "agent.routing",
             Self::ApprovalPolicy => "policy.mode",
             Self::Latency => "agent.latency",
             Self::Preset => "agent.preset",

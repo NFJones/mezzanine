@@ -4611,17 +4611,17 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Returns the pane-local automatic reasoning preference, falling back to
+    /// Returns the pane-local routing preference, falling back to
     /// the configured default when the pane has no explicit override.
-    pub(super) fn agent_auto_reasoning_enabled_for_pane(&self, pane_id: &str) -> bool {
-        self.agent_auto_reasoning_overrides
+    pub(super) fn agent_routing_enabled_for_pane(&self, pane_id: &str) -> bool {
+        self.agent_routing_overrides
             .get(pane_id)
             .copied()
             .or_else(|| {
                 self.agent_selected_personality_profile(pane_id)
-                    .and_then(|profile| profile.auto_reasoning_enabled)
+                    .and_then(|profile| profile.routing_enabled)
             })
-            .unwrap_or(self.agent_auto_reasoning)
+            .unwrap_or(self.agent_routing)
     }
 
     /// Builds an automatic sizing dispatch for the first provider request of a
@@ -4631,7 +4631,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         default_profile: &ModelProfile,
     ) -> Result<Option<RuntimeAutoSizingDispatch>> {
-        if !self.agent_auto_reasoning_enabled_for_pane(&turn.pane_id)
+        if !self.agent_routing_enabled_for_pane(&turn.pane_id)
             || self.agent_turn_executions.contains_key(&turn.turn_id)
         {
             return Ok(None);
@@ -4737,7 +4737,7 @@ impl RuntimeSessionService {
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
                 &format!(
-                    "agent: auto reasoning selected {} reasoning on {}",
+                    "agent: routing selected {} reasoning on {}",
                     decision.reasoning_effort, profile.model
                 ),
             )?;
@@ -4754,10 +4754,7 @@ impl RuntimeSessionService {
             )?;
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
-                &format!(
-                    "agent: auto reasoning fallback to {}: {}",
-                    profile.model, fallback
-                ),
+                &format!("agent: routing fallback to {}: {}", profile.model, fallback),
             )?;
         }
         Ok(())
@@ -6540,7 +6537,7 @@ impl RuntimeSessionService {
             )?;
             self.append_agent_verbose_status_text_to_terminal_buffer(
                 &turn.pane_id,
-                "agent: auto reasoning selecting model and reasoning effort",
+                "agent: routing selecting model and reasoning effort",
             )?;
         }
         let auto_sizing_provider = if let Some(auto_sizing) = auto_sizing.as_ref()

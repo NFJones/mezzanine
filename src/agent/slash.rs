@@ -222,12 +222,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("model", &[], SlashCommandEffect::PolicyMutation, true),
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
-        slash(
-            "auto-reasoning",
-            &[],
-            SlashCommandEffect::PolicyMutation,
-            true,
-        ),
+        slash("routing", &[], SlashCommandEffect::PolicyMutation, true),
         slash("personality", &[], SlashCommandEffect::PolicyMutation, true),
         slash("stop", &[], SlashCommandEffect::BackgroundJobMutation, true),
         slash("fork", &[], SlashCommandEffect::SessionMutation, false),

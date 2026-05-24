@@ -112,8 +112,8 @@ pub struct AgentSessionMetadata {
     pub planning_enabled: bool,
     /// Pane-local response style, if one is active.
     pub response_style: Option<String>,
-    /// Pane-local automatic reasoning override, if one is active.
-    pub auto_reasoning_enabled: Option<bool>,
+    /// Pane-local routing override, if one is active.
+    pub routing_enabled: Option<bool>,
     /// Saved approval policy name for the session, if known.
     pub approval_policy: Option<String>,
     /// Best-known pane working directory for the agent session.

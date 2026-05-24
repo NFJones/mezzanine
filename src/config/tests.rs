@@ -720,7 +720,11 @@ default_command = "vim"
 path = "/bin/bash"
 
 [frames.pane]
-visible_fields = ["pane.index", "agent.model"]
+visible_fields = ["pane.index", "agent.auto_reasoning", "agent.model"]
+[agents]
+auto_reasoning = true
+[personalities.careful]
+auto_reasoning_enabled = true
 "#;
 
     let plan = migrate_config_text(ConfigFormat::Toml, legacy).unwrap();
@@ -728,9 +732,14 @@ visible_fields = ["pane.index", "agent.model"]
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 2"));
+    assert!(plan.text.contains("version = 3"));
     assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
     assert!(!plan.text.contains("nested_muxxer"));
+    assert!(plan.text.contains("routing = true"));
+    assert!(plan.text.contains("routing_enabled = true"));
+    assert!(plan.text.contains("\"agent.routing\""));
+    assert!(!plan.text.contains("auto_reasoning"));
+    assert!(!plan.text.contains("agent.auto_reasoning"));
     assert!(!plan.text.contains("default_command"));
     assert!(!plan.text.contains("path = \"/bin/bash\""));
     assert!(plan.text.contains("\"agent.preset\""));
@@ -759,8 +768,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-
-    assert_eq!(values.get("version"), Some(&"2".to_string()));
+    assert_eq!(values.get("version"), Some(&"3".to_string()));
     assert_eq!(
         values.get("terminal.nested_multiplexer"),
         Some(&"disabled".to_string())
@@ -830,7 +838,7 @@ fn validates_custom_subagent_profile_schema() {
 fn validates_custom_personality_profile_schema() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
-        "[agents]\ncustom_system_prompt = \"Follow local conventions.\"\ndefault_personality = \"careful\"\n[personalities.careful]\nname = \"Careful\"\nsystem_prompt = \"Be precise.\"\nresponse_style = \"terse\"\nmodel_profile = \"default\"\nplanning_enabled = true\nauto_reasoning_enabled = true\n",
+        "[agents]\ncustom_system_prompt = \"Follow local conventions.\"\ndefault_personality = \"careful\"\n[personalities.careful]\nname = \"Careful\"\nsystem_prompt = \"Be precise.\"\nresponse_style = \"terse\"\nmodel_profile = \"default\"\nplanning_enabled = true\nrouting_enabled = true\n",
         ConfigScope::Primary,
     );
 

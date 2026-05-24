@@ -599,10 +599,8 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "debug-config"
         | "diff"
         | "list-modified-files" => "copy and diagnostics",
-        "approval" | "approve" | "auto-reasoning" | "init" | "latency" | "list-mcp"
-        | "log-level" | "logout" | "model" | "permissions" | "personality" | "trust" => {
-            "configuration"
-        }
+        "approval" | "approve" | "routing" | "init" | "latency" | "list-mcp" | "log-level"
+        | "logout" | "model" | "permissions" | "personality" | "trust" => "configuration",
         "help" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
@@ -641,7 +639,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "list-mcp" => "list configured MCP servers and tools.",
         "model" => "inspect or change model and reasoning settings.",
         "latency" => "inspect or change latency/cost preference.",
-        "auto-reasoning" => "toggle pane-local automatic model sizing.",
+        "routing" => "toggle pane-local automatic model sizing.",
         "personality" => "inspect or change response personality.",
         "resume" => "resume a saved conversation.",
         "fork" => "fork the current conversation into a new thread.",

@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 2
+version = 3
 
 [session]
 detach_behavior = "keep-running"
@@ -79,7 +79,7 @@ enabled = true
 position = "border"
 template = " #{pane.index} #{pane.title} "
 style = "default"
-visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.auto_reasoning", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 
 [theme]
 active = "kanagawa"
@@ -178,7 +178,7 @@ shell_only = true
 auto_compact = true
 auto_compact_threshold = 0.95
 compaction_raw_retention_percent = 10
-auto_reasoning = false
+routing = false
 action_failure_retry_limit = 5
 custom_system_prompt = ""
 default_personality = ""

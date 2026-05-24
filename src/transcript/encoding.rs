@@ -277,7 +277,7 @@ impl AgentSessionMetadata {
             self.pane_model_profile.clone().unwrap_or_default(),
             self.planning_enabled.to_string(),
             self.response_style.clone().unwrap_or_default(),
-            self.auto_reasoning_enabled
+            self.routing_enabled
                 .map(|enabled| enabled.to_string())
                 .unwrap_or_default(),
             self.working_directory.clone().unwrap_or_default(),
@@ -338,10 +338,10 @@ impl AgentSessionMetadata {
             pane_model_profile: (!fields[8].is_empty()).then(|| fields[8].clone()),
             planning_enabled: parse_bool(&fields[9], "planning_enabled")?,
             response_style: (!fields[10].is_empty()).then(|| fields[10].clone()),
-            auto_reasoning_enabled: fields
+            routing_enabled: fields
                 .get(11)
                 .filter(|value| !value.is_empty())
-                .map(|value| parse_bool(value, "auto_reasoning_enabled"))
+                .map(|value| parse_bool(value, "routing_enabled"))
                 .transpose()?,
             working_directory: fields.get(12).filter(|value| !value.is_empty()).cloned(),
             project_root: fields.get(13).filter(|value| !value.is_empty()).cloned(),

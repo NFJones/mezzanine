@@ -9276,6 +9276,25 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .unwrap();
         assert_eq!(second_provider_report.accepted, 1);
         assert_eq!(second_provider_report.applied, 1);
+        let mut second_shell_transaction_settled = false;
+        for _ in 0..200 {
+            let timer_effects = client_handle.drain_timer_side_effects(16).await.unwrap();
+            if timer_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    RuntimeSideEffect::CancelTimer { key }
+                        if key.kind == RuntimeTimerKind::ShellTransaction
+                )
+            }) {
+                second_shell_transaction_settled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            second_shell_transaction_settled,
+            "second shell transaction should settle before ending the test client"
+        );
         let alive_seen = wait_for_rendered_text(
             &client_handle,
             ClientViewRole::Primary,

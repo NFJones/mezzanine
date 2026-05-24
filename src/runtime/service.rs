@@ -10,11 +10,11 @@ use super::{
     AuditActor, AuditDeferredWrite, AuditLog, AuditRecord, AuthStore, BTreeMap, BTreeSet,
     BlockedApprovalQueue, BlockedApprovalRequest, ConfigFormat, ConfigLayer, ConfigScope,
     ControlIdempotencyCache, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_AUTO_COMPACT,
-    DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_AUTO_REASONING,
-    DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT, DEFAULT_HISTORY_LIMIT,
-    DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
-    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM,
-    DEFAULT_SUBAGENT_WAIT_POLICY, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
+    DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    DEFAULT_AGENT_ROUTING, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
+    DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
+    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY,
+    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
     DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredProjectConfigWrite,
     DeferredProjectInstructionWrite, EventKind, EventLog, FocusedShellHookQueue, HostClipboard,
     KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan,
@@ -31,18 +31,17 @@ use super::{
     discover_existing_overlays, discover_project_root, discover_streamable_http_mcp_server,
     ensure_absolute, ensure_no_mez_separator, fs, json_escape,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_compact_from_config,
-    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_reasoning_from_config,
-    runtime_agent_auto_sizing_from_config,
+    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_personality_profiles_from_config,
-    runtime_approval_policy_name, runtime_audit_config_present, runtime_audit_log_from_config,
-    runtime_command_bindings_from_effective, runtime_default_agent_personality_from_config,
-    runtime_default_models_for_provider, runtime_effective_config_value,
-    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
-    runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
-    runtime_key_bindings_from_config, runtime_max_concurrent_agents_from_config,
-    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
-    runtime_max_subagent_panes_per_window_from_config,
+    runtime_agent_routing_from_config, runtime_approval_policy_name, runtime_audit_config_present,
+    runtime_audit_log_from_config, runtime_command_bindings_from_effective,
+    runtime_default_agent_personality_from_config, runtime_default_models_for_provider,
+    runtime_effective_config_value, runtime_history_limit_from_config,
+    runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
+    runtime_host_clipboard_from_config, runtime_key_bindings_from_config,
+    runtime_max_concurrent_agents_from_config, runtime_max_root_subagents_from_config,
+    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_pane_by_id, runtime_pane_frame_position_from_config,
     runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
@@ -285,8 +284,8 @@ impl RuntimeSessionService {
             agent_compacting_panes: BTreeMap::new(),
             pending_agent_compaction_tasks: BTreeMap::new(),
             claimed_agent_compaction_tasks: BTreeMap::new(),
-            agent_auto_reasoning: DEFAULT_AGENT_AUTO_REASONING,
-            agent_auto_reasoning_overrides: BTreeMap::new(),
+            agent_routing: DEFAULT_AGENT_ROUTING,
+            agent_routing_overrides: BTreeMap::new(),
             agent_auto_sizing: Default::default(),
             agent_auto_sizing_overrides: BTreeMap::new(),
             agent_token_usage_by_conversation: BTreeMap::new(),
@@ -728,7 +727,7 @@ impl RuntimeSessionService {
             runtime_agent_auto_compact_threshold_from_config(&structured)?;
         self.agent_compaction_raw_retention_percent =
             runtime_agent_compaction_raw_retention_percent_from_config(&structured)?;
-        self.agent_auto_reasoning = runtime_agent_auto_reasoning_from_config(&structured)?;
+        self.agent_routing = runtime_agent_routing_from_config(&structured)?;
         self.agent_action_failure_retry_limit =
             runtime_agent_action_failure_retry_limit_from_config(&structured)?;
         self.agent_auto_sizing = runtime_agent_auto_sizing_from_config(&structured)?;
@@ -1789,12 +1788,11 @@ impl RuntimeSessionService {
             } else {
                 self.agent_response_styles.remove(&metadata.pane_id);
             }
-            if let Some(enabled) = metadata.auto_reasoning_enabled {
-                self.agent_auto_reasoning_overrides
+            if let Some(enabled) = metadata.routing_enabled {
+                self.agent_routing_overrides
                     .insert(metadata.pane_id.clone(), enabled);
             } else {
-                self.agent_auto_reasoning_overrides
-                    .remove(&metadata.pane_id);
+                self.agent_routing_overrides.remove(&metadata.pane_id);
             }
             self.restore_agent_approval_policy_from_metadata(
                 metadata.approval_policy.as_deref(),
@@ -1893,10 +1891,7 @@ impl RuntimeSessionService {
                         .cloned(),
                     planning_enabled: self.agent_planning_modes.contains(&session.pane_id),
                     response_style: self.agent_response_styles.get(&session.pane_id).cloned(),
-                    auto_reasoning_enabled: self
-                        .agent_auto_reasoning_overrides
-                        .get(&session.pane_id)
-                        .copied(),
+                    routing_enabled: self.agent_routing_overrides.get(&session.pane_id).copied(),
                     approval_policy: self
                         .live_approval_policy_override
                         .map(runtime_approval_policy_name)
@@ -1922,7 +1917,7 @@ impl RuntimeSessionService {
     ///
     /// `/resume` can bind a saved conversation without going through daemon
     /// startup recovery. This helper reloads the matching metadata row so
-    /// explicit session choices such as auto-reasoning, approval policy, and
+    /// explicit session choices such as routing, approval policy, and
     /// provider token accounting continue from saved state instead of falling
     /// back to current defaults.
     pub(super) fn restore_agent_resume_state_for_conversation(
@@ -1938,11 +1933,11 @@ impl RuntimeSessionService {
             if metadata.conversation_id != conversation_id {
                 continue;
             }
-            if let Some(enabled) = metadata.auto_reasoning_enabled {
-                self.agent_auto_reasoning_overrides
+            if let Some(enabled) = metadata.routing_enabled {
+                self.agent_routing_overrides
                     .insert(pane_id.to_string(), enabled);
             } else {
-                self.agent_auto_reasoning_overrides.remove(pane_id);
+                self.agent_routing_overrides.remove(pane_id);
             }
             self.restore_agent_approval_policy_from_metadata(
                 metadata.approval_policy.as_deref(),

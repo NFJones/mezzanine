@@ -4195,7 +4195,7 @@ pub(super) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.auto_compact"
                 | "agents.auto_compact_threshold"
                 | "agents.compaction_raw_retention_percent"
-                | "agents.auto_reasoning"
+                | "agents.routing"
                 | "agents.action_failure_retry_limit"
                 | "agents.shell_only"
                 | "agents.subagent_placement"

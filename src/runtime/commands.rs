@@ -765,14 +765,14 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "auto-reasoning"
+                    && command == "routing"
                 {
-                    let auto_reasoning_outcome =
-                        self.execute_agent_shell_auto_reasoning_command(&pane_id, input)?;
+                    let routing_outcome =
+                        self.execute_agent_shell_routing_command(&pane_id, input)?;
                     runtime_agent_shell_command_response_json(
                         &pane_id,
                         input,
-                        Some(&auto_reasoning_outcome),
+                        Some(&routing_outcome),
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
@@ -2213,7 +2213,6 @@ fn runtime_auto_sizing_matches_preset(
             || config.allowed_reasoning_efforts == preset.allowed_reasoning_efforts)
 }
 
-
 impl RuntimeSessionService {
     fn runtime_model_catalog_for_provider(
         &mut self,
@@ -2955,31 +2954,30 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Executes `/auto-reasoning` against pane-scoped auto-sizing state.
-    pub(super) fn execute_agent_shell_auto_reasoning_command(
+    /// Executes `/routing` against pane-scoped auto-sizing state.
+    pub(super) fn execute_agent_shell_routing_command(
         &mut self,
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let invocation = parse_slash_command(input)?.ok_or_else(|| {
-            MezError::invalid_args("auto-reasoning command must be a slash command")
-        })?;
-        let mode = runtime_single_mode_arg(&invocation.args, "auto-reasoning", "toggle")?;
-        let default_enabled = self.agent_auto_reasoning;
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("routing command must be a slash command"))?;
+        let mode = runtime_single_mode_arg(&invocation.args, "routing", "toggle")?;
+        let default_enabled = self.agent_routing;
         let enabled_before = self
-            .agent_auto_reasoning_overrides
+            .agent_routing_overrides
             .get(pane_id)
             .copied()
             .unwrap_or(default_enabled);
         if matches!(mode.as_str(), "status" | "show") {
             return Ok(AgentShellCommandOutcome::Display {
-                command: "auto-reasoning".to_string(),
+                command: "routing".to_string(),
                 body: format!(
-                    "pane={} enabled={} default={} override_present={} source=runtime-auto-reasoning",
+                    "pane={} enabled={} default={} override_present={} source=runtime-routing",
                     json_escape(pane_id),
                     enabled_before,
                     default_enabled,
-                    self.agent_auto_reasoning_overrides.contains_key(pane_id)
+                    self.agent_routing_overrides.contains_key(pane_id)
                 ),
             });
         }
@@ -2990,16 +2988,16 @@ impl RuntimeSessionService {
             "toggle" => !enabled_before,
             _ => {
                 return Err(MezError::invalid_args(
-                    "auto-reasoning slash command expects on, off, toggle, status, or no argument",
+                    "routing slash command expects on, off, toggle, status, or no argument",
                 ));
             }
         };
-        self.agent_auto_reasoning_overrides
+        self.agent_routing_overrides
             .insert(pane_id.to_string(), enabled);
         Ok(AgentShellCommandOutcome::Mutated {
-            command: "auto-reasoning".to_string(),
+            command: "routing".to_string(),
             body: format!(
-                "pane={} enabled={} default={} changed={} source=runtime-auto-reasoning",
+                "pane={} enabled={} default={} changed={} source=runtime-routing",
                 json_escape(pane_id),
                 enabled,
                 default_enabled,
@@ -3147,9 +3145,9 @@ impl RuntimeSessionService {
                 self.agent_planning_modes.remove(pane_id);
             }
         }
-        if let Some(auto_reasoning_enabled) = profile.auto_reasoning_enabled {
-            self.agent_auto_reasoning_overrides
-                .insert(pane_id.to_string(), auto_reasoning_enabled);
+        if let Some(routing_enabled) = profile.routing_enabled {
+            self.agent_routing_overrides
+                .insert(pane_id.to_string(), routing_enabled);
         }
         Ok(())
     }
