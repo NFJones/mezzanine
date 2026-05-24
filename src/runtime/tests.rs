@@ -15987,6 +15987,236 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("low"));
 }
 
+/// Verifies that model presets are visible as pane-frame status selectors and
+/// apply pane-local automatic sizing without mutating the global sizing
+/// defaults. This protects the preset UI contract from silently disappearing
+/// when the active preset is derived from runtime state instead of stored as a
+/// literal frame value.
+#[test]
+fn runtime_pane_agent_status_selector_applies_model_preset_locally() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"
+[agents]
+default_provider = "openai"
+default_model_profile = "default"
+
+[agents.auto_sizing]
+router_model_profile = "openai-router"
+small_model_profile = "openai-small"
+medium_model_profile = "openai-medium"
+large_model_profile = "openai-large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+
+[providers.openai]
+kind = "openai"
+models = ["gpt-5.5", "gpt-5.4"]
+default_model = "gpt-5.5"
+
+[providers.deepseek]
+kind = "deepseek"
+models = ["deepseek-v4-flash", "deepseek-v4"]
+default_model = "deepseek-v4-flash"
+
+[model_profiles.default]
+provider = "openai"
+model = "gpt-5.5"
+reasoning_profile = "medium"
+
+[model_profiles.openai-router]
+provider = "openai"
+model = "gpt-5.4"
+reasoning_profile = "medium"
+
+[model_profiles.openai-small]
+provider = "openai"
+model = "gpt-5.4"
+reasoning_profile = "low"
+
+[model_profiles.openai-medium]
+provider = "openai"
+model = "gpt-5.5"
+reasoning_profile = "medium"
+
+[model_profiles.openai-large]
+provider = "openai"
+model = "gpt-5.5"
+reasoning_profile = "high"
+
+[model_profiles.deepseek-fast]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+reasoning_profile = "high"
+latency_preference = "fast"
+
+[model_profiles.deepseek-default]
+provider = "deepseek"
+model = "deepseek-v4"
+reasoning_profile = "xhigh"
+
+[model_presets.openai]
+default_model_profile = "default"
+auto_sizing_router_model_profile = "openai-router"
+auto_sizing_small_model_profile = "openai-small"
+auto_sizing_medium_model_profile = "openai-medium"
+auto_sizing_large_model_profile = "openai-large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+
+[model_presets.deepseek]
+default_model_profile = "deepseek-fast"
+auto_sizing_router_model_profile = "deepseek-fast"
+auto_sizing_small_model_profile = "deepseek-fast"
+auto_sizing_medium_model_profile = "deepseek-default"
+auto_sizing_large_model_profile = "deepseek-default"
+allowed_reasoning_efforts = ["high", "xhigh"]
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let initial_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let initial_pane_context = initial_config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(initial_pane_context.agent_preset.as_deref(), Some("openai"));
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Preset,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let selector = service
+        .pane_agent_status_selector
+        .as_ref()
+        .expect("preset selector should open from the pane status field");
+    assert_eq!(selector.field, PaneAgentStatusField::Preset);
+    assert_eq!(
+        selector.items,
+        vec!["deepseek".to_string(), "openai".to_string()]
+    );
+    assert_eq!(selector.active_index, 1);
+    let deepseek_index = selector
+        .items
+        .iter()
+        .position(|item| item == "deepseek")
+        .unwrap();
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::SelectPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Preset,
+                        item_index: deepseek_index,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(service.pane_agent_status_selector.is_none());
+    let (_name, active_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(active_profile.provider, "deepseek");
+    assert_eq!(active_profile.model, "deepseek-v4-flash");
+    assert_eq!(
+        service.agent_auto_sizing.router_model_profile, "openai-router",
+        "preset selection must not mutate the global auto-sizing defaults"
+    );
+    let pane_auto_sizing = service.agent_auto_sizing_overrides.get("%1").unwrap();
+    assert_eq!(pane_auto_sizing.router_model_profile, "deepseek-fast");
+    assert_eq!(pane_auto_sizing.medium_model_profile, "deepseek-default");
+    assert_eq!(
+        pane_auto_sizing.allowed_reasoning_efforts,
+        vec!["high".to_string(), "xhigh".to_string()]
+    );
+
+    let updated_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let updated_pane_context = updated_config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(
+        updated_pane_context.agent_preset.as_deref(),
+        Some("deepseek")
+    );
+}
+
+/// Verifies that model presets validate every referenced auto-sizing profile at
+/// config-load time. Without this guard, invalid preset groups can appear in
+/// the selector and fail later during selection or automatic model sizing.
+#[test]
+fn runtime_model_presets_reject_unknown_auto_sizing_profile_references() {
+    let mut service = test_runtime_service();
+    let error = service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"
+[agents]
+default_provider = "openai"
+default_model_profile = "default"
+
+[providers.openai]
+kind = "openai"
+models = ["gpt-5.5"]
+default_model = "gpt-5.5"
+
+[model_profiles.default]
+provider = "openai"
+model = "gpt-5.5"
+reasoning_profile = "medium"
+
+[model_presets.openai]
+default_model_profile = "default"
+auto_sizing_router_model_profile = "missing-router"
+"#
+            .to_string(),
+        }])
+        .unwrap_err();
+
+    assert!(
+        error.message().contains(
+            "model_presets.openai.auto_sizing_router_model_profile `missing-router` is not configured in model_profiles"
+        ),
+        "{error:?}"
+    );
+}
+
 /// Verifies that the /latency slash command displays the current setting when
 /// called without args and applies a pane-local override when given a valid
 /// value.

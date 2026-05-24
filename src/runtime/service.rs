@@ -288,6 +288,7 @@ impl RuntimeSessionService {
             agent_auto_reasoning: DEFAULT_AGENT_AUTO_REASONING,
             agent_auto_reasoning_overrides: BTreeMap::new(),
             agent_auto_sizing: Default::default(),
+            agent_auto_sizing_overrides: BTreeMap::new(),
             agent_token_usage_by_conversation: BTreeMap::new(),
             agent_context_usage_by_conversation: BTreeMap::new(),
             agent_quota_usage_by_conversation: BTreeMap::new(),

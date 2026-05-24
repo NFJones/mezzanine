@@ -5643,6 +5643,7 @@ impl RuntimeSessionService {
         self.pane_closing.remove(pane_id);
         self.pending_terminal_subagent_pane_closes.remove(pane_id);
         self.model_profile_overrides.pane_profiles.remove(pane_id);
+        self.agent_auto_sizing_overrides.remove(pane_id);
         let pane_turn_ids = self
             .agent_turn_ledger
             .turns()

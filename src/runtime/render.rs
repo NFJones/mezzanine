@@ -6627,7 +6627,7 @@ impl RuntimeSessionService {
                     .latency_preference
                     .or_else(|| Some("default".to_string()))
             }
-            PaneAgentStatusField::Preset => None,
+            PaneAgentStatusField::Preset => self.active_model_preset_name_for_pane(pane_id),
         }
     }
 
@@ -8452,7 +8452,7 @@ impl RuntimeSessionService {
                         agent_reasoning,
                         agent_auto_reasoning,
                         agent_latency,
-                        agent_preset: None,
+                        agent_preset: self.agent_preset_display_value_for_pane(pane_id.as_str()),
                         agent_context_usage,
                         history_position,
                         agent_prompt: agent_session

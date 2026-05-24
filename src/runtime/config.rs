@@ -2747,36 +2747,76 @@ pub(super) fn runtime_preset_registry_from_config(
                 "model_presets.{preset_name}.default_model_profile `{default_model_profile}` is not configured in model_profiles"
             )));
         }
+        let auto_sizing_router_model_profile = runtime_preset_model_profile_reference(
+            preset_name,
+            "auto_sizing_router_model_profile",
+            object,
+            profiles,
+            default_model_profile,
+        )?;
+        let auto_sizing_small_model_profile = runtime_preset_model_profile_reference(
+            preset_name,
+            "auto_sizing_small_model_profile",
+            object,
+            profiles,
+            default_model_profile,
+        )?;
+        let auto_sizing_medium_model_profile = runtime_preset_model_profile_reference(
+            preset_name,
+            "auto_sizing_medium_model_profile",
+            object,
+            profiles,
+            default_model_profile,
+        )?;
+        let auto_sizing_large_model_profile = runtime_preset_model_profile_reference(
+            preset_name,
+            "auto_sizing_large_model_profile",
+            object,
+            profiles,
+            default_model_profile,
+        )?;
+        let allowed_reasoning_efforts =
+            runtime_json_string_array(object.get("allowed_reasoning_efforts"))?.unwrap_or_default();
+        for effort in &allowed_reasoning_efforts {
+            if !matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh") {
+                return Err(MezError::config(format!(
+                    "model_presets.{preset_name}.allowed_reasoning_efforts contains unsupported effort `{effort}`"
+                )));
+            }
+        }
         let preset = RuntimeModelPreset {
             default_model_profile: default_model_profile.to_string(),
-            auto_sizing_router_model_profile: runtime_json_string(
-                object.get("auto_sizing_router_model_profile"),
-            )
-            .unwrap_or(default_model_profile)
-            .to_string(),
-            auto_sizing_small_model_profile: runtime_json_string(
-                object.get("auto_sizing_small_model_profile"),
-            )
-            .unwrap_or(default_model_profile)
-            .to_string(),
-            auto_sizing_medium_model_profile: runtime_json_string(
-                object.get("auto_sizing_medium_model_profile"),
-            )
-            .unwrap_or(default_model_profile)
-            .to_string(),
-            auto_sizing_large_model_profile: runtime_json_string(
-                object.get("auto_sizing_large_model_profile"),
-            )
-            .unwrap_or(default_model_profile)
-            .to_string(),
-            allowed_reasoning_efforts: runtime_json_string_array(
-                object.get("allowed_reasoning_efforts"),
-            )?
-            .unwrap_or_default(),
+            auto_sizing_router_model_profile,
+            auto_sizing_small_model_profile,
+            auto_sizing_medium_model_profile,
+            auto_sizing_large_model_profile,
+            allowed_reasoning_efforts,
         };
         registry.presets.insert(preset_name.clone(), preset);
     }
     Ok(registry)
+}
+
+/// Parses and validates one model-profile reference from a model preset.
+fn runtime_preset_model_profile_reference(
+    preset_name: &str,
+    key: &str,
+    object: &serde_json::Map<String, Value>,
+    profiles: &BTreeMap<String, ModelProfile>,
+    fallback: &str,
+) -> Result<String> {
+    let profile = runtime_json_string(object.get(key)).unwrap_or(fallback);
+    if profile.trim().is_empty() {
+        return Err(MezError::config(format!(
+            "model_presets.{preset_name}.{key} must not be empty"
+        )));
+    }
+    if !profiles.contains_key(profile) {
+        return Err(MezError::config(format!(
+            "model_presets.{preset_name}.{key} `{profile}` is not configured in model_profiles"
+        )));
+    }
+    Ok(profile.to_string())
 }
 
 /// Runs the runtime model profile from config operation for this subsystem.

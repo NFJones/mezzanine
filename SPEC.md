@@ -817,6 +817,10 @@ Pane frames MUST support the following fields:
 - `agent.model`: Active provider model name when visible by policy.
 - `agent.reasoning`: Active reasoning profile or effort when visible by policy.
 - `agent.auto_reasoning`: Pane-local automatic reasoning enablement state.
+- `agent.preset`: Active model preset name when the pane model and
+  auto-sizing profile group match a configured preset, or an implementation
+  placeholder such as `custom` when presets exist but the pane state does not
+  match one.
 - `agent.context_usage`: Last known provider input context-window usage
   percentage for the active pane-agent conversation, computed from the latest
   provider response input-token count and Mezzanine's effective model
@@ -2275,6 +2279,7 @@ The top-level configuration object MUST support the following keys:
 - `history`
 - `agents`
 - `model_profiles`
+- `model_presets`
 - `permissions`
 - `providers`
 - `subagents`
@@ -2420,6 +2425,17 @@ classification may choose. `router_model_profile` MUST default to
 "xhigh"]`. `fallback_policy` MUST default to `use-default-profile`, meaning
 router failures fall back to the user-selected default model profile for the
 turn.
+
+The `model_presets` table MUST be a map keyed by model preset identity. Each
+preset MUST define `default_model_profile` and MAY define
+`auto_sizing_router_model_profile`, `auto_sizing_small_model_profile`,
+`auto_sizing_medium_model_profile`, `auto_sizing_large_model_profile`, and
+`allowed_reasoning_efforts`. Missing auto-sizing profile keys MUST inherit
+`default_model_profile`. Every referenced model profile MUST exist in
+`model_profiles`, and every configured reasoning effort MUST use the canonical
+names `low`, `medium`, `high`, or `xhigh`. Selecting a model preset from a pane
+status selector MUST apply the default model profile and auto-sizing profile
+group to that pane without mutating the global `agents.auto_sizing` defaults.
 
 The `model_profiles` table MUST be a map keyed by model profile identity. Each
 profile MUST define `provider` and `model`, and MAY define

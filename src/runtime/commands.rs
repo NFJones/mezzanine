@@ -14,8 +14,9 @@ use super::{
     MezError, ModelProfile, ModelProfileOverrides, Path, PathBuf, RUNTIME_LATENCY_PREFERENCES,
     Result, RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
     RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatchProvider, RuntimeAgentTurnSteering,
-    RuntimeAgentTurnStop, RuntimeModelProfileOverrideScope, RuntimeSessionService, ScheduledWork,
-    ScheduledWorkKind, SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision, Value,
+    RuntimeAgentTurnStop, RuntimeAutoSizingConfig, RuntimeModelPreset,
+    RuntimeModelProfileOverrideScope, RuntimeSessionService, ScheduledWork, ScheduledWorkKind,
+    SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision, Value,
     agent_shell_visibility_json_name, agent_subshell_enter_command, compose_effective_config,
     current_unix_seconds, discover_project_root, execute_agent_shell_command_with_context,
     execute_command, execute_runtime_command_sequence, execute_runtime_command_sequence_async,
@@ -1982,12 +1983,16 @@ impl RuntimeSessionService {
         let router = preset.auto_sizing_router_model_profile.clone();
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        self.agent_auto_sizing.router_model_profile = router.clone();
-        self.agent_auto_sizing.small_model_profile = preset.auto_sizing_small_model_profile.clone();
-        self.agent_auto_sizing.medium_model_profile =
-            preset.auto_sizing_medium_model_profile.clone();
-        self.agent_auto_sizing.large_model_profile = preset.auto_sizing_large_model_profile.clone();
-        self.agent_auto_sizing.allowed_reasoning_efforts = preset.allowed_reasoning_efforts.clone();
+        let mut auto_sizing = self.runtime_auto_sizing_config_for_pane(pane_id).clone();
+        auto_sizing.router_model_profile = router.clone();
+        auto_sizing.small_model_profile = preset.auto_sizing_small_model_profile.clone();
+        auto_sizing.medium_model_profile = preset.auto_sizing_medium_model_profile.clone();
+        auto_sizing.large_model_profile = preset.auto_sizing_large_model_profile.clone();
+        if !preset.allowed_reasoning_efforts.is_empty() {
+            auto_sizing.allowed_reasoning_efforts = preset.allowed_reasoning_efforts.clone();
+        }
+        self.agent_auto_sizing_overrides
+            .insert(pane_id.to_string(), auto_sizing);
         let resolved = self.provider_registry.resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "preset".to_string(),
@@ -2008,6 +2013,51 @@ impl RuntimeSessionService {
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
         })
+    }
+
+    /// Returns the auto-sizing configuration currently active for one pane.
+    pub(super) fn runtime_auto_sizing_config_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> &RuntimeAutoSizingConfig {
+        self.agent_auto_sizing_overrides
+            .get(pane_id)
+            .unwrap_or(&self.agent_auto_sizing)
+    }
+
+    /// Returns the preset label to render for one pane, when presets exist.
+    pub(super) fn agent_preset_display_value_for_pane(&self, pane_id: &str) -> Option<String> {
+        if !self.preset_registry.has_presets() {
+            return None;
+        }
+        Some(
+            self.active_model_preset_name_for_pane(pane_id)
+                .unwrap_or_else(|| "custom".to_string()),
+        )
+    }
+
+    /// Returns the active model preset name when the pane state matches one.
+    pub(super) fn active_model_preset_name_for_pane(&self, pane_id: &str) -> Option<String> {
+        if !self.preset_registry.has_presets() {
+            return None;
+        }
+        let agent_id = format!("agent-{pane_id}");
+        let (_active_name, active_profile) = self
+            .active_model_profile_for_pane(pane_id, &agent_id, None)
+            .ok()?;
+        let auto_sizing = self.runtime_auto_sizing_config_for_pane(pane_id);
+        self.preset_registry
+            .presets
+            .iter()
+            .find_map(|(preset_name, preset)| {
+                let preset_profile = self
+                    .provider_registry
+                    .resolve_profile(&preset.default_model_profile)
+                    .ok()?;
+                (runtime_model_profile_matches_preset_profile(&active_profile, &preset_profile)
+                    && runtime_auto_sizing_matches_preset(auto_sizing, preset))
+                .then(|| preset_name.clone())
+            })
     }
 
     /// Applies a latency preference selected from the pane-frame latency picker.
@@ -2094,6 +2144,31 @@ fn parse_picker_model_label(label: &str) -> (&str, &str) {
         Some((provider, model)) => (provider, model),
         None => ("openai", label),
     }
+}
+
+/// Reports whether a live model profile is equivalent to a preset default.
+fn runtime_model_profile_matches_preset_profile(
+    active: &ModelProfile,
+    preset: &ModelProfile,
+) -> bool {
+    active.provider == preset.provider
+        && active.model == preset.model
+        && active.reasoning_profile == preset.reasoning_profile
+        && active.latency_preference.as_deref().unwrap_or("default")
+            == preset.latency_preference.as_deref().unwrap_or("default")
+}
+
+/// Reports whether one auto-sizing configuration matches a preset.
+fn runtime_auto_sizing_matches_preset(
+    config: &RuntimeAutoSizingConfig,
+    preset: &RuntimeModelPreset,
+) -> bool {
+    config.router_model_profile == preset.auto_sizing_router_model_profile
+        && config.small_model_profile == preset.auto_sizing_small_model_profile
+        && config.medium_model_profile == preset.auto_sizing_medium_model_profile
+        && config.large_model_profile == preset.auto_sizing_large_model_profile
+        && (preset.allowed_reasoning_efforts.is_empty()
+            || config.allowed_reasoning_efforts == preset.allowed_reasoning_efforts)
 }
 
 impl RuntimeSessionService {

@@ -3667,6 +3667,9 @@ pub struct RuntimeSessionService {
     pub(super) agent_auto_reasoning_overrides: BTreeMap<String, bool>,
     /// Automatic sizing profile and fallback configuration.
     pub(super) agent_auto_sizing: RuntimeAutoSizingConfig,
+    /// Pane-local automatic sizing profile overrides selected through model
+    /// presets. Missing entries inherit the configured default.
+    pub(super) agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
     /// Cumulative provider token usage keyed by agent conversation id.
     pub(super) agent_token_usage_by_conversation: BTreeMap<String, ModelTokenUsage>,
     /// Latest provider-response input context usage percentage keyed by

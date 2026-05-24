@@ -4634,7 +4634,7 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
-        let config = &self.agent_auto_sizing;
+        let config = self.runtime_auto_sizing_config_for_pane(&turn.pane_id);
         let router_profile = self
             .provider_registry
             .resolve_profile(&config.router_model_profile)?;
