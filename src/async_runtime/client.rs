@@ -971,7 +971,10 @@ where
             .await?;
         if dispatches.is_empty() {
             handle
-                .queue_provider_poll_timer_if_needed(report.polls.saturating_add(1), 1)
+                .queue_provider_poll_timer_if_needed(
+                    report.polls.saturating_add(1),
+                    config.provider_poll_fallback_delay_ms(),
+                )
                 .await?;
         }
         if dispatches.is_empty() {

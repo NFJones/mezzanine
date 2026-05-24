@@ -435,6 +435,15 @@ impl AsyncAgentProviderServiceConfig {
         self.validate()?;
         Ok(self)
     }
+    /// Returns the actor-owned provider-poll fallback delay in milliseconds.
+    ///
+    /// The fallback reuses the validated idle interval so the async provider
+    /// worker keeps a bounded liveness backstop without collapsing into a
+    /// high-frequency wakeup loop.
+    pub fn provider_poll_fallback_delay_ms(&self) -> u64 {
+        let delay_ms = self.idle_interval.as_millis();
+        u64::try_from(delay_ms).unwrap_or(u64::MAX).max(1)
+    }
 
     /// Runs the validate operation for this subsystem.
     ///

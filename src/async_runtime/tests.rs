@@ -7587,6 +7587,7 @@ async fn async_agent_provider_service_uses_bounded_idle_probe() {
 /// polls should leave exactly one scheduled provider-poll timer side effect.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
+    let idle_interval = Duration::from_millis(25);
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
@@ -7610,7 +7611,10 @@ async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
     let service = async move {
         run_async_agent_provider_service(
             &service_handle,
-            AsyncAgentProviderServiceConfig::new(1).unwrap(),
+            AsyncAgentProviderServiceConfig::new(1)
+                .unwrap()
+                .with_idle_interval(idle_interval)
+                .unwrap(),
             |polls, _| polls >= 2,
         )
         .await
@@ -7618,9 +7622,9 @@ async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
     };
     let clock = async {
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::time::advance(idle_interval).await;
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_millis(1)).await;
+        tokio::time::advance(idle_interval).await;
     };
     let client = async {
         let (report, ()) = tokio::join!(service, clock);
@@ -7635,7 +7639,7 @@ async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
         };
         assert_eq!(key.kind, RuntimeTimerKind::ProviderPoll);
         assert_eq!(key.owner_id, "agent-provider");
-        assert_eq!(*delay_ms, 1);
+        assert_eq!(*delay_ms, idle_interval.as_millis() as u64);
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
