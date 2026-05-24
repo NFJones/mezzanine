@@ -45,6 +45,9 @@ use crate::terminal::{DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM};
 use crate::terminal::{
     GraphicRendition, TerminalColor, TerminalModeState, TerminalSavedState, TerminalStyleSpan,
 };
+use crate::test_support::control::JsonRpcRequestBuilder;
+use crate::test_support::runtime::SessionFixture;
+use crate::test_support::temp::TestTempDir;
 use std::fs;
 use std::path::PathBuf;
 
@@ -88,12 +91,7 @@ fn primary_params() -> InitializeParams {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn test_session() -> (Session, ClientId) {
-    let mut session = Session::new_default(
-        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        Size::new(80, 24).unwrap(),
-    );
-    let primary = session.attach_primary("primary", true).unwrap();
-    (session, primary)
+    SessionFixture::new().build_with_primary()
 }
 
 /// Runs the temp root operation for this subsystem.
@@ -101,11 +99,8 @@ fn test_session() -> (Session, ClientId) {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn temp_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("mez-control-test-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
-    root
+fn temp_root(name: &str) -> TestTempDir {
+    TestTempDir::new(&format!("control-test-{name}"))
 }
 
 /// Verifies none authentication gets no session data.
@@ -737,10 +732,12 @@ fn approval_control_methods_reject_unknown_params_on_specialized_dispatch() {
 fn snapshot_control_methods_reject_unknown_params_on_specialized_dispatch() {
     let (mut session, primary) = test_session();
     let root = temp_root("snapshot-unknown-params");
-    let snapshots = SnapshotRepository::new(root.clone());
+    let snapshots = SnapshotRepository::new(root.to_path_buf());
 
     let response = dispatch_control_request_with_snapshots(
-        r#"{"jsonrpc":"2.0","id":1,"method":"snapshot/list","params":{"surprise":true}}"#,
+        &JsonRpcRequestBuilder::method("snapshot/list")
+            .params_json(r#"{"surprise":true}"#)
+            .build(),
         &mut session,
         &primary,
         &snapshots,
@@ -750,7 +747,10 @@ fn snapshot_control_methods_reject_unknown_params_on_specialized_dispatch() {
     assert!(response.contains("snapshot/list params contains unknown field"));
 
     let null_target = dispatch_control_request_with_snapshots(
-        r#"{"jsonrpc":"2.0","id":2,"method":"snapshot/list","params":{"target":null}}"#,
+        &JsonRpcRequestBuilder::method("snapshot/list")
+            .id(2)
+            .params_json(r#"{"target":null}"#)
+            .build(),
         &mut session,
         &primary,
         &snapshots,

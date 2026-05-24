@@ -164,6 +164,12 @@ pub mod subagent;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod terminal;
+/// Exposes shared test support for crate-internal regression suites.
+///
+/// The module is compiled only for tests and keeps high-reuse fixtures out of
+/// large subsystem test files.
+#[cfg(test)]
+pub(crate) mod test_support;
 /// Exposes the transcript module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

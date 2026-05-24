@@ -110,6 +110,13 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Replaces host clipboard access for tests that must avoid touching the
+    /// parent desktop/session clipboard.
+    #[cfg(test)]
+    pub(crate) fn set_host_clipboard_for_tests(&mut self, host_clipboard: HostClipboard) {
+        self.host_clipboard = host_clipboard;
+    }
+
     /// Runs the from parts operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

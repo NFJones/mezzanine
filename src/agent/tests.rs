@@ -52,6 +52,8 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::mcp::{McpPromptTool, McpRegistry, McpToolCallPlan, McpToolCallResponse};
 use crate::memory::{MemoryRecord, MemoryScope};
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
+use crate::test_support::agent::ActionBuilder;
+use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole};
 use std::cell::RefCell;
 use std::fs::File;
@@ -1311,17 +1313,7 @@ fn turn() -> AgentTurnRecord {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn shell_action(id: &str) -> AgentAction {
-    AgentAction {
-        id: id.to_string(),
-        rationale: "inspect current directory".to_string(),
-        payload: AgentActionPayload::ShellCommand {
-            summary: "Inspect the current directory".to_string(),
-            command: "pwd".to_string(),
-            interactive: false,
-            stateful: false,
-            timeout_ms: Some(1000),
-        },
-    }
+    ActionBuilder::shell(id)
 }
 
 /// Runs the say action operation for this subsystem.
@@ -1330,27 +1322,13 @@ fn shell_action(id: &str) -> AgentAction {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn say_action(id: &str, text: &str) -> AgentAction {
-    AgentAction {
-        id: id.to_string(),
-        rationale: "reply to user".to_string(),
-        payload: crate::agent::AgentActionPayload::Say {
-            status: crate::agent::SayStatus::Final,
-            text: text.to_string(),
-            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
-        },
-    }
+    ActionBuilder::say(id, text)
 }
 
 /// Builds an abort action for validating that provider-authored aborts stay
 /// outside the exposed action surface.
 fn abort_action(id: &str, reason: &str) -> AgentAction {
-    AgentAction {
-        id: id.to_string(),
-        rationale: "stop the turn".to_string(),
-        payload: AgentActionPayload::Abort {
-            reason: reason.to_string(),
-        },
-    }
+    ActionBuilder::abort(id, reason)
 }
 
 /// Runs the mcp action operation for this subsystem.
@@ -1359,28 +1337,12 @@ fn abort_action(id: &str, reason: &str) -> AgentAction {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn mcp_action(id: &str) -> AgentAction {
-    AgentAction {
-        id: id.to_string(),
-        rationale: "inspect external integration state".to_string(),
-        payload: AgentActionPayload::McpCall {
-            server: "state".to_string(),
-            tool: "list".to_string(),
-            arguments_json: r#"{"path":"."}"#.to_string(),
-        },
-    }
+    ActionBuilder::mcp(id)
 }
 
 /// Builds a live configuration mutation action for approval-policy tests.
 fn config_change_action(id: &str) -> AgentAction {
-    AgentAction {
-        id: id.to_string(),
-        rationale: "change the active theme".to_string(),
-        payload: AgentActionPayload::ConfigChange {
-            setting_path: "theme.active".to_string(),
-            operation: "set".to_string(),
-            value: Some("kanagawa".to_string()),
-        },
-    }
+    ActionBuilder::config_change(id)
 }
 
 /// Builds a non-executing capability request action for runner tests.
@@ -1388,27 +1350,14 @@ fn config_change_action(id: &str) -> AgentAction {
 /// The helper keeps capability negotiation explicit in tests that need to
 /// exercise executable actions after the first provider round-trip.
 fn capability_action(id: &str, capability: AgentCapability) -> AgentAction {
-    AgentAction {
-        id: id.to_string(),
-        rationale: "request the action surface needed for the task".to_string(),
-        payload: AgentActionPayload::RequestCapability {
-            capability,
-            reason: format!("need {} actions for this test", capability.as_str()),
-        },
-    }
+    ActionBuilder::capability(id, capability)
 }
 
 /// Creates a unique temporary directory for tests without adding another
 /// dependency to the crate under test. Callers remove the directory after the
 /// assertions that need it complete.
-fn test_temp_dir(label: &str) -> std::path::PathBuf {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("mez-{label}-{}-{unique}", std::process::id()));
-    std::fs::create_dir(&path).unwrap();
-    path
+fn test_temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new(label)
 }
 
 /// Builds a Mezzanine add-file patch for one relative path and exact content.

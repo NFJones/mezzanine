@@ -34,6 +34,7 @@ use crate::terminal::{
     TerminalClientLoopConfig, TerminalColor, TerminalOscEvent, TerminalScreen, TerminalStyledLine,
     UI_COLOR_SLOT_NAMES,
 };
+use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
 use crate::transcript::AgentTranscriptStore;
 use base64::Engine;
 use std::cell::RefCell;
@@ -143,22 +144,7 @@ fn empty_host_clipboard_read() -> Option<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn test_session() -> Session {
-    Session::new_default(
-        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        Size::new(80, 24).unwrap(),
-    )
-}
-
-/// Runs the test session with size operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn test_session_with_size(size: Size) -> Session {
-    Session::new_default(
-        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        size,
-    )
+    SessionFixture::new().build()
 }
 
 /// Runs the test runtime service operation for this subsystem.
@@ -167,16 +153,7 @@ fn test_session_with_size(size: Size) -> Session {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn test_runtime_service() -> RuntimeSessionService {
-    let mut service = RuntimeSessionService::with_event_log(
-        test_session(),
-        PathBuf::from("/tmp/mez-1000/default.sock"),
-        100,
-        10,
-        1024,
-    )
-    .unwrap();
-    service.host_clipboard = HostClipboard::disabled();
-    service
+    RuntimeServiceFixture::new().build()
 }
 
 /// Runs the test runtime service with size operation for this subsystem.
@@ -185,16 +162,7 @@ fn test_runtime_service() -> RuntimeSessionService {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn test_runtime_service_with_size(size: Size) -> RuntimeSessionService {
-    let mut service = RuntimeSessionService::with_event_log(
-        test_session_with_size(size),
-        PathBuf::from("/tmp/mez-1000/default.sock"),
-        100,
-        10,
-        1024,
-    )
-    .unwrap();
-    service.host_clipboard = HostClipboard::disabled();
-    service
+    RuntimeServiceFixture::new().size(size).build()
 }
 
 /// Resolves a bash binary for tests that need to exercise interactive bash
