@@ -5,10 +5,8 @@
 //! continuations avoid repeating reads, tests, and patch recovery checks while
 //! keeping large raw tool outputs out of the stable prompt prefix.
 
-use super::{
-    ContextBlock, ContextSourceKind, MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES,
-    model_context_single_line, model_context_source_kind_name,
-};
+use super::compaction::{model_context_single_line, model_context_source_kind_name};
+use super::{ContextBlock, ContextSourceKind, MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES};
 use std::collections::HashSet;
 
 /// Prepares context blocks for provider requests and compaction.
