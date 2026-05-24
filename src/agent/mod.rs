@@ -12,13 +12,10 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::auth::AuthStore;
 use crate::error::{MezError, Result};
-use crate::instructions::DiscoveredInstructionFile;
 use crate::mcp::{
     McpPromptSummary, McpPromptTool, McpRegistry, McpToolCallPlan, McpToolCallResponse,
 };
-use crate::memory::{MemoryRecord, MemoryScope};
 use crate::permissions::{PathScopes, PermissionPolicy, RuleDecision, SessionApprovalStore};
-use crate::scheduler::{AgentScheduler, runnable_agent_ids};
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
 
 /// Exposes the actions module boundary.
