@@ -3941,7 +3941,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
             .contains("prefer the first small implementation, test, validation, or report action")
     );
     assert!(prompt.contains("over reading more for confidence"));
-    assert!(prompt.contains("Do not stop at a plan when an executable action can make progress"));
+    assert!(prompt.contains("Never stop at a plan when an executable action can make progress"));
     assert!(prompt.contains("Personality, response-style, and custom system prompt blocks"));
     assert!(prompt.contains("They do not change the execution loop"));
     assert!(prompt.contains("Do not flatter, praise, validate, or agree with the user by default"));
