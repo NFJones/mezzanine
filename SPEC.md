@@ -1403,6 +1403,7 @@ The command language MUST include commands equivalent to:
 - `choose-buffer`
 - `delete-buffer`
 - `show-messages`
+- `show-metrics`
 - `list-keys`
 - `list-themes`
 - `set-theme`
@@ -1487,6 +1488,7 @@ The baseline commands MUST have the following semantics:
 | `choose-buffer` | Present an interactive buffer picker and set the chosen buffer as the active copy/paste buffer or paste it when requested. |
 | `delete-buffer` | Delete the selected or named paste buffer. The command MUST fail with `not_found` for an unknown buffer. |
 | `show-messages` | Display Mezzanine message log entries, including diagnostics, pending observer requests, pending approvals, and hook failures visible to the primary client. |
+| `show-metrics` | Display async runtime counters and histogram summaries for important runtime measurements, including event batches, pane output sizes, side-effect queue activity, and current queue depth snapshots, in the primary command-output pager. |
 | `list-keys` | Return effective key bindings in column-aligned form, including source configuration layer and command expansion. |
 | `list-themes` | Return built-in UI themes and configured custom themes, marking the active theme and whether each entry comes from the built-in registry or configuration. |
 | `set-theme` | Set the active UI theme to a built-in or configured theme name, validate the name against the effective theme registry, materialize the selected aliases and color slots, apply the change to the running client immediately, and persist the selected theme into the primary config. |

@@ -142,6 +142,7 @@ pub use config::{
     AsyncRuntimeActorMetrics, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
     AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig,
     AsyncRuntimeMessageConnectionConfig, AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle,
+    RuntimeHistogram, RuntimeHistogramBucket,
 };
 pub use daemon::{build_async_runtime_daemon_services, run_async_runtime_daemon};
 pub use events::{

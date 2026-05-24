@@ -231,6 +231,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "choose-buffer",
     "delete-buffer",
     "show-messages",
+    "show-metrics",
     "list-keys",
     "list-themes",
     "set-theme",
@@ -285,6 +286,7 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         | "export-history"
         | "pipe-pane"
         | "refresh-client"
+        | "show-metrics"
         | "refresh-provider-info"
         | "agent-shell"
         | "mcp-retry"

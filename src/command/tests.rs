@@ -1111,6 +1111,7 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("attach-session:status=implemented"));
     assert!(body.contains("copy-mode:status=runtime-required"));
     assert!(body.contains("show-messages:status=implemented"));
+    assert!(body.contains("show-metrics:status=runtime-required"));
     assert!(body.contains("list-keys:status=implemented"));
     assert!(body.contains("list-themes:status=implemented"));
     assert!(body.contains("set-theme:status=store-required"));
@@ -1173,6 +1174,7 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("windows, groups, and panes"), "{help}");
     assert!(help.contains("list-commands"), "{help}");
     assert!(help.contains("list-keys"), "{help}");
+    assert!(help.contains("show-metrics"), "{help}");
     assert!(help.contains("rebalance-window"), "{help}");
     assert!(help.contains("set-theme"), "{help}");
     assert!(help.contains("agent-shell"), "{help}");
@@ -1350,6 +1352,15 @@ fn display_safe_pending_command_defaults() {
         .unwrap(),
     );
     assert_eq!(messages, "messages=0 source=in-memory-log status=empty");
+    let metrics = display_body(
+        execute_command(
+            &mut session,
+            &primary,
+            &parse_command_sequence("show-metrics").unwrap()[0],
+        )
+        .unwrap(),
+    );
+    assert_eq!(metrics, "metrics source=async-runtime status=unavailable");
 }
 
 /// Verifies paste and history commands report live terminal requirements.

@@ -25,7 +25,7 @@ use super::{
     persist_command_config_mutation, persist_command_theme_config, persist_mcp_add,
     persist_mcp_remove, pipe_pane_display, positional_args, resume_session_display,
     save_buffer_display, search_history_display, set_option_args, set_theme_arg,
-    show_default_options, show_messages_display, snapshot_session_display,
+    show_default_options, show_messages_display, show_metrics_display, snapshot_session_display,
     split_window_shell_command, validate_config_file,
 };
 
@@ -1027,6 +1027,10 @@ pub fn execute_command(
         "show-messages" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: show_messages_display(),
+        }),
+        "show-metrics" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: show_metrics_display(),
         }),
         "list-keys" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),

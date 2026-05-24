@@ -165,6 +165,7 @@ impl RuntimeSessionService {
             message_service,
             pane_processes,
             async_owned_pane_processes: BTreeMap::new(),
+            async_runtime_metrics: None,
             pane_current_working_directories: BTreeMap::new(),
             deferred_pane_inputs: Vec::new(),
             deferred_pane_resizes: BTreeMap::new(),
@@ -432,6 +433,19 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         apply_registry_update(registry, update)
+    }
+    /// Replaces the cached async runtime metrics snapshot used by display commands.
+    pub(crate) fn set_async_runtime_metrics(
+        &mut self,
+        metrics: crate::async_runtime::AsyncRuntimeActorMetrics,
+    ) {
+        self.async_runtime_metrics = Some(metrics);
+    }
+    /// Returns the cached async runtime metrics snapshot when the actor provided one.
+    pub(super) fn async_runtime_metrics(
+        &self,
+    ) -> Option<&crate::async_runtime::AsyncRuntimeActorMetrics> {
+        self.async_runtime_metrics.as_ref()
     }
 
     /// Runs the config layers operation for this subsystem.

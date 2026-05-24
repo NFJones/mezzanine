@@ -342,6 +342,10 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_messages_display(service),
         })),
+        "show-metrics" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_show_metrics_display(service),
+        })),
         "list-keys" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_list_key_bindings_display(service)?,
@@ -2101,6 +2105,153 @@ pub(super) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
             .collect::<Vec<_>>(),
     );
     runtime_show_messages_body(events.len(), "source=runtime-event-log", &summary, lines)
+}
+/// Formats one runtime histogram summary and bucket listing for pager output.
+fn runtime_metrics_histogram_lines(
+    name: &str,
+    histogram: &crate::async_runtime::RuntimeHistogram,
+) -> Vec<String> {
+    let average = if histogram.observations == 0 {
+        0.0
+    } else {
+        histogram.sum as f64 / histogram.observations as f64
+    };
+    let mut lines = vec![format!(
+        "{name}: observations={} min={} max={} average={average:.2}",
+        histogram.observations,
+        histogram
+            .min
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        histogram
+            .max
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+    )];
+    lines.extend(histogram.buckets.iter().map(|bucket| {
+        let upper_bound = if bucket.upper_bound == u64::MAX {
+            "+inf".to_string()
+        } else {
+            bucket.upper_bound.to_string()
+        };
+        format!("  <= {upper_bound}: {}", bucket.count)
+    }));
+    lines
+}
+/// Runs the runtime show metrics display operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> String {
+    let Some(metrics) = service.async_runtime_metrics() else {
+        return "metrics source=async-runtime status=unavailable".to_string();
+    };
+    let mut lines = vec![
+        "metrics source=async-runtime status=available".to_string(),
+        "".to_string(),
+        "[counts]".to_string(),
+        format!("commands_processed = {}", metrics.commands_processed),
+        format!(
+            "render_client_view_requests = {}",
+            metrics.render_client_view_requests
+        ),
+        format!(
+            "render_client_frame_requests = {}",
+            metrics.render_client_frame_requests
+        ),
+        format!(
+            "terminal_step_control_requests = {}",
+            metrics.terminal_step_control_requests
+        ),
+        format!(
+            "terminal_view_control_requests = {}",
+            metrics.terminal_view_control_requests
+        ),
+        format!("runtime_event_batches = {}", metrics.runtime_event_batches),
+        format!(
+            "runtime_events_accepted = {}",
+            metrics.runtime_events_accepted
+        ),
+        format!(
+            "runtime_events_applied = {}",
+            metrics.runtime_events_applied
+        ),
+        format!(
+            "runtime_side_effects_queued = {}",
+            metrics.runtime_side_effects_queued
+        ),
+        format!(
+            "runtime_side_effects_drained = {}",
+            metrics.runtime_side_effects_drained
+        ),
+        format!("pane_output_chunks = {}", metrics.pane_output_chunks),
+        format!("pane_output_bytes = {}", metrics.pane_output_bytes),
+        format!(
+            "render_invalidations_coalesced = {}",
+            metrics.render_invalidations_coalesced
+        ),
+        format!(
+            "runtime_timer_schedules_queued = {}",
+            metrics.runtime_timer_schedules_queued
+        ),
+        format!(
+            "runtime_timer_cancellations_queued = {}",
+            metrics.runtime_timer_cancellations_queued
+        ),
+        format!(
+            "runtime_timer_events_ignored = {}",
+            metrics.runtime_timer_events_ignored
+        ),
+        format!(
+            "side_effect_queue_depth = {}",
+            metrics.side_effect_queue_depth
+        ),
+        format!(
+            "side_effect_queue_high_water = {}",
+            metrics.side_effect_queue_high_water
+        ),
+        format!(
+            "message_delivery_notifications = {}",
+            metrics.message_delivery_notifications
+        ),
+        format!(
+            "event_delivery_notifications = {}",
+            metrics.event_delivery_notifications
+        ),
+        format!(
+            "side_effect_delivery_notifications = {}",
+            metrics.side_effect_delivery_notifications
+        ),
+        format!(
+            "lifecycle_state_notifications = {}",
+            metrics.lifecycle_state_notifications
+        ),
+        "".to_string(),
+        "[histograms]".to_string(),
+    ];
+    for (name, histogram) in [
+        (
+            "runtime_event_batch_sizes",
+            &metrics.runtime_event_batch_sizes,
+        ),
+        (
+            "runtime_side_effect_enqueue_sizes",
+            &metrics.runtime_side_effect_enqueue_sizes,
+        ),
+        (
+            "runtime_side_effect_drain_sizes",
+            &metrics.runtime_side_effect_drain_sizes,
+        ),
+        ("pane_output_chunk_bytes", &metrics.pane_output_chunk_bytes),
+        (
+            "side_effect_queue_depth_samples",
+            &metrics.side_effect_queue_depth_samples,
+        ),
+    ] {
+        lines.extend(runtime_metrics_histogram_lines(name, histogram));
+    }
+    lines.join("\n")
 }
 
 /// Runs the runtime show messages body operation for this subsystem.

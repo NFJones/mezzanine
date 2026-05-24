@@ -298,9 +298,11 @@ impl AsyncRuntimeSessionActor {
         while let Some(request) = self.receiver.recv().await {
             self.commands_processed += 1;
             self.metrics.commands_processed = self.commands_processed;
+            self.sync_metrics_snapshot_to_service();
             if self.handle_request(request).await {
                 break;
             }
+            self.sync_metrics_snapshot_to_service();
         }
 
         AsyncRuntimeActorExit {
@@ -345,6 +347,17 @@ impl AsyncRuntimeSessionActor {
             }
             offset = offset.saturating_add(consumed);
         }
+    }
+    /// Returns the current metrics snapshot with live queue depth included.
+    fn current_metrics_snapshot(&self) -> super::AsyncRuntimeActorMetrics {
+        let mut metrics = self.metrics.clone();
+        metrics.side_effect_queue_depth = self.side_effects.len();
+        metrics
+    }
+    /// Copies the current actor metrics snapshot into runtime service state.
+    fn sync_metrics_snapshot_to_service(&mut self) {
+        self.service
+            .set_async_runtime_metrics(self.current_metrics_snapshot());
     }
 
     /// Runs the handle request operation for this subsystem.
@@ -1058,6 +1071,9 @@ impl AsyncRuntimeSessionActor {
             .metrics
             .runtime_events_applied
             .saturating_add(u64::try_from(report.applied).unwrap_or(u64::MAX));
+        self.metrics
+            .runtime_event_batch_sizes
+            .record(u64::try_from(report.accepted).unwrap_or(u64::MAX));
         Ok(report)
     }
 
@@ -1085,6 +1101,9 @@ impl AsyncRuntimeSessionActor {
                         .metrics
                         .pane_output_bytes
                         .saturating_add(u64::try_from(byte_count).unwrap_or(u64::MAX));
+                    self.metrics
+                        .pane_output_chunk_bytes
+                        .record(u64::try_from(byte_count).unwrap_or(u64::MAX));
                 }
                 let mut side_effects = if applied {
                     self.render_side_effects(RenderInvalidationReason::PaneOutput)
@@ -2387,6 +2406,9 @@ impl AsyncRuntimeSessionActor {
                 .runtime_timer_cancellations_queued
                 .saturating_add(u64::try_from(timer_cancellations).unwrap_or(u64::MAX));
         }
+        self.metrics
+            .runtime_side_effect_enqueue_sizes
+            .record(u64::try_from(queued).unwrap_or(u64::MAX));
         self.metrics.render_invalidations_coalesced = self
             .metrics
             .render_invalidations_coalesced
@@ -2396,6 +2418,9 @@ impl AsyncRuntimeSessionActor {
             .metrics
             .side_effect_queue_high_water
             .max(self.side_effects.len());
+        self.metrics
+            .side_effect_queue_depth_samples
+            .record(u64::try_from(self.side_effects.len()).unwrap_or(u64::MAX));
         if should_notify {
             self.notify_side_effect_delivery();
         }
@@ -2724,7 +2749,13 @@ impl AsyncRuntimeSessionActor {
             .metrics
             .runtime_side_effects_drained
             .saturating_add(u64::try_from(drained).unwrap_or(u64::MAX));
+        self.metrics
+            .runtime_side_effect_drain_sizes
+            .record(u64::try_from(drained).unwrap_or(u64::MAX));
         self.metrics.side_effect_queue_depth = self.side_effects.len();
+        self.metrics
+            .side_effect_queue_depth_samples
+            .record(u64::try_from(self.side_effects.len()).unwrap_or(u64::MAX));
         if drained > 0 && !self.side_effects.is_empty() {
             self.notify_side_effect_delivery();
         }

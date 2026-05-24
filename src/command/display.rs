@@ -529,9 +529,8 @@ fn terminal_command_category(name: &str) -> &'static str {
         | "paste-buffer" | "paste-clipboard" | "pipe-pane" | "save-buffer" | "search-history" => {
             "copy, buffers, and history"
         }
-        "help" | "list-commands" | "mark-pane-ready" | "refresh-client" | "show-messages" => {
-            "diagnostics and help"
-        }
+        "help" | "list-commands" | "mark-pane-ready" | "refresh-client" | "show-messages"
+        | "show-metrics" => "diagnostics and help",
         "approve-observer" | "attach-session" | "choose-observer" | "detach-client"
         | "kill-session" | "list-clients" | "list-observers" | "list-sessions"
         | "reject-observer" | "rename-session" | "resume-session" | "revoke-observer"
@@ -616,6 +615,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "set-option" => "set a live-mutable option.",
         "set-theme" => "switch active UI theme by name.",
         "show-messages" => "show diagnostics, pending approvals, and observer requests.",
+        "show-metrics" => "show async runtime counters and histograms.",
         "show-options" => "show effective options.",
         "snapshot-session" => "create a structured session snapshot.",
         "source-file" => "load a configuration file.",
@@ -942,6 +942,14 @@ pub(super) fn resume_session_display(invocation: &CommandInvocation) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn show_messages_display() -> String {
     "messages=0 source=in-memory-log status=empty".to_string()
+}
+/// Runs the show metrics display operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn show_metrics_display() -> String {
+    "metrics source=async-runtime status=unavailable".to_string()
 }
 
 /// Runs the list default key bindings operation for this subsystem.

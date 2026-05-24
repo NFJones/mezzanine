@@ -3579,15 +3579,26 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
         assert_eq!(queued.runtime_event_batches, 1);
         assert_eq!(queued.runtime_events_accepted, 1);
         assert_eq!(queued.runtime_events_applied, 1);
+        assert_eq!(queued.runtime_event_batch_sizes.observations, 1);
+        assert_eq!(queued.runtime_event_batch_sizes.min, Some(1));
+        assert_eq!(queued.runtime_event_batch_sizes.max, Some(1));
         assert_eq!(queued.runtime_side_effects_queued, 1);
         assert_eq!(queued.runtime_side_effects_drained, 0);
+        assert_eq!(queued.runtime_side_effect_enqueue_sizes.observations, 1);
+        assert_eq!(queued.runtime_side_effect_enqueue_sizes.max, Some(1));
         assert_eq!(queued.pane_output_chunks, 1);
         assert_eq!(
             queued.pane_output_bytes,
             u64::try_from(b"metrics-output\n".len()).unwrap()
         );
+        assert_eq!(queued.pane_output_chunk_bytes.observations, 1);
+        assert_eq!(
+            queued.pane_output_chunk_bytes.max,
+            Some(u64::try_from(b"metrics-output\n".len()).unwrap())
+        );
         assert_eq!(queued.side_effect_queue_depth, 1);
         assert_eq!(queued.side_effect_queue_high_water, 1);
+        assert_eq!(queued.side_effect_queue_depth_samples.max, Some(1));
         assert_eq!(queued.side_effect_delivery_notifications, 1);
 
         assert_eq!(
@@ -3601,8 +3612,11 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
         let drained = handle.metrics().await.unwrap();
         assert_eq!(drained.commands_processed, 4);
         assert_eq!(drained.runtime_side_effects_drained, 1);
+        assert_eq!(drained.runtime_side_effect_drain_sizes.observations, 1);
+        assert_eq!(drained.runtime_side_effect_drain_sizes.max, Some(1));
         assert_eq!(drained.side_effect_queue_depth, 0);
         assert_eq!(drained.side_effect_queue_high_water, 1);
+        assert!(drained.side_effect_queue_depth_samples.observations >= 2);
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
@@ -3617,6 +3631,13 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
     assert_eq!(
         exit.metrics.pane_output_bytes,
         u64::try_from(b"metrics-output\n".len()).unwrap()
+    );
+    assert_eq!(exit.metrics.runtime_event_batch_sizes.max, Some(1));
+    assert_eq!(exit.metrics.runtime_side_effect_enqueue_sizes.max, Some(1));
+    assert_eq!(exit.metrics.runtime_side_effect_drain_sizes.max, Some(1));
+    assert_eq!(
+        exit.metrics.pane_output_chunk_bytes.max,
+        Some(u64::try_from(b"metrics-output\n".len()).unwrap())
     );
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -3682,6 +3703,49 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
     assert_eq!(exit.metrics.render_client_view_requests, 1);
     assert_eq!(exit.metrics.terminal_step_control_requests, 1);
     assert_eq!(exit.metrics.terminal_view_control_requests, 1);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+/// Verifies that the async runtime terminal command path exposes the current
+/// actor counters and histograms through `show-metrics` for pager rendering.
+#[tokio::test(flavor = "current_thread")]
+async fn async_terminal_show_metrics_command_renders_actor_metrics() {
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"show-metrics\n".to_vec(),
+        }));
+        handle.submit_runtime_events(batch).await.unwrap();
+        let output = handle
+            .execute_terminal_command(primary, "show-metrics".to_string())
+            .await
+            .unwrap();
+        assert!(output.contains(r#""command":"show-metrics""#), "{output}");
+        assert!(
+            output.contains("metrics source=async-runtime status=available"),
+            "{output}"
+        );
+        assert!(output.contains("[counts]"), "{output}");
+        assert!(output.contains("commands_processed ="), "{output}");
+        assert!(output.contains("[histograms]"), "{output}");
+        assert!(output.contains("runtime_event_batch_sizes"), "{output}");
+        assert!(output.contains("pane_output_chunk_bytes"), "{output}");
+        assert!(
+            output.contains("side_effect_queue_depth_samples"),
+            "{output}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 

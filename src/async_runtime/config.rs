@@ -48,6 +48,77 @@ impl Default for AsyncRuntimeActorConfig {
 }
 
 /// Snapshot of async runtime actor counters used for migration diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHistogramBucket {
+    /// Inclusive upper bound represented by this bucket.
+    pub upper_bound: u64,
+    /// Number of observations recorded in this bucket.
+    pub count: u64,
+}
+/// Bounded histogram used by async runtime metrics snapshots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeHistogram {
+    /// Number of recorded observations.
+    pub observations: u64,
+    /// Sum of all recorded values.
+    pub sum: u64,
+    /// Minimum observed value.
+    pub min: Option<u64>,
+    /// Maximum observed value.
+    pub max: Option<u64>,
+    /// Fixed-width buckets that accumulate observations by upper bound.
+    pub buckets: Vec<RuntimeHistogramBucket>,
+}
+impl Default for RuntimeHistogram {
+    /// Builds the default bounded histogram buckets used by runtime metrics.
+    fn default() -> Self {
+        Self {
+            observations: 0,
+            sum: 0,
+            min: None,
+            max: None,
+            buckets: [
+                0,
+                1,
+                2,
+                4,
+                8,
+                16,
+                32,
+                64,
+                128,
+                256,
+                512,
+                1024,
+                4096,
+                16384,
+                u64::MAX,
+            ]
+            .into_iter()
+            .map(|upper_bound| RuntimeHistogramBucket {
+                upper_bound,
+                count: 0,
+            })
+            .collect(),
+        }
+    }
+}
+impl RuntimeHistogram {
+    /// Records one observation in the histogram using saturating arithmetic.
+    pub fn record(&mut self, value: u64) {
+        self.observations = self.observations.saturating_add(1);
+        self.sum = self.sum.saturating_add(value);
+        self.min = Some(self.min.map_or(value, |current| current.min(value)));
+        self.max = Some(self.max.map_or(value, |current| current.max(value)));
+        if let Some(bucket) = self
+            .buckets
+            .iter_mut()
+            .find(|bucket| value <= bucket.upper_bound)
+        {
+            bucket.count = bucket.count.saturating_add(1);
+        }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AsyncRuntimeActorMetrics {
     /// Number of actor requests processed in serialized order.
@@ -66,14 +137,22 @@ pub struct AsyncRuntimeActorMetrics {
     pub runtime_events_accepted: u64,
     /// Number of typed runtime events applied to mutable runtime state.
     pub runtime_events_applied: u64,
+    /// Histogram of accepted event counts per runtime event batch.
+    pub runtime_event_batch_sizes: RuntimeHistogram,
     /// Number of runtime side effects queued by event application.
     pub runtime_side_effects_queued: u64,
     /// Number of runtime side effects drained by supervised workers.
     pub runtime_side_effects_drained: u64,
+    /// Histogram of queued side-effect counts per enqueue pass.
+    pub runtime_side_effect_enqueue_sizes: RuntimeHistogram,
+    /// Histogram of drained side-effect counts per drain pass.
+    pub runtime_side_effect_drain_sizes: RuntimeHistogram,
     /// Number of pane output chunks applied through typed runtime events.
     pub pane_output_chunks: u64,
     /// Number of pane output bytes applied through typed runtime events.
     pub pane_output_bytes: u64,
+    /// Histogram of pane output chunk sizes in bytes.
+    pub pane_output_chunk_bytes: RuntimeHistogram,
     /// Number of redundant render invalidations merged by render side-effect drains.
     pub render_invalidations_coalesced: u64,
     /// Number of runtime timer schedule side effects queued through the actor.
@@ -86,6 +165,8 @@ pub struct AsyncRuntimeActorMetrics {
     pub side_effect_queue_depth: usize,
     /// Maximum side-effect queue depth observed since actor startup.
     pub side_effect_queue_high_water: usize,
+    /// Histogram of sampled side-effect queue depths.
+    pub side_effect_queue_depth_samples: RuntimeHistogram,
     /// Message-delivery notifications emitted by actor mutations.
     pub message_delivery_notifications: u64,
     /// Event-delivery notifications emitted by actor mutations.
