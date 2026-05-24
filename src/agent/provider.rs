@@ -480,7 +480,7 @@ impl ProviderCapabilities {
             "deepseek" => Self {
                 supports_responses_api: false,
                 supports_max_output_tokens: true,
-                supports_reasoning_controls: false,
+                supports_reasoning_controls: true,
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
                 supports_streaming: true,
@@ -2026,7 +2026,11 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
-    if let Some(reasoning_effort) = request
+    let use_maap_tool = request.interaction_kind != ModelInteractionKind::AutoSizing
+        && !request.allowed_actions.actions.is_empty();
+    if use_maap_tool {
+        body["thinking"] = serde_json::json!({"type": "disabled"});
+    } else if let Some(reasoning_effort) = request
         .reasoning_effort
         .as_deref()
         .filter(|effort| !effort.is_empty())
@@ -2035,29 +2039,21 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
         body["reasoning_effort"] = serde_json::json!(deepseek_effort);
         body["thinking"] = serde_json::json!({"type": "enabled"});
     }
-    if capabilities.supports_tool_calls {
-        let use_maap_tool = request.interaction_kind != ModelInteractionKind::AutoSizing
-            && !request.allowed_actions.actions.is_empty();
-        body["tool_choice"] = if use_maap_tool {
-            deepseek_maap_tool_choice()
-        } else {
-            serde_json::json!("none")
-        };
-        if use_maap_tool {
-            let maap_tool = serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-                    "description": deepseek_maap_tool_description(&request.allowed_actions),
-                    "parameters": maap_action_batch_schema(
-                        &request.allowed_actions,
-                        &request.available_mcp_tools
-                    ),
-                    "strict": false
-                }
-            });
-            body["tools"] = serde_json::json!([maap_tool]);
-        }
+    if capabilities.supports_tool_calls && use_maap_tool {
+        body["tool_choice"] = deepseek_maap_tool_choice();
+        let maap_tool = serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "description": deepseek_maap_tool_description(&request.allowed_actions),
+                "parameters": maap_action_batch_schema(
+                    &request.allowed_actions,
+                    &request.available_mcp_tools
+                ),
+                "strict": false
+            }
+        });
+        body["tools"] = serde_json::json!([maap_tool]);
     }
     serde_json::to_string(&body).map_err(|error| {
         MezError::invalid_state(format!(
@@ -2073,7 +2069,8 @@ fn deepseek_chat_completions_request_body(request: &ModelRequest, stream: bool) 
 /// are present, which allows a prose answer instead of a MAAP action batch.
 /// Mezzanine requires a structured action batch for every non-auto-sizing
 /// provider turn, so executable and response-only turns force the single MAAP
-/// tool explicitly.
+/// tool explicitly. DeepSeek currently rejects forced `tool_choice` in thinking
+/// mode, so callers that use this helper must disable thinking for the request.
 fn deepseek_maap_tool_choice() -> serde_json::Value {
     serde_json::json!({
         "type": "function",

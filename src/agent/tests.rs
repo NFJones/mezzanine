@@ -7858,17 +7858,19 @@ fn deepseek_tool_action_types(tool: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// Verifies DeepSeek capability-decision requests force the MAAP tool call
-/// instead of allowing an ordinary prose response.
+/// Verifies DeepSeek capability-decision requests disable thinking before
+/// forcing the MAAP tool call instead of allowing an ordinary prose response.
 ///
 /// The DeepSeek Chat Completions API defaults to `tool_choice=auto` whenever a
 /// tool list is present. Mezzanine's first provider turn still requires a
 /// structured MAAP batch so the model can request the missing coarse capability
-/// rather than narrating that it might try an action name. This regression
-/// protects the forced named-tool choice and the narrow say/request-capability
-/// schema used by the initial turn.
+/// rather than narrating that it might try an action name. DeepSeek rejects
+/// forced `tool_choice` in thinking mode, so this regression protects both the
+/// explicit non-thinking toggle and the narrow say/request-capability schema
+/// used by the initial turn.
 #[test]
-fn deepseek_chat_completions_request_body_forces_maap_tool_for_capability_decision() {
+fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_capability_decision()
+ {
     let request = assemble_model_request(
         &ModelProfile {
             provider: "deepseek".to_string(),
@@ -7902,6 +7904,13 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_for_capability_decisi
     let action_types = deepseek_tool_action_types(tool);
 
     assert_eq!(
+        value["thinking"],
+        serde_json::json!({
+            "type": "disabled"
+        })
+    );
+    assert!(value.get("reasoning_effort").is_none());
+    assert_eq!(
         value["tool_choice"],
         serde_json::json!({
             "type": "function",
@@ -7916,16 +7925,17 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_for_capability_decisi
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
-/// Verifies DeepSeek subagent execution requests force the MAAP tool and expose
-/// the concrete subagent action variants.
+/// Verifies DeepSeek subagent execution requests disable thinking before
+/// forcing the MAAP tool and exposing the concrete subagent action variants.
 ///
 /// After the controller grants subagent capability, the provider-visible schema
 /// must make `spawn_agent` and `send_message` explicit while still forcing the
 /// single MAAP function call. Without a forced named tool, DeepSeek can legally
 /// return normal assistant text even though Mezzanine needs executable local
-/// actions for the turn to progress.
+/// actions for the turn to progress. The request must remain in non-thinking
+/// mode because DeepSeek rejects forced `tool_choice` while thinking is enabled.
 #[test]
-fn deepseek_chat_completions_request_body_forces_maap_tool_for_subagent_actions() {
+fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_subagent_actions() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "deepseek".to_string(),
@@ -7962,6 +7972,13 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_for_subagent_actions(
     let action_types = deepseek_tool_action_types(tool);
 
     assert_eq!(
+        value["thinking"],
+        serde_json::json!({
+            "type": "disabled"
+        })
+    );
+    assert!(value.get("reasoning_effort").is_none());
+    assert_eq!(
         value["tool_choice"],
         serde_json::json!({
             "type": "function",
@@ -7979,6 +7996,55 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_for_subagent_actions(
             "Current allowed action types: say,request_capability,send_message,spawn_agent"
         )
     );
+}
+
+/// Verifies DeepSeek no-tool requests can use thinking mode without sending a
+/// redundant `tool_choice: none` field. This matters because DeepSeek's
+/// thinking mode rejects some `tool_choice` values even when Mezzanine has no
+/// function tool to force for the request.
+#[test]
+fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking_requests() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("xhigh".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "classify this prompt size".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::AutoSizing;
+    request.allowed_actions = crate::agent::AllowedActionSet::from_actions([]);
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/v1/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+
+    assert_eq!(
+        value["thinking"],
+        serde_json::json!({
+            "type": "enabled"
+        })
+    );
+    assert_eq!(value["reasoning_effort"], "max");
+    assert!(value.get("tool_choice").is_none());
+    assert!(value.get("tools").is_none());
 }
 
 /// Recursively validates strict-schema object requirements with a path that
