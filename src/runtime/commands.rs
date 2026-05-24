@@ -1360,11 +1360,11 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_args("model command must be a slash command"))?;
         let agent_id = format!("agent-{pane_id}");
         let args = runtime_model_command_args(&invocation.args)?;
-        if args.secondary {
-            return self.execute_agent_shell_secondary_model_command(
+        if args.routing {
+            return self.execute_agent_shell_routing_model_command(
                 pane_id,
                 &agent_id,
-                RuntimeSecondaryModelCommandArgs {
+                RuntimeRoutingModelCommandArgs {
                     profile: args.profile.as_deref(),
                     reasoning_profile: args.reasoning_profile.as_deref(),
                     clear: args.clear,
@@ -1466,12 +1466,12 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_args("model command must be a slash command"))?;
         let agent_id = format!("agent-{pane_id}");
         let args = runtime_model_command_args(&invocation.args)?;
-        if args.secondary {
+        if args.routing {
             return self
-                .execute_agent_shell_secondary_model_command_async(
+                .execute_agent_shell_routing_model_command_async(
                     pane_id,
                     &agent_id,
-                    RuntimeSecondaryModelCommandArgs {
+                    RuntimeRoutingModelCommandArgs {
                         profile: args.profile.as_deref(),
                         reasoning_profile: args.reasoning_profile.as_deref(),
                         clear: args.clear,
@@ -1638,27 +1638,27 @@ impl RuntimeSessionService {
             })
     }
 
-    /// Executes `/model --secondary` against the auto-sizing router profile.
+    /// Executes `/model --routing` against the auto-sizing router profile.
     ///
-    /// The secondary model is the provider request used to classify turn size
+    /// The routing model is the provider request used to classify turn size
     /// before the main model request. Keeping it on the `/model` command makes
     /// the model controls discoverable without changing ordinary pane model
     /// selection semantics.
-    fn execute_agent_shell_secondary_model_command(
+    fn execute_agent_shell_routing_model_command(
         &mut self,
         pane_id: &str,
         agent_id: &str,
-        args: RuntimeSecondaryModelCommandArgs<'_>,
+        args: RuntimeRoutingModelCommandArgs<'_>,
     ) -> Result<AgentShellCommandOutcome> {
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, agent_id, None)?;
-        let (secondary_name, secondary_profile) = self.active_secondary_model_profile()?;
+        let (routing_name, routing_profile) = self.active_routing_model_profile()?;
         if args.clear {
-            return self.set_secondary_model_profile_outcome(
+            return self.set_routing_model_profile_outcome(
                 pane_id,
                 DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
                 &active_profile.provider,
-                "runtime-secondary-model-clear",
+                "runtime-routing-model-clear",
             );
         }
         if args.list {
@@ -1666,15 +1666,15 @@ impl RuntimeSessionService {
             self.record_agent_provider_quota_usage(pane_id, &catalog.quota_usage);
             return Ok(AgentShellCommandOutcome::Display {
                 command: "model".to_string(),
-                body: runtime_model_catalog_display(&secondary_name, &secondary_profile, &catalog),
+                body: runtime_model_catalog_display(&routing_name, &routing_profile, &catalog),
             });
         }
         if args.profile.is_none() || args.show {
             return Ok(AgentShellCommandOutcome::Display {
                 command: "model".to_string(),
-                body: runtime_secondary_model_profile_display(
-                    &secondary_name,
-                    &secondary_profile,
+                body: runtime_routing_model_profile_display(
+                    &routing_name,
+                    &routing_profile,
                     &active_profile,
                 ),
             });
@@ -1696,30 +1696,29 @@ impl RuntimeSessionService {
                 &catalog,
             )?
         };
-        self.set_secondary_model_profile_outcome(
+        self.set_routing_model_profile_outcome(
             pane_id,
             &profile_name,
             &active_profile.provider,
-            "runtime-secondary-model-selection",
+            "runtime-routing-model-selection",
         )
     }
-
-    /// Async variant of `/model --secondary` for provider catalog lookups.
-    async fn execute_agent_shell_secondary_model_command_async(
+    /// Async variant of `/model --routing` for provider catalog lookups.
+    async fn execute_agent_shell_routing_model_command_async(
         &mut self,
         pane_id: &str,
         agent_id: &str,
-        args: RuntimeSecondaryModelCommandArgs<'_>,
+        args: RuntimeRoutingModelCommandArgs<'_>,
     ) -> Result<AgentShellCommandOutcome> {
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, agent_id, None)?;
-        let (secondary_name, secondary_profile) = self.active_secondary_model_profile()?;
+        let (routing_name, routing_profile) = self.active_routing_model_profile()?;
         if args.clear {
-            return self.set_secondary_model_profile_outcome(
+            return self.set_routing_model_profile_outcome(
                 pane_id,
                 DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
                 &active_profile.provider,
-                "runtime-secondary-model-clear",
+                "runtime-routing-model-clear",
             );
         }
         if args.list {
@@ -1727,15 +1726,15 @@ impl RuntimeSessionService {
             self.record_agent_provider_quota_usage(pane_id, &catalog.quota_usage);
             return Ok(AgentShellCommandOutcome::Display {
                 command: "model".to_string(),
-                body: runtime_model_catalog_display(&secondary_name, &secondary_profile, &catalog),
+                body: runtime_model_catalog_display(&routing_name, &routing_profile, &catalog),
             });
         }
         if args.profile.is_none() || args.show {
             return Ok(AgentShellCommandOutcome::Display {
                 command: "model".to_string(),
-                body: runtime_secondary_model_profile_display(
-                    &secondary_name,
-                    &secondary_profile,
+                body: runtime_routing_model_profile_display(
+                    &routing_name,
+                    &routing_profile,
                     &active_profile,
                 ),
             });
@@ -1757,23 +1756,21 @@ impl RuntimeSessionService {
                 &catalog,
             )?
         };
-        self.set_secondary_model_profile_outcome(
+        self.set_routing_model_profile_outcome(
             pane_id,
             &profile_name,
             &active_profile.provider,
-            "runtime-secondary-model-selection",
+            "runtime-routing-model-selection",
         )
     }
-
-    /// Returns the currently configured secondary auto-sizing model profile.
-    fn active_secondary_model_profile(&self) -> Result<(String, ModelProfile)> {
+    /// Returns the currently configured routing auto-sizing model profile.
+    fn active_routing_model_profile(&self) -> Result<(String, ModelProfile)> {
         let profile_name = self.agent_auto_sizing.router_model_profile.clone();
         let profile = self.provider_registry.resolve_profile(&profile_name)?;
         Ok((profile_name, profile))
     }
-
-    /// Applies a secondary auto-sizing model profile after provider validation.
-    fn set_secondary_model_profile_outcome(
+    /// Applies a routing auto-sizing model profile after provider validation.
+    fn set_routing_model_profile_outcome(
         &mut self,
         pane_id: &str,
         profile_name: &str,
@@ -1783,7 +1780,7 @@ impl RuntimeSessionService {
         let profile = self.provider_registry.resolve_profile(profile_name)?;
         if profile.provider != active_provider {
             return Err(MezError::config(format!(
-                "secondary model profile `{profile_name}` uses provider `{}`, but active provider is `{active_provider}`",
+                "routing model profile `{profile_name}` uses provider `{}`, but active provider is `{active_provider}`",
                 profile.provider
             )));
         }
@@ -1791,7 +1788,7 @@ impl RuntimeSessionService {
         Ok(AgentShellCommandOutcome::Mutated {
             command: "model".to_string(),
             body: format!(
-                "scope=secondary profile={} provider={} model={} reasoning_profile={} source={}",
+                "scope=routing profile={} provider={} model={} reasoning_profile={} source={}",
                 json_escape(profile_name),
                 json_escape(&profile.provider),
                 json_escape(&profile.model),
@@ -5369,21 +5366,21 @@ impl RuntimeSessionService {
     }
 }
 
-/// Borrowed argument view for `/model --secondary`.
+/// Borrowed argument view for `/model --routing`.
 ///
 /// The public parser lives in the runtime config module; this compact local
 /// view keeps command execution readable without exposing parser internals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuntimeSecondaryModelCommandArgs<'a> {
+struct RuntimeRoutingModelCommandArgs<'a> {
     /// Optional requested model profile or provider model name.
     profile: Option<&'a str>,
     /// Optional reasoning profile or effort requested with the model.
     reasoning_profile: Option<&'a str>,
-    /// Whether to reset the secondary model to the default router profile.
+    /// Whether to reset the routing model to the default router profile.
     clear: bool,
     /// Whether to list models for the active provider.
     list: bool,
-    /// Whether to show the current secondary model.
+    /// Whether to show the current routing model.
     show: bool,
 }
 
@@ -5578,18 +5575,18 @@ fn deepseek_default_reasoning_effort_levels() -> Vec<String> {
     vec!["high".to_string(), "max".to_string()]
 }
 
-/// Formats the current secondary auto-sizing model profile.
-fn runtime_secondary_model_profile_display(
-    secondary_name: &str,
-    secondary_profile: &ModelProfile,
+/// Formats the current routing auto-sizing model profile.
+fn runtime_routing_model_profile_display(
+    routing_name: &str,
+    routing_profile: &ModelProfile,
     active_profile: &ModelProfile,
 ) -> String {
     format!(
-        "scope=secondary profile={} provider={} model={} reasoning_profile={} active_provider={} active_model={} source=runtime-secondary-model",
-        json_escape(secondary_name),
-        json_escape(&secondary_profile.provider),
-        json_escape(&secondary_profile.model),
-        secondary_profile
+        "scope=routing profile={} provider={} model={} reasoning_profile={} active_provider={} active_model={} source=runtime-routing-model",
+        json_escape(routing_name),
+        json_escape(&routing_profile.provider),
+        json_escape(&routing_profile.model),
+        routing_profile
             .reasoning_profile
             .as_deref()
             .unwrap_or("none"),

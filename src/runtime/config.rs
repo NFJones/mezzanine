@@ -618,11 +618,11 @@ pub(super) struct RuntimeModelCommandArgs {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) show: bool,
-    /// Stores whether the command targets the secondary auto-sizing router.
+    /// Stores whether the command targets the routing auto-sizing router.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) secondary: bool,
+    pub(super) routing: bool,
 }
 
 /// Runs the runtime model command args operation for this subsystem.
@@ -647,7 +647,7 @@ pub(super) fn runtime_model_command_args(args: &str) -> Result<RuntimeModelComma
                     .ok_or_else(|| MezError::invalid_args("/model --target requires a value"))?;
                 parsed.target = Some(target.to_string());
             }
-            "--secondary" | "--router" => parsed.secondary = true,
+            "--routing" | "--router" => parsed.routing = true,
             "--reasoning" | "--reasoning-level" | "--reasoning-profile" => {
                 let reasoning = words
                     .next()
@@ -694,9 +694,9 @@ pub(super) fn runtime_model_command_args(args: &str) -> Result<RuntimeModelComma
             "/model list cannot be combined with a reasoning level",
         ));
     }
-    if parsed.secondary && (parsed.scope.is_some() || parsed.target.is_some()) {
+    if parsed.routing && (parsed.scope.is_some() || parsed.target.is_some()) {
         return Err(MezError::invalid_args(
-            "/model --secondary cannot be combined with --scope or --target",
+            "/model --routing cannot be combined with --scope or --target",
         ));
     }
     Ok(parsed)

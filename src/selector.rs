@@ -784,7 +784,7 @@ fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
                 "xhigh",
             ]);
             candidates.extend(flag_candidates(&[
-                "--secondary",
+                "--routing",
                 "--router",
                 "--reasoning",
                 "--clear",
@@ -866,7 +866,7 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "approval" => Some(" <ask|auto-allow|full-access>"),
         "approve" => Some(" <approval-id|latest> [once|session|project|global]"),
         "trust" => Some(" <project-root|latest|list>"),
-        "model" => Some(" [--secondary] <list|model> [reasoning]"),
+        "model" => Some(" [--routing] <list|model> [reasoning]"),
         "routing" => Some(" <on|off|toggle|status>"),
         "statusline" => Some(" <on|off|toggle>"),
         "log-level" => Some(" <normal|verbose|debug|trace>"),

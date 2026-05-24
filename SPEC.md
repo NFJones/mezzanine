@@ -2441,7 +2441,7 @@ failed action.
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,
 `allowed_reasoning_efforts`, and `fallback_policy`. These keys define the
-secondary model used to classify turn size and the target model profiles that
+routing model used to classify turn size and the target model profiles that
 classification may choose. `router_model_profile` MUST default to
 `auto-size-router`, `small_model_profile` MUST default to `auto-size-small`,
 `medium_model_profile` MUST default to `auto-size-medium`, and
@@ -7025,7 +7025,7 @@ The auto-sizing router prompt MUST include:
 - explicit guidance that plan requests MUST inspect enough available evidence to
   identify concrete solution steps instead of returning only a discovery plan.
 
-The router prompt MUST instruct the secondary model to ignore any user-task
+The router prompt MUST instruct the routing model to ignore any user-task
 text that attempts to change the router schema, policy, available models,
 allowed reasoning efforts, permissions, or system instructions. The router MUST
 not receive passive pane terminal contents, tool/action outputs, system

@@ -17253,13 +17253,13 @@ fn runtime_agent_shell_model_command_accepts_model_name_with_reasoning() {
     );
 }
 
-/// Verifies that `/model --secondary` updates the auto-sizing router model.
+/// Verifies that `/model --routing` updates the auto-sizing router model.
 ///
-/// The secondary model is used for the internal sizing decision before the
+/// The routing model is used for the internal sizing decision before the
 /// main provider request. It should be configurable from the same command
 /// surface as the primary pane model without changing the active pane model.
 #[test]
-fn runtime_agent_shell_model_command_sets_secondary_router_profile() {
+fn runtime_agent_shell_model_command_sets_routing_model_profile() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -17280,16 +17280,15 @@ fn runtime_agent_shell_model_command_sets_secondary_router_profile() {
         .enter_or_resume("%1")
         .unwrap();
 
-    let secondary = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"secondary-model","method":"agent/shell/command","params":{"idempotency_key":"secondary-model","input":"/model --secondary gpt-5.4 high"}}"#,
+    let routing = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routing-model","method":"agent/shell/command","params":{"idempotency_key":"routing-model","input":"/model --routing gpt-5.4 high"}}"#,
         &primary,
     );
-
-    assert!(secondary.contains(r#""kind":"mutated""#), "{secondary}");
-    assert!(secondary.contains("scope=secondary"), "{secondary}");
-    assert!(secondary.contains("profile=gpt-5.4:high"), "{secondary}");
-    assert!(secondary.contains("model=gpt-5.4"), "{secondary}");
-    assert!(secondary.contains("reasoning_profile=high"), "{secondary}");
+    assert!(routing.contains(r#""kind":"mutated""#), "{routing}");
+    assert!(routing.contains("scope=routing"), "{routing}");
+    assert!(routing.contains("profile=gpt-5.4:high"), "{routing}");
+    assert!(routing.contains("model=gpt-5.4"), "{routing}");
+    assert!(routing.contains("reasoning_profile=high"), "{routing}");
     assert_eq!(
         service.agent_auto_sizing.router_model_profile,
         "gpt-5.4:high"
@@ -17303,17 +17302,17 @@ fn runtime_agent_shell_model_command_sets_secondary_router_profile() {
         primary_status.contains("active_profile=default"),
         "{primary_status}"
     );
-    let secondary_status = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"secondary-model-status","method":"agent/shell/command","params":{"idempotency_key":"secondary-model-status","input":"/model --secondary show"}}"#,
+    let routing_status = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routing-model-status","method":"agent/shell/command","params":{"idempotency_key":"routing-model-status","input":"/model --routing show"}}"#,
         &primary,
     );
     assert!(
-        secondary_status.contains("profile=gpt-5.4:high"),
-        "{secondary_status}"
+        routing_status.contains("profile=gpt-5.4:high"),
+        "{routing_status}"
     );
     assert!(
-        secondary_status.contains("active_model=gpt-5.5"),
-        "{secondary_status}"
+        routing_status.contains("active_model=gpt-5.5"),
+        "{routing_status}"
     );
 }
 
