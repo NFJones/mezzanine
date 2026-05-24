@@ -68,6 +68,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod geometry;
 mod input;
 mod mouse;
+mod paste;
 
 use geometry::{clipped_overlay_style_span, overlay_text_cells, remove_overlapping_style_spans};
 use input::{
@@ -79,6 +80,7 @@ use mouse::{
     MouseResizeDragUpdate, horizontal_mouse_resize_state, mouse_resize_update_from_state,
     vertical_mouse_resize_state,
 };
+use paste::{RuntimePasteSource, runtime_readline_paste_bytes};
 
 // Attached terminal input application and client view rendering.
 
@@ -176,38 +178,6 @@ struct MouseSelectionTarget {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     edge: Option<MouseSelectionEdge>,
-}
-
-/// Carries Runtime Paste Source state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimePasteSource {
-    /// Stores the label value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    label: String,
-    /// Stores the buffer name value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    buffer_name: Option<String>,
-    /// Stores the content value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    content: String,
-}
-
-/// Wraps pasted text for the readline decoder as one bracketed-paste payload.
-fn runtime_readline_paste_bytes(content: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(content.len().saturating_add(12));
-    bytes.extend_from_slice(b"\x1b[200~");
-    bytes.extend_from_slice(content.as_bytes());
-    bytes.extend_from_slice(b"\x1b[201~");
-    bytes
 }
 
 /// Returns a compact MCP server state label for command completion details.
