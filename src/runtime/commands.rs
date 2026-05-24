@@ -2120,11 +2120,30 @@ impl RuntimeSessionService {
         catalog: &RuntimeModelCatalog,
     ) -> Result<AgentShellCommandOutcome> {
         let provider_id = catalog.provider.clone();
+        let agent_id = format!("agent-{pane_id}");
+        let latency = self
+            .active_model_profile_for_pane(pane_id, &agent_id, None)
+            .ok()
+            .and_then(|(_active_name, active_profile)| {
+                let new_provider_supports_latency = self
+                    .provider_registry
+                    .provider(&provider_id)
+                    .is_some_and(|provider| {
+                        ProviderCapabilities::for_kind(&provider.kind).supports_service_tier
+                    });
+                (new_provider_supports_latency
+                    && self.model_profile_supports_latency_preference(&active_profile))
+                .then(|| {
+                    active_profile
+                        .latency_preference
+                        .unwrap_or_else(|| "default".to_string())
+                })
+            });
         let profile_name = self.runtime_generated_profile_for_provider_model(
             &provider_id,
             model_name,
             reasoning,
-            None,
+            latency.as_deref(),
             catalog,
         )?;
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());

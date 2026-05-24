@@ -16045,6 +16045,123 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("low"));
 }
 
+/// Verifies that changing reasoning from the pane-frame selector preserves the
+/// active latency preference and keeps the latency pill visible.
+///
+/// Reasoning changes generate a new pane-scoped model profile. That generated
+/// profile must carry forward the provider-visible latency selection so the
+/// status bar does not lose its latency dropdown after the user changes only
+/// the reasoning level.
+#[test]
+fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\nlatency_preference = \"fast\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "openai",
+        vec![crate::agent::ProviderModelInfo {
+            id: "gpt-5.5".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["low".to_string(), "high".to_string()],
+        }],
+        vec!["low".to_string(), "high".to_string()],
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Reasoning,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let reasoning_items = service
+        .pane_agent_status_selector
+        .as_ref()
+        .map(|selector| selector.items.clone())
+        .unwrap_or_default();
+    let high_index = reasoning_items
+        .iter()
+        .position(|item| item == "high")
+        .expect("reasoning selector should include high");
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::SelectPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Reasoning,
+                        item_index: high_index,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let (_name, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(profile.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(profile.latency_preference.as_deref(), Some("fast"));
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(pane_context.agent_latency.as_deref(), Some("fast"));
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Latency,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(
+        service.pane_agent_status_selector.is_some(),
+        "latency selector should remain available after reasoning changes"
+    );
+}
+
 /// Verifies that pane-frame latency controls are hidden for providers that do
 /// not support a provider-visible latency preference.
 ///

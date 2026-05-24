@@ -8417,8 +8417,12 @@ impl RuntimeSessionService {
                     });
                 let agent_latency = agent_latency_profile.as_ref().and_then(|profile| {
                     self.model_profile_supports_latency_preference(profile)
-                        .then(|| profile.latency_preference.clone())
-                        .flatten()
+                        .then(|| {
+                            profile
+                                .latency_preference
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string())
+                        })
                 });
                 let agent_context_usage = agent_session.and_then(|session| {
                     self.agent_context_usage_by_conversation
