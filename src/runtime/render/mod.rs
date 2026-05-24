@@ -66,10 +66,16 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod geometry;
+mod input;
 
 use geometry::{
     clipped_overlay_style_span, overlay_text_cells, range_overlap_u16,
     remove_overlapping_style_spans,
+};
+use input::{
+    RuntimeDisplayOverlayInputAction, RuntimeSelectorInputAction,
+    runtime_display_overlay_input_action, runtime_selector_input_action,
+    runtime_selector_step_index,
 };
 
 // Attached terminal input application and client view rendering.
@@ -1143,118 +1149,6 @@ fn runtime_display_field_value(value: &str) -> String {
         "false" => "no".to_string(),
         "none" => "none".to_string(),
         _ => value.to_string(),
-    }
-}
-
-/// Carries Runtime Display Overlay Input Action state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeDisplayOverlayInputAction {
-    /// Represents the Exit case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Exit,
-    /// Represents the Scroll By case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ScrollBy(isize),
-    /// Represents the Select Active case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    SelectActive,
-    /// Represents the Select Previous case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    SelectPrevious,
-    /// Represents the Select Next case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    SelectNext,
-    /// Move to the first selectable row when a selector is active.
-    SelectFirst,
-    /// Move to the last selectable row when a selector is active.
-    SelectLast,
-    /// Represents the Ignore case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Ignore,
-}
-
-/// Runs the runtime display overlay input action operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_display_overlay_input_action(input: &[u8]) -> RuntimeDisplayOverlayInputAction {
-    if input == b"q" {
-        return RuntimeDisplayOverlayInputAction::Exit;
-    }
-    match runtime_selector_input_action(input) {
-        RuntimeSelectorInputAction::Exit => RuntimeDisplayOverlayInputAction::Exit,
-        RuntimeSelectorInputAction::Select => RuntimeDisplayOverlayInputAction::SelectActive,
-        RuntimeSelectorInputAction::Previous => RuntimeDisplayOverlayInputAction::SelectPrevious,
-        RuntimeSelectorInputAction::Next => RuntimeDisplayOverlayInputAction::SelectNext,
-        RuntimeSelectorInputAction::First => RuntimeDisplayOverlayInputAction::SelectFirst,
-        RuntimeSelectorInputAction::Last => RuntimeDisplayOverlayInputAction::SelectLast,
-        RuntimeSelectorInputAction::Ignore => match input {
-            b"\x1b[5~" => RuntimeDisplayOverlayInputAction::ScrollBy(-10),
-            b"\x1b[6~" => RuntimeDisplayOverlayInputAction::ScrollBy(10),
-            _ => RuntimeDisplayOverlayInputAction::Ignore,
-        },
-    }
-}
-
-/// Selector navigation action shared by dropdown and command overlay controls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeSelectorInputAction {
-    /// Close the active selector without applying a value.
-    Exit,
-    /// Move the active selection to the previous item.
-    Previous,
-    /// Move the active selection to the next item.
-    Next,
-    /// Move the active selection to the first item.
-    First,
-    /// Move the active selection to the last item.
-    Last,
-    /// Apply the active selected item.
-    Select,
-    /// Input is not selector navigation.
-    Ignore,
-}
-
-/// Converts raw terminal input into selector navigation.
-fn runtime_selector_input_action(input: &[u8]) -> RuntimeSelectorInputAction {
-    match input {
-        b"\x1b" | b"\x03" => RuntimeSelectorInputAction::Exit,
-        b"\r" | b"\n" => RuntimeSelectorInputAction::Select,
-        b"\x1b[A" | b"\x1bOA" | b"\x1b[D" | b"\x1bOD" => RuntimeSelectorInputAction::Previous,
-        b"\x1b[B" | b"\x1bOB" | b"\x1b[C" | b"\x1bOC" => RuntimeSelectorInputAction::Next,
-        b"\x1b[H" | b"\x1b[1~" => RuntimeSelectorInputAction::First,
-        b"\x1b[F" | b"\x1b[4~" => RuntimeSelectorInputAction::Last,
-        _ => RuntimeSelectorInputAction::Ignore,
-    }
-}
-
-/// Moves a bounded selector index by one item.
-fn runtime_selector_step_index(active: usize, len: usize, delta: isize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    if delta.is_negative() {
-        active.saturating_sub(delta.unsigned_abs())
-    } else {
-        active
-            .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX))
-            .min(len.saturating_sub(1))
     }
 }
 
