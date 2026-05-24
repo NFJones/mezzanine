@@ -9504,6 +9504,65 @@ fn runtime_agent_prompt_accepts_encoded_ctrl_r_history_search() {
     let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "/status");
 }
+/// Verifies standalone Escape clears pane-local agent prompt text without
+/// hiding the agent shell.
+///
+/// Agent-shell exit is reserved for Ctrl+C confirmation or empty Ctrl+D. A
+/// normal Escape press should only clear the current draft and keep the pane
+/// prompt session active.
+#[test]
+fn runtime_agent_prompt_escape_clears_input_without_hiding_shell() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    {
+        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        prompt_state.prompt.buffer.set_line("draft text");
+    }
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(report.forwarded_bytes, 0);
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.visibility),
+        Some(AgentShellVisibility::Visible)
+    );
+    let followup = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"next".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(followup.forwarded_bytes, 0);
+    assert_eq!(followup.agent_prompt_inputs_applied, 1);
+    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    assert_eq!(prompt_state.prompt.buffer.line(), "next");
+}
 
 /// Verifies standalone Escape cancels pane-local agent reverse search without
 /// exiting the agent shell.
@@ -10489,13 +10548,13 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies Escape interrupts active agent work instead of exiting agent mode.
+/// Verifies Escape does not interrupt active agent work or exit agent mode.
 ///
-/// The pane-local prompt owns Escape while visible. During active work it must
-/// follow the same cancellation contract as `/stop`, leaving the shell visible
-/// and clearing the running turn rather than hiding the prompt.
+/// The pane-local prompt owns Escape while visible. During active work it only
+/// clears draft input, so an empty draft leaves the shell visible and the
+/// running turn untouched.
 #[test]
-fn runtime_agent_prompt_escape_interrupts_running_turn() {
+fn runtime_agent_prompt_escape_preserves_running_turn() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -10509,7 +10568,6 @@ fn runtime_agent_prompt_escape_interrupts_running_turn() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-
     let report = service
         .apply_attached_terminal_step_plan(
             &primary,
@@ -10522,9 +10580,8 @@ fn runtime_agent_prompt_escape_interrupts_running_turn() {
             },
         )
         .unwrap();
-
     assert_eq!(report.forwarded_bytes, 0);
-    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert_eq!(report.agent_prompt_inputs_applied, 0);
     assert_eq!(
         service
             .agent_shell_store()
@@ -10537,9 +10594,9 @@ fn runtime_agent_prompt_escape_interrupts_running_turn() {
             .agent_shell_store()
             .get("%1")
             .and_then(|session| session.running_turn_id.as_deref()),
-        None
+        Some("turn-1")
     );
-    assert!(!service.agent_turn_is_running("turn-1"));
+    assert!(service.agent_turn_is_running("turn-1"));
 }
 
 /// Verifies Ctrl+C uses the same active-work interruption path as Escape.
@@ -10595,13 +10652,13 @@ fn runtime_agent_prompt_ctrl_c_interrupts_running_turn() {
     assert!(!service.agent_turn_is_running("turn-1"));
 }
 
-/// Verifies Escape exits an idle pane-local agent shell.
+/// Verifies Escape is a no-op for an empty idle pane-local agent shell.
 ///
-/// Escape is an explicit mode exit key when no turn is active, so it should
-/// leave agent mode rather than sending bytes to the pane PTY or manufacturing
-/// a `/stop` error.
+/// Agent-shell exit is reserved for Ctrl+C confirmation or empty Ctrl+D, so
+/// Escape with no draft input keeps the prompt visible without forwarding bytes
+/// to the pane PTY.
 #[test]
-fn runtime_agent_prompt_escape_exits_when_idle() {
+fn runtime_agent_prompt_escape_keeps_empty_idle_shell_visible() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -10610,7 +10667,6 @@ fn runtime_agent_prompt_escape_exits_when_idle() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-
     let report = service
         .apply_attached_terminal_step_plan(
             &primary,
@@ -10623,15 +10679,14 @@ fn runtime_agent_prompt_escape_exits_when_idle() {
             },
         )
         .unwrap();
-
     assert_eq!(report.forwarded_bytes, 0);
-    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert_eq!(report.agent_prompt_inputs_applied, 0);
     assert_eq!(
         service
             .agent_shell_store()
             .get("%1")
             .map(|session| session.visibility),
-        Some(AgentShellVisibility::Hidden)
+        Some(AgentShellVisibility::Visible)
     );
 }
 

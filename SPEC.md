@@ -1595,8 +1595,9 @@ process. Mezzanine mux commands, pane/window navigation, copy-mode controls, and
 other global control bindings MUST remain available while the prompt is visible.
 
 Cancelling the pane-local agent prompt through baseline prompt exit keys
-including `Ctrl+D` on an empty prompt and a standalone Escape key MUST hide the
-prompt and return focus to the pane without requiring an external process kill.
+including `Ctrl+D` on an empty prompt MUST hide the prompt and return focus to
+the pane without requiring an external process kill. A standalone Escape key
+MUST NOT hide the agent shell and instead MUST clear any current draft input.
 When no pane-local agent task is active, `Ctrl+C` MUST require a second
 `Ctrl+C` within three seconds before hiding the prompt. The first `Ctrl+C` MUST
 leave the prompt visible and display a pane-local status message that explains
@@ -1934,8 +1935,10 @@ without submitting it. Escape, `Ctrl+C`, Left arrow, Up arrow, and Down arrow
 MUST cancel reverse search and restore the draft that was present when reverse
 search started. `Ctrl+L` MUST scroll the active pane's
 used visible rows into retained history and clear the live viewport without
-closing the prompt, and standalone Escape MUST close the prompt without
-forwarding bytes to the pane. Command-prompt history MUST be persisted
+closing the prompt. In the pane-local agent shell, standalone Escape MUST
+clear the current draft without closing the prompt or forwarding bytes to the
+pane. In the primary command prompt, standalone Escape MUST close the prompt
+without forwarding bytes to the pane. Command-prompt history MUST be persisted
 in a bounded shared command-prompt history file under the agent-session parent
 directory.
 Command-prompt history MUST remain separate from agent prompt history so each

@@ -854,6 +854,26 @@ fn readline_agent_prompt_ctrl_j_inserts_newline_and_enter_submits() {
         ReadlineOutcome::Submitted(String::from("first\nsecond"))
     );
 }
+/// Verifies standalone Escape clears pane-local agent prompt text without
+/// cancelling or submitting the prompt.
+///
+/// Agent-shell Escape is a draft-clearing key, not an exit path. Ctrl+C and
+/// empty Ctrl+D remain the dedicated exit signals.
+#[test]
+fn readline_agent_prompt_escape_clears_input_without_cancelling() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"draft text"),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "draft text");
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"\x1b"),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "");
+    assert_eq!(prompt_outcome(&mut prompt, b"\x1b"), ReadlineOutcome::Noop);
+}
 
 /// Verifies readline terminal input maps history navigation and draft restore.
 ///

@@ -106,6 +106,13 @@ impl ReadlinePrompt {
                 .buffer
                 .apply(ReadlineEdit::InsertText("\n".to_string())));
         }
+        if self.kind == ReadlinePromptKind::Agent && input == b"\x1b" {
+            if self.buffer.line().is_empty() {
+                return Ok(ReadlineOutcome::Noop);
+            }
+            self.buffer.set_line("");
+            return Ok(ReadlineOutcome::Edited);
+        }
         if self.kind == ReadlinePromptKind::Agent {
             match input {
                 b"\x1b[A" | b"\x1bOA" => {

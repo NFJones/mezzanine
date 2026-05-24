@@ -4573,15 +4573,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         if input == b"\x1b" {
-            if self
-                .agent_prompt_inputs
-                .get(pane_id)
-                .is_some_and(|state| state.prompt.reverse_search_active())
-            {
-                // Let the pane-local prompt consume Escape to cancel search.
-            } else {
-                return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
-            }
+            self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
         }
         if input == b"\x0c" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
@@ -4606,7 +4598,7 @@ impl RuntimeSessionService {
             state
                 .prompt
                 .set_selector_extra_candidates(selector_extra_candidates);
-            if input == b"\x1b" && state.prompt.reverse_search_active() {
+            if input == b"\x1b" {
                 vec![state.prompt.apply_terminal_input(input)?]
             } else {
                 state.decoder.apply_to_prompt(&mut state.prompt, input)?
@@ -4705,10 +4697,10 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Applies the Escape interrupt/exit contract for pane-local agent prompts.
+    /// Applies the interrupt/exit contract for pane-local agent prompts.
     ///
-    /// Escape interrupts active work by reusing `/stop`. When the pane has no
-    /// active turn, Escape leaves agent mode through `/exit`.
+    /// Ctrl+C confirmation and EOF exits share this helper so active work is
+    /// stopped consistently before the pane-local prompt is hidden.
     fn apply_agent_prompt_interrupt_or_exit(
         &mut self,
         primary_client_id: &crate::ids::ClientId,
