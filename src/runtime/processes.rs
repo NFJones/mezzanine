@@ -4226,27 +4226,29 @@ impl RuntimeSessionService {
             let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
                 MezError::invalid_state("running agent execution has no action batch")
             })?;
-            let action = batch
+            let Some(action) = batch
                 .actions
                 .iter()
                 .find(|action| action.id == action_id.as_str())
                 .cloned()
-                .ok_or_else(|| {
-                    MezError::invalid_state("shell transaction does not match an agent action")
-                })?;
+            else {
+                // A delayed marker for an already-superseded action is stale.
+                return Ok(0);
+            };
             let mut shell_backed_actions = Vec::new();
             for candidate in &batch.actions {
                 if local_action_plan(candidate)?.is_some() {
                     shell_backed_actions.push(candidate.clone());
                 }
             }
-            let result_index = execution
+            let Some(result_index) = execution
                 .action_results
                 .iter()
                 .position(|result| result.action_id == action_id.as_str())
-                .ok_or_else(|| {
-                    MezError::invalid_state("shell transaction does not match an action result")
-                })?;
+            else {
+                // A delayed marker for an already-superseded result is stale.
+                return Ok(0);
+            };
             if execution.action_results[result_index].status != ActionStatus::Running {
                 return Ok(0);
             }

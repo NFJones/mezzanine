@@ -10767,21 +10767,23 @@ impl RuntimeSessionService {
             let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
                 MezError::invalid_state("running agent execution has no action batch")
             })?;
-            let action = batch
+            let Some(action) = batch
                 .actions
                 .iter()
                 .find(|action| action.id == failure.action_id)
                 .cloned()
-                .ok_or_else(|| {
-                    MezError::invalid_state("shell transaction does not match an agent action")
-                })?;
-            let result_index = execution
+            else {
+                // A timeout/failure for an already-superseded action is stale.
+                return Ok(0);
+            };
+            let Some(result_index) = execution
                 .action_results
                 .iter()
                 .position(|result| result.action_id == failure.action_id)
-                .ok_or_else(|| {
-                    MezError::invalid_state("shell transaction does not match an action result")
-                })?;
+            else {
+                // A timeout/failure for an already-superseded result is stale.
+                return Ok(0);
+            };
             if execution.action_results[result_index].status != ActionStatus::Running {
                 None
             } else {
