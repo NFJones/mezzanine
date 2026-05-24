@@ -1879,6 +1879,8 @@ impl RuntimeSessionService {
         message: impl Into<String>,
     ) -> Result<usize> {
         let message = message.into();
+        self.runtime_metrics
+            .record_shell_transaction_protocol_violation();
         self.running_shell_transactions.remove(marker);
         self.clear_shell_transaction_protocol_state(marker);
         self.interrupt_shell_transaction_pane_if_live(&transaction.pane_id)?;
@@ -4412,6 +4414,12 @@ impl RuntimeSessionService {
                 local_plan.display_output_after_completion,
             )
         };
+        self.runtime_metrics.record_shell_transaction_completion(
+            transaction_ref.started_at_unix_ms,
+            current_unix_millis(),
+            transaction_ref.observed_output_bytes,
+            exit_code,
+        );
         if exit_code == 0 {
             self.record_shell_dispatch_success(turn_id, &transaction_ref.command);
         }

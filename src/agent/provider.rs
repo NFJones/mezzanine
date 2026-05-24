@@ -312,6 +312,10 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub tools_bytes: usize,
     /// SHA-256 of the OpenAI `tools` list.
     pub tools_sha256: String,
+    /// Bytes in the OpenAI request-level `tool_choice` value.
+    pub tool_choice_bytes: usize,
+    /// SHA-256 of the OpenAI request-level `tool_choice` value.
+    pub tool_choice_sha256: String,
     /// Bytes in the stable input prefix following instructions/tools/schema.
     pub stable_input_bytes: usize,
     /// SHA-256 of the stable input prefix following instructions/tools/schema.
@@ -4470,6 +4474,18 @@ pub fn openai_prompt_cache_diagnostics_for_request(
     let tools_text = serde_json::to_string(&tools).map_err(|error| {
         MezError::invalid_state(format!("OpenAI tools diagnostics failed: {error}"))
     })?;
+    let tool_choice = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        serde_json::json!("none")
+    } else {
+        let surface = openai_maap_tool_surface_for_request(request);
+        serde_json::json!({
+            "type": "function",
+            "name": surface.tool_name()
+        })
+    };
+    let tool_choice_text = serde_json::to_string(&tool_choice).map_err(|error| {
+        MezError::invalid_state(format!("OpenAI tool-choice diagnostics failed: {error}"))
+    })?;
     let stable_input_text = serde_json::to_string(&rendered.stable_input).map_err(|error| {
         MezError::invalid_state(format!("OpenAI stable-input diagnostics failed: {error}"))
     })?;
@@ -4477,10 +4493,11 @@ pub fn openai_prompt_cache_diagnostics_for_request(
         MezError::invalid_state(format!("OpenAI volatile-input diagnostics failed: {error}"))
     })?;
     let cacheable_prefix = serde_json::to_string(&serde_json::json!({
-        "cache_family": "responses-routing-v3",
+        "cache_family": "responses-routing-v4",
         "instructions": rendered.instructions,
         "response_format": response_format,
         "tools": tools,
+        "tool_choice": tool_choice,
         "stable_input": rendered.stable_input,
     }))
     .map_err(|error| {
@@ -4495,6 +4512,8 @@ pub fn openai_prompt_cache_diagnostics_for_request(
         response_format_sha256: sha256_hex(response_format_text.as_bytes()),
         tools_bytes: tools_text.len(),
         tools_sha256: sha256_hex(tools_text.as_bytes()),
+        tool_choice_bytes: tool_choice_text.len(),
+        tool_choice_sha256: sha256_hex(tool_choice_text.as_bytes()),
         stable_input_bytes: stable_input_text.len(),
         stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
         volatile_input_bytes: volatile_input_text.len(),

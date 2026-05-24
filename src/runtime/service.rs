@@ -166,6 +166,7 @@ impl RuntimeSessionService {
             pane_processes,
             async_owned_pane_processes: BTreeMap::new(),
             async_runtime_metrics: None,
+            runtime_metrics: Default::default(),
             pane_current_working_directories: BTreeMap::new(),
             deferred_pane_inputs: Vec::new(),
             deferred_pane_resizes: BTreeMap::new(),
@@ -446,6 +447,10 @@ impl RuntimeSessionService {
         &self,
     ) -> Option<&crate::async_runtime::AsyncRuntimeActorMetrics> {
         self.async_runtime_metrics.as_ref()
+    }
+    /// Returns runtime-owned agent, provider, prompt-cache, and shell metrics.
+    pub(super) fn runtime_metrics(&self) -> &super::types::RuntimeMetricsSnapshot {
+        &self.runtime_metrics
     }
 
     /// Runs the config layers operation for this subsystem.

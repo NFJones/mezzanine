@@ -8,13 +8,13 @@
 use super::runtime_execute_auto_sizing_with_provider;
 use super::types::{RuntimeAgentPatchRecord, RuntimeAgentProviderClaim, RuntimeAgentTurnSteering};
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
-    AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
-    AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest, ContextBlock,
-    ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_PROVIDER_TIMEOUT_MS,
-    DeferredAgentTranscriptWrite, Envelope, EventKind, HookEvent, JoinedSubagentDependency,
-    McpToolCallRequest, MezError, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
-    ModelTokenUsage, PaneId, PaneReadinessState, PathBuf, PathScopes,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentId,
+    AgentShellSession, AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
+    AuditActor, AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest,
+    ContextBlock, ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    DEFAULT_PROVIDER_TIMEOUT_MS, DeferredAgentTranscriptWrite, Envelope, EventKind, HookEvent,
+    JoinedSubagentDependency, McpToolCallRequest, MezError, ModelMessageRole, ModelProfile,
+    ModelRequest, ModelResponse, ModelTokenUsage, PaneId, PaneReadinessState, PathBuf, PathScopes,
     PendingFocusedShellHookContinuation, PermissionPolicy, ProviderQuotaUsage,
     ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
@@ -2156,6 +2156,8 @@ fn runtime_openai_prompt_cache_diagnostics_trace_json(
         "response_format_sha256": diagnostics.response_format_sha256,
         "tools_bytes": diagnostics.tools_bytes,
         "tools_sha256": diagnostics.tools_sha256,
+        "tool_choice_bytes": diagnostics.tool_choice_bytes,
+        "tool_choice_sha256": diagnostics.tool_choice_sha256,
         "stable_input_bytes": diagnostics.stable_input_bytes,
         "stable_input_sha256": diagnostics.stable_input_sha256,
         "volatile_input_bytes": diagnostics.volatile_input_bytes,
@@ -3478,6 +3480,38 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Records the provider request shape that the runtime is about to submit.
+    fn record_runtime_provider_request_shape_for_context(
+        &mut self,
+        model_profile: &ModelProfile,
+        turn: &AgentTurnRecord,
+        context: &AgentContext,
+        available_mcp_tools: &[crate::mcp::McpPromptTool],
+    ) {
+        let Ok(mut request) = assemble_model_request_with_retained_tail_percent(
+            model_profile,
+            turn,
+            context,
+            self.agent_compaction_raw_retention_percent,
+        ) else {
+            return;
+        };
+        request.available_mcp_tools = available_mcp_tools.to_vec();
+        let (diagnostics, diagnostics_failed) = if request.provider == "openai" {
+            match openai_prompt_cache_diagnostics_for_request(&request) {
+                Ok(diagnostics) => (Some(diagnostics), false),
+                Err(_) => (None, true),
+            }
+        } else {
+            (None, false)
+        };
+        self.runtime_metrics.record_provider_request_shape(
+            &request,
+            diagnostics.as_ref(),
+            diagnostics_failed,
+        );
+    }
+
     /// Runs the append agent trace maap response operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -3570,6 +3604,7 @@ impl RuntimeSessionService {
         }
 
         self.agent_turn_ledger.start_turn(turn.clone())?;
+        self.runtime_metrics.record_agent_turn_started();
         self.agent_shell_store
             .start_turn(turn.pane_id.as_str(), turn.turn_id.clone())?;
         self.append_agent_trace_turn_transition(
@@ -3930,6 +3965,7 @@ impl RuntimeSessionService {
             self.append_agent_status_text_to_terminal_buffer(pane_id, &footer)?;
         }
         let previous_state = turn.state;
+        self.runtime_metrics.record_agent_turn_finished(state);
         self.agent_turn_ledger.finish_turn(turn_id, state)?;
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
         self.agent_turn_contexts.remove(turn_id);
@@ -3994,6 +4030,7 @@ impl RuntimeSessionService {
         if let Some(footer) = runtime_agent_finished_footer_line(turn, state) {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }
+        self.runtime_metrics.record_agent_turn_finished(state);
         self.agent_turn_ledger.finish_turn(&turn.turn_id, state)?;
         self.append_agent_trace_turn_transition(
             turn,
@@ -4851,6 +4888,12 @@ impl RuntimeSessionService {
                 context.blocks.len()
             ),
         )?;
+        self.record_runtime_provider_request_shape_for_context(
+            &model_profile,
+            &turn,
+            &context,
+            &mcp_summary.available_tools,
+        );
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request_with_retained_tail_percent(
                 &model_profile,
@@ -4999,6 +5042,7 @@ impl RuntimeSessionService {
                             continue;
                         }
                     }
+                    self.runtime_metrics.record_provider_failure();
                     self.fail_agent_turn_for_provider_error(
                         &turn,
                         provider.provider_id(),
@@ -5106,6 +5150,12 @@ impl RuntimeSessionService {
                 context.blocks.len()
             ),
         )?;
+        self.record_runtime_provider_request_shape_for_context(
+            &model_profile,
+            &turn,
+            &context,
+            &mcp_summary.available_tools,
+        );
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let path_scopes = if subagent_scope.is_some() {
             None
@@ -5222,6 +5272,7 @@ impl RuntimeSessionService {
                             continue;
                         }
                     }
+                    self.runtime_metrics.record_provider_failure();
                     self.fail_agent_turn_for_provider_error(
                         &turn,
                         provider.provider_id(),
@@ -5558,6 +5609,8 @@ impl RuntimeSessionService {
                 execution.final_turn
             ),
         )?;
+        self.runtime_metrics
+            .record_provider_response(&execution.response, execution.latest_response_usage);
         self.record_agent_provider_token_usage_with_profile(
             &turn.pane_id,
             execution.response.usage,
@@ -5788,6 +5841,8 @@ impl RuntimeSessionService {
                 execution.final_turn
             ),
         )?;
+        self.runtime_metrics
+            .record_provider_response(&execution.response, execution.latest_response_usage);
         self.record_agent_provider_token_usage_with_profile(
             &turn.pane_id,
             execution.response.usage,
@@ -6639,6 +6694,12 @@ impl RuntimeSessionService {
                 context.blocks.len()
             ),
         )?;
+        self.record_runtime_provider_request_shape_for_context(
+            &model_profile,
+            &turn,
+            &context,
+            &mcp_summary.available_tools,
+        );
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request_with_retained_tail_percent(
                 &model_profile,
@@ -6759,6 +6820,7 @@ impl RuntimeSessionService {
             &model_profile,
             error,
         )?;
+        self.runtime_metrics.record_provider_failure();
         self.fail_agent_turn_for_provider_error(
             &turn,
             &model_profile.provider,
@@ -7325,6 +7387,7 @@ impl RuntimeSessionService {
                             ),
                         )?;
                     }
+                    self.runtime_metrics.record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 PaneReadinessState::Busy => {
@@ -7408,6 +7471,7 @@ impl RuntimeSessionService {
                             )?;
                         }
                     }
+                    self.runtime_metrics.record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 PaneReadinessState::Probing => {
@@ -7422,6 +7486,7 @@ impl RuntimeSessionService {
                             )
                         ),
                     )?;
+                    self.runtime_metrics.record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 state @ (PaneReadinessState::FullScreen
@@ -7473,6 +7538,7 @@ impl RuntimeSessionService {
                             ),
                         )?;
                     }
+                    self.runtime_metrics.record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 state => {
@@ -7543,6 +7609,7 @@ impl RuntimeSessionService {
                         &turn.turn_id,
                         &format!("action {} waiting reason=pre_shell_hook_pending", action.id),
                     )?;
+                    self.runtime_metrics.record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 RuntimeHookPipelineDecision::Block(block) => {
@@ -7605,6 +7672,7 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
+        self.runtime_metrics.record_shell_action_batch(dispatched);
         Ok(dispatched)
     }
 

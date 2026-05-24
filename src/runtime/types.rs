@@ -13,16 +13,17 @@ use super::{
     FocusedShellHookDispatch, FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan,
     HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry,
     McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse,
-    MessageService, MezError, ModelProfile, ModelRequest, ModelTokenUsage, OpenAiResponsesProvider,
-    OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager,
-    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes,
-    PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result,
-    ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore, SessionRecord,
-    SessionRegistry, Size, SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration,
-    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
-    ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write,
-    delivery_batch_json, effective_uid, encode_control_body, encode_event_notification,
-    encode_mmp_body, execute_streamable_http_exchange, parse_mcp_tools_call_response,
+    MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    OpenAiResponsesProvider, OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId,
+    PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path,
+    PathBuf, PathScopes, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage,
+    ReqwestProviderHttpTransport, Result, ScopeRegistry, Session, SessionApprovalStore,
+    SessionMemoryStore, SessionRecord, SessionRegistry, Size, SplitDirection, Stdio,
+    SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
+    TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent,
+    WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid, encode_control_body,
+    encode_event_notification, encode_mmp_body, execute_streamable_http_exchange,
+    parse_mcp_tools_call_response,
 };
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
@@ -86,6 +87,307 @@ const COMMAND_PANE_PIPE_QUEUE_CAPACITY: usize = 256;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const COMMAND_PANE_PIPE_CLOSE_TIMEOUT: Duration = Duration::from_millis(250);
+/// Runtime-owned diagnostics for provider, prompt-cache, turn, and shell work.
+///
+/// The async runtime actor records serialized actor activity separately. This
+/// snapshot covers the higher-level runtime service path so inspection commands
+/// can debug agent/provider behavior without parsing trace logs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct RuntimeMetricsSnapshot {
+    /// Number of agent turns started by the runtime service.
+    pub(super) agent_turns_started: u64,
+    /// Number of agent turns that ended completed.
+    pub(super) agent_turns_completed: u64,
+    /// Number of agent turns that ended failed.
+    pub(super) agent_turns_failed: u64,
+    /// Number of agent turns that ended interrupted.
+    pub(super) agent_turns_interrupted: u64,
+    /// Number of agent turns that ended blocked waiting for approval or child work.
+    pub(super) agent_turns_blocked: u64,
+    /// Number of provider request shapes recorded from runtime executions.
+    pub(super) provider_requests_started: u64,
+    /// Number of recorded provider requests in capability-decision mode.
+    pub(super) provider_request_capability_decision: u64,
+    /// Number of recorded provider requests in action-execution mode.
+    pub(super) provider_request_action_execution: u64,
+    /// Number of recorded provider requests in repair mode.
+    pub(super) provider_request_repair: u64,
+    /// Number of recorded provider requests in auto-sizing mode.
+    pub(super) provider_request_auto_sizing: u64,
+    /// Number of provider executions that returned a usable response.
+    pub(super) provider_responses_succeeded: u64,
+    /// Number of provider executions that failed before a usable response.
+    pub(super) provider_responses_failed: u64,
+    /// Number of request shapes with available prompt-cache diagnostics.
+    pub(super) provider_prompt_cache_diagnostics_available: u64,
+    /// Number of request shapes whose prompt-cache diagnostics could not be built.
+    pub(super) provider_prompt_cache_diagnostics_failed: u64,
+    /// Number of provider responses that reported cached input tokens.
+    pub(super) provider_cached_input_reports: u64,
+    /// Number of provider responses that did not report cached input tokens.
+    pub(super) provider_cached_input_unknown: u64,
+    /// Number of provider responses that reported zero cached input tokens.
+    pub(super) provider_cached_input_zero_hits: u64,
+    /// Accumulated provider input tokens.
+    pub(super) provider_input_tokens: u64,
+    /// Accumulated provider output tokens.
+    pub(super) provider_output_tokens: u64,
+    /// Accumulated provider reasoning tokens.
+    pub(super) provider_reasoning_tokens: u64,
+    /// Accumulated provider cached input tokens when reported.
+    pub(super) provider_cached_input_tokens: u64,
+    /// Accumulated provider input tokens not reported as cache hits.
+    pub(super) provider_billed_input_tokens: u64,
+    /// Number of shell action dispatch attempts that reached dispatch accounting.
+    pub(super) shell_action_batches: u64,
+    /// Number of shell-backed agent actions dispatched to panes.
+    pub(super) shell_actions_dispatched: u64,
+    /// Number of shell transactions observed to completion.
+    pub(super) shell_transactions_observed: u64,
+    /// Number of shell transactions that exited successfully.
+    pub(super) shell_transactions_succeeded: u64,
+    /// Number of shell transactions that exited non-zero.
+    pub(super) shell_transactions_failed: u64,
+    /// Number of shell transaction marker protocol violations.
+    pub(super) shell_transaction_protocol_violations: u64,
+    /// Histogram of provider request message counts.
+    pub(super) provider_request_message_counts: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of total provider request message bytes.
+    pub(super) provider_request_message_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of OpenAI instruction bytes in cache diagnostics.
+    pub(super) provider_prompt_instructions_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of OpenAI response-format bytes in cache diagnostics.
+    pub(super) provider_prompt_response_format_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of OpenAI tool schema bytes in cache diagnostics.
+    pub(super) provider_prompt_tools_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of OpenAI tool-choice bytes in cache diagnostics.
+    pub(super) provider_prompt_tool_choice_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of stable input bytes in cache diagnostics.
+    pub(super) provider_prompt_stable_input_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of volatile input bytes in cache diagnostics.
+    pub(super) provider_prompt_volatile_input_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of complete observable cacheable prefix bytes.
+    pub(super) provider_prompt_cacheable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of latest response input tokens.
+    pub(super) provider_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of latest response output tokens.
+    pub(super) provider_output_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of latest response cached input tokens.
+    pub(super) provider_cached_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of latest response cache-hit ratios in basis points.
+    pub(super) provider_cached_input_hit_ratio_basis_points: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of MAAP action counts per provider response.
+    pub(super) provider_response_action_counts: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of shell actions dispatched per dispatch pass.
+    pub(super) shell_actions_dispatched_per_batch: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of shell transaction elapsed milliseconds.
+    pub(super) shell_transaction_duration_ms: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of shell transaction model-visible output bytes.
+    pub(super) shell_transaction_output_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Most recent provider identifier observed by runtime metrics.
+    pub(super) last_provider: Option<String>,
+    /// Most recent provider model observed by runtime metrics.
+    pub(super) last_model: Option<String>,
+    /// Most recent provider interaction kind observed by runtime metrics.
+    pub(super) last_interaction_kind: Option<String>,
+    /// Most recent allowed action surface observed by runtime metrics.
+    pub(super) last_allowed_actions: Option<String>,
+    /// Most recent prompt-cache key observed by runtime metrics.
+    pub(super) last_prompt_cache_key: Option<String>,
+    /// Most recent tool-choice digest observed by runtime metrics.
+    pub(super) last_tool_choice_sha256: Option<String>,
+}
+
+impl RuntimeMetricsSnapshot {
+    /// Records that one runtime-owned agent turn started execution.
+    pub(super) fn record_agent_turn_started(&mut self) {
+        self.agent_turns_started = self.agent_turns_started.saturating_add(1);
+    }
+
+    /// Records one terminal or blocked turn outcome.
+    pub(super) fn record_agent_turn_finished(&mut self, state: AgentTurnState) {
+        match state {
+            AgentTurnState::Completed => {
+                self.agent_turns_completed = self.agent_turns_completed.saturating_add(1);
+            }
+            AgentTurnState::Failed => {
+                self.agent_turns_failed = self.agent_turns_failed.saturating_add(1);
+            }
+            AgentTurnState::Interrupted => {
+                self.agent_turns_interrupted = self.agent_turns_interrupted.saturating_add(1);
+            }
+            AgentTurnState::Blocked => {
+                self.agent_turns_blocked = self.agent_turns_blocked.saturating_add(1);
+            }
+            AgentTurnState::Queued | AgentTurnState::Running => {}
+        }
+    }
+
+    /// Records one provider request shape and prompt-cache diagnostic snapshot.
+    pub(super) fn record_provider_request_shape(
+        &mut self,
+        request: &ModelRequest,
+        diagnostics: Option<&crate::agent::OpenAiPromptCacheDiagnostics>,
+        diagnostics_failed: bool,
+    ) {
+        self.provider_requests_started = self.provider_requests_started.saturating_add(1);
+        match request.interaction_kind.as_str() {
+            "capability_decision" => {
+                self.provider_request_capability_decision =
+                    self.provider_request_capability_decision.saturating_add(1);
+            }
+            "action_execution" => {
+                self.provider_request_action_execution =
+                    self.provider_request_action_execution.saturating_add(1);
+            }
+            "repair" => {
+                self.provider_request_repair = self.provider_request_repair.saturating_add(1);
+            }
+            "auto_sizing" => {
+                self.provider_request_auto_sizing =
+                    self.provider_request_auto_sizing.saturating_add(1);
+            }
+            _ => {}
+        }
+        self.provider_request_message_counts
+            .record(request.messages.len() as u64);
+        let message_bytes = request.messages.iter().fold(0u64, |sum, message| {
+            sum.saturating_add(message.content.len() as u64)
+        });
+        self.provider_request_message_bytes.record(message_bytes);
+        self.last_provider = Some(request.provider.clone());
+        self.last_model = Some(request.model.clone());
+        self.last_interaction_kind = Some(request.interaction_kind.as_str().to_string());
+        self.last_allowed_actions = Some(request.allowed_actions.action_type_names().join(","));
+        if let Some(diagnostics) = diagnostics {
+            self.provider_prompt_cache_diagnostics_available = self
+                .provider_prompt_cache_diagnostics_available
+                .saturating_add(1);
+            self.provider_prompt_instructions_bytes
+                .record(diagnostics.instructions_bytes as u64);
+            self.provider_prompt_response_format_bytes
+                .record(diagnostics.response_format_bytes as u64);
+            self.provider_prompt_tools_bytes
+                .record(diagnostics.tools_bytes as u64);
+            self.provider_prompt_tool_choice_bytes
+                .record(diagnostics.tool_choice_bytes as u64);
+            self.provider_prompt_stable_input_bytes
+                .record(diagnostics.stable_input_bytes as u64);
+            self.provider_prompt_volatile_input_bytes
+                .record(diagnostics.volatile_input_bytes as u64);
+            self.provider_prompt_cacheable_prefix_bytes
+                .record(diagnostics.cacheable_prefix_bytes as u64);
+            self.last_prompt_cache_key = Some(diagnostics.prompt_cache_key.clone());
+            self.last_tool_choice_sha256 = Some(diagnostics.tool_choice_sha256.clone());
+        } else if diagnostics_failed {
+            self.provider_prompt_cache_diagnostics_failed = self
+                .provider_prompt_cache_diagnostics_failed
+                .saturating_add(1);
+        }
+    }
+
+    /// Records one successful provider execution and its response shape.
+    pub(super) fn record_provider_response(
+        &mut self,
+        response: &ModelResponse,
+        latest_usage: ModelTokenUsage,
+    ) {
+        self.provider_responses_succeeded = self.provider_responses_succeeded.saturating_add(1);
+        self.provider_response_action_counts.record(
+            response
+                .action_batch
+                .as_ref()
+                .map(|batch| batch.actions.len() as u64)
+                .unwrap_or(0),
+        );
+        self.record_provider_token_usage(response.usage, latest_usage);
+    }
+
+    /// Records one provider request that failed before yielding a usable response.
+    pub(super) fn record_provider_failure(&mut self) {
+        self.provider_responses_failed = self.provider_responses_failed.saturating_add(1);
+    }
+
+    /// Records provider token counters and per-response token histograms.
+    pub(super) fn record_provider_token_usage(
+        &mut self,
+        usage: ModelTokenUsage,
+        latest_usage: ModelTokenUsage,
+    ) {
+        self.provider_input_tokens = self
+            .provider_input_tokens
+            .saturating_add(usage.input_tokens);
+        self.provider_output_tokens = self
+            .provider_output_tokens
+            .saturating_add(usage.output_tokens);
+        self.provider_reasoning_tokens = self
+            .provider_reasoning_tokens
+            .saturating_add(usage.reasoning_tokens);
+        self.provider_cached_input_tokens = self
+            .provider_cached_input_tokens
+            .saturating_add(usage.cached_input_tokens.unwrap_or(0));
+        self.provider_billed_input_tokens = self
+            .provider_billed_input_tokens
+            .saturating_add(usage.billed_input_tokens());
+        self.provider_input_tokens_per_response
+            .record(latest_usage.input_tokens);
+        self.provider_output_tokens_per_response
+            .record(latest_usage.output_tokens);
+        if let Some(cached) = latest_usage.cached_input_tokens {
+            self.provider_cached_input_reports =
+                self.provider_cached_input_reports.saturating_add(1);
+            if cached == 0 {
+                self.provider_cached_input_zero_hits =
+                    self.provider_cached_input_zero_hits.saturating_add(1);
+            }
+            self.provider_cached_input_tokens_per_response
+                .record(cached);
+            if let Some(ratio) = latest_usage.cached_input_hit_ratio_basis_points() {
+                self.provider_cached_input_hit_ratio_basis_points
+                    .record(u64::from(ratio));
+            }
+        } else {
+            self.provider_cached_input_unknown =
+                self.provider_cached_input_unknown.saturating_add(1);
+        }
+    }
+
+    /// Records the number of shell-backed actions dispatched in one pass.
+    pub(super) fn record_shell_action_batch(&mut self, dispatched: usize) {
+        self.shell_action_batches = self.shell_action_batches.saturating_add(1);
+        self.shell_actions_dispatched = self
+            .shell_actions_dispatched
+            .saturating_add(dispatched as u64);
+        self.shell_actions_dispatched_per_batch
+            .record(dispatched as u64);
+    }
+
+    /// Records one completed shell transaction and its result payload size.
+    pub(super) fn record_shell_transaction_completion(
+        &mut self,
+        started_at_unix_ms: u64,
+        finished_at_unix_ms: u64,
+        output_bytes: usize,
+        exit_code: i32,
+    ) {
+        self.shell_transactions_observed = self.shell_transactions_observed.saturating_add(1);
+        if exit_code == 0 {
+            self.shell_transactions_succeeded = self.shell_transactions_succeeded.saturating_add(1);
+        } else {
+            self.shell_transactions_failed = self.shell_transactions_failed.saturating_add(1);
+        }
+        self.shell_transaction_duration_ms
+            .record(finished_at_unix_ms.saturating_sub(started_at_unix_ms));
+        self.shell_transaction_output_bytes
+            .record(output_bytes as u64);
+    }
+
+    /// Records one shell wrapper marker protocol violation.
+    pub(super) fn record_shell_transaction_protocol_violation(&mut self) {
+        self.shell_transaction_protocol_violations =
+            self.shell_transaction_protocol_violations.saturating_add(1);
+    }
+}
 
 /// One retained `apply_patch` attempt emitted by the current pane agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3116,6 +3418,13 @@ pub struct RuntimeSessionService {
     /// `show-metrics` so runtime display helpers can present metrics without
     /// taking a direct dependency on actor internals.
     pub(super) async_runtime_metrics: Option<crate::async_runtime::AsyncRuntimeActorMetrics>,
+    /// Stores runtime-owned agent, provider, and shell diagnostics.
+    ///
+    /// These counters and histograms are updated from the serialized runtime
+    /// service path so `show-metrics` can expose prompt-cache shape, provider
+    /// usage, turn lifecycle, and shell-transaction behavior without parsing
+    /// trace logs.
+    pub(super) runtime_metrics: RuntimeMetricsSnapshot,
     /// Stores the pane current working directories value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

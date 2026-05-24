@@ -2144,13 +2144,245 @@ fn runtime_metrics_histogram_lines(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> String {
-    let Some(metrics) = service.async_runtime_metrics() else {
-        return "metrics source=async-runtime status=unavailable".to_string();
-    };
+    let runtime_metrics = service.runtime_metrics();
     let mut lines = vec![
+        "metrics source=runtime-service status=available".to_string(),
+        "".to_string(),
+        "[runtime counts]".to_string(),
+        format!(
+            "agent_turns_started = {}",
+            runtime_metrics.agent_turns_started
+        ),
+        format!(
+            "agent_turns_completed = {}",
+            runtime_metrics.agent_turns_completed
+        ),
+        format!(
+            "agent_turns_failed = {}",
+            runtime_metrics.agent_turns_failed
+        ),
+        format!(
+            "agent_turns_interrupted = {}",
+            runtime_metrics.agent_turns_interrupted
+        ),
+        format!(
+            "agent_turns_blocked = {}",
+            runtime_metrics.agent_turns_blocked
+        ),
+        format!(
+            "provider_requests_started = {}",
+            runtime_metrics.provider_requests_started
+        ),
+        format!(
+            "provider_request_capability_decision = {}",
+            runtime_metrics.provider_request_capability_decision
+        ),
+        format!(
+            "provider_request_action_execution = {}",
+            runtime_metrics.provider_request_action_execution
+        ),
+        format!(
+            "provider_request_repair = {}",
+            runtime_metrics.provider_request_repair
+        ),
+        format!(
+            "provider_request_auto_sizing = {}",
+            runtime_metrics.provider_request_auto_sizing
+        ),
+        format!(
+            "provider_responses_succeeded = {}",
+            runtime_metrics.provider_responses_succeeded
+        ),
+        format!(
+            "provider_responses_failed = {}",
+            runtime_metrics.provider_responses_failed
+        ),
+        format!(
+            "provider_prompt_cache_diagnostics_available = {}",
+            runtime_metrics.provider_prompt_cache_diagnostics_available
+        ),
+        format!(
+            "provider_prompt_cache_diagnostics_failed = {}",
+            runtime_metrics.provider_prompt_cache_diagnostics_failed
+        ),
+        format!(
+            "provider_cached_input_reports = {}",
+            runtime_metrics.provider_cached_input_reports
+        ),
+        format!(
+            "provider_cached_input_unknown = {}",
+            runtime_metrics.provider_cached_input_unknown
+        ),
+        format!(
+            "provider_cached_input_zero_hits = {}",
+            runtime_metrics.provider_cached_input_zero_hits
+        ),
+        format!(
+            "provider_input_tokens = {}",
+            runtime_metrics.provider_input_tokens
+        ),
+        format!(
+            "provider_output_tokens = {}",
+            runtime_metrics.provider_output_tokens
+        ),
+        format!(
+            "provider_reasoning_tokens = {}",
+            runtime_metrics.provider_reasoning_tokens
+        ),
+        format!(
+            "provider_cached_input_tokens = {}",
+            runtime_metrics.provider_cached_input_tokens
+        ),
+        format!(
+            "provider_billed_input_tokens = {}",
+            runtime_metrics.provider_billed_input_tokens
+        ),
+        format!(
+            "shell_action_batches = {}",
+            runtime_metrics.shell_action_batches
+        ),
+        format!(
+            "shell_actions_dispatched = {}",
+            runtime_metrics.shell_actions_dispatched
+        ),
+        format!(
+            "shell_transactions_observed = {}",
+            runtime_metrics.shell_transactions_observed
+        ),
+        format!(
+            "shell_transactions_succeeded = {}",
+            runtime_metrics.shell_transactions_succeeded
+        ),
+        format!(
+            "shell_transactions_failed = {}",
+            runtime_metrics.shell_transactions_failed
+        ),
+        format!(
+            "shell_transaction_protocol_violations = {}",
+            runtime_metrics.shell_transaction_protocol_violations
+        ),
+        "".to_string(),
+        "[runtime latest]".to_string(),
+        format!(
+            "last_provider = {}",
+            runtime_metrics.last_provider.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "last_model = {}",
+            runtime_metrics.last_model.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "last_interaction_kind = {}",
+            runtime_metrics
+                .last_interaction_kind
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
+            "last_allowed_actions = {}",
+            runtime_metrics
+                .last_allowed_actions
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
+            "last_prompt_cache_key = {}",
+            runtime_metrics
+                .last_prompt_cache_key
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
+            "last_tool_choice_sha256 = {}",
+            runtime_metrics
+                .last_tool_choice_sha256
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        "".to_string(),
+        "[runtime histograms]".to_string(),
+    ];
+    for (name, histogram) in [
+        (
+            "provider_request_message_counts",
+            &runtime_metrics.provider_request_message_counts,
+        ),
+        (
+            "provider_request_message_bytes",
+            &runtime_metrics.provider_request_message_bytes,
+        ),
+        (
+            "provider_prompt_instructions_bytes",
+            &runtime_metrics.provider_prompt_instructions_bytes,
+        ),
+        (
+            "provider_prompt_response_format_bytes",
+            &runtime_metrics.provider_prompt_response_format_bytes,
+        ),
+        (
+            "provider_prompt_tools_bytes",
+            &runtime_metrics.provider_prompt_tools_bytes,
+        ),
+        (
+            "provider_prompt_tool_choice_bytes",
+            &runtime_metrics.provider_prompt_tool_choice_bytes,
+        ),
+        (
+            "provider_prompt_stable_input_bytes",
+            &runtime_metrics.provider_prompt_stable_input_bytes,
+        ),
+        (
+            "provider_prompt_volatile_input_bytes",
+            &runtime_metrics.provider_prompt_volatile_input_bytes,
+        ),
+        (
+            "provider_prompt_cacheable_prefix_bytes",
+            &runtime_metrics.provider_prompt_cacheable_prefix_bytes,
+        ),
+        (
+            "provider_input_tokens_per_response",
+            &runtime_metrics.provider_input_tokens_per_response,
+        ),
+        (
+            "provider_output_tokens_per_response",
+            &runtime_metrics.provider_output_tokens_per_response,
+        ),
+        (
+            "provider_cached_input_tokens_per_response",
+            &runtime_metrics.provider_cached_input_tokens_per_response,
+        ),
+        (
+            "provider_cached_input_hit_ratio_basis_points",
+            &runtime_metrics.provider_cached_input_hit_ratio_basis_points,
+        ),
+        (
+            "provider_response_action_counts",
+            &runtime_metrics.provider_response_action_counts,
+        ),
+        (
+            "shell_actions_dispatched_per_batch",
+            &runtime_metrics.shell_actions_dispatched_per_batch,
+        ),
+        (
+            "shell_transaction_duration_ms",
+            &runtime_metrics.shell_transaction_duration_ms,
+        ),
+        (
+            "shell_transaction_output_bytes",
+            &runtime_metrics.shell_transaction_output_bytes,
+        ),
+    ] {
+        lines.extend(runtime_metrics_histogram_lines(name, histogram));
+    }
+    lines.push("".to_string());
+    let Some(metrics) = service.async_runtime_metrics() else {
+        lines.push("metrics source=async-runtime status=unavailable".to_string());
+        return lines.join("\n");
+    };
+    lines.extend([
         "metrics source=async-runtime status=available".to_string(),
         "".to_string(),
-        "[counts]".to_string(),
+        "[async runtime counts]".to_string(),
         format!("commands_processed = {}", metrics.commands_processed),
         format!(
             "render_client_view_requests = {}",
@@ -2228,8 +2460,8 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             metrics.lifecycle_state_notifications
         ),
         "".to_string(),
-        "[histograms]".to_string(),
-    ];
+        "[async runtime histograms]".to_string(),
+    ]);
     for (name, histogram) in [
         (
             "runtime_event_batch_sizes",

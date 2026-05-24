@@ -3731,9 +3731,20 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
             output.contains("metrics source=async-runtime status=available"),
             "{output}"
         );
-        assert!(output.contains("[counts]"), "{output}");
+        assert!(
+            output.contains("metrics source=runtime-service status=available"),
+            "{output}"
+        );
+        assert!(output.contains("[runtime counts]"), "{output}");
+        assert!(output.contains("provider_requests_started ="), "{output}");
+        assert!(output.contains("[runtime histograms]"), "{output}");
+        assert!(
+            output.contains("provider_prompt_cacheable_prefix_bytes"),
+            "{output}"
+        );
+        assert!(output.contains("[async runtime counts]"), "{output}");
         assert!(output.contains("commands_processed ="), "{output}");
-        assert!(output.contains("[histograms]"), "{output}");
+        assert!(output.contains("[async runtime histograms]"), "{output}");
         assert!(output.contains("runtime_event_batch_sizes"), "{output}");
         assert!(output.contains("pane_output_chunk_bytes"), "{output}");
         assert!(
