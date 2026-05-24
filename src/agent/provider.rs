@@ -3294,11 +3294,12 @@ fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
         | ContextSourceKind::Memory
         | ContextSourceKind::Transcript
         | ContextSourceKind::TranscriptUser
-        | ContextSourceKind::TranscriptAssistant
-        | ContextSourceKind::TranscriptTool => true,
+        | ContextSourceKind::TranscriptAssistant => true,
         ContextSourceKind::Policy => !message.content.starts_with("[scheduler state]\n"),
         ContextSourceKind::UserInstruction
         | ContextSourceKind::LocalMessage
+        | ContextSourceKind::TranscriptTool
+        | ContextSourceKind::EvidenceLedger
         | ContextSourceKind::ActionResult => false,
     }
 }
@@ -3638,11 +3639,11 @@ fn maap_action_batch_schema(
             "rationale": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Very terse model-authored rationale for this complete action batch. Mezzanine renders this once as a thinking log before the listed actions and persists it as future context. Write it as an additive delta: only the new reason these actions are next, not a restatement of the user request, global goal, previous rationale, prior say, loaded context, or action summaries. Compare against recent thinking lines, action results, the current-turn progress say ledger when present, and any progress say in the same response; if there is no new user-visible update, keep the rationale minimal and do not add a progress say. If progress say records durable learning, this rationale should only name the next executable reason. Omit optional action rationales that duplicate this batch rationale, progress say, or the action summary. Progress say is for sequence-point updates: include it when a non-trivial task reaches a meaningful boundary such as changed diagnosis, chosen implementation strategy, phase transition, blocker state, validation outcome, or user-requested narration. A sequence point is consumed once stated; do not add progress say when it would restate a previous owner, diagnosis, direction, phase, blocker, or validation result. Do not rewrite the same progress update with different verbs; if the prior update already named the subject, write only the changed fact or omit progress."
+                "description": "Terse additive reason these actions are next. Do not restate the user request, prior rationale, progress say, or action summaries."
             },
             "thought": {
                 "type": ["string", "null"],
-                "description": "Optional longer durable work note for future model context. Set null unless a substantive learning, decision, invariant, or recovery detail would help a later continuation. It is persisted as thinking context and may appear in verbose-or-higher logs, but it is not shown in normal-mode pane logs. Do not duplicate rationale, progress say, action summaries, or recent thinking lines; do not include secrets, hidden policy, or private chain-of-thought."
+                "description": "Optional longer durable work note for future context. Use only for substantive learning, decisions, invariants, or recovery details; otherwise null. Do not include secrets or private chain-of-thought."
             },
             "actions": {
                 "type": "array",
@@ -3783,7 +3784,7 @@ fn maap_say_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": ["progress", "final", "blocked"],
-                    "description": "Required terminal intent. Use progress for nonterminal sequence-point updates when the turn should continue and the user should know what was learned, which direction was chosen, what phase is starting, or what blocker/validation result changed the task state. For non-trivial multi-step work, include at most one progress say at meaningful task boundaries: after the first evidence pass identifies the real owner or diagnosis, when choosing an implementation or report direction, when moving from inspection to editing, when moving from editing to validation, when validation changes the plan, or when a blocker or uncertainty changes the next step. A sequence point is consumed once stated; do not restate the same owner, diagnosis, direction, phase transition, blocker, or validation result in later progress say unless it materially changed. When a current-turn progress say ledger is present, treat its progress_say lines as already-shown progress and omit progress if the new text would paraphrase one. Progress say should be a delta, not a refreshed summary; if the prior update already named the subject, write only the changed fact or omit progress. Do not use progress for future-tense plans, intended-work checklists, routine inspection, owner localization, anchor lookup, test lookup, command-wrapper lookup, \"now patching\" updates, routine action continuity, or headings such as Plan:, Steps:, Next:, Executed:, or Evidence: when executable actions are requested in the same response. Do not use progress just to announce or justify executable actions, duplicate the batch rationale/action summaries, or restate prior progress in the same turn, and do not emit progress in every action batch. Use final when the user goal is complete, and blocked when user input or an external condition is required before progress can continue. Do not pair final or blocked say actions with executable actions; wait for results first."
+                    "description": "progress for a new sequence-point update, final when the user goal is complete, blocked when external input/state is required. Do not pair final or blocked with executable actions."
                 }),
             ),
             (
@@ -3799,7 +3800,7 @@ fn maap_say_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "minLength": 1,
-                    "description": "Non-empty conversational text for the user. Content in say is display-only: shell commands and Mezzanine patch blocks here do not execute. Use shell_command when terminal work should be executed and apply_patch for executable *** Begin Patch blocks. Only include commands or patches here when the user explicitly asked to see examples or text. Do not use say to duplicate the batch rationale, action summaries, recent thinking lines, action results, the current-turn progress say ledger, or prior progress say. When using progress for a sequence-point update, write 1-2 compact sentences naming the important fact, decision, phase transition, blocker, or validation outcome. Before writing progress, answer what changed since the last progress say in this turn; if the answer is only more evidence for the same conclusion, same owner, same diagnosis, same path, or same phase, omit progress say. If a current-turn progress say ledger is present, compare against its progress_say lines and omit progress if the planned text would paraphrase one unless the underlying fact materially changed. Do not rewrite the same update with different verbs; once the subject or diagnosis is already stated, write only the new delta. The text must state durable learning or a decision, not intended work. If there is no new sequence-point update, omit progress say. If progress say is included, keep the batch rationale to the next executable reason instead of restating the same finding. Do not format ordinary progress or final text with Plan:, Executed:, or Evidence: headings unless the user explicitly requested that report format. For markdown content, this remains the raw markdown copied to buffers and clipboards."
+                    "description": "User-visible text. Display-only: commands and patch blocks here do not execute. Progress text must be a compact new learning, decision, phase change, validation outcome, or blocker delta; omit it if it repeats prior progress, rationale, summaries, thinking, or action results."
                 }),
             ),
         ],
@@ -3893,7 +3894,7 @@ fn maap_shell_command_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "minLength": 1,
-                    "description": "Exact shell input to execute in the pane. Use this for one logical local inspection, build, test, git, package, process, formatting, validation, bounded generation, directory creation, path move, path deletion, or terminal operation that is not a structured patch. Prefer one focused command or compact pipeline with one purpose; avoid long &&, ;, or newline chains. When shell work is independent, emit separate shell_command actions in the same MAAP action batch instead of joining commands inside one shell string. Split across provider turns when later commands depend on earlier output. Use shell-level chaining only for tightly coupled fail-fast steps that should share one outcome and one output stream. Keep commands bounded and noninteractive. Discover command/tool invocation details only when needed, then reuse the discovered command form during the same work cycle instead of repeating equivalent discovery branches before every command. Never invoke the MAAP action name apply_patch as a shell program; emit apply_patch as an action instead. Agent-authored heredoc and here-string redirections (<<, <<-, <<<) are disabled; use apply_patch for ordinary file content changes. Non-zero shell exit status is ordinary model-visible command evidence."
+                    "description": "Exact bounded, noninteractive pane shell input for one logical inspection, command, build, test, format, validation, filesystem, or git action. Prefer one focused command; use separate shell_command actions for independent work. Do not run apply_patch as a shell program; use the apply_patch action. Heredocs and here-strings are disabled."
                 }),
             ),
         ],
@@ -3907,7 +3908,7 @@ fn maap_apply_patch_action_schema() -> serde_json::Value {
         "apply_patch",
         [described_string_property(
             "patch",
-            "Mezzanine patch block for one or more file operations. Emit the patch string directly: do not include Markdown fences, heredoc wrappers, or apply_patch <<... shell text. The most reliable update shape is one small file operation with a copied @@ anchor from the current file and 1-6 exact old/context lines; prefer several small anchored hunks over one large brittle hunk. Copy blank separator lines as explicit context when they sit between old/context blocks; recovery may tolerate omitted blank-only separators between adjacent old hunk lines, including add-only insertion boundaries and replacement blocks, but do not rely on that fallback. Canonical grammar: first nonblank line must be *** Begin Patch; last nonblank line must be *** End Patch. Between them emit one or more file operations. Add file: *** Add File: <relative-path> followed by zero or more content lines, each beginning with +. Update file: *** Update File: <relative-path>, optionally immediately followed by *** Move to: <relative-path>, then one or more hunks. Each canonical hunk starts with a line beginning @@, optionally followed by distinctive anchor text from the current file such as @@ fn name or @@ impl Type @@ fn method. For recovery compatibility, parsing also accepts whitespace around patch markers/directives, uniformly indented patch blocks, Markdown-fenced or heredoc-wrapped patch text in this field including accidental apply_patch <<... wrappers, blank hunk-body lines as empty context lines, safe ./ or git-diff a/ or b/ header path prefixes, and an omitted @@ header for the first update hunk only. Unified-diff hunk range metadata is also accepted inside Mezzanine update hunks, e.g. @@ -10,7 +10,8 @@ or @@ -10,7 +10,8 @@ fn name; the old-line number is only a conservative tie-breaker when the old/context body has multiple valid matches, and it is rejected for ties, near-ties, distant candidates, or conflicts with header anchors. Hunk body lines begin with exactly one prefix character: space for context, - for removed text, + for added text; an optional *** End of File line inside a hunk means the final file has no trailing newline. Header anchors constrain old-context placement; they do not replace the required hunk body context. Rust-like header anchors may bound matching to a conservatively resolved structural scope, but unresolved scopes fall back and internal ambiguity still fails. Hunk placement tries exact old-context matching first, may use the unified old-line range as a conservative disambiguating hint, and may tolerate trailing whitespace, surrounding whitespace, common Unicode punctuation drift, or omitted blank-only separator lines between adjacent old hunk lines when that still identifies one deterministic location; copied context lines are preserved from the current file and are not rewritten from the patch, blanks omitted before copied context are preserved, and blanks omitted before removed lines are deleted with the removed block. Unanchored pure-addition update hunks append by default; use a distinctive @@ anchor when inserting elsewhere. Delete file: *** Delete File: <relative-path> with no body. This is the only semantic file-content mutation action. Multi-file patches are accepted when the edits are related; use separate apply_patch actions when independent files would be easier to recover separately. File paths in *** Add File, *** Update File, *** Delete File, and *** Move to headers must be relative to the pane current working directory and must not be absolute, empty, contain empty segments, or contain .. traversal; canonical output should omit ./, a/, and b/ prefixes. Raw unified diffs are not accepted; use shell_command with git apply only when a raw unified diff is truly required. Do not pipe this patch to an apply_patch shell command; apply_patch is this MAAP action, not a pane executable. After a hunk/context mismatch or ambiguity, classify the failure, reuse fresh current-file evidence already present in recent action results, otherwise re-read only missing or stale candidate/owner ranges, compare the intended change with current code, skip already-applied or equivalent behavior, and emit a smaller fresh patch with distinctive @@ header anchors instead of replaying substantially the same patch. Ambiguous context means inspect candidate regions; missing or stale context under an anchor means inspect the current owner body; replacement_hint diagnostics mean reconcile the current file before retrying.",
+            "Direct Mezzanine patch text, not Markdown, heredoc, shell, or git apply input. Must start with *** Begin Patch and end with *** End Patch. Use Add/Update/Delete/Move file directives with relative safe paths only; paths must not be absolute or contain .. traversal. Prefer one small anchored update with a distinctive @@ header and 1-6 exact current old/context lines; use multiple small hunks instead of one brittle hunk. Hunk lines use one leading prefix: space context, - removed, + added; *** End of File means no final newline. This is the only semantic file-content mutation action. After mismatch or ambiguity, use existing diagnostics or reread only missing/stale owner ranges, skip already-applied changes, and retry with a smaller fresh anchored patch.",
         )],
         &["patch"],
     )
@@ -4437,13 +4438,15 @@ fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     material.push_str("prompt_version=");
     material.push_str(&AGENT_PROMPT_PROFILE_VERSION.to_string());
     material.push('\n');
-    material.push_str("provider=");
-    material.push_str(&request.provider);
+    material.push_str("session_id=");
+    material.push_str(
+        request
+            .prompt_cache_session_id
+            .as_deref()
+            .unwrap_or("session-unknown"),
+    );
     material.push('\n');
-    material.push_str("model=");
-    material.push_str(&request.model);
-    material.push('\n');
-    material.push_str("cache_family=responses-routing-v3\n");
+    material.push_str("cache_family=responses-routing-v4\n");
     format!("mez-{}", &sha256_hex(material.as_bytes())[..32])
 }
 

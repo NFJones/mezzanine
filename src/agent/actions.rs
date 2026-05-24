@@ -3398,6 +3398,7 @@ pub(super) fn role_for_source(source: ContextSourceKind) -> ModelMessageRole {
         ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool => {
             ModelMessageRole::Tool
         }
+        ContextSourceKind::EvidenceLedger => ModelMessageRole::Developer,
         ContextSourceKind::TranscriptAssistant => ModelMessageRole::Assistant,
         ContextSourceKind::UserInstruction
         | ContextSourceKind::LocalMessage

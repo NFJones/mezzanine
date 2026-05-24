@@ -10,10 +10,12 @@ use super::{
     build_agent_system_prompt_with_repository_instructions, role_for_source, runnable_agent_ids,
     validate_non_empty,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Maximum bytes from one context block copied into a provider request.
 const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
+/// Maximum exact bytes pinned as hot action evidence during compaction.
+const MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES: usize = 16 * 1024;
 /// Marker used for deterministic local compaction summaries in provider context.
 const MODEL_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
 /// Default raw suffix percent retained after local context compaction.
@@ -103,6 +105,11 @@ pub enum ContextSourceKind {
     /// Historical tool entries remain bounded and sanitized before becoming
     /// model context.
     TranscriptTool,
+    /// Represents a compact ledger of evidence already gathered in a turn.
+    ///
+    /// This generated block lets provider continuations reuse command, test,
+    /// patch, and file-read facts without replaying large raw tool outputs.
+    EvidenceLedger,
     /// Represents the Action Result case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -173,6 +180,7 @@ impl TrustDomain {
             ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
+            | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::ActionResult => TrustDomain::ModelOutput,
             ContextSourceKind::TranscriptUser => TrustDomain::UserInput,
         }
@@ -276,6 +284,7 @@ impl ContextBlock {
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool => ContextStability::SessionStable,
+            ContextSourceKind::EvidenceLedger => ContextStability::TurnVolatile,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
             | ContextSourceKind::ActionResult => ContextStability::TurnVolatile,
@@ -293,8 +302,7 @@ impl ContextBlock {
             | ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant
-            | ContextSourceKind::TranscriptTool => {
+            | ContextSourceKind::TranscriptAssistant => {
                 if self.stability() == ContextStability::TurnVolatile {
                     ContextCachePolicy::Ineligible
                 } else if self.source == ContextSourceKind::ProjectGuidance {
@@ -303,8 +311,10 @@ impl ContextBlock {
                     ContextCachePolicy::Eligible
                 }
             }
+            ContextSourceKind::TranscriptTool => ContextCachePolicy::Ineligible,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
+            | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::ActionResult => ContextCachePolicy::Ineligible,
         }
     }
@@ -324,6 +334,7 @@ impl ContextBlock {
                 | ContextSourceKind::TranscriptUser
                 | ContextSourceKind::TranscriptAssistant
                 | ContextSourceKind::TranscriptTool
+                | ContextSourceKind::EvidenceLedger
                 | ContextSourceKind::ActionResult
                 | ContextSourceKind::LocalMessage
         )
@@ -975,6 +986,12 @@ pub struct ModelRequest {
     /// Provider output-token cap, when configured or temporarily escalated for
     /// an output-limit retry.
     pub max_output_tokens: Option<usize>,
+    /// Live Mezzanine session identifier used to route provider prompt-cache
+    /// entries without coupling the local key to provider or model names.
+    ///
+    /// The value is non-secret and is derived from runtime session context when
+    /// present. Requests built outside a live session leave it unset.
+    pub prompt_cache_session_id: Option<String>,
     /// Stores the turn id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1174,11 +1191,15 @@ pub fn append_mcp_context(
     let mut unavailable_servers = summary.unavailable_servers.clone();
     unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
 
-    for tool in &available_tools {
-        lines.push(format!(
-            "available_tool={}/{} approval_required={}",
-            tool.server_id, tool.tool_name, tool.approval_required
-        ));
+    if mcp_context_should_include_tool_details(&context, &available_tools) {
+        for tool in &available_tools {
+            lines.push(format!(
+                "available_tool={}/{} approval_required={}",
+                tool.server_id, tool.tool_name, tool.approval_required
+            ));
+        }
+    } else if !available_tools.is_empty() {
+        lines.push("available_tool_details=deferred_to_mcp_action_schema".to_string());
     }
     for server in &unavailable_servers {
         lines.push(format!(
@@ -1200,6 +1221,33 @@ pub fn append_mcp_context(
         },
     );
     AgentContext::new(context.blocks)
+}
+
+/// Returns whether MCP prompt context should include per-tool details.
+fn mcp_context_should_include_tool_details(
+    context: &AgentContext,
+    available_tools: &[McpPromptTool],
+) -> bool {
+    context.blocks.iter().any(|block| {
+        matches!(
+            block.source,
+            ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage
+        ) && mcp_context_text_requests_details(&block.content, available_tools)
+    })
+}
+
+/// Returns whether text is explicitly about MCP or one available MCP tool.
+fn mcp_context_text_requests_details(content: &str, available_tools: &[McpPromptTool]) -> bool {
+    let normalized = content.to_ascii_lowercase();
+    if normalized.contains("mcp") || normalized.contains("/list-mcp") {
+        return true;
+    }
+    available_tools.iter().any(|tool| {
+        let server = tool.server_id.to_ascii_lowercase();
+        let name = tool.tool_name.to_ascii_lowercase();
+        (!server.is_empty() && normalized.contains(&server))
+            || (!name.is_empty() && normalized.contains(&name))
+    })
 }
 
 /// Runs the append project guidance context operation for this subsystem.
@@ -1319,12 +1367,18 @@ pub fn append_scheduler_context(
     mut context: AgentContext,
     scheduler: &AgentScheduler,
 ) -> Result<AgentContext> {
+    context.blocks.retain(|block| {
+        block.source != ContextSourceKind::Policy || block.label != "scheduler state"
+    });
     let snapshot = scheduler.snapshot();
     let runnable_agents = runnable_agent_ids(scheduler);
     let scheduler_idle = snapshot.running == 0
         && snapshot.blocked == 0
         && snapshot.queued == 0
         && runnable_agents.is_empty();
+    if scheduler_idle && !idle_scheduler_context_is_relevant(&context) {
+        return AgentContext::new(context.blocks);
+    }
     let content = if scheduler_idle {
         format!(
             "state=idle\nmax_concurrent_agents={}",
@@ -1394,6 +1448,36 @@ pub fn append_scheduler_context(
     };
     insert_policy_context_block(&mut context.blocks, block);
     AgentContext::new(context.blocks)
+}
+
+/// Returns whether an otherwise idle scheduler summary is relevant.
+fn idle_scheduler_context_is_relevant(context: &AgentContext) -> bool {
+    context.blocks.iter().any(|block| {
+        matches!(
+            block.source,
+            ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage
+        ) && scheduler_context_text_is_relevant(&block.content)
+    })
+}
+
+/// Returns true when text asks about scheduling, subagents, or concurrency.
+fn scheduler_context_text_is_relevant(content: &str) -> bool {
+    let normalized = content.to_ascii_lowercase();
+    [
+        "subagent",
+        "subagents",
+        "spawn agent",
+        "scheduler",
+        "scheduling",
+        "concurrency",
+        "concurrent",
+        "parallel",
+        "queued",
+        "running turn",
+        "background task",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 /// Runs the insert policy context block operation for this subsystem.
@@ -1547,10 +1631,11 @@ pub fn assemble_model_request_with_retained_tail_percent(
     validate_non_empty("model", &profile.model)?;
     validate_non_empty("turn_id", &turn.turn_id)?;
 
-    let blocks = if model_context_has_bulk_compaction_summary(&context.blocks) {
-        context.blocks.clone()
+    let prepared_blocks = prepare_model_context_blocks(context.blocks.clone());
+    let blocks = if model_context_has_bulk_compaction_summary(&prepared_blocks) {
+        prepared_blocks
     } else {
-        order_model_context_blocks(context.blocks.clone())
+        order_model_context_blocks(prepared_blocks)
     };
     let repository_instruction_blocks = blocks
         .iter()
@@ -1567,7 +1652,10 @@ pub fn assemble_model_request_with_retained_tail_percent(
         )?,
     });
     for block in &blocks {
-        if block.source == ContextSourceKind::ProjectGuidance {
+        if matches!(
+            block.source,
+            ContextSourceKind::ProjectGuidance | ContextSourceKind::TranscriptTool
+        ) {
             continue;
         }
         messages.push(ModelMessage {
@@ -1591,6 +1679,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
             .get("prompt_cache_retention")
             .cloned(),
         max_output_tokens: profile.max_output_tokens(),
+        prompt_cache_session_id: prompt_cache_session_id_from_blocks(&blocks),
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),
@@ -1600,6 +1689,254 @@ pub fn assemble_model_request_with_retained_tail_percent(
     };
     constrain_skill_actions_for_loaded_context(&mut request);
     Ok(request)
+}
+
+/// Prepares context blocks for provider requests and compaction.
+fn prepare_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
+    let deduped = dedupe_historical_context_blocks(blocks);
+    with_generated_evidence_ledger(deduped)
+}
+
+/// Removes repeated historical transcript blocks before request assembly.
+fn dedupe_historical_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let should_dedupe = matches!(
+            block.source,
+            ContextSourceKind::Transcript
+                | ContextSourceKind::TranscriptUser
+                | ContextSourceKind::TranscriptAssistant
+                | ContextSourceKind::TranscriptTool
+        );
+        if should_dedupe {
+            let key = (
+                model_context_source_kind_name(block.source),
+                block.label.clone(),
+                block.content.clone(),
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+        }
+        deduped.push(block);
+    }
+    deduped
+}
+
+/// Adds or refreshes the generated evidence ledger block.
+fn with_generated_evidence_ledger(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
+    let mut blocks = blocks
+        .into_iter()
+        .filter(|block| block.source != ContextSourceKind::EvidenceLedger)
+        .collect::<Vec<_>>();
+    let Some(ledger) = build_evidence_ledger_block(&blocks) else {
+        return blocks;
+    };
+    let insert_at = blocks
+        .iter()
+        .rposition(|block| block.source == ContextSourceKind::UserInstruction)
+        .map(|index| index.saturating_add(1))
+        .or_else(|| {
+            blocks
+                .iter()
+                .position(|block| block.source == ContextSourceKind::ActionResult)
+        })
+        .unwrap_or(blocks.len());
+    blocks.insert(insert_at, ledger);
+    blocks
+}
+
+/// Builds a compact provider-visible evidence ledger from action/tool blocks.
+fn build_evidence_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> {
+    let mut lines = vec![
+        "Use this ledger before repeating reads, tests, validation, or patch recovery.".to_string(),
+    ];
+    let mut entries = Vec::new();
+    for block in blocks {
+        if !matches!(
+            block.source,
+            ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
+        ) {
+            continue;
+        }
+        let Some(entry) = evidence_ledger_entry_for_block(block) else {
+            continue;
+        };
+        entries.push(entry);
+        if entries.len() >= 24 {
+            break;
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    lines.extend(entries);
+    Some(ContextBlock {
+        source: ContextSourceKind::EvidenceLedger,
+        label: "evidence ledger".to_string(),
+        content: lines.join("\n"),
+    })
+}
+
+/// Returns one compact ledger line for a raw action or historical tool block.
+fn evidence_ledger_entry_for_block(block: &ContextBlock) -> Option<String> {
+    let marker_line = block.content.lines().next().unwrap_or_default().trim();
+    let command = model_context_field_value(&block.content, "command")
+        .or_else(|| historical_tool_command_hint(&block.content));
+    let exit_code = model_context_field_value(&block.content, "exit_code");
+    let status = action_result_marker_status(marker_line).unwrap_or("historical");
+    let action_type = action_result_marker_type(marker_line).unwrap_or_else(|| {
+        if command.is_some() {
+            "shell_command"
+        } else {
+            "tool"
+        }
+    });
+    let summary = evidence_summary_for_block(block);
+    let category = evidence_category(action_type, command.as_deref(), &block.content);
+    let mut line = format!(
+        "- category={} source={} status={}",
+        category,
+        model_context_source_kind_name(block.source),
+        status
+    );
+    if let Some(command) = command {
+        line.push_str(&format!(" command={}", model_context_single_line(&command)));
+    }
+    if let Some(exit_code) = exit_code {
+        line.push_str(&format!(
+            " exit_code={}",
+            model_context_single_line(&exit_code)
+        ));
+    }
+    if !summary.is_empty() {
+        line.push_str(&format!(" summary={summary}"));
+    }
+    Some(line)
+}
+
+/// Returns a compact category for a ledger entry.
+fn evidence_category(action_type: &str, command: Option<&str>, content: &str) -> &'static str {
+    if action_type == "apply_patch" {
+        return "patch";
+    }
+    let haystack = format!(
+        "{} {}",
+        command.unwrap_or_default().to_ascii_lowercase(),
+        content.to_ascii_lowercase()
+    );
+    if haystack.contains("cargo test")
+        || haystack.contains("just test")
+        || haystack.contains("cargo check")
+        || haystack.contains("just check")
+        || haystack.contains("cargo clippy")
+        || haystack.contains("just clippy")
+        || haystack.contains("cargo fmt")
+        || haystack.contains("just fmt")
+        || haystack.contains("git diff --check")
+    {
+        "validation"
+    } else if haystack.contains("sed -n")
+        || haystack.contains("rg ")
+        || haystack.contains("rg\t")
+        || haystack.contains("read ")
+    {
+        "read"
+    } else {
+        "command"
+    }
+}
+
+/// Extracts a simple `key: value` field from model-facing action context.
+fn model_context_field_value(content: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    content.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(&prefix)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+/// Extracts command hints from older transcript tool content.
+fn historical_tool_command_hint(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("command:")
+            .or_else(|| line.trim().strip_prefix("command="))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+/// Extracts an action type from a standard action-result marker.
+fn action_result_marker_type(marker: &str) -> Option<&str> {
+    let marker = marker.strip_prefix("[action_result ")?;
+    let mut fields = marker.trim_end_matches(']').split_whitespace();
+    let _action_id = fields.next()?;
+    fields.next()
+}
+
+/// Extracts an action status from a standard action-result marker.
+fn action_result_marker_status(marker: &str) -> Option<&str> {
+    let marker = marker.strip_prefix("[action_result ")?;
+    let mut fields = marker.trim_end_matches(']').split_whitespace();
+    let _action_id = fields.next()?;
+    let _action_type = fields.next()?;
+    fields.next()
+}
+
+/// Builds a short action-output summary for the evidence ledger.
+fn evidence_summary_for_block(block: &ContextBlock) -> String {
+    if block.content.len() > MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES {
+        return "oversized output omitted; see compacted inventory or rerun a bounded query if needed"
+            .to_string();
+    }
+    let summary_source = block
+        .content
+        .split_once("output:")
+        .map(|(_, output)| output)
+        .or_else(|| {
+            block
+                .content
+                .split_once("content:")
+                .map(|(_, output)| output)
+        })
+        .unwrap_or(&block.content);
+    model_context_single_line(&truncate_model_context_summary(summary_source, 220))
+}
+
+/// Truncates a summary to a byte ceiling without splitting UTF-8.
+fn truncate_model_context_summary(value: &str, max_bytes: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() <= max_bytes {
+        return trimmed.to_string();
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !trimmed.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    format!("{}...", &trimmed[..boundary])
+}
+
+/// Extracts the live Mezzanine session UUID from runtime identity context.
+fn prompt_cache_session_id_from_blocks(blocks: &[ContextBlock]) -> Option<String> {
+    blocks
+        .iter()
+        .find(|block| {
+            block.source == ContextSourceKind::Configuration && block.label == "session identity"
+        })
+        .and_then(|block| {
+            block
+                .content
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix("session_id="))
+        })
+        .filter(|session_id| !session_id.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Compacts provider-bound context blocks after a trigger has fired.
@@ -1625,12 +1962,9 @@ pub fn compact_model_context_for_budget_with_retained_tail_percent(
     context_budget_words: usize,
     retained_tail_percent: usize,
 ) -> Result<(AgentContext, ModelContextCompactionReport)> {
-    let (blocks, report) = compact_model_context_blocks(
-        &context.blocks,
-        context_budget_words,
-        true,
-        retained_tail_percent,
-    );
+    let blocks = prepare_model_context_blocks(context.blocks);
+    let (blocks, report) =
+        compact_model_context_blocks(&blocks, context_budget_words, true, retained_tail_percent);
     AgentContext::new(blocks).map(|context| (context, report))
 }
 
@@ -1663,10 +1997,30 @@ fn compact_model_context_blocks(
         return (blocks.to_vec(), report);
     }
 
-    report.compacted_blocks = compacted_blocks.len();
-    let mut prepared = Vec::with_capacity(retained_tail.len().saturating_add(1));
+    let protected_indices = protected_compacted_block_indices(compacted_blocks);
+    let mut protected_blocks = Vec::new();
+    let mut summarizable_blocks = Vec::new();
+    for (index, block) in compacted_blocks.iter().cloned().enumerate() {
+        if protected_indices.contains(&index) {
+            protected_blocks.push(block);
+        } else {
+            summarizable_blocks.push(block);
+        }
+    }
+    if summarizable_blocks.is_empty() {
+        return (blocks.to_vec(), report);
+    }
+
+    report.compacted_blocks = summarizable_blocks.len();
+    let mut prepared = Vec::with_capacity(
+        protected_blocks
+            .len()
+            .saturating_add(retained_tail.len())
+            .saturating_add(1),
+    );
+    prepared.extend(protected_blocks);
     prepared.push(bulk_compacted_model_context_block(
-        compacted_blocks,
+        &summarizable_blocks,
         retained_tail,
         tail_budget,
         retained_tail_percent,
@@ -1684,6 +2038,30 @@ fn compact_model_context_blocks(
     }
 
     (prepared, report)
+}
+
+/// Returns compacted-block indexes that should stay exact through compaction.
+fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> {
+    let mut protected = HashSet::new();
+    for (index, block) in blocks.iter().enumerate() {
+        if matches!(
+            block.source,
+            ContextSourceKind::ProjectGuidance | ContextSourceKind::EvidenceLedger
+        ) {
+            protected.insert(index);
+        }
+    }
+    let mut hot_action_results = 0usize;
+    for (index, block) in blocks.iter().enumerate().rev() {
+        if block.source == ContextSourceKind::ActionResult
+            && block.content.len() <= MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES
+            && hot_action_results < 8
+        {
+            protected.insert(index);
+            hot_action_results = hot_action_results.saturating_add(1);
+        }
+    }
+    protected
 }
 
 /// Returns provider context blocks with stable reusable material before
@@ -1849,6 +2227,7 @@ fn model_context_source_kind_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptUser => "transcript_user",
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::TranscriptTool => "transcript_tool",
+        ContextSourceKind::EvidenceLedger => "evidence_ledger",
         ContextSourceKind::ActionResult => "action_result",
     }
 }

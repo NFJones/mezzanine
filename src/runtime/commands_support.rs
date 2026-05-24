@@ -1406,6 +1406,7 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptUser => "transcript-user",
         ContextSourceKind::TranscriptAssistant => "transcript-assistant",
         ContextSourceKind::TranscriptTool => "transcript-tool",
+        ContextSourceKind::EvidenceLedger => "evidence-ledger",
         ContextSourceKind::ActionResult => "action-result",
     }
 }

@@ -7833,6 +7833,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
@@ -7976,6 +7977,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
@@ -8141,6 +8143,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
@@ -8834,6 +8837,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
@@ -9083,6 +9087,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     .get("prompt_cache_retention")
                     .cloned(),
                 max_output_tokens: task.model_profile.max_output_tokens(),
+                prompt_cache_session_id: None,
                 turn_id: task.turn_id.clone(),
                 agent_id: task.agent_id.clone(),
                 available_mcp_tools: Vec::new(),
@@ -9223,6 +9228,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     .get("prompt_cache_retention")
                     .cloned(),
                 max_output_tokens: next_task.model_profile.max_output_tokens(),
+                prompt_cache_session_id: None,
                 turn_id: next_task.turn_id.clone(),
                 agent_id: next_task.agent_id.clone(),
                 available_mcp_tools: Vec::new(),
@@ -9385,6 +9391,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
@@ -9552,6 +9559,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),

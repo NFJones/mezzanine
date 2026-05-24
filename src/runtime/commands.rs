@@ -6196,6 +6196,7 @@ fn runtime_model_compaction_request(
         prompt_cache_retention: profile.provider_options.get("prompt_cache_retention").cloned(),
         latency_preference: profile.latency_preference.clone(),
         max_output_tokens: profile.max_output_tokens(),
+        prompt_cache_session_id: None,
         turn_id,
         agent_id,
         available_mcp_tools: Vec::new(),
@@ -6291,6 +6292,7 @@ fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptUser => "transcript-user",
         ContextSourceKind::TranscriptAssistant => "transcript-assistant",
         ContextSourceKind::TranscriptTool => "transcript-tool",
+        ContextSourceKind::EvidenceLedger => "evidence-ledger",
         ContextSourceKind::ActionResult => "action-result",
     }
 }

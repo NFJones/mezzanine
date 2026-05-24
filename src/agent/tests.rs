@@ -2299,8 +2299,11 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
     assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
     assert!(!scheduler.stable_prefix_eligible());
     assert_eq!(transcript_tool.stability(), ContextStability::SessionStable);
-    assert_eq!(transcript_tool.cache_policy(), ContextCachePolicy::Eligible);
-    assert!(transcript_tool.stable_prefix_eligible());
+    assert_eq!(
+        transcript_tool.cache_policy(),
+        ContextCachePolicy::Ineligible
+    );
+    assert!(!transcript_tool.stable_prefix_eligible());
     assert_eq!(pane_identity.stability(), ContextStability::TurnVolatile);
     assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
     assert!(!pane_identity.stable_prefix_eligible());
@@ -2359,9 +2362,13 @@ fn model_request_groups_stable_prefix_before_volatile_suffix() {
             ContextSourceKind::System,
             ContextSourceKind::ActionResult,
             ContextSourceKind::UserInstruction,
+            ContextSourceKind::EvidenceLedger,
         ]
     );
     assert!(request.messages[0].content.contains("stable guidance"));
+    assert!(request.messages.iter().any(|message| message.source
+        == ContextSourceKind::EvidenceLedger
+        && message.content.contains("volatile result")));
 
     let request = assemble_model_request(
         &ModelProfile {
@@ -2405,10 +2412,14 @@ fn model_request_groups_stable_prefix_before_volatile_suffix() {
         vec![
             ContextSourceKind::System,
             ContextSourceKind::UserInstruction,
+            ContextSourceKind::EvidenceLedger,
             ContextSourceKind::ActionResult,
         ]
     );
     assert!(request.messages[0].content.contains("stable guidance"));
+    assert!(request.messages.iter().any(|message| message.source
+        == ContextSourceKind::EvidenceLedger
+        && message.content.contains("test -s file")));
 }
 
 /// Verifies provider request assembly preserves context until provider feedback
@@ -2481,6 +2492,61 @@ fn explicit_context_compaction_uses_configured_retained_tail_percent() {
         .expect("bulk compaction memory should be present");
 
     assert!(memory_block.content.contains("retained_tail_percent=25"));
+}
+
+/// Verifies explicit compaction keeps hot execution evidence and repo guidance
+/// exact while folding older unrelated context into a bulk summary. These
+/// blocks are what prevent long recovery turns from rereading instructions or
+/// repeating recently completed commands after provider-limit compaction.
+#[test]
+fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result() {
+    let mut blocks = vec![
+        ContextBlock {
+            source: ContextSourceKind::ProjectGuidance,
+            label: "project guidance".to_string(),
+            content: "run just test before handoff".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "action result".to_string(),
+            content: "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence".to_string(),
+        },
+    ];
+    for index in 0..40 {
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::Memory,
+            label: format!("old memory {index}"),
+            content: "old unrelated context ".repeat(20),
+        });
+    }
+
+    let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
+        AgentContext::new(blocks).unwrap(),
+        600,
+        10,
+    )
+    .unwrap();
+
+    assert!(report.changed());
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ProjectGuidance
+            && block.content.contains("run just test")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::EvidenceLedger
+            && block.content.contains("fresh evidence")
+            && block.content.contains("command=rg cache")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult && block.content.contains("fresh evidence")
+    }));
+    assert!(
+        context
+            .blocks
+            .iter()
+            .any(|block| block.source == ContextSourceKind::Memory
+                && block.content.contains("[context compacted]"))
+    );
 }
 
 /// Verifies request assembly does not compact older context merely because a
@@ -2730,10 +2796,9 @@ fn memory_context_rejects_sensitive_records_without_consent() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
 }
 
-/// Verifies that MCP prompt context distinguishes available tools from
-/// unavailable servers and is inserted before user instructions. This keeps
-/// runtime integration state visible without presenting unavailable tools as
-/// callable actions.
+/// Verifies that MCP prompt context keeps availability visible while deferring
+/// per-tool details until the task is explicitly MCP-related. This avoids
+/// replaying a large unrelated tool catalog into every ordinary provider turn.
 #[test]
 fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt() {
     let context = AgentContext::new(vec![ContextBlock {
@@ -2766,6 +2831,11 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert!(
         context.blocks[0]
             .content
+            .contains("available_tool_details=deferred_to_mcp_action_schema")
+    );
+    assert!(
+        !context.blocks[0]
+            .content
             .contains("available_tool=fs/read_file")
     );
     assert!(
@@ -2784,6 +2854,44 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
             .contains("unavailable_server=gitlab")
     );
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
+}
+
+/// Verifies that MCP prompt context expands per-tool details when the active
+/// task explicitly references MCP. Tool schemas remain available through the
+/// action schema, but this summary helps the model decide that MCP is relevant.
+#[test]
+fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use MCP to call read_file".to_string(),
+    }])
+    .unwrap();
+    let context = append_mcp_context(
+        context,
+        &crate::mcp::McpPromptSummary {
+            available_tools: vec![crate::mcp::McpPromptTool {
+                server_id: "fs".to_string(),
+                tool_name: "read_file".to_string(),
+                description: "Read files".to_string(),
+                approval_required: true,
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            }],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("available_tool=fs/read_file")
+    );
+    assert!(
+        !context.blocks[0]
+            .content
+            .contains("available_tool_details=deferred")
+    );
 }
 
 /// Verifies that refreshing MCP prompt context replaces the previous
@@ -2828,7 +2936,11 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
         .collect::<Vec<_>>();
 
     assert_eq!(mcp_blocks.len(), 1);
-    assert!(mcp_blocks[0].content.contains("available_tool=git/status"));
+    assert!(
+        mcp_blocks[0]
+            .content
+            .contains("available_tool_details=deferred_to_mcp_action_schema")
+    );
     assert!(
         !mcp_blocks[0]
             .content
@@ -3137,17 +3249,41 @@ fn permission_context_is_not_model_visible() {
     assert_eq!(context.blocks[0].content, "edit the file");
 }
 
-/// Verifies idle scheduler context stays compact.
+/// Verifies idle scheduler context is omitted from ordinary turns.
 ///
-/// Empty `none` fields consume model context without improving the provider's
-/// ability to choose the next action, so an idle scheduler should be summarized
-/// as a short state line plus the concurrency limit.
+/// Empty scheduler state consumes volatile prompt space without improving the
+/// provider's next action unless the user is asking about scheduling,
+/// subagents, or concurrency.
 #[test]
-fn scheduler_context_compacts_idle_state() {
+fn scheduler_context_omits_unrelated_idle_state() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
         content: "do the task".to_string(),
+    }])
+    .unwrap();
+    let scheduler = crate::scheduler::AgentScheduler::new(2).unwrap();
+
+    let context = append_scheduler_context(context, &scheduler).unwrap();
+
+    assert!(
+        context
+            .blocks
+            .iter()
+            .all(|block| block.label != "scheduler state")
+    );
+}
+
+/// Verifies idle scheduler context remains available when the active task is
+/// about scheduling or parallel work. This keeps useful controller state
+/// discoverable for subagent and concurrency tasks without adding it to every
+/// unrelated provider turn.
+#[test]
+fn scheduler_context_keeps_relevant_idle_state_compact() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "spawn subagents for this task".to_string(),
     }])
     .unwrap();
     let scheduler = crate::scheduler::AgentScheduler::new(2).unwrap();
@@ -3158,7 +3294,6 @@ fn scheduler_context_compacts_idle_state() {
         .iter()
         .find(|block| block.label == "scheduler state")
         .unwrap();
-
     assert_eq!(
         scheduler_context.content,
         "state=idle\nmax_concurrent_agents=2"
@@ -9781,17 +9916,11 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         capability_tool["parameters"]["properties"]["rationale"]["description"]
             .as_str()
             .unwrap();
-    assert!(rationale_description.contains("Very terse"));
-    assert!(rationale_description.contains("thinking log"));
-    assert!(rationale_description.contains("additive delta"));
-    assert!(rationale_description.contains("only the new reason these actions are next"));
-    assert!(rationale_description.contains("not a restatement of the user request"));
-    assert!(rationale_description.contains("previous rationale"));
-    assert!(rationale_description.contains("prior say"));
-    assert!(
-        rationale_description.contains("persists it as future context"),
-        "{rationale_description}"
-    );
+    assert!(rationale_description.contains("Terse additive reason"));
+    assert!(rationale_description.contains("actions are next"));
+    assert!(rationale_description.contains("Do not restate the user request"));
+    assert!(rationale_description.contains("prior rationale"));
+    assert!(rationale_description.contains("progress say"));
     let thought_description = capability_tool["parameters"]["properties"]["thought"]["description"]
         .as_str()
         .unwrap();
@@ -9800,68 +9929,28 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         "{thought_description}"
     );
     assert!(
-        thought_description.contains("Set null unless"),
+        thought_description.contains("Use only for substantive learning"),
         "{thought_description}"
     );
     assert!(
-        thought_description.contains("future model context"),
+        thought_description.contains("future context"),
         "{thought_description}"
     );
     assert!(
-        thought_description.contains("verbose-or-higher logs"),
+        thought_description.contains("Do not include secrets"),
         "{thought_description}"
     );
     assert!(
-        thought_description.contains("not shown in normal-mode"),
+        thought_description.contains("private chain-of-thought"),
         "{thought_description}"
     );
     assert!(
-        thought_description.contains("Do not duplicate rationale"),
-        "{thought_description}"
+        rationale_description.len() < 240,
+        "batch rationale schema should stay compact: {rationale_description}"
     );
     assert!(
-        rationale_description.contains("Compare against recent thinking lines, action results"),
-        "{rationale_description}"
-    );
-    assert!(rationale_description.contains("current-turn progress say ledger"));
-    assert!(rationale_description.contains("any progress say in the same response"));
-    assert!(rationale_description.contains("if there is no new user-visible update"));
-    assert!(rationale_description.contains("do not add a progress say"));
-    assert!(rationale_description.contains("If progress say records durable learning"));
-    assert!(rationale_description.contains("only name the next executable reason"));
-    assert!(rationale_description.contains("Omit optional action rationales"));
-    assert!(rationale_description.contains("progress say, or the action summary"));
-    assert!(
-        rationale_description.contains("Progress say is for sequence-point updates"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("meaningful boundary"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("changed diagnosis"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("validation outcome"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("A sequence point is consumed once stated"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("do not add progress say when it would restate"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("Do not rewrite the same progress update"),
-        "{rationale_description}"
-    );
-    assert!(
-        rationale_description.contains("write only the changed fact or omit progress"),
-        "{rationale_description}"
+        thought_description.len() < 320,
+        "thought schema should stay compact: {thought_description}"
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
@@ -9921,64 +10010,32 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     let say_status_description = say_schema["properties"]["status"]["description"]
         .as_str()
         .unwrap();
-    assert!(say_status_description.contains("nonterminal sequence-point updates"));
-    assert!(say_status_description.contains("user should know what was learned"));
-    assert!(say_status_description.contains("which direction was chosen"));
-    assert!(say_status_description.contains("what phase is starting"));
-    assert!(say_status_description.contains("what blocker/validation result"));
-    assert!(say_status_description.contains("include at most one progress say"));
-    assert!(say_status_description.contains("first evidence pass identifies the real owner"));
-    assert!(say_status_description.contains("implementation or report direction"));
-    assert!(say_status_description.contains("inspection to editing"));
-    assert!(say_status_description.contains("editing to validation"));
-    assert!(say_status_description.contains("validation changes the plan"));
-    assert!(say_status_description.contains("blocker or uncertainty changes the next step"));
-    assert!(say_status_description.contains("A sequence point is consumed once stated"));
-    assert!(say_status_description.contains("do not restate the same owner"));
-    assert!(say_status_description.contains("unless it materially changed"));
-    assert!(say_status_description.contains("current-turn progress say ledger"));
-    assert!(say_status_description.contains("already-shown progress"));
-    assert!(say_status_description.contains("Progress say should be a delta"));
-    assert!(say_status_description.contains("write only the changed fact or omit progress"));
-    assert!(say_status_description.contains("future-tense plans"));
-    assert!(say_status_description.contains("routine inspection"));
-    assert!(say_status_description.contains("owner localization"));
-    assert!(say_status_description.contains("anchor lookup"));
-    assert!(say_status_description.contains("test lookup"));
-    assert!(say_status_description.contains("\"now patching\""));
-    assert!(say_status_description.contains("routine action continuity"));
-    assert!(say_status_description.contains("command-wrapper lookup"));
-    assert!(say_status_description.contains("Plan:, Steps:, Next:, Executed:, or Evidence:"));
     assert!(
-        say_status_description.contains("Do not use progress just to announce"),
+        say_status_description.contains("progress for a new sequence-point update"),
         "{say_status_description}"
     );
-    assert!(say_status_description.contains("duplicate the batch rationale/action summaries"));
-    assert!(say_status_description.contains("restate prior progress in the same turn"));
-    assert!(say_status_description.contains("do not emit progress in every action batch"));
+    assert!(say_status_description.contains("final when the user goal is complete"));
+    assert!(say_status_description.contains("blocked when external input/state is required"));
+    assert!(say_status_description.contains("Do not pair final or blocked"));
+    assert!(
+        say_status_description.len() < 320,
+        "say status schema should stay compact: {say_status_description}"
+    );
     let say_text_description = say_schema["properties"]["text"]["description"]
         .as_str()
         .unwrap();
-    assert!(say_text_description.contains("Content in say is display-only"));
-    assert!(say_text_description.contains("progress for a sequence-point update"));
-    assert!(say_text_description.contains("1-2 compact sentences"));
-    assert!(say_text_description.contains("important fact"));
-    assert!(say_text_description.contains("Before writing progress, answer what changed"));
-    assert!(say_text_description.contains("only more evidence for the same conclusion"));
-    assert!(say_text_description.contains("same owner, same diagnosis, same path, or same phase"));
-    assert!(say_text_description.contains("current-turn progress say ledger"));
-    assert!(say_text_description.contains("planned text would paraphrase one"));
-    assert!(say_text_description.contains("Do not rewrite the same update with different verbs"));
-    assert!(say_text_description.contains("write only the new delta"));
-    assert!(say_text_description.contains("durable learning or a decision, not intended work"));
-    assert!(say_text_description.contains("If there is no new sequence-point update"));
-    assert!(say_text_description.contains("If progress say is included"));
+    assert!(say_text_description.contains("User-visible text"));
+    assert!(say_text_description.contains("Display-only"));
+    assert!(say_text_description.contains("commands and patch blocks here do not execute"));
+    assert!(say_text_description.contains("compact new learning"));
+    assert!(say_text_description.contains("blocker delta"));
     assert!(
-        say_text_description.contains("keep the batch rationale to the next executable reason")
+        say_text_description.contains("omit it if it repeats prior progress"),
+        "{say_text_description}"
     );
     assert!(
-        say_text_description.contains("Do not format ordinary progress or final text with Plan:"),
-        "{say_text_description}"
+        say_text_description.len() < 520,
+        "say text schema should stay compact: {say_text_description}"
     );
     assert_eq!(
         say_schema["properties"]["content_type"]["enum"],
@@ -9993,19 +10050,19 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         say_schema["properties"]["text"]["description"]
             .as_str()
             .unwrap()
-            .contains("Content in say is display-only")
+            .contains("Display-only")
     );
     assert!(
         say_schema["properties"]["text"]["description"]
             .as_str()
             .unwrap()
-            .contains("apply_patch for executable *** Begin Patch blocks")
+            .contains("commands and patch blocks here do not execute")
     );
     assert!(
         say_schema["properties"]["text"]["description"]
             .as_str()
             .unwrap()
-            .contains("Do not use say to duplicate the batch rationale")
+            .contains("rationale")
     );
     let capability_schema = action_schemas
         .iter()
@@ -10099,7 +10156,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         .position(|message| {
             message["content"][0]["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("command output marker"))
+                .is_some_and(|text| text.starts_with("[current action result]"))
         })
         .unwrap();
     let action_message = &input[action_index];
@@ -10181,6 +10238,73 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     assert_eq!(
         first_value["prompt_cache_key"],
         execution_value["prompt_cache_key"]
+    );
+}
+
+/// Verifies OpenAI prompt-cache routing keys are scoped by Mezzanine session
+/// identity rather than fragmented by provider or model names. The provider
+/// still validates exact prefix bytes, but the local routing namespace should
+/// follow the durable session so model switches can reuse compatible prefixes.
+#[test]
+fn openai_prompt_cache_key_uses_session_identity_not_provider_or_model() {
+    let context_for_session = |session_id: &str| {
+        AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::Configuration,
+                label: "session identity".to_string(),
+                content: format!("session_id={session_id} session_name=default"),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "inspect the repo".to_string(),
+            },
+        ])
+        .unwrap()
+    };
+    let profile = |provider: &str, model: &str| ModelProfile {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let session_a_openai = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-a"),
+    )
+    .unwrap();
+    let session_a_other_model = assemble_model_request(
+        &profile("deepseek", "deepseek-b"),
+        &turn(),
+        &context_for_session("session-a"),
+    )
+    .unwrap();
+    let session_b_openai = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-b"),
+    )
+    .unwrap();
+
+    let session_a_value: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&session_a_openai).unwrap()).unwrap();
+    let session_a_other_value: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&session_a_other_model).unwrap())
+            .unwrap();
+    let session_b_value: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&session_b_openai).unwrap()).unwrap();
+
+    assert_eq!(
+        session_a_value["prompt_cache_key"],
+        session_a_other_value["prompt_cache_key"]
+    );
+    assert_ne!(
+        session_a_value["prompt_cache_key"],
+        session_b_value["prompt_cache_key"]
     );
 }
 
@@ -10356,16 +10480,14 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         stable_b_diagnostics.cacheable_prefix_sha256
     );
 }
-/// Verifies immutable historical tool transcript entries stay inside the
-/// OpenAI reusable prefix while the new user request remains in the volatile
-/// suffix.
+/// Verifies historical tool transcript entries are summarized into the evidence
+/// ledger instead of replayed as raw provider input.
 ///
-/// Historical tool outputs are replayed transcript evidence, so changing the
-/// latest user prompt should not invalidate cache reuse for that prior tool
-/// material. Current-turn action results remain volatile and are covered by a
-/// dedicated regression below.
+/// Older raw tool output can be large and unrelated to the active task. Request
+/// assembly should preserve the actionable fact in a compact ledger while
+/// keeping the reusable prefix limited to stable conversation context.
 #[test]
-fn openai_historical_tool_results_stay_in_stable_prefix() {
+fn openai_historical_tool_results_are_summarized_outside_stable_prefix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -10436,19 +10558,24 @@ fn openai_historical_tool_results_stay_in_stable_prefix() {
     let first_body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&first).unwrap()).unwrap();
     let first_input = first_body["input"].as_array().unwrap();
-    let historical_tool_text = first_input
+    assert!(!first_input.iter().any(|message| {
+        message["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("[historical tool result]"))
+    }));
+    let ledger_text = first_input
         .iter()
         .find_map(|message| {
             let text = message["content"][0]["text"].as_str()?;
-            text.contains("[historical tool result]").then_some(text)
+            text.contains("[evidence ledger]").then_some(text)
         })
-        .expect("historical tool result should be rendered into input");
-    assert!(historical_tool_text.contains("stable evidence"));
-    assert!(historical_tool_text.contains("not a new user request"));
+        .expect("historical tool result should be summarized into the evidence ledger");
+    assert!(ledger_text.contains("stable evidence"));
+    assert!(ledger_text.contains("command=rg cache"));
     let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
     let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
-    assert!(first_prefix.contains("[historical tool result]"));
-    assert!(first_prefix.contains("stable evidence"));
+    assert!(!first_prefix.contains("[historical tool result]"));
+    assert!(!first_prefix.contains("stable evidence"));
     assert_eq!(first_prefix, second_prefix);
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
@@ -10463,7 +10590,8 @@ fn openai_historical_tool_results_stay_in_stable_prefix() {
     );
 }
 /// Verifies current-turn action results remain outside the OpenAI reusable
-/// prefix even when historical tool transcript entries become cache-eligible.
+/// prefix while historical tool transcript entries are represented only by the
+/// compact evidence ledger.
 ///
 /// Execution evidence for the active instruction must stay in the volatile
 /// suffix so the provider sees it after the latest user request and does not
@@ -10523,10 +10651,18 @@ fn openai_current_action_results_remain_volatile_suffix() {
         .expect("current action result should be rendered into input");
     assert!(action_index > user_index);
     let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
-    assert!(prefix.contains("[historical tool result]"));
+    assert!(!prefix.contains("[historical tool result]"));
+    assert!(!prefix.contains("cached evidence"));
     assert!(!prefix.contains("[current action result]"));
+    assert!(input.iter().any(|message| {
+        message["content"][0]["text"].as_str().is_some_and(|text| {
+            text.contains("[evidence ledger]")
+                && text.contains("cached evidence")
+                && text.contains("fresh evidence")
+        })
+    }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
-    assert!(diagnostics.stable_input_bytes > 2);
+    assert_eq!(diagnostics.stable_input_bytes, 2);
     assert!(diagnostics.volatile_input_bytes > 2);
 }
 
@@ -11041,36 +11177,27 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
         .as_str()
         .unwrap();
     assert!(
-        shell_description.contains("Discover command/tool invocation details only when needed"),
+        shell_description.contains("Exact bounded, noninteractive pane shell input"),
         "{shell_description}"
     );
     assert!(
-        shell_description.contains("Use this for one logical local inspection"),
+        shell_description.contains("one logical inspection"),
         "{shell_description}"
     );
     assert!(
-        shell_description
-            .contains("Prefer one focused command or compact pipeline with one purpose"),
+        shell_description.contains("Prefer one focused command"),
         "{shell_description}"
     );
     assert!(
-        shell_description.contains("avoid long &&, ;, or newline chains"),
+        shell_description.contains("separate shell_command actions for independent work"),
         "{shell_description}"
     );
     assert!(
-        shell_description.contains("separate shell_command actions in the same MAAP action batch"),
+        shell_description.contains("Do not run apply_patch as a shell program"),
         "{shell_description}"
     );
     assert!(
-        shell_description.contains("one outcome and one output stream"),
-        "{shell_description}"
-    );
-    assert!(
-        shell_description.contains("reuse the discovered command form"),
-        "{shell_description}"
-    );
-    assert!(
-        shell_description.contains("repeating equivalent discovery branches"),
+        shell_description.contains("Heredocs and here-strings are disabled"),
         "{shell_description}"
     );
 }
@@ -11264,184 +11391,62 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         .as_str()
         .unwrap();
 
-    assert!(
-        !description.contains("legacy compatibility"),
-        "{description}"
-    );
-    assert!(description.contains("git apply"), "{description}");
     assert!(description.contains("Mezzanine"), "{description}");
     assert!(
         description.contains("only semantic file-content mutation action"),
         "{description}"
     );
     assert!(
-        description.contains("one or more file operations"),
+        description.contains("Direct Mezzanine patch text"),
         "{description}"
     );
-    assert!(
-        description.contains("Multi-file patches are accepted"),
-        "{description}"
-    );
-    assert!(description.contains("*** Add File"), "{description}");
-    assert!(description.contains("content lines"), "{description}");
-    assert!(description.contains("beginning with +"), "{description}");
-    assert!(description.contains("*** Update File"), "{description}");
-    assert!(description.contains("*** Move to"), "{description}");
-    assert!(description.contains("one or more hunks"), "{description}");
-    assert!(description.contains("beginning @@"), "{description}");
-    assert!(
-        description.contains("Emit the patch string directly"),
-        "{description}"
-    );
-    assert!(
-        description.contains("most reliable update shape"),
-        "{description}"
-    );
-    assert!(
-        description.contains("1-6 exact old/context lines"),
-        "{description}"
-    );
-    assert!(
-        description.contains("several small anchored hunks"),
-        "{description}"
-    );
-    assert!(description.contains("Markdown fences"), "{description}");
-    assert!(
-        description.contains("For recovery compatibility"),
-        "{description}"
-    );
-    assert!(
-        description.contains("uniformly indented patch blocks"),
-        "{description}"
-    );
-    assert!(
-        description.contains("Markdown-fenced or heredoc-wrapped"),
-        "{description}"
-    );
-    assert!(
-        description.contains("apply_patch <<... wrappers"),
-        "{description}"
-    );
-    assert!(
-        description.contains("blank hunk-body lines as empty context lines"),
-        "{description}"
-    );
-    assert!(
-        description.contains("safe ./ or git-diff a/ or b/ header path prefixes"),
-        "{description}"
-    );
-    assert!(
-        description.contains("omitted @@ header for the first update hunk"),
-        "{description}"
-    );
-    assert!(
-        description.contains("Unified-diff hunk range metadata is also accepted"),
-        "{description}"
-    );
-    assert!(
-        description.contains("old-line number is only a conservative tie-breaker"),
-        "{description}"
-    );
-    assert!(
-        description.contains("rejected for ties, near-ties, distant candidates"),
-        "{description}"
-    );
-    assert!(
-        description.contains("distinctive anchor text"),
-        "{description}"
-    );
-    assert!(
-        description.contains("Header anchors constrain old-context placement"),
-        "{description}"
-    );
-    assert!(description.contains("structural scope"), "{description}");
-    assert!(
-        description.contains("tries exact old-context matching first"),
-        "{description}"
-    );
-    assert!(
-        description.contains("surrounding whitespace"),
-        "{description}"
-    );
-    assert!(
-        description.contains("common Unicode punctuation drift"),
-        "{description}"
-    );
-    assert!(
-        description.contains("between adjacent old hunk lines"),
-        "{description}"
-    );
-    assert!(
-        description.contains("blanks omitted before copied context are preserved"),
-        "{description}"
-    );
-    assert!(
-        description.contains("blanks omitted before removed lines are deleted"),
-        "{description}"
-    );
-    assert!(
-        description.contains("one deterministic location"),
-        "{description}"
-    );
-    assert!(
-        description.contains("Unanchored pure-addition update hunks append by default"),
-        "{description}"
-    );
-    assert!(
-        description.contains("context lines are preserved from the current file"),
-        "{description}"
-    );
-    assert!(description.contains("space for context"), "{description}");
-    assert!(description.contains("- for removed"), "{description}");
-    assert!(description.contains("+ for added"), "{description}");
-    assert!(description.contains("*** End of File"), "{description}");
-    assert!(description.contains("no trailing newline"), "{description}");
-    assert!(description.contains("*** Delete File"), "{description}");
-    assert!(description.contains("with no body"), "{description}");
-    assert!(
-        description.contains("After a hunk/context mismatch or ambiguity"),
-        "{description}"
-    );
-    assert!(
-        description.contains("classify the failure"),
-        "{description}"
-    );
-    assert!(
-        description.contains("reuse fresh current-file evidence already present"),
-        "{description}"
-    );
-    assert!(
-        description.contains("re-read only missing or stale candidate/owner ranges"),
-        "{description}"
-    );
-    assert!(
-        description.contains("skip already-applied or equivalent behavior"),
-        "{description}"
-    );
-    assert!(
-        description.contains("replacement_hint diagnostics mean reconcile"),
-        "{description}"
-    );
-    assert!(
-        description.contains("distinctive @@ header anchors"),
-        "{description}"
-    );
-    assert!(description.contains("smaller fresh patch"), "{description}");
     assert!(description.contains("*** Begin Patch"), "{description}");
     assert!(description.contains("*** End Patch"), "{description}");
     assert!(
-        description.contains("relative to the pane current working directory"),
+        description.contains("Add/Update/Delete/Move file directives"),
         "{description}"
     );
+    assert!(description.contains("relative safe paths"), "{description}");
     assert!(
-        description.contains("must not be absolute"),
+        description.contains("paths must not be absolute"),
         "{description}"
     );
-    assert!(description.contains("empty segments"), "{description}");
     assert!(description.contains(".. traversal"), "{description}");
     assert!(
-        description.contains("canonical output should omit ./, a/, and b/ prefixes"),
+        description.contains("distinctive @@ header"),
         "{description}"
+    );
+    assert!(
+        description.contains("1-6 exact current old/context lines"),
+        "{description}"
+    );
+    assert!(
+        description.contains("multiple small hunks"),
+        "{description}"
+    );
+    assert!(description.contains("space context"), "{description}");
+    assert!(description.contains("- removed"), "{description}");
+    assert!(description.contains("+ added"), "{description}");
+    assert!(description.contains("*** End of File"), "{description}");
+    assert!(
+        description.contains("After mismatch or ambiguity"),
+        "{description}"
+    );
+    assert!(
+        description.contains("reread only missing/stale owner ranges"),
+        "{description}"
+    );
+    assert!(
+        description.contains("skip already-applied changes"),
+        "{description}"
+    );
+    assert!(
+        description.contains("smaller fresh anchored patch"),
+        "{description}"
+    );
+    assert!(
+        description.len() < 1200,
+        "apply_patch schema guidance should stay compact: {description}"
     );
 }
 

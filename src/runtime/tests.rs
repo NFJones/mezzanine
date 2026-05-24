@@ -973,6 +973,7 @@ fn runtime_model_request_fixture_for_agent(
         latency_preference: None,
         prompt_cache_retention: None,
         max_output_tokens: None,
+        prompt_cache_session_id: None,
         turn_id: turn_id.to_string(),
         agent_id: agent_id.to_string(),
         available_mcp_tools: Vec::new(),
@@ -11692,7 +11693,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         response.contains("| src | agent-%1 | owned-write |"),
         "{response}"
     );
-    assert!(response.contains("| Context | 5 blocks"), "{response}");
+    assert!(response.contains("| Context | 4 blocks"), "{response}");
     assert!(
         response.contains(
             "| Provider tokens | input=20 raw_input=120 output=34 reasoning=9 cached_input=100 cache_hit=83.33% total=154 |"
@@ -13674,6 +13675,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 latency_preference: None,
                 prompt_cache_retention: None,
                 max_output_tokens: None,
+                prompt_cache_session_id: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 available_mcp_tools: Vec::new(),
@@ -24016,6 +24018,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,
+            prompt_cache_session_id: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             available_mcp_tools: Vec::new(),
