@@ -53,6 +53,7 @@ subsystem modules rather than expanding `src/main.rs`.
 - Behavior/config changes must update related documentation and examples (`README.md`, `SPEC.md`, `docs/examples/config.toml`) in the same change.
 - All tests should have a long form docstring to explain what is being tested and why.
 - Unless specifically instructed, do not maintain backwards compatibility with prior versions of this software. Deprecated code and modules should be removed.
+- The config schema must be versioned and you must provide a migration for config items which are added, renamed/moved or deleted from the schema using conventions established in `SPEC.md`.
 - Commit changes at major sequence points with long form commit messages to describe what has changed.
 - When working on a research task, document your results in `docs/reference/`.
 - When working on very large multi-phase refactors, write a refactor progress document out to `docs/reference/` and keep it up to date throughout the refactor.
