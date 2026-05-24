@@ -69,6 +69,7 @@ mod geometry;
 mod input;
 mod mouse;
 mod paste;
+mod time;
 
 use geometry::{clipped_overlay_style_span, overlay_text_cells, remove_overlapping_style_spans};
 use input::{
@@ -81,6 +82,7 @@ use mouse::{
     vertical_mouse_resize_state,
 };
 use paste::{RuntimePasteSource, runtime_readline_paste_bytes};
+use time::{runtime_human_system_uptime, runtime_local_datetime_seconds_string};
 
 // Attached terminal input application and client view rendering.
 
@@ -9799,56 +9801,6 @@ fn copy_selection_rendition(
     let mut rendition = ui_theme.colors.copy_selection.rendition();
     rendition.inverse = true;
     rendition
-}
-
-/// Runs the runtime human system uptime operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_local_datetime_seconds_string() -> String {
-    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-/// Runs the runtime human system uptime operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_human_system_uptime() -> String {
-    runtime_system_uptime_seconds()
-        .map(runtime_format_human_duration)
-        .unwrap_or_else(|| "uptime unknown".to_string())
-}
-
-/// Runs the runtime system uptime seconds operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_system_uptime_seconds() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/uptime").ok()?;
-    let seconds = text.split_whitespace().next()?;
-    seconds.split('.').next()?.parse::<u64>().ok()
-}
-
-/// Runs the runtime format human duration operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_format_human_duration(seconds: u64) -> String {
-    let days = seconds / 86_400;
-    let hours = (seconds % 86_400) / 3_600;
-    let minutes = (seconds % 3_600) / 60;
-    if days > 0 {
-        format!("{days}d {hours:02}h {minutes:02}m")
-    } else if hours > 0 {
-        format!("{hours}h {minutes:02}m")
-    } else if minutes > 0 {
-        format!("{minutes}m")
-    } else {
-        format!("{seconds}s")
-    }
 }
 
 #[cfg(test)]
