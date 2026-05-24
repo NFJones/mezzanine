@@ -1889,11 +1889,14 @@ subtle gradient scan as running or queued work. The default agent model,
 reasoning, context usage, and status pills SHOULD include one visible padding
 cell on each side of their contained item text. The default model and reasoning
 pills MUST be mouse-selectable controls when the terminal
-mouse protocol is active: clicking the model pill MUST present a drop-down of
-models from the active configured provider, clicking the reasoning pill MUST
-present a drop-down of reasoning levels available for the active model, hovering
-an item SHOULD highlight it, and clicking an item MUST apply it to the pane's
-agent model profile. The same drop-down MUST support keyboard navigation:
+mouse protocol is active: clicking the model pill MUST present a drop-down with
+configured model presets first and concrete provider/model entries after them,
+selecting a preset MUST apply that preset's pane-local model and auto-sizing
+settings, and the model pill MUST continue to display the active concrete model
+after a preset selection. Clicking the reasoning pill MUST present a drop-down
+of reasoning levels available for the active model, hovering an item SHOULD
+highlight it, and clicking an item MUST apply it to the pane's agent model
+profile. The same drop-down MUST support keyboard navigation:
 Up/Left MUST move to the previous item, Down/Right MUST move to the next item,
 Home/End SHOULD move to the first and last items when supported, Enter MUST
 apply the active item, and Escape MUST close without applying a value. The

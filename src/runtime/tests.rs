@@ -16242,13 +16242,13 @@ reasoning_effort = "high"
     );
 }
 
-/// Verifies that model presets are visible as pane-frame status selectors and
-/// apply pane-local automatic sizing without mutating the global sizing
-/// defaults. This protects the preset UI contract from silently disappearing
-/// when the active preset is derived from runtime state instead of stored as a
-/// literal frame value.
+/// Verifies that the pane-frame model selector prepends configured presets and
+/// applies preset-local automatic sizing without mutating the global sizing
+/// defaults. This also protects the model pill contract by keeping the visible
+/// model value sourced from the active concrete model after a preset choice
+/// changes the pane profile.
 #[test]
-fn runtime_pane_agent_status_selector_applies_model_preset_locally() {
+fn runtime_pane_model_selector_prepends_presets_and_applies_them_locally() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -16347,6 +16347,7 @@ allowed_reasoning_efforts = ["high", "xhigh"]
         .unwrap();
     let initial_pane_context = initial_config.frame_context.panes.get("%1").unwrap();
     assert_eq!(initial_pane_context.agent_preset.as_deref(), Some("openai"));
+    assert_eq!(initial_pane_context.agent_model.as_deref(), Some("gpt-5.5"));
 
     service
         .apply_attached_terminal_step_plan(
@@ -16355,7 +16356,7 @@ allowed_reasoning_efforts = ["high", "xhigh"]
                 actions: vec![TerminalClientLoopAction::HandleMouse(
                     MouseAction::OpenPaneAgentStatusSelector {
                         pane_index: 0,
-                        field: PaneAgentStatusField::Preset,
+                        field: PaneAgentStatusField::Model,
                     },
                 )],
                 output_lines: Vec::new(),
@@ -16368,17 +16369,23 @@ allowed_reasoning_efforts = ["high", "xhigh"]
     let selector = service
         .pane_agent_status_selector
         .as_ref()
-        .expect("preset selector should open from the pane status field");
-    assert_eq!(selector.field, PaneAgentStatusField::Preset);
+        .expect("model selector should open from the pane status field");
+    assert_eq!(selector.field, PaneAgentStatusField::Model);
     assert_eq!(
-        selector.items,
-        vec!["deepseek".to_string(), "openai".to_string()]
+        &selector.items[..2],
+        ["preset: deepseek".to_string(), "preset: openai".to_string()]
     );
-    assert_eq!(selector.active_index, 1);
+    assert_eq!(
+        selector
+            .items
+            .get(selector.active_index)
+            .map(String::as_str),
+        Some("openai: gpt-5.5")
+    );
     let deepseek_index = selector
         .items
         .iter()
-        .position(|item| item == "deepseek")
+        .position(|item| item == "preset: deepseek")
         .unwrap();
 
     service
@@ -16388,7 +16395,7 @@ allowed_reasoning_efforts = ["high", "xhigh"]
                 actions: vec![TerminalClientLoopAction::HandleMouse(
                     MouseAction::SelectPaneAgentStatusSelector {
                         pane_index: 0,
-                        field: PaneAgentStatusField::Preset,
+                        field: PaneAgentStatusField::Model,
                         item_index: deepseek_index,
                     },
                 )],
@@ -16422,6 +16429,10 @@ allowed_reasoning_efforts = ["high", "xhigh"]
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     let updated_pane_context = updated_config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(
+        updated_pane_context.agent_model.as_deref(),
+        Some("deepseek-v4-flash")
+    );
     assert_eq!(
         updated_pane_context.agent_preset.as_deref(),
         Some("deepseek")

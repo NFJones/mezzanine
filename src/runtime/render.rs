@@ -6446,7 +6446,9 @@ impl RuntimeSessionService {
             .map(|width| width.saturating_add(1))
             .unwrap_or(1);
         let items = match field {
-            PaneAgentStatusField::Model => self.configured_model_names_for_pane(&pane_id)?,
+            PaneAgentStatusField::Model | PaneAgentStatusField::Preset => {
+                self.configured_model_names_for_pane(&pane_id)?
+            }
             PaneAgentStatusField::Reasoning => {
                 let agent_id = format!("agent-{pane_id}");
                 let (_active_name, active_profile) =
@@ -6474,7 +6476,6 @@ impl RuntimeSessionService {
                     Vec::new()
                 }
             }
-            PaneAgentStatusField::Preset => self.preset_registry.presets.keys().cloned().collect(),
             PaneAgentStatusField::AutoReasoning => Vec::new(),
         };
         if items.is_empty() {
@@ -6540,7 +6541,7 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let outcome = match field {
-            PaneAgentStatusField::Model => {
+            PaneAgentStatusField::Model | PaneAgentStatusField::Preset => {
                 self.apply_pane_model_picker_selection(&selector.pane_id, &value)?
             }
             PaneAgentStatusField::Reasoning => {
@@ -6567,9 +6568,6 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Latency => {
                 self.apply_pane_latency_picker_selection(&selector.pane_id, &value)?
             }
-            PaneAgentStatusField::Preset => {
-                self.apply_preset_selection(&selector.pane_id, &value)?
-            }
         };
         let response = runtime_agent_shell_command_response_json(
             &selector.pane_id,
@@ -6579,7 +6577,7 @@ impl RuntimeSessionService {
                 PaneAgentStatusField::AutoReasoning => "/auto-reasoning",
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
                 PaneAgentStatusField::Latency => "/latency",
-                PaneAgentStatusField::Preset => "/preset",
+                PaneAgentStatusField::Preset => "/model",
             },
             Some(&outcome),
         );
@@ -6637,7 +6635,9 @@ impl RuntimeSessionService {
                     .latency_preference
                     .or_else(|| Some("default".to_string()))
             }
-            PaneAgentStatusField::Preset => self.active_model_preset_name_for_pane(pane_id),
+            PaneAgentStatusField::Preset => self
+                .active_model_preset_name_for_pane(pane_id)
+                .map(|preset| format!("preset: {preset}")),
         }
     }
 

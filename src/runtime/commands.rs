@@ -1816,6 +1816,12 @@ impl RuntimeSessionService {
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let active_model_label = format!("{}: {}", active_profile.provider, active_profile.model);
+        let mut models: Vec<String> = self
+            .preset_registry
+            .presets
+            .keys()
+            .map(|preset| format!("preset: {preset}"))
+            .collect();
         let mut provider_ids: Vec<String> =
             self.provider_registry.providers().keys().cloned().collect();
         if let Some(auth_store) = self.auth_store.as_ref() {
@@ -1826,7 +1832,6 @@ impl RuntimeSessionService {
                 }
             }
         }
-        let mut models = Vec::new();
         for provider_id in &provider_ids {
             let models_for_provider: Vec<String> = if let Some(provider_config) =
                 self.provider_registry.provider(provider_id).cloned()
@@ -1870,6 +1875,10 @@ impl RuntimeSessionService {
             models.insert(0, active_model_label);
         }
         Ok(models)
+    }
+    /// Returns the preset name encoded in one pane-frame model picker entry.
+    pub(super) fn pane_model_picker_preset_name<'a>(&self, value: &'a str) -> Option<&'a str> {
+        value.strip_prefix("preset: ")
     }
 
     /// Returns configured reasoning choices for a pane model picker.
@@ -1915,6 +1924,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         model_label: &str,
     ) -> Result<AgentShellCommandOutcome> {
+        if let Some(preset_name) = self.pane_model_picker_preset_name(model_label) {
+            return self.apply_preset_selection(pane_id, preset_name);
+        }
         let agent_id = format!("agent-{pane_id}");
         let (provider_id, model_name) = parse_picker_model_label(model_label);
         let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
@@ -2200,6 +2212,7 @@ fn runtime_auto_sizing_matches_preset(
         && (preset.allowed_reasoning_efforts.is_empty()
             || config.allowed_reasoning_efforts == preset.allowed_reasoning_efforts)
 }
+
 
 impl RuntimeSessionService {
     fn runtime_model_catalog_for_provider(
