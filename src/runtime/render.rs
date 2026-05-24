@@ -6461,11 +6461,18 @@ impl RuntimeSessionService {
                 ]
             }
             PaneAgentStatusField::Latency => {
-                vec![
-                    "slow".to_string(),
-                    "default".to_string(),
-                    "fast".to_string(),
-                ]
+                let agent_id = format!("agent-{pane_id}");
+                let (_active_name, active_profile) =
+                    self.active_model_profile_for_pane(&pane_id, &agent_id, None)?;
+                if self.model_profile_supports_latency_preference(&active_profile) {
+                    vec![
+                        "slow".to_string(),
+                        "default".to_string(),
+                        "fast".to_string(),
+                    ]
+                } else {
+                    Vec::new()
+                }
             }
             PaneAgentStatusField::Preset => self.preset_registry.presets.keys().cloned().collect(),
             PaneAgentStatusField::AutoReasoning => Vec::new(),
@@ -6623,6 +6630,9 @@ impl RuntimeSessionService {
                 let (_active_name, profile) = self
                     .active_model_profile_for_pane(pane_id, &agent_id, None)
                     .ok()?;
+                if !self.model_profile_supports_latency_preference(&profile) {
+                    return None;
+                }
                 profile
                     .latency_preference
                     .or_else(|| Some("default".to_string()))
@@ -8398,17 +8408,18 @@ impl RuntimeSessionService {
                         "auto:off".to_string()
                     }
                 });
-                let agent_latency = latest_turn
-                    .and_then(|turn| {
-                        self.agent_turn_model_profiles
-                            .get(&turn.turn_id)
-                            .and_then(|profile| profile.latency_preference.clone())
-                    })
+                let agent_latency_profile = latest_turn
+                    .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())
                     .or_else(|| {
                         active_agent_profile
                             .as_ref()
-                            .and_then(|(_name, profile)| profile.latency_preference.clone())
+                            .map(|(_name, profile)| profile.clone())
                     });
+                let agent_latency = agent_latency_profile.as_ref().and_then(|profile| {
+                    self.model_profile_supports_latency_preference(profile)
+                        .then(|| profile.latency_preference.clone())
+                        .flatten()
+                });
                 let agent_context_usage = agent_session.and_then(|session| {
                     self.agent_context_usage_by_conversation
                         .get(&session.session_id)

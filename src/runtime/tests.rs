@@ -16012,6 +16012,84 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("low"));
 }
 
+/// Verifies that pane-frame latency controls are hidden for providers that do
+/// not support a provider-visible latency preference.
+///
+/// DeepSeek profiles can still carry `latency_preference` metadata for identity
+/// and preset display, but exposing a clickable latency selector would suggest
+/// a provider request behavior that DeepSeek does not implement.
+#[test]
+fn runtime_pane_agent_status_hides_latency_for_unsupported_provider() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"
+[agents]
+default_provider = "deepseek"
+default_model_profile = "deepseek-default"
+
+[providers.deepseek]
+kind = "deepseek"
+models = ["deepseek-v4-pro"]
+default_model = "deepseek-v4-pro"
+
+[model_profiles.deepseek-default]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+reasoning_profile = "high"
+latency_preference = "fast"
+
+[model_profiles.deepseek-default.provider_options]
+reasoning_effort = "high"
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(
+        pane_context.agent_latency, None,
+        "unsupported providers should not render a latency status pill"
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Latency,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(
+        service.pane_agent_status_selector.is_none(),
+        "unsupported providers should not expose a latency dropdown"
+    );
+}
+
 /// Verifies that model presets are visible as pane-frame status selectors and
 /// apply pane-local automatic sizing without mutating the global sizing
 /// defaults. This protects the preset UI contract from silently disappearing

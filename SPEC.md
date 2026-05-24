@@ -4700,7 +4700,9 @@ The baseline command capabilities are:
   display the active setting when invoked without arguments or with `status` or
   `show`. The command MUST apply a pane-scoped model-profile override that
   includes the selected latency preference without changing the provider, model,
-  or reasoning profile.
+  or reasoning profile. Pane-frame agent status controls MUST expose the latency
+  selector only when the active provider supports a provider-visible latency
+  preference.
 - `/logout`: Log out of a provider account.
 - `/list-mcp`: List configured Model Context Protocol servers and tools.
 - `/model`: Inspect and change the active model and reasoning settings. The

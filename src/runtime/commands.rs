@@ -38,8 +38,9 @@ use super::{
 use crate::agent::{
     AgentActionPayload, AllowedActionSet, AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
-    ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport,
-    append_mcp_context, model_context_text_word_count, openai_default_reasoning_levels_for_model,
+    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
+    ReqwestProviderHttpTransport, append_mcp_context, model_context_text_word_count,
+    openai_default_reasoning_levels_for_model,
     openai_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
@@ -1625,6 +1626,16 @@ impl RuntimeSessionService {
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
         })
+    }
+
+    /// Reports whether the provider behind one model profile supports
+    /// provider-visible latency preferences.
+    pub(super) fn model_profile_supports_latency_preference(&self, profile: &ModelProfile) -> bool {
+        self.provider_registry
+            .provider(&profile.provider)
+            .is_some_and(|provider| {
+                ProviderCapabilities::for_kind(&provider.kind).supports_service_tier
+            })
     }
 
     /// Executes `/model --secondary` against the auto-sizing router profile.
