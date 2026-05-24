@@ -5,23 +5,27 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentCapability, AllowedAction,
-    AllowedActionSet, AuthStore, BTreeMap, ContextSourceKind, ExposeSecret, MaapBatch,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    Result, SecretString, parse_fenced_maap_action_batch_for_turn,
-    parse_maap_action_batch_json_for_turn, validate_non_empty,
+    AgentCapability, AllowedAction, AllowedActionSet, AuthStore, BTreeMap, ExposeSecret, MaapBatch,
+    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, Result,
+    SecretString, parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    validate_non_empty,
 };
 use crate::auth::{AuthCredentialKind, AuthMetadata};
-use sha2::Digest;
 use std::future::Future;
 use std::pin::Pin;
 
 // Model provider traits and OpenAI Responses adapter.
 
+mod cache;
 mod catalog;
 mod errors;
 mod http;
+mod quota;
 mod schema;
+#[cfg(test)]
+pub(crate) use cache::openai_stable_prefix_material_for_request;
+pub use cache::{OpenAiPromptCacheDiagnostics, openai_prompt_cache_diagnostics_for_request};
+use cache::{openai_prompt_cache_key, openai_render_request_messages, openai_response_format};
 use catalog::provider_catalog_reasoning_levels;
 pub use catalog::{
     ProviderModelCatalog, ProviderModelInfo, openai_default_reasoning_levels_for_model,
@@ -42,6 +46,7 @@ pub use http::{
     AsyncProviderHttpTransport, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS,
     ProviderHttpRequest, ProviderHttpResponse, ReqwestProviderHttpTransport,
 };
+pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use schema::{
     OpenAiMaapToolSurface, maap_action_batch_schema, openai_maap_action_batch_tools,
     openai_maap_tool_surface_for_request,
@@ -68,8 +73,6 @@ pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/co
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 /// OpenAI function tool name used to carry one validated MAAP action batch.
 pub const OPENAI_MAAP_FUNCTION_TOOL_NAME: &str = "submit_maap_action_batch";
-/// Prefix used by local provider-context compaction summaries.
-const OPENAI_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
 /// Maximum native function-call argument bytes accepted from OpenAI responses.
 const OPENAI_FUNCTION_CALL_ARGUMENT_LIMIT_BYTES: usize = DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 
@@ -158,32 +161,6 @@ impl ModelTokenUsage {
     }
 }
 
-/// Provider-reported quota usage for one rate-limit bucket.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderQuotaUsage {
-    /// Provider quota bucket name, such as `requests` or `tokens`.
-    pub name: String,
-    /// Usage percentage in basis points, where `10000` is exactly 100%.
-    pub used_basis_points: u32,
-    /// Provider-reported quota limit for this bucket.
-    pub limit: u64,
-    /// Provider-reported quota remaining for this bucket.
-    pub remaining: u64,
-    /// Provider-reported reset value for this bucket, if supplied.
-    pub reset: Option<String>,
-}
-
-impl ProviderQuotaUsage {
-    /// Returns a human-readable percentage with two decimal places.
-    pub fn used_percent_display(&self) -> String {
-        format!(
-            "{}.{:02}%",
-            self.used_basis_points / 100,
-            self.used_basis_points % 100
-        )
-    }
-}
-
 /// Carries Model Response state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -214,41 +191,6 @@ pub struct ModelResponse {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub action_batch: Option<MaapBatch>,
-}
-
-/// Non-model-visible fingerprints for diagnosing provider prompt-cache reuse.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenAiPromptCacheDiagnostics {
-    /// Stable routing key sent to the OpenAI Responses API.
-    pub prompt_cache_key: String,
-    /// Bytes in the front-loaded OpenAI `instructions` field.
-    pub instructions_bytes: usize,
-    /// SHA-256 of the front-loaded OpenAI `instructions` field.
-    pub instructions_sha256: String,
-    /// Bytes in the OpenAI structured response format schema.
-    pub response_format_bytes: usize,
-    /// SHA-256 of the OpenAI structured response format schema.
-    pub response_format_sha256: String,
-    /// Bytes in the OpenAI `tools` list.
-    pub tools_bytes: usize,
-    /// SHA-256 of the OpenAI `tools` list.
-    pub tools_sha256: String,
-    /// Bytes in the OpenAI request-level `tool_choice` value.
-    pub tool_choice_bytes: usize,
-    /// SHA-256 of the OpenAI request-level `tool_choice` value.
-    pub tool_choice_sha256: String,
-    /// Bytes in the stable input prefix following instructions/tools/schema.
-    pub stable_input_bytes: usize,
-    /// SHA-256 of the stable input prefix following instructions/tools/schema.
-    pub stable_input_sha256: String,
-    /// Bytes in volatile input suffix material.
-    pub volatile_input_bytes: usize,
-    /// SHA-256 of volatile input suffix material.
-    pub volatile_input_sha256: String,
-    /// Bytes in the complete cacheable prefix material Mezzanine can observe.
-    pub cacheable_prefix_bytes: usize,
-    /// SHA-256 of the complete cacheable prefix material Mezzanine can observe.
-    pub cacheable_prefix_sha256: String,
 }
 
 /// Defines the Model Provider behavior contract for this subsystem.
@@ -1880,227 +1822,6 @@ fn openai_gpt_model_version_at_least(model: &str, min_major: u16, min_minor: u16
     major > min_major || (major == min_major && minor >= min_minor)
 }
 
-/// Provider-specific rendering of Mezzanine model messages for OpenAI Responses.
-#[derive(Debug, Clone)]
-struct OpenAiRenderedMessages {
-    /// Joined Responses `instructions` value.
-    instructions: String,
-    /// Responses `input` messages.
-    input: Vec<serde_json::Value>,
-    /// Input messages included in the stable reusable prefix.
-    stable_input: Vec<serde_json::Value>,
-    /// Input messages that belong to the volatile suffix.
-    volatile_input: Vec<serde_json::Value>,
-}
-
-/// Renders request messages and captures canonical stable-prefix material.
-fn openai_render_request_messages(request: &ModelRequest) -> Result<OpenAiRenderedMessages> {
-    let mut instructions = Vec::new();
-    let mut input = Vec::new();
-    let mut stable_input = Vec::new();
-    let mut volatile_input = Vec::new();
-    let mut stable_input_open = true;
-    for message in &request.messages {
-        if openai_message_belongs_in_instructions(message) {
-            instructions.push(message.content.clone());
-            continue;
-        }
-
-        openai_push_input_message(
-            message,
-            &mut input,
-            &mut stable_input,
-            &mut volatile_input,
-            &mut stable_input_open,
-        );
-    }
-    if let Some(message) = openai_allowed_action_surface_message(request) {
-        openai_push_input_message(
-            &message,
-            &mut input,
-            &mut stable_input,
-            &mut volatile_input,
-            &mut stable_input_open,
-        );
-    }
-    if input.is_empty() {
-        return Err(MezError::invalid_args(
-            "OpenAI Responses request requires at least one user or tool input message",
-        ));
-    }
-    let instructions = instructions.join("\n\n");
-    Ok(OpenAiRenderedMessages {
-        instructions,
-        input,
-        stable_input,
-        volatile_input,
-    })
-}
-
-/// Adds one rendered input message to both provider input and cache diagnostics.
-fn openai_push_input_message(
-    message: &ModelMessage,
-    input: &mut Vec<serde_json::Value>,
-    stable_input: &mut Vec<serde_json::Value>,
-    volatile_input: &mut Vec<serde_json::Value>,
-    stable_input_open: &mut bool,
-) {
-    let value = openai_input_message_value(message);
-    if *stable_input_open && openai_message_stable_prefix_eligible(message) {
-        stable_input.push(value.clone());
-    } else {
-        *stable_input_open = false;
-        volatile_input.push(value.clone());
-    }
-    input.push(value);
-}
-
-/// Returns true when a message should be rendered into OpenAI `instructions`.
-fn openai_message_belongs_in_instructions(message: &ModelMessage) -> bool {
-    message.role == ModelMessageRole::System
-}
-
-/// Renders one non-instruction message into OpenAI Responses input shape.
-fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
-    match message.role {
-        ModelMessageRole::Assistant => serde_json::json!({
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "output_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::Developer => serde_json::json!({
-            "role": "developer",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::System => serde_json::json!({
-            "role": "system",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::User => serde_json::json!({
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::Tool => serde_json::json!({
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": openai_tool_result_input_text(message)
-                }
-            ]
-        }),
-    }
-}
-
-/// Renders Mezzanine tool/action evidence through an OpenAI-supported message
-/// role while preserving its provenance in-band.
-fn openai_tool_result_input_text(message: &ModelMessage) -> String {
-    let marker = match message.source {
-        ContextSourceKind::ActionResult => "[current action result]",
-        ContextSourceKind::TranscriptTool => "[historical tool result]",
-        _ => "[tool result]",
-    };
-    format!(
-        "{marker}\n\
-         This is executed Mezzanine action output, not a new user request.\n\
-         {}",
-        message.content
-    )
-}
-
-/// Returns whether a rendered input message belongs in the reusable prefix.
-fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
-    if openai_message_is_volatile_controller_state(message) {
-        return false;
-    }
-    match message.source {
-        ContextSourceKind::System
-        | ContextSourceKind::DeveloperInstruction
-        | ContextSourceKind::Configuration
-        | ContextSourceKind::ProjectGuidance
-        | ContextSourceKind::Memory
-        | ContextSourceKind::Transcript
-        | ContextSourceKind::TranscriptUser
-        | ContextSourceKind::TranscriptAssistant => true,
-        ContextSourceKind::Policy => !message.content.starts_with("[scheduler state]\n"),
-        ContextSourceKind::UserInstruction
-        | ContextSourceKind::LocalMessage
-        | ContextSourceKind::TranscriptTool
-        | ContextSourceKind::EvidenceLedger
-        | ContextSourceKind::ActionResult => false,
-    }
-}
-
-/// Builds the late controller instruction that makes the current executable
-/// surface visible in model context.
-fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<ModelMessage> {
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        return None;
-    }
-    let allowed_actions = request.allowed_actions.action_type_names().join(",");
-    let selected_tool = openai_maap_tool_surface_for_request(request).tool_name();
-    Some(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::LocalMessage,
-        content: format!(
-            "[allowed action surface]\n\
-             interaction_kind={}\n\
-             allowed_actions={allowed_actions}\n\
-             active_function_tool={selected_tool}\n\
-             This controller state is authoritative for action eligibility. \
-             OpenAI may receive a cache-stable list of inactive MAAP tools, but tool_choice selects only active_function_tool for this request. \
-             Emit only action objects whose type appears in allowed_actions and is present in the selected function schema. \
-             Treat [current action result] and [action_result ...] messages as current execution evidence. If they already satisfy the task, emit say with status final instead of requesting capability or rerunning actions to reconfirm them. \
-             Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill. Users can still invoke skills explicitly with $<skill-name> syntax before this request is built. \
-             If the needed action type is absent and request_capability appears in allowed_actions, emit request_capability immediately for the needed coarse capability; do not spend the response on a plan or progress message. \
-             If no listed action can make progress, emit say with status blocked or final. \
-             Disallowed action types are rejected by Mezzanine and waste a recovery attempt.",
-            request.interaction_kind.as_str(),
-        ),
-    })
-}
-
-/// Returns true for late controller state that should never enter the stable prefix.
-fn openai_message_is_volatile_controller_state(message: &ModelMessage) -> bool {
-    let content = message.content.trim_start();
-    content.starts_with("[capability ")
-        || content.starts_with("[capability decisions]")
-        || content.starts_with("[controller failure summary]")
-        || content.starts_with(OPENAI_CONTEXT_COMPACTED_PREFIX)
-}
-
-/// Builds canonical provider-visible stable-prefix material.
-#[cfg(test)]
-fn openai_stable_prefix_material(
-    instructions: &str,
-    stable_input: &[serde_json::Value],
-) -> serde_json::Result<String> {
-    serde_json::to_string(&serde_json::json!({
-        "cache_family": "responses-prefix-v2",
-        "instructions": instructions,
-        "stable_input": stable_input,
-    }))
-}
-
 /// Runs the parse provider native maap action batch operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -2118,47 +1839,6 @@ fn parse_provider_native_maap_action_batch(
     } else {
         Ok(None)
     }
-}
-
-/// Runs the openai maap response format operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn openai_response_format(request: &ModelRequest) -> Option<serde_json::Value> {
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        return Some(openai_auto_sizing_response_format());
-    }
-    None
-}
-
-/// Builds the OpenAI structured-output schema for internal auto-sizing
-/// decisions.
-fn openai_auto_sizing_response_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "json_schema",
-        "name": "mezzanine_auto_sizing_decision",
-        "description": "Internal Mezzanine turn model and reasoning sizing decision.",
-        "strict": true,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "version": { "type": "integer", "enum": [1] },
-                "size": { "type": "string", "enum": ["small", "medium", "large"] },
-                "reasoning_effort": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high", "xhigh"]
-                },
-                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-                "rationale": {
-                    "type": "string",
-                    "description": "Short non-secret explanation suitable for an agent status log."
-                }
-            },
-            "required": ["version", "size", "reasoning_effort", "confidence", "rationale"],
-            "additionalProperties": false
-        }
-    })
 }
 
 /// Runs the parse openai responses provider body operation for this subsystem.
@@ -2427,179 +2107,6 @@ fn openai_cached_input_tokens(value: &serde_json::Value) -> Option<u64> {
         total.saturating_add(tokens)
     });
     found.then_some(total)
-}
-
-/// Builds a stable, non-secret OpenAI prompt-cache routing key for a request.
-fn openai_prompt_cache_key(request: &ModelRequest) -> String {
-    let mut material = String::new();
-    material.push_str("mezzanine\n");
-    material.push_str("prompt_profile=");
-    material.push_str(AGENT_PROMPT_PROFILE_NAME);
-    material.push('\n');
-    material.push_str("prompt_version=");
-    material.push_str(&AGENT_PROMPT_PROFILE_VERSION.to_string());
-    material.push('\n');
-    material.push_str("session_id=");
-    material.push_str(
-        request
-            .prompt_cache_session_id
-            .as_deref()
-            .unwrap_or("session-unknown"),
-    );
-    material.push('\n');
-    material.push_str("cache_family=responses-routing-v4\n");
-    format!("mez-{}", &sha256_hex(material.as_bytes())[..32])
-}
-
-/// Returns non-model-visible OpenAI prompt-cache diagnostics for one request.
-pub fn openai_prompt_cache_diagnostics_for_request(
-    request: &ModelRequest,
-) -> Result<OpenAiPromptCacheDiagnostics> {
-    validate_non_empty("OpenAI model", &request.model)?;
-    let rendered = openai_render_request_messages(request)?;
-    let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
-    let response_format_text = serde_json::to_string(&response_format).map_err(|error| {
-        MezError::invalid_state(format!(
-            "OpenAI response-format diagnostics failed: {error}"
-        ))
-    })?;
-    let tools = if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        serde_json::json!([])
-    } else {
-        serde_json::json!(openai_maap_action_batch_tools(request))
-    };
-    let tools_text = serde_json::to_string(&tools).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI tools diagnostics failed: {error}"))
-    })?;
-    let tool_choice = if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        serde_json::json!("none")
-    } else {
-        let surface = openai_maap_tool_surface_for_request(request);
-        serde_json::json!({
-            "type": "function",
-            "name": surface.tool_name()
-        })
-    };
-    let tool_choice_text = serde_json::to_string(&tool_choice).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI tool-choice diagnostics failed: {error}"))
-    })?;
-    let stable_input_text = serde_json::to_string(&rendered.stable_input).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI stable-input diagnostics failed: {error}"))
-    })?;
-    let volatile_input_text = serde_json::to_string(&rendered.volatile_input).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI volatile-input diagnostics failed: {error}"))
-    })?;
-    let cacheable_prefix = serde_json::to_string(&serde_json::json!({
-        "cache_family": "responses-routing-v4",
-        "instructions": rendered.instructions,
-        "response_format": response_format,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "stable_input": rendered.stable_input,
-    }))
-    .map_err(|error| {
-        MezError::invalid_state(format!("OpenAI cache-prefix diagnostics failed: {error}"))
-    })?;
-
-    Ok(OpenAiPromptCacheDiagnostics {
-        prompt_cache_key: openai_prompt_cache_key(request),
-        instructions_bytes: rendered.instructions.len(),
-        instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
-        response_format_bytes: response_format_text.len(),
-        response_format_sha256: sha256_hex(response_format_text.as_bytes()),
-        tools_bytes: tools_text.len(),
-        tools_sha256: sha256_hex(tools_text.as_bytes()),
-        tool_choice_bytes: tool_choice_text.len(),
-        tool_choice_sha256: sha256_hex(tool_choice_text.as_bytes()),
-        stable_input_bytes: stable_input_text.len(),
-        stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
-        volatile_input_bytes: volatile_input_text.len(),
-        volatile_input_sha256: sha256_hex(volatile_input_text.as_bytes()),
-        cacheable_prefix_bytes: cacheable_prefix.len(),
-        cacheable_prefix_sha256: sha256_hex(cacheable_prefix.as_bytes()),
-    })
-}
-
-/// Returns canonical OpenAI stable-prefix material for tests and diagnostics.
-#[cfg(test)]
-pub(super) fn openai_stable_prefix_material_for_request(request: &ModelRequest) -> Result<String> {
-    let rendered = openai_render_request_messages(request)?;
-    openai_stable_prefix_material(&rendered.instructions, &rendered.stable_input).map_err(|error| {
-        MezError::invalid_state(format!(
-            "OpenAI stable prefix material encoding failed: {error}"
-        ))
-    })
-}
-
-/// Encodes bytes as lower-case SHA-256 hexadecimal text.
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// Extracts quota usage percentages from provider rate-limit headers.
-pub fn provider_quota_usage_from_headers(
-    headers: &BTreeMap<String, String>,
-) -> Vec<ProviderQuotaUsage> {
-    let normalized = headers
-        .iter()
-        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_string()))
-        .collect::<BTreeMap<_, _>>();
-    let mut quotas = Vec::new();
-    for (header, value) in &normalized {
-        let Some(name) = header.strip_prefix("x-ratelimit-limit-") else {
-            continue;
-        };
-        let Some(limit) = provider_header_u64(value) else {
-            continue;
-        };
-        let remaining_header = format!("x-ratelimit-remaining-{name}");
-        let Some(remaining) = normalized
-            .get(&remaining_header)
-            .and_then(|remaining| provider_header_u64(remaining))
-        else {
-            continue;
-        };
-        let used = limit.saturating_sub(remaining.min(limit));
-        let used_basis_points = if limit == 0 {
-            0
-        } else {
-            ((u128::from(used) * 10_000 + u128::from(limit / 2)) / u128::from(limit))
-                .min(u128::from(u32::MAX)) as u32
-        };
-        quotas.push(ProviderQuotaUsage {
-            name: name.to_string(),
-            used_basis_points,
-            limit,
-            remaining,
-            reset: normalized
-                .get(&format!("x-ratelimit-reset-{name}"))
-                .cloned(),
-        });
-    }
-    quotas.sort_by(|left, right| left.name.cmp(&right.name));
-    quotas.dedup_by(|left, right| left.name == right.name);
-    quotas
-}
-
-/// Parses the leading unsigned integer from a provider quota header.
-fn provider_header_u64(value: &str) -> Option<u64> {
-    let value = value.trim();
-    if let Ok(parsed) = value.parse::<u64>() {
-        return Some(parsed);
-    }
-    let normalized = value
-        .chars()
-        .filter(|character| *character != ',' && *character != '_')
-        .collect::<String>();
-    if normalized
-        .chars()
-        .all(|character| character.is_ascii_digit())
-    {
-        normalized.parse::<u64>().ok()
-    } else {
-        None
-    }
 }
 
 /// Runs the parse sse data events operation for this subsystem.
