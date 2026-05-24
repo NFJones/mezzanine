@@ -9,14 +9,19 @@ use super::LocalActionPlan;
 use crate::agent::maap::{is_mez_patch_payload, validate_apply_patch_payload};
 use crate::agent::shell::shell_quote;
 use crate::error::{MezError, Result};
-use base64::Engine;
 use std::collections::BTreeMap;
 
 mod parser;
+mod snapshot;
 mod transaction;
 
 use parser::{
     MezPatch, MezPatchHunk, MezPatchHunkLine, MezPatchOperation, MezPatchRangeHint, parse_mez_patch,
+};
+use snapshot::{
+    ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchTextFile,
+    ensure_missing_state, ensure_regular_state, parse_apply_patch_snapshot_output,
+    snapshot_text_state,
 };
 pub use transaction::ApplyPatchTransactionPhase;
 use transaction::{
@@ -296,169 +301,8 @@ fn append_skipped_blank_context_lines(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ApplyPatchSnapshot {
-    path: String,
-    resolved_path: String,
-    state: ApplyPatchSnapshotState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ApplyPatchSnapshotState {
-    Regular(Vec<u8>),
-    Missing,
-    NonRegular,
-    OutsideCwd,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ApplyPatchFileChange {
-    path: String,
-    resolved_path: String,
-    original: ApplyPatchOriginalState,
-    final_bytes: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ApplyPatchOriginalState {
-    Regular(Vec<u8>),
-    Missing,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ApplyPatchTextFile {
-    lines: Vec<String>,
-    trailing_newline: bool,
-}
-
-impl ApplyPatchTextFile {
-    fn from_bytes(path: &str, bytes: &[u8]) -> Result<Self> {
-        let text = String::from_utf8(bytes.to_vec()).map_err(|_| {
-            MezError::invalid_args(format!("apply_patch: file is not valid UTF-8: {path}"))
-        })?;
-        Ok(Self {
-            lines: text.lines().map(ToString::to_string).collect(),
-            trailing_newline: text.ends_with('\n'),
-        })
-    }
-
-    fn from_lines(lines: Vec<String>, trailing_newline: bool) -> Self {
-        Self {
-            lines,
-            trailing_newline,
-        }
-    }
-
-    fn into_bytes(self) -> Vec<u8> {
-        let mut text = self.lines.join("\n");
-        if !self.lines.is_empty() && self.trailing_newline {
-            text.push('\n');
-        }
-        text.into_bytes()
-    }
-}
-
 fn apply_patch_parse_error<T>(message: &str) -> Result<T> {
     Err(MezError::invalid_args(format!("apply_patch: {message}")))
-}
-
-fn parse_apply_patch_snapshot_output(output: &str) -> Result<BTreeMap<String, ApplyPatchSnapshot>> {
-    let mut lines = output.replace("\r\n", "\n").replace('\r', "\n");
-    if !lines.ends_with('\n') {
-        lines.push('\n');
-    }
-    let lines = lines.lines().collect::<Vec<_>>();
-    let begin = lines
-        .iter()
-        .position(|line| *line == APPLY_PATCH_READ_BEGIN_MARKER)
-        .ok_or_else(|| {
-            MezError::invalid_args("apply_patch: read phase did not emit a snapshot begin marker")
-        })?;
-    let end = lines
-        .iter()
-        .rposition(|line| *line == APPLY_PATCH_READ_END_MARKER)
-        .ok_or_else(|| {
-            MezError::invalid_args("apply_patch: read phase did not emit a snapshot end marker")
-        })?;
-    let mut index = begin + 1;
-    let mut snapshots = BTreeMap::new();
-    while index < end {
-        if lines[index] != APPLY_PATCH_FILE_BEGIN_MARKER {
-            return apply_patch_parse_error("malformed remote snapshot entry");
-        }
-        index += 1;
-        let path = decode_apply_patch_snapshot_field(lines.get(index), "PATH_B64")?;
-        index += 1;
-        let resolved_path = decode_apply_patch_snapshot_field(lines.get(index), "RESOLVED_B64")?;
-        index += 1;
-        let status = lines
-            .get(index)
-            .and_then(|line| line.strip_prefix("STATUS "))
-            .ok_or_else(|| {
-                MezError::invalid_args("apply_patch: malformed remote snapshot status")
-            })?;
-        index += 1;
-        let state = match status {
-            "regular" => {
-                if lines.get(index) != Some(&APPLY_PATCH_CONTENT_BEGIN_MARKER) {
-                    return apply_patch_parse_error("regular remote snapshot omitted content");
-                }
-                index += 1;
-                let mut encoded = String::new();
-                while index < end && lines[index] != APPLY_PATCH_CONTENT_END_MARKER {
-                    encoded.push_str(lines[index].trim());
-                    index += 1;
-                }
-                if lines.get(index) != Some(&APPLY_PATCH_CONTENT_END_MARKER) {
-                    return apply_patch_parse_error(
-                        "regular remote snapshot content was unterminated",
-                    );
-                }
-                index += 1;
-                ApplyPatchSnapshotState::Regular(decode_base64_bytes(&encoded, "file content")?)
-            }
-            "missing" => ApplyPatchSnapshotState::Missing,
-            "non_regular" => ApplyPatchSnapshotState::NonRegular,
-            "outside_cwd" => ApplyPatchSnapshotState::OutsideCwd,
-            _ => ApplyPatchSnapshotState::Error,
-        };
-        if lines.get(index) != Some(&APPLY_PATCH_FILE_END_MARKER) {
-            return apply_patch_parse_error("remote snapshot entry was unterminated");
-        }
-        index += 1;
-        snapshots.insert(
-            path.clone(),
-            ApplyPatchSnapshot {
-                path,
-                resolved_path,
-                state,
-            },
-        );
-    }
-    Ok(snapshots)
-}
-
-fn decode_apply_patch_snapshot_field(line: Option<&&str>, name: &str) -> Result<String> {
-    let encoded = line
-        .and_then(|line| line.strip_prefix(&format!("{name} ")))
-        .ok_or_else(|| {
-            MezError::invalid_args(format!("apply_patch: missing snapshot field {name}"))
-        })?;
-    let bytes = decode_base64_bytes(encoded, name)?;
-    String::from_utf8(bytes).map_err(|_| {
-        MezError::invalid_args(format!("apply_patch: snapshot field {name} is not UTF-8"))
-    })
-}
-
-fn decode_base64_bytes(encoded: &str, label: &str) -> Result<Vec<u8>> {
-    base64::engine::general_purpose::STANDARD
-        .decode(encoded.as_bytes())
-        .map_err(|error| {
-            MezError::invalid_args(format!(
-                "apply_patch: failed to decode {label} base64: {error}"
-            ))
-        })
 }
 
 fn apply_mez_patch_to_snapshots(
@@ -2013,52 +1857,4 @@ fn apply_patch_current_context_range(
     let start = center.saturating_sub(APPLY_PATCH_MISMATCH_CONTEXT_LINES / 2);
     let end = (center + (APPLY_PATCH_MISMATCH_CONTEXT_LINES / 2) + 1).min(file.lines.len());
     Some((start + 1, end))
-}
-
-fn snapshot_text_state(snapshot: &ApplyPatchSnapshot) -> Result<Option<ApplyPatchTextFile>> {
-    match &snapshot.state {
-        ApplyPatchSnapshotState::Regular(bytes) => {
-            Ok(Some(ApplyPatchTextFile::from_bytes(&snapshot.path, bytes)?))
-        }
-        ApplyPatchSnapshotState::Missing => Ok(None),
-        ApplyPatchSnapshotState::NonRegular => Err(MezError::invalid_args(format!(
-            "apply_patch: refusing to patch non-regular file: {}",
-            snapshot.path
-        ))),
-        ApplyPatchSnapshotState::OutsideCwd => Err(MezError::invalid_args(format!(
-            "apply_patch: resolved path is outside current working directory: {}",
-            snapshot.path
-        ))),
-        ApplyPatchSnapshotState::Error => Err(MezError::invalid_args(format!(
-            "apply_patch: failed to resolve path: {}",
-            snapshot.path
-        ))),
-    }
-}
-
-fn ensure_missing_state(path: &str, state: Option<&Option<ApplyPatchTextFile>>) -> Result<()> {
-    match state {
-        Some(None) => Ok(()),
-        Some(Some(_)) => Err(MezError::invalid_args(format!(
-            "apply_patch: refusing to add existing path: {path}"
-        ))),
-        None => Err(MezError::invalid_args(format!(
-            "apply_patch: missing remote snapshot for path: {path}"
-        ))),
-    }
-}
-
-fn ensure_regular_state<'a>(
-    path: &str,
-    state: Option<&'a Option<ApplyPatchTextFile>>,
-) -> Result<&'a ApplyPatchTextFile> {
-    match state {
-        Some(Some(file)) => Ok(file),
-        Some(None) => Err(MezError::invalid_args(format!(
-            "apply_patch: missing file: {path}"
-        ))),
-        None => Err(MezError::invalid_args(format!(
-            "apply_patch: missing remote snapshot for path: {path}"
-        ))),
-    }
 }
