@@ -1886,9 +1886,11 @@ When a root turn is blocked only because it is waiting for joined subagents to
 complete, the pane-frame status value SHOULD be `waiting`, the status pill
 SHOULD display `waiting`, and the pill SHOULD use the same themed color and
 subtle gradient scan as running or queued work. The default agent model,
-reasoning, context usage, and status pills SHOULD include one visible padding
-cell on each side of their contained item text. The default model and reasoning
-pills MUST be mouse-selectable controls when the terminal
+reasoning, auto-reasoning, context usage, and status pills SHOULD include one
+visible padding cell on each side of their contained item text. The default
+auto-reasoning pill MUST render the constant text `route` and signal its
+enabled or disabled state through pill color alone. The default model and
+reasoning pills MUST be mouse-selectable controls when the terminal
 mouse protocol is active: clicking the model pill MUST present a drop-down with
 configured model presets first and concrete provider/model entries after them,
 selecting a preset MUST apply that preset's pane-local model and auto-sizing

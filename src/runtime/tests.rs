@@ -16708,7 +16708,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         .unwrap();
     let rendered = view.lines.join("\n");
     assert!(rendered.contains("full-access"), "{rendered}");
-    assert!(rendered.contains("auto:on"), "{rendered}");
+    assert!(rendered.contains("route"), "{rendered}");
     assert!(rendered.contains("gpt"), "{rendered}");
 }
 

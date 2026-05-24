@@ -54,7 +54,6 @@ pub const DEFAULT_PANE_FRAME_RIGHT_ALIGNED: &[&str] = &[
     "agent.reasoning",
     "agent.auto_reasoning",
     "agent.latency",
-    "agent.preset",
     "policy.mode",
     "agent.context_usage",
     "agent.status",
@@ -4277,6 +4276,9 @@ fn pane_frame_right_aligned_display_value(field: &str, value: String) -> String 
 fn pane_frame_right_aligned_segment_value(field: &str, value: &str) -> String {
     if field == "agent.name" && value.trim() == "manager" {
         return String::new();
+    }
+    if field == "agent.auto_reasoning" && !value.trim().is_empty() {
+        return "route".to_string();
     }
     value.to_string()
 }

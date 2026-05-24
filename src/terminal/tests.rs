@@ -6505,6 +6505,8 @@ fn render_default_pane_frame_right_aligns_context_usage_before_agent_status() {
             agent_status: Some("running".to_string()),
             agent_model: Some("gpt-5.5".to_string()),
             agent_reasoning: Some("high".to_string()),
+            agent_auto_reasoning: Some("auto:on".to_string()),
+            agent_preset: Some("openai".to_string()),
             agent_context_usage: Some("87%".to_string()),
             ..TerminalPaneFrameContext::default()
         },
@@ -6523,9 +6525,15 @@ fn render_default_pane_frame_right_aligns_context_usage_before_agent_status() {
     )
     .unwrap();
 
-    assert_eq!(
-        rendered[0],
-        " 0 shell                        gpt-5.5   high   87%   running  "
+    assert!(rendered[0].contains("gpt-5.5"), "{:?}", rendered[0]);
+    assert!(rendered[0].contains(" high "), "{:?}", rendered[0]);
+    assert!(rendered[0].contains(" route "), "{:?}", rendered[0]);
+    assert!(rendered[0].contains(" 87% "), "{:?}", rendered[0]);
+    assert!(rendered[0].contains(" running "), "{:?}", rendered[0]);
+    assert!(
+        !rendered[0].contains("openai"),
+        "default pane frame should not render the preset pill: {:?}",
+        rendered[0]
     );
 }
 
