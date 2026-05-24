@@ -5,13 +5,13 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{McpPromptTool, MezError, Result, validate_non_empty};
-use std::collections::BTreeSet;
 
 mod appenders;
 mod assembly;
 mod compaction;
 mod evidence;
 mod skills;
+mod surface;
 
 pub use appenders::{
     append_mcp_context, append_memory_context, append_permission_policy_context,
@@ -23,6 +23,7 @@ pub use compaction::{
     model_context_text_word_count,
 };
 pub use skills::constrain_skill_actions_for_loaded_context;
+pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 
 /// Maximum bytes from one context block copied into a provider request.
 const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
@@ -433,262 +434,6 @@ pub struct ModelMessage {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub content: String,
-}
-
-/// Describes the kind of provider interaction Mezzanine is requesting.
-///
-/// The interaction kind is controller-owned state. It tells providers whether
-/// the model is currently deciding which capability it needs or emitting
-/// executable MAAP actions after a capability has been granted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelInteractionKind {
-    /// The model may speak to the user or request a coarse capability, but it
-    /// must not emit executable filesystem, shell, network, MCP, or subagent
-    /// actions.
-    CapabilityDecision,
-    /// The model may emit only the executable MAAP actions exposed through the
-    /// request's allowed-action set.
-    ActionExecution,
-    /// The model is repairing malformed MAAP for the same interaction surface.
-    Repair,
-    /// The model is producing an internal automatic sizing decision. The
-    /// response is parsed as structured JSON and is not replayed as ordinary
-    /// conversation context.
-    AutoSizing,
-}
-
-impl ModelInteractionKind {
-    /// Returns the stable provider/debug name for the interaction kind.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ModelInteractionKind::CapabilityDecision => "capability_decision",
-            ModelInteractionKind::ActionExecution => "action_execution",
-            ModelInteractionKind::Repair => "repair",
-            ModelInteractionKind::AutoSizing => "auto_sizing",
-        }
-    }
-}
-
-/// Coarse capabilities the model may request before executable actions are
-/// exposed.
-///
-/// Capabilities are intentionally broader than individual MAAP actions. The
-/// controller can grant or deny them with simple policy and runtime-context
-/// checks, while the model still chooses the concrete action once a capability
-/// is granted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AgentCapability {
-    /// Respond to the user without external effects.
-    RespondOnly,
-    /// Execute a pane shell command.
-    Shell,
-    /// Search external HTTP(S) information.
-    NetworkSearch,
-    /// Fetch an external HTTP(S) URL.
-    NetworkFetch,
-    /// Call an available MCP tool.
-    Mcp,
-    /// Send a local agent message or spawn a subagent.
-    Subagent,
-    /// Request a Mezzanine configuration change.
-    ConfigChange,
-}
-
-impl AgentCapability {
-    /// Returns the stable schema/debug name for the capability.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AgentCapability::RespondOnly => "respond_only",
-            AgentCapability::Shell => "shell",
-            AgentCapability::NetworkSearch => "network_search",
-            AgentCapability::NetworkFetch => "network_fetch",
-            AgentCapability::Mcp => "mcp",
-            AgentCapability::Subagent => "subagent",
-            AgentCapability::ConfigChange => "config_change",
-        }
-    }
-
-    /// Parses a model-authored capability name.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "respond_only" => Some(AgentCapability::RespondOnly),
-            "shell" => Some(AgentCapability::Shell),
-            "network_search" => Some(AgentCapability::NetworkSearch),
-            "network_fetch" => Some(AgentCapability::NetworkFetch),
-            "mcp" => Some(AgentCapability::Mcp),
-            "subagent" => Some(AgentCapability::Subagent),
-            "config_change" => Some(AgentCapability::ConfigChange),
-            _ => None,
-        }
-    }
-
-    /// Returns every provider-visible capability name.
-    pub fn all_names() -> &'static [&'static str] {
-        &[
-            "respond_only",
-            "shell",
-            "network_search",
-            "network_fetch",
-            "mcp",
-            "subagent",
-            "config_change",
-        ]
-    }
-}
-
-/// Concrete MAAP action kinds that may be exposed in one provider request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AllowedAction {
-    /// User-facing text.
-    Say,
-    /// Non-executing capability request.
-    RequestCapability,
-    /// Skill catalog request.
-    RequestSkills,
-    /// Skill context loading.
-    CallSkill,
-    /// Pane shell command.
-    ShellCommand,
-    /// Apply a patch.
-    ApplyPatch,
-    /// External web search.
-    WebSearch,
-    /// External URL fetch.
-    FetchUrl,
-    /// Local agent message.
-    SendMessage,
-    /// Subagent spawn.
-    SpawnAgent,
-    /// Configuration change.
-    ConfigChange,
-    /// MCP tool call.
-    McpCall,
-    /// Abort the turn.
-    Abort,
-}
-
-impl AllowedAction {
-    /// Returns the stable MAAP action type for this allowed action.
-    pub fn action_type(self) -> &'static str {
-        match self {
-            AllowedAction::Say => "say",
-            AllowedAction::RequestCapability => "request_capability",
-            AllowedAction::RequestSkills => "request_skills",
-            AllowedAction::CallSkill => "call_skill",
-            AllowedAction::ShellCommand => "shell_command",
-            AllowedAction::ApplyPatch => "apply_patch",
-            AllowedAction::WebSearch => "web_search",
-            AllowedAction::FetchUrl => "fetch_url",
-            AllowedAction::SendMessage => "send_message",
-            AllowedAction::SpawnAgent => "spawn_agent",
-            AllowedAction::ConfigChange => "config_change",
-            AllowedAction::McpCall => "mcp_call",
-            AllowedAction::Abort => "abort",
-        }
-    }
-
-    /// Maps a MAAP action type to the corresponding allowed-action value.
-    pub fn from_action_type(action_type: &str) -> Option<Self> {
-        match action_type {
-            "say" => Some(AllowedAction::Say),
-            "request_capability" => Some(AllowedAction::RequestCapability),
-            "request_skills" => Some(AllowedAction::RequestSkills),
-            "call_skill" => Some(AllowedAction::CallSkill),
-            "shell_command" => Some(AllowedAction::ShellCommand),
-            "apply_patch" => Some(AllowedAction::ApplyPatch),
-            "web_search" => Some(AllowedAction::WebSearch),
-            "fetch_url" => Some(AllowedAction::FetchUrl),
-            "send_message" => Some(AllowedAction::SendMessage),
-            "spawn_agent" => Some(AllowedAction::SpawnAgent),
-            "config_change" => Some(AllowedAction::ConfigChange),
-            "mcp_call" => Some(AllowedAction::McpCall),
-            "abort" => Some(AllowedAction::Abort),
-            _ => None,
-        }
-    }
-}
-
-/// Controller-owned concrete action surface for one provider request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AllowedActionSet {
-    /// Stores the allowed action values.
-    pub actions: BTreeSet<AllowedAction>,
-}
-
-impl AllowedActionSet {
-    /// Builds the initial non-executing capability-decision surface.
-    pub fn capability_decision() -> Self {
-        Self::from_actions([AllowedAction::Say, AllowedAction::RequestCapability])
-    }
-
-    /// Builds a response-only action surface.
-    pub fn respond_only() -> Self {
-        Self::from_actions([AllowedAction::Say])
-    }
-
-    /// Builds the non-effecting base surface for action-execution requests.
-    pub fn action_execution_base() -> Self {
-        Self::from_actions([AllowedAction::Say, AllowedAction::RequestCapability])
-    }
-
-    /// Builds an action surface that can only emit user-facing text.
-    pub fn say_only() -> Self {
-        Self::from_actions([AllowedAction::Say])
-    }
-
-    /// Builds the executable action surface exposed after a capability grant.
-    pub fn for_capability(capability: AgentCapability) -> Self {
-        let mut output = Self::action_execution_base();
-        match capability {
-            AgentCapability::RespondOnly => {}
-            AgentCapability::Shell => {
-                output.extend([AllowedAction::ShellCommand, AllowedAction::ApplyPatch])
-            }
-            AgentCapability::NetworkSearch => output.extend([AllowedAction::WebSearch]),
-            AgentCapability::NetworkFetch => output.extend([AllowedAction::FetchUrl]),
-            AgentCapability::Mcp => output.extend([AllowedAction::McpCall]),
-            AgentCapability::Subagent => {
-                output.extend([AllowedAction::SendMessage, AllowedAction::SpawnAgent])
-            }
-            AgentCapability::ConfigChange => output.extend([AllowedAction::ConfigChange]),
-        }
-        output
-    }
-
-    /// Builds a set from a sequence of actions.
-    pub fn from_actions(actions: impl IntoIterator<Item = AllowedAction>) -> Self {
-        Self {
-            actions: actions.into_iter().collect(),
-        }
-    }
-
-    /// Adds actions to the set.
-    pub fn extend(&mut self, actions: impl IntoIterator<Item = AllowedAction>) {
-        self.actions.extend(actions);
-    }
-
-    /// Adds all actions from another set.
-    pub fn extend_set(&mut self, other: &AllowedActionSet) {
-        self.actions.extend(other.actions.iter().copied());
-    }
-
-    /// Removes one action from the exposed action surface.
-    pub fn remove(&mut self, action: AllowedAction) {
-        self.actions.remove(&action);
-    }
-
-    /// Returns true when the given action is exposed in this set.
-    pub fn contains(&self, action: AllowedAction) -> bool {
-        self.actions.contains(&action)
-    }
-
-    /// Returns action type names in stable order for trace and debug output.
-    pub fn action_type_names(&self) -> Vec<&'static str> {
-        self.actions
-            .iter()
-            .map(|action| action.action_type())
-            .collect()
-    }
 }
 
 /// Carries Model Profile state for this subsystem.
