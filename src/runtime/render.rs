@@ -8533,6 +8533,9 @@ impl RuntimeSessionService {
         {
             return "waiting";
         }
+        if self.runtime_agent_turn_is_auto_sizing_routing(turn) {
+            return "routing";
+        }
         if self.pending_agent_provider_tasks.contains(&turn.turn_id)
             || self
                 .claimed_agent_provider_tasks
@@ -8541,6 +8544,23 @@ impl RuntimeSessionService {
             return "thinking";
         }
         "running"
+    }
+    /// Returns whether a running turn is still in the auto-sizing router phase.
+    fn runtime_agent_turn_is_auto_sizing_routing(&self, turn: &AgentTurnRecord) -> bool {
+        if !self.agent_routing_enabled_for_pane(&turn.pane_id) {
+            return false;
+        }
+        if self.agent_turn_executions.contains_key(&turn.turn_id) {
+            return false;
+        }
+        if !(self.pending_agent_provider_tasks.contains(&turn.turn_id)
+            || self
+                .claimed_agent_provider_tasks
+                .contains_key(&turn.turn_id))
+        {
+            return false;
+        }
+        true
     }
 
     /// Formats a pane working directory for compact pane-frame display.

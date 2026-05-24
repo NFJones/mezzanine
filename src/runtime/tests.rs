@@ -17500,6 +17500,12 @@ reasoning_profile = "high"
     );
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    let frame_context = service.terminal_frame_context();
+    let pane_context = frame_context
+        .panes
+        .get("%1")
+        .expect("routing pane context should exist");
+    assert_eq!(pane_context.agent_status.as_deref(), Some("routing"));
     service
         .agent_turn_contexts
         .get_mut("turn-1")

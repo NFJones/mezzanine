@@ -2740,7 +2740,7 @@ fn pane_frame_agent_context_usage_rendition(value: &str, ui_theme: &UiTheme) -> 
 /// on duplicated control-flow logic.
 fn pane_frame_agent_status_rendition(status: &str, ui_theme: &UiTheme) -> GraphicRendition {
     match status {
-        "queued" | "running" | "thinking" | "executing" | "waiting" | "compacting" => {
+        "queued" | "running" | "thinking" | "routing" | "executing" | "waiting" | "compacting" => {
             ui_theme.colors.agent_status_running.rendition()
         }
         "blocked" | "waiting_approval" => ui_theme.colors.agent_status_blocked.rendition(),
@@ -2754,7 +2754,7 @@ fn pane_frame_agent_status_rendition(status: &str, ui_theme: &UiTheme) -> Graphi
 fn pane_frame_agent_status_is_active(status: &str) -> bool {
     matches!(
         status,
-        "queued" | "running" | "thinking" | "executing" | "waiting" | "compacting"
+        "queued" | "running" | "thinking" | "routing" | "executing" | "waiting" | "compacting"
     )
 }
 

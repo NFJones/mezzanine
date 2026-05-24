@@ -6940,6 +6940,66 @@ fn render_default_pane_frame_agent_status_waiting_uses_running_scan() {
         "{status_backgrounds:?}"
     );
 }
+/// Verifies that the routing substate reuses the animated running treatment so
+/// auto-sizing stays visibly active while the router chooses a model.
+#[test]
+fn render_default_pane_frame_agent_status_routing_uses_running_scan() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(56, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.panes.insert(
+        pane_id,
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_name: Some("manager".to_string()),
+            agent_status: Some("routing".to_string()),
+            agent_model: Some("gpt-5.5".to_string()),
+            agent_reasoning: Some("high".to_string()),
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    frame_context.animation_tick_ms = 720;
+    let config = TerminalClientLoopConfig {
+        frame_context,
+        window_frames_enabled: false,
+        pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+        ..TerminalClientLoopConfig::default()
+    };
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        view.lines[0],
+        " 0 shell                      gpt-5.5   high   routing  "
+    );
+    let status_start = display_column_for_fragment(&view.lines[0], "routing");
+    let status_end = status_start + "routing".len();
+    let status_backgrounds = view.line_style_spans[0]
+        .iter()
+        .filter(|span| {
+            span.start < status_end && span.start.saturating_add(span.length) > status_start
+        })
+        .filter_map(|span| span.rendition.background)
+        .collect::<Vec<_>>();
+    assert!(
+        status_backgrounds.len() > 1,
+        "{:?}",
+        view.line_style_spans[0]
+    );
+    assert!(
+        status_backgrounds
+            .iter()
+            .any(|color| *color != TerminalColor::Rgb(0x7e, 0x9c, 0xd8)),
+        "{status_backgrounds:?}"
+    );
+}
 
 /// Verifies stopped agent turns use a muted status treatment instead of the
 /// failed/error colors.
