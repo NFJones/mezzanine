@@ -7,7 +7,6 @@
 use super::AsyncModelProvider;
 #[cfg(test)]
 use super::ModelProvider;
-use super::shell::{SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_END_MARKER};
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
     AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction, AllowedActionSet,
@@ -24,14 +23,14 @@ use super::{
     string_array_json, tool_discovery_script,
 };
 use crate::subagent::SubagentScopeDeclaration;
-use base64::Engine;
 
 mod result_context;
+mod shell_transport;
 mod transcript;
 
 pub use result_context::action_result_context_content;
 pub(super) use result_context::action_result_transcript_content;
-use result_context::shell_output_line_is_mezzanine_wrapper;
+pub use shell_transport::decode_shell_output_transport;
 pub use transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, next_transcript_sequence,
     persist_turn_execution_transcript, transcript_entries_for_execution,
@@ -187,19 +186,6 @@ pub fn postprocess_shell_action_success_output(
     postprocess_semantic_shell_output(action, output).map(|output| output.stdout)
 }
 
-/// Decodes shell-output transport blocks emitted by non-stateful transactions.
-///
-/// # Parameters
-/// - `stdout`: Bounded raw PTY observation for one shell transaction.
-pub fn decode_shell_output_transport(stdout: &str) -> String {
-    decode_base64_transport_output(
-        stdout,
-        SHELL_OUTPUT_BASE64_BEGIN_MARKER,
-        SHELL_OUTPUT_BASE64_END_MARKER,
-        "shell output",
-    )
-}
-
 /// Builds compact action-result content for a plain model-authored shell command.
 ///
 /// # Parameters
@@ -240,103 +226,6 @@ fn postprocess_semantic_shell_output(
         ensure_success_preview(&mut output, patch_change_preview(patch));
     }
     Ok(output)
-}
-
-fn decode_base64_transport_output(stdout: &str, begin: &str, end: &str, label: &str) -> String {
-    if !stdout.contains(begin) {
-        return stdout.to_string();
-    }
-    let normalized = stdout.replace("\r\n", "\n").replace('\r', "\n");
-    let mut decoded = String::new();
-    let mut block = String::new();
-    let mut outside_block = String::new();
-    let mut in_block = false;
-    for line in normalized.split_inclusive('\n') {
-        let marker_candidate = line.trim_end_matches('\n');
-        if marker_candidate == begin {
-            append_non_wrapper_transport_text(&mut decoded, &outside_block);
-            outside_block.clear();
-            in_block = true;
-            block.clear();
-            continue;
-        }
-        if marker_candidate == end {
-            decoded.push_str(&decode_base64_transport_block(&block, label, false));
-            in_block = false;
-            block.clear();
-            continue;
-        }
-        if in_block {
-            block.push_str(marker_candidate.trim());
-        } else {
-            outside_block.push_str(line);
-        }
-    }
-    if in_block {
-        decoded.push_str(&decode_base64_transport_block(&block, label, true));
-        decoded.push_str(&format!(
-            "[mez: {label} base64 transport ended before end marker]\n"
-        ));
-    } else {
-        append_non_wrapper_transport_text(&mut decoded, &outside_block);
-    }
-    decoded
-}
-
-fn append_non_wrapper_transport_text(decoded: &mut String, text: &str) {
-    for line in text.split_inclusive('\n') {
-        let (line, had_newline) = line
-            .strip_suffix('\n')
-            .map(|line| (line, true))
-            .unwrap_or((line, false));
-        let trimmed = line.trim();
-        if trimmed.is_empty()
-            || shell_output_line_is_mezzanine_wrapper(trimmed)
-            || shell_output_line_is_mezzanine_transport_scaffold(trimmed)
-        {
-            continue;
-        }
-        decoded.push_str(line);
-        if had_newline {
-            decoded.push('\n');
-        }
-    }
-}
-
-fn shell_output_line_is_mezzanine_transport_scaffold(trimmed: &str) -> bool {
-    matches!(
-        trimmed,
-        "{" | "}" | "done" | "-" | "C" | "I" | "o" | "SY" | "TC" | "PS0"
-    )
-}
-
-fn decode_base64_transport_block(block: &str, label: &str, partial: bool) -> String {
-    let mut cleaned = block
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
-    if partial {
-        let full_quartets = cleaned.len() - (cleaned.len() % 4);
-        cleaned.truncate(full_quartets);
-    }
-    if cleaned.is_empty() {
-        return String::new();
-    }
-    match base64::engine::general_purpose::STANDARD.decode(cleaned.as_bytes()) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(error) => {
-                let bytes = error.into_bytes();
-                let mut text = format!(
-                    "[mez: {label} contained non-UTF-8 bytes; decoded {} bytes with replacement characters]\n",
-                    bytes.len()
-                );
-                text.push_str(&String::from_utf8_lossy(&bytes));
-                text
-            }
-        },
-        Err(error) => format!("[mez: failed to decode {label} base64 transport: {error}]\n"),
-    }
 }
 
 fn ensure_success_preview(output: &mut ShellExecutionOutput, preview: String) {
