@@ -9147,25 +9147,9 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             first_seen.contains("AGENT_ASYNC_FIRST_COMMAND"),
             "{first_seen}"
         );
-        let mut first_shell_transaction_settled = false;
-        for _ in 0..200 {
-            let timer_effects = client_handle.drain_timer_side_effects(16).await.unwrap();
-            if timer_effects.iter().any(|effect| {
-                matches!(
-                    effect,
-                    RuntimeSideEffect::CancelTimer { key }
-                        if key.kind == RuntimeTimerKind::ShellTransaction
-                )
-            }) {
-                first_shell_transaction_settled = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert!(
-            first_shell_transaction_settled,
-            "first shell transaction should settle before submitting continuation"
-        );
+        wait_for_shell_transaction_timer_settlement(&client_handle, "first")
+            .await
+            .unwrap();
 
         let mut next_task = None;
         for _ in 0..200 {
@@ -9276,25 +9260,9 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .unwrap();
         assert_eq!(second_provider_report.accepted, 1);
         assert_eq!(second_provider_report.applied, 1);
-        let mut second_shell_transaction_settled = false;
-        for _ in 0..200 {
-            let timer_effects = client_handle.drain_timer_side_effects(16).await.unwrap();
-            if timer_effects.iter().any(|effect| {
-                matches!(
-                    effect,
-                    RuntimeSideEffect::CancelTimer { key }
-                        if key.kind == RuntimeTimerKind::ShellTransaction
-                )
-            }) {
-                second_shell_transaction_settled = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert!(
-            second_shell_transaction_settled,
-            "second shell transaction should settle before ending the test client"
-        );
+        wait_for_shell_transaction_timer_settlement(&client_handle, "second")
+            .await
+            .unwrap();
         let alive_seen = wait_for_rendered_text(
             &client_handle,
             ClientViewRole::Primary,
@@ -9691,6 +9659,48 @@ async fn wait_for_rendered_text(
     }
     Err(MezError::invalid_state(format!(
         "timed out waiting for rendered text {needle:?}; last render: {last_text}"
+    )))
+}
+
+/// Waits until one agent shell transaction timer has been both scheduled and
+/// cancelled, proving the matching runtime transaction settled.
+async fn wait_for_shell_transaction_timer_settlement(
+    handle: &super::AsyncRuntimeSessionHandle,
+    label: &str,
+) -> Result<()> {
+    let mut scheduled_key = None;
+    let mut cancelled_keys = Vec::new();
+    for _ in 0..200 {
+        let timer_effects = handle.drain_timer_side_effects(16).await?;
+        for effect in timer_effects {
+            match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::ShellTransaction
+                        && scheduled_key.is_none() =>
+                {
+                    if cancelled_keys.iter().any(|cancelled| cancelled == &key) {
+                        return Ok(());
+                    }
+                    scheduled_key = Some(key);
+                }
+                RuntimeSideEffect::CancelTimer { key }
+                    if key.kind == RuntimeTimerKind::ShellTransaction =>
+                {
+                    if scheduled_key
+                        .as_ref()
+                        .is_some_and(|scheduled| scheduled == &key)
+                    {
+                        return Ok(());
+                    }
+                    cancelled_keys.push(key);
+                }
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    Err(MezError::invalid_state(format!(
+        "{label} shell transaction timer should settle before the test continues"
     )))
 }
 
