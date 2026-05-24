@@ -17,7 +17,6 @@ use rustix::io::Errno;
 #[cfg(test)]
 use rustix::io::{read as rustix_read, write as rustix_write};
 use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::error::{MezError, Result};
 use crate::layout::{PaneGeometry, Size, Window};
