@@ -8,20 +8,19 @@
 use super::runtime_execute_auto_sizing_with_provider;
 use super::types::{RuntimeAgentPatchRecord, RuntimeAgentProviderClaim, RuntimeAgentTurnSteering};
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentId,
-    AgentShellSession, AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
-    AuditActor, AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest,
-    ContextBlock, ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
-    DEFAULT_PROVIDER_TIMEOUT_MS, DeferredAgentTranscriptWrite, Envelope, EventKind, HookEvent,
-    JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelRequest,
-    ModelResponse, ModelTokenUsage, PaneId, PaneReadinessState, PathBuf, PathScopes,
-    PendingFocusedShellHookContinuation, PermissionPolicy, ProviderQuotaUsage,
-    ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
-    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
-    RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock,
-    RuntimeHookPipelineDecision, RuntimeMcpActionExecutor, RuntimeSessionService,
-    RuntimeShellTransactionActionFailure, SenderIdentity, ShellTransaction,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
+    AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
+    AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest, ContextBlock,
+    ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_PROVIDER_TIMEOUT_MS,
+    DeferredAgentTranscriptWrite, Envelope, EventKind, HookEvent, JoinedSubagentDependency,
+    McpToolCallRequest, MezError, ModelProfile, ModelResponse, ModelTokenUsage, PaneId,
+    PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy,
+    ProviderQuotaUsage, ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport,
+    Result, RuleDecision, RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimeAgentCopyOutput, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
+    RuntimeAgentProviderTask, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
+    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
+    RuntimeSessionService, RuntimeShellTransactionActionFailure, SenderIdentity, ShellTransaction,
     ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
     SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
     TranscriptRole, action_result_context_content, append_mcp_context,
@@ -53,7 +52,6 @@ use crate::agent::{
     ApplyPatchTransactionPhase, MaapBatch, apply_patch_error_plan, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output,
     deepseek_provider_from_auth_store_with_provider_options,
-    openai_prompt_cache_diagnostics_for_request,
     openai_provider_from_auth_store_with_provider_options,
 };
 use crate::agent::{SayStatus, assistant_context_content_for_execution};
@@ -232,266 +230,6 @@ fn runtime_agent_execution_prompt_display_lines(
 }
 
 impl RuntimeSessionService {
-    /// Records text in the bounded hidden per-pane trace log.
-    fn record_agent_pane_trace_log_text(&mut self, pane_id: &str, text: &str) {
-        let Some(log) = (!text.trim().is_empty()).then(|| {
-            self.agent_pane_trace_logs
-                .entry(pane_id.to_string())
-                .or_default()
-        }) else {
-            return;
-        };
-        for line in text.trim_end_matches(['\r', '\n']).lines() {
-            if !line.trim().is_empty() {
-                log.push(runtime_bounded_trace_text(line));
-            }
-        }
-        runtime_trim_agent_pane_trace_log(log);
-    }
-
-    /// Returns the retained trace log text for one pane.
-    pub(super) fn agent_pane_trace_log_text(&self, pane_id: &str) -> Option<String> {
-        let log = self.agent_pane_trace_logs.get(pane_id)?;
-        (!log.is_empty()).then(|| log.join("\n"))
-    }
-
-    /// Runs the agent diagnostic label operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn agent_diagnostic_label(&self, pane_id: &str) -> Option<&'static str> {
-        self.agent_diagnostic_level_name(pane_id)
-    }
-
-    /// Runs the append agent trace turn transition operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn append_agent_trace_turn_transition(
-        &mut self,
-        turn: &AgentTurnRecord,
-        from: AgentTurnState,
-        to: AgentTurnState,
-        reason: &str,
-    ) -> Result<()> {
-        let trace_line = format!(
-            "agent trace: turn {} moved from {} to {} ({})",
-            turn.turn_id,
-            runtime_agent_turn_state_name(from),
-            runtime_agent_turn_state_name(to),
-            runtime_agent_terminal_preview(&runtime_humanize_agent_diagnostic(reason))
-        );
-        self.record_agent_pane_trace_log_text(&turn.pane_id, &trace_line);
-        let Some(label) = self.agent_diagnostic_label(&turn.pane_id) else {
-            return Ok(());
-        };
-        self.append_agent_status_text_to_terminal_buffer(
-            &turn.pane_id,
-            &format!(
-                "agent {label}: turn {} moved from {} to {} ({})",
-                turn.turn_id,
-                runtime_agent_turn_state_name(from),
-                runtime_agent_turn_state_name(to),
-                runtime_agent_terminal_preview(&runtime_humanize_agent_diagnostic(reason))
-            ),
-        )
-    }
-
-    /// Runs the append agent trace turn event operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn append_agent_trace_turn_event(
-        &mut self,
-        pane_id: &str,
-        turn_id: &str,
-        message: &str,
-    ) -> Result<()> {
-        if self.find_pane_descriptor(pane_id).is_none() {
-            return Ok(());
-        }
-        let trace_line = format!(
-            "agent trace: turn {}: {}",
-            turn_id,
-            runtime_agent_terminal_preview(&runtime_humanize_agent_diagnostic(message))
-        );
-        self.record_agent_pane_trace_log_text(pane_id, &trace_line);
-        let Some(label) = self.agent_diagnostic_label(pane_id) else {
-            return Ok(());
-        };
-        let message = if self.agent_trace_enabled(pane_id) {
-            message.to_string()
-        } else {
-            runtime_sanitize_agent_diagnostic_text(message)
-        };
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!(
-                "agent {label}: turn {}: {}",
-                turn_id,
-                runtime_agent_terminal_preview(&runtime_humanize_agent_diagnostic(&message))
-            ),
-        )
-    }
-
-    /// Appends a MAAP diagnostic while retaining a possibly fuller trace value.
-    fn append_agent_trace_maap_value_with_retained(
-        &mut self,
-        pane_id: &str,
-        turn_id: &str,
-        label: &str,
-        display_value: serde_json::Value,
-        retained_value: serde_json::Value,
-    ) -> Result<()> {
-        let retained_value = runtime_bounded_trace_value_strings(retained_value);
-        let retained_body = serde_json::to_string_pretty(&retained_value).map_err(|error| {
-            MezError::invalid_state(format!("MAAP trace JSON encoding failed: {error}"))
-        })?;
-        self.record_agent_pane_trace_log_text(
-            pane_id,
-            &format!("agent trace: turn {turn_id}: MAAP {label}\n{retained_body}"),
-        );
-        let Some(level_label) = self.agent_diagnostic_label(pane_id) else {
-            return Ok(());
-        };
-        let value = runtime_bounded_trace_value_strings(display_value);
-        let body = serde_json::to_string_pretty(&value).map_err(|error| {
-            MezError::invalid_state(format!("MAAP trace JSON encoding failed: {error}"))
-        })?;
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!("agent {level_label}: turn {turn_id}: MAAP {label}\n{body}"),
-        )
-    }
-
-    /// Runs the append agent trace maap request operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn append_agent_trace_maap_request(
-        &mut self,
-        turn: &AgentTurnRecord,
-        request: &ModelRequest,
-    ) -> Result<()> {
-        self.append_agent_trace_maap_value_with_retained(
-            &turn.pane_id,
-            &turn.turn_id,
-            "request",
-            runtime_model_request_trace_json(
-                request,
-                self.agent_trace_enabled(&turn.pane_id),
-                true,
-            ),
-            runtime_model_request_trace_json(request, true, true),
-        )
-    }
-
-    /// Records the provider request shape that the runtime is about to submit.
-    fn record_runtime_provider_request_shape_for_context(
-        &mut self,
-        model_profile: &ModelProfile,
-        turn: &AgentTurnRecord,
-        context: &AgentContext,
-        available_mcp_tools: &[crate::mcp::McpPromptTool],
-    ) {
-        let Ok(mut request) = assemble_model_request_with_retained_tail_percent(
-            model_profile,
-            turn,
-            context,
-            self.agent_compaction_raw_retention_percent,
-        ) else {
-            return;
-        };
-        request.available_mcp_tools = available_mcp_tools.to_vec();
-        let (diagnostics, diagnostics_failed) = if request.provider == "openai" {
-            match openai_prompt_cache_diagnostics_for_request(&request) {
-                Ok(diagnostics) => (Some(diagnostics), false),
-                Err(_) => (None, true),
-            }
-        } else {
-            (None, false)
-        };
-        self.runtime_metrics.record_provider_request_shape(
-            &request,
-            diagnostics.as_ref(),
-            diagnostics_failed,
-        );
-    }
-
-    /// Runs the append agent trace maap response operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn append_agent_trace_maap_response(
-        &mut self,
-        turn: &AgentTurnRecord,
-        response: &ModelResponse,
-    ) -> Result<()> {
-        self.append_agent_trace_maap_value_with_retained(
-            &turn.pane_id,
-            &turn.turn_id,
-            "response",
-            runtime_model_response_trace_json(response, self.agent_trace_enabled(&turn.pane_id)),
-            runtime_model_response_trace_json(response, true),
-        )
-    }
-
-    /// Runs the append agent trace maap action results operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn append_agent_trace_maap_action_results(
-        &mut self,
-        pane_id: &str,
-        turn_id: &str,
-        label: &str,
-        results: &[ActionResult],
-    ) -> Result<()> {
-        self.append_agent_trace_maap_value_with_retained(
-            pane_id,
-            turn_id,
-            label,
-            runtime_action_results_trace_json(results, self.agent_trace_enabled(pane_id)),
-            runtime_action_results_trace_json(results, true),
-        )
-    }
-
-    /// Runs the append agent trace provider error operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn append_agent_trace_provider_error(
-        &mut self,
-        turn: &AgentTurnRecord,
-        provider_id: &str,
-        model_profile: &ModelProfile,
-        error: &MezError,
-    ) -> Result<()> {
-        let display_include_shell_view = self.agent_trace_enabled(&turn.pane_id);
-        let display_value = runtime_agent_provider_error_trace_json(
-            provider_id,
-            model_profile,
-            error,
-            display_include_shell_view,
-        );
-        let retained_value =
-            runtime_agent_provider_error_trace_json(provider_id, model_profile, error, true);
-        self.append_agent_trace_maap_value_with_retained(
-            &turn.pane_id,
-            &turn.turn_id,
-            "provider_error",
-            display_value,
-            retained_value,
-        )
-    }
-
     /// Runs the start agent turn operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
