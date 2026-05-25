@@ -3650,6 +3650,7 @@ impl ModelProvider for EchoProvider {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         })
     }
 }
@@ -3741,7 +3742,8 @@ impl ModelProvider for CapabilityBatchProvider {
                     actions: vec![capability_action("capability-1", self.capability)],
                     final_turn: false,
                 }),
-            });
+                provider_transcript_events: Vec::new(),
+});
         }
 
         Ok(self.response.clone())

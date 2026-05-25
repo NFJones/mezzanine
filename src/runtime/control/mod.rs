@@ -67,6 +67,7 @@ use super::{
     state_request_session_target_matches, unix_seconds_to_rfc3339, validate_config_text,
     window_target_checked_resolved,
 };
+use crate::agent::ProviderTranscriptEvent;
 
 use crate::config::compose_effective_config;
 use crate::control::{
@@ -125,7 +126,10 @@ fn runtime_agent_transcript_context_blocks(
 ) -> Vec<ContextBlock> {
     let context_entries = entries
         .iter()
-        .filter(|entry| entry.role != TranscriptRole::System)
+        .filter(|entry| {
+            entry.role != TranscriptRole::System
+                || ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some()
+        })
         .collect::<Vec<_>>();
     let mut blocks = Vec::new();
     for entry in context_entries {
@@ -159,6 +163,11 @@ fn runtime_transcript_context_source_kind(role: TranscriptRole) -> ContextSource
 /// that is useful for durable audit but harmful as future prompt context.
 fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<String> {
     match entry.role {
+        TranscriptRole::System
+            if ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some() =>
+        {
+            Some(entry.content.clone())
+        }
         TranscriptRole::System => None,
         TranscriptRole::Tool => runtime_transcript_tool_context_content(&entry.content),
         TranscriptRole::User if transcript_content_looks_like_skill_context(&entry.content) => None,
@@ -4717,5 +4726,65 @@ fn runtime_agent_visibility_from_snapshot(
         _ => Err(MezError::invalid_args(
             "snapshot agent session visibility is invalid",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies only provider-native system transcript entries become model
+    /// context.
+    ///
+    /// Ordinary system transcript entries are durable audit records rather than
+    /// chat history. DeepSeek replay metadata is also stored with the system
+    /// role, but it must survive runtime transcript filtering so request
+    /// assembly can render it back into native assistant/tool messages.
+    #[test]
+    fn runtime_transcript_context_preserves_provider_native_system_entries() {
+        let provider_event = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "action result".to_string(),
+        }
+        .to_transcript_content();
+        let entries = vec![
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "ordinary system audit record".to_string(),
+            },
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 2,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: provider_event.clone(),
+            },
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 3,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "visible assistant history".to_string(),
+            },
+        ];
+
+        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].content, provider_event);
+        assert!(ProviderTranscriptEvent::from_transcript_content(&blocks[0].content).is_some());
+        assert_eq!(blocks[1].content, "visible assistant history");
     }
 }

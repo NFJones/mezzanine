@@ -527,6 +527,7 @@ fn runtime_test_compaction_response(summary: &str) -> crate::agent::ModelRespons
         usage: Default::default(),
         quota_usage: Vec::new(),
         action_batch: None,
+        provider_transcript_events: Vec::new(),
     }
 }
 
@@ -903,6 +904,7 @@ context_window_tokens = 64000
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
         },
         last_request: RefCell::new(None),
     };
@@ -1821,6 +1823,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1915,6 +1918,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -3260,6 +3264,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -3308,6 +3313,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
         },
         last_request: RefCell::new(None),
     };
@@ -3382,6 +3388,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let first_execution = service
@@ -3432,6 +3439,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
                 ],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let executions = service
@@ -3519,6 +3527,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
                     }],
                     final_turn: true,
                 }),
+                provider_transcript_events: Vec::new(),
             },
         };
         service
@@ -3823,6 +3832,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                     actions: vec![spawn_one.clone(), spawn_two.clone()],
                     final_turn: false,
                 }),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![
@@ -3983,6 +3993,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                     actions: vec![spawn.clone()],
                     final_turn: false,
                 }),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![crate::agent::ActionResult::running(

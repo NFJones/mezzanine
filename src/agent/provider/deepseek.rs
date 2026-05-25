@@ -10,7 +10,7 @@ use super::{
     AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MezError,
     ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
-    ProviderHttpResponse, Result, parse_maap_action_batch_json_for_turn,
+    ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_maap_action_batch_json_for_turn,
     provider_quota_usage_from_headers, validate_non_empty,
 };
 use std::collections::BTreeMap;
@@ -92,22 +92,23 @@ fn deepseek_chat_completions_request_body_with_strategy(
     strategy: DeepSeekMaapRequestStrategy,
 ) -> Result<String> {
     let capabilities = ProviderCapabilities::for_kind("deepseek");
-    let messages: Vec<serde_json::Value> = request
-        .messages
-        .iter()
-        .map(|message| {
-            let role = match message.role {
-                ModelMessageRole::System => "system",
-                ModelMessageRole::User => "user",
-                ModelMessageRole::Assistant => "assistant",
-                _ => "user",
-            };
-            serde_json::json!({
-                "role": role,
-                "content": message.content
-            })
-        })
-        .collect();
+    let mut messages = Vec::with_capacity(request.messages.len());
+    for message in &request.messages {
+        if let Some(event) = ProviderTranscriptEvent::from_transcript_content(&message.content) {
+            messages.push(deepseek_provider_transcript_event_message(&event));
+            continue;
+        }
+        let role = match message.role {
+            ModelMessageRole::System => "system",
+            ModelMessageRole::User => "user",
+            ModelMessageRole::Assistant => "assistant",
+            _ => "user",
+        };
+        messages.push(serde_json::json!({
+            "role": role,
+            "content": message.content
+        }));
+    }
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": messages,
@@ -154,6 +155,39 @@ fn deepseek_chat_completions_request_body_with_strategy(
             "DeepSeek Chat Completions request encoding failed: {error}"
         ))
     })
+}
+
+/// Renders a hidden provider transcript event as a DeepSeek-native message.
+fn deepseek_provider_transcript_event_message(
+    event: &ProviderTranscriptEvent,
+) -> serde_json::Value {
+    match event {
+        ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content,
+            reasoning_content,
+            tool_calls,
+        } => {
+            let mut message = serde_json::json!({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": tool_calls,
+            });
+            if let Some(reasoning_content) =
+                reasoning_content.as_deref().filter(|text| !text.is_empty())
+            {
+                message["reasoning_content"] = serde_json::json!(reasoning_content);
+            }
+            message
+        }
+        ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id,
+            content,
+        } => serde_json::json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        }),
+    }
 }
 
 /// Returns the DeepSeek MAAP strategy for one model request.
@@ -257,6 +291,7 @@ pub(super) fn parse_deepseek_chat_completions_http_response(
             usage: Default::default(),
             quota_usage: provider_quota_usage_from_headers(&headers),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         });
     }
     let mut parsed = parse_deepseek_chat_completions_response_body(&body, request)?;
@@ -313,6 +348,8 @@ fn parse_deepseek_chat_completions_response_body(
     } else {
         raw_text
     };
+    let provider_transcript_events =
+        deepseek_provider_transcript_events_for_message(message, reasoning_content);
     let action_batch = if let Some(parsed) = message
         .get("tool_calls")
         .and_then(|tool_calls| tool_calls.as_array())
@@ -349,7 +386,31 @@ fn parse_deepseek_chat_completions_response_body(
         usage,
         quota_usage: Vec::new(),
         action_batch,
+        provider_transcript_events,
     })
+}
+
+/// Captures DeepSeek-native assistant tool-call metadata for transcript replay.
+fn deepseek_provider_transcript_events_for_message(
+    message: &serde_json::Value,
+    reasoning_content: Option<String>,
+) -> Vec<ProviderTranscriptEvent> {
+    let Some(tool_calls) = message
+        .get("tool_calls")
+        .and_then(serde_json::Value::as_array)
+        .filter(|tool_calls| !tool_calls.is_empty())
+    else {
+        return Vec::new();
+    };
+    vec![ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+        content: message
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        reasoning_content,
+        tool_calls: tool_calls.clone(),
+    }]
 }
 
 /// Parses usage statistics from a DeepSeek Chat Completions response.
@@ -435,6 +496,26 @@ pub(super) fn build_deepseek_models_http_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::{ContextSourceKind, ModelMessage, PROVIDER_TRANSCRIPT_EVENT_MARKER};
+
+    /// Builds a minimal DeepSeek model request for provider-shape tests.
+    fn deepseek_test_request(messages: Vec<ModelMessage>) -> ModelRequest {
+        ModelRequest {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_effort: Some("high".to_string()),
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            prompt_cache_session_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            interaction_kind: ModelInteractionKind::ActionExecution,
+            allowed_actions: AllowedActionSet::action_execution_base(),
+            messages,
+        }
+    }
 
     /// Verifies configured DeepSeek base URLs expand to the current documented
     /// Chat Completions and Models endpoints.
@@ -502,5 +583,156 @@ mod tests {
             "reasoning_tokens": 3
         }));
         assert_eq!(flat.reasoning_tokens, 3);
+    }
+
+    /// Verifies DeepSeek thinking-mode tool-call responses retain provider
+    /// native replay metadata.
+    ///
+    /// DeepSeek requires the assistant `reasoning_content` and `tool_calls`
+    /// from thinking-mode tool-call turns to be sent again on later requests.
+    /// The provider parser therefore captures that native assistant envelope
+    /// alongside the MAAP batch instead of flattening it into visible text.
+    #[test]
+    fn deepseek_response_captures_thinking_tool_call_transcript_event() {
+        let request = deepseek_test_request(Vec::new());
+        let body = serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "I need to inspect the workspace first.",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                            "arguments": serde_json::json!({
+                                "rationale": "inspect before editing",
+                                "actions": [{
+                                    "id": "a1",
+                                    "type": "shell_command",
+                                    "summary": "list files",
+                                    "command": "ls",
+                                    "rationale": "find project files"
+                                }],
+                                "final_turn": false
+                            }).to_string()
+                        }
+                    }]
+                }
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 4
+            }
+        })
+        .to_string();
+
+        let response = parse_deepseek_chat_completions_response_body(&body, &request).unwrap();
+
+        assert!(response.action_batch.is_some());
+        assert_eq!(response.provider_transcript_events.len(), 1);
+        let ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content,
+            reasoning_content,
+            tool_calls,
+        } = &response.provider_transcript_events[0]
+        else {
+            panic!("expected DeepSeek assistant tool-call event");
+        };
+        assert_eq!(content, "");
+        assert_eq!(
+            reasoning_content.as_deref(),
+            Some("I need to inspect the workspace first.")
+        );
+        assert_eq!(tool_calls[0]["id"], "call_1");
+        assert_eq!(
+            tool_calls[0]["function"]["name"],
+            OPENAI_MAAP_FUNCTION_TOOL_NAME
+        );
+    }
+
+    /// Verifies hidden provider transcript events replay as DeepSeek-native
+    /// assistant and tool messages in their original context position.
+    ///
+    /// The request body must not leak Mezzanine's hidden transcript marker to
+    /// DeepSeek. Instead, the adapter restores the documented message shape:
+    /// assistant content, `reasoning_content`, `tool_calls`, then a matching
+    /// `role: tool` result before the next user turn.
+    #[test]
+    fn deepseek_request_replays_hidden_provider_transcript_events_as_native_messages() {
+        let tool_calls = vec![serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "arguments": "{\"actions\":[]}"
+            }
+        })];
+        let assistant_event = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: "".to_string(),
+            reasoning_content: Some("The prior turn needed a shell command.".to_string()),
+            tool_calls,
+        };
+        let tool_event = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "action_id=a1 status=success".to_string(),
+        };
+        let request = deepseek_test_request(vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                content: "system prompt".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::TranscriptUser,
+                content: "previous request".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                content: assistant_event.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::Transcript,
+                content: tool_event.to_transcript_content(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "continue".to_string(),
+            },
+        ]);
+
+        let http = build_deepseek_chat_completions_http_request(
+            &request,
+            "deepseek-key",
+            "https://api.deepseek.com/chat/completions",
+            true,
+            1000,
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&http.body).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body.get("tool_choice").is_none());
+        assert!(!http.body.contains(PROVIDER_TRANSCRIPT_EVENT_MARKER.trim()));
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(
+            messages[2]["reasoning_content"],
+            "The prior turn needed a shell command."
+        );
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_1");
+        assert_eq!(messages[4]["role"], "user");
+        assert_eq!(messages[4]["content"], "continue");
     }
 }

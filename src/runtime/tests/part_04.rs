@@ -144,6 +144,7 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -658,6 +659,7 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let execution = service
@@ -742,6 +744,7 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
                 ],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -821,6 +824,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let execution = service
@@ -951,6 +955,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                     actions: vec![action.clone()],
                     final_turn: false,
                 }),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![crate::agent::ActionResult::running(
@@ -1148,6 +1153,7 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1235,6 +1241,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1324,6 +1331,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1412,6 +1420,7 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1511,6 +1520,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1742,6 +1752,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -1876,6 +1887,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                     }],
                     final_turn: false,
                 }),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![result],
@@ -2015,6 +2027,7 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -2111,6 +2124,7 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -2199,6 +2213,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -2325,6 +2340,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -2442,6 +2458,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -2475,6 +2492,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
                 usage: Default::default(),
                 quota_usage: Default::default(),
                 action_batch: Some(runtime_complete_batch("turn-1")),
+                provider_transcript_events: Vec::new(),
             },
         };
         let completions = service
@@ -2562,6 +2580,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -2882,6 +2901,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                     actions: vec![action.clone()],
                     final_turn: false,
                 }),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![crate::agent::ActionResult::running(

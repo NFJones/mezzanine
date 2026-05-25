@@ -6,8 +6,8 @@
 //! type facade.
 
 use super::super::{
-    AgentPromptProfile, AgentTurnRecord, build_agent_system_prompt_with_repository_instructions,
-    role_for_source, validate_non_empty,
+    AgentPromptProfile, AgentTurnRecord, ProviderTranscriptEvent,
+    build_agent_system_prompt_with_repository_instructions, role_for_source, validate_non_empty,
 };
 use super::compaction::model_context_has_bulk_compaction_summary;
 use super::evidence::prepare_model_context_blocks;
@@ -73,6 +73,14 @@ pub fn assemble_model_request_with_retained_tail_percent(
         )?,
     });
     for block in &blocks {
+        if ProviderTranscriptEvent::from_transcript_content(&block.content).is_some() {
+            messages.push(ModelMessage {
+                role: ModelMessageRole::System,
+                source: block.source,
+                content: block.content.clone(),
+            });
+            continue;
+        }
         if matches!(
             block.source,
             ContextSourceKind::ProjectGuidance | ContextSourceKind::TranscriptTool

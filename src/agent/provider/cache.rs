@@ -8,7 +8,7 @@ use super::schema::{openai_maap_action_batch_tools, openai_maap_tool_surface_for
 use super::validate_non_empty;
 use crate::agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ContextSourceKind,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
 };
 use crate::error::{MezError, Result};
 use sha2::Digest;
@@ -74,6 +74,9 @@ pub(super) fn openai_render_request_messages(
     let mut volatile_input = Vec::new();
     let mut stable_input_open = true;
     for message in &request.messages {
+        if ProviderTranscriptEvent::from_transcript_content(&message.content).is_some() {
+            continue;
+        }
         if openai_message_belongs_in_instructions(message) {
             instructions.push(message.content.clone());
             continue;
@@ -433,4 +436,75 @@ fn openai_stable_prefix_material(
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = sha2::Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::AllowedActionSet;
+
+    /// Verifies OpenAI request rendering ignores hidden provider-native
+    /// transcript events.
+    ///
+    /// DeepSeek can persist hidden replay metadata into shared transcript
+    /// history. If a later request is routed through OpenAI, that metadata must
+    /// not become an instruction or input message because OpenAI does not
+    /// understand DeepSeek `reasoning_content` or Chat Completions tool-call
+    /// replay fields.
+    #[test]
+    fn openai_rendering_omits_hidden_provider_transcript_events() {
+        let event = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: "".to_string(),
+            reasoning_content: Some("DeepSeek-only reasoning".to_string()),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }
+            })],
+        };
+        let request = ModelRequest {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_effort: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            prompt_cache_session_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            interaction_kind: ModelInteractionKind::CapabilityDecision,
+            allowed_actions: AllowedActionSet::capability_decision(),
+            messages: vec![
+                ModelMessage {
+                    role: ModelMessageRole::System,
+                    source: ContextSourceKind::System,
+                    content: "system prompt".to_string(),
+                },
+                ModelMessage {
+                    role: ModelMessageRole::System,
+                    source: ContextSourceKind::Transcript,
+                    content: event.to_transcript_content(),
+                },
+                ModelMessage {
+                    role: ModelMessageRole::User,
+                    source: ContextSourceKind::UserInstruction,
+                    content: "continue".to_string(),
+                },
+            ],
+        };
+
+        let rendered = openai_render_request_messages(&request).unwrap();
+        let rendered_json = serde_json::to_string(&rendered.input).unwrap();
+
+        assert_eq!(rendered.input.len(), 2);
+        assert!(rendered.instructions.contains("system prompt"));
+        assert!(rendered_json.contains("continue"));
+        assert!(!rendered.instructions.contains("DeepSeek-only reasoning"));
+        assert!(!rendered_json.contains("reasoning_content"));
+        assert!(!rendered_json.contains("call_1"));
+    }
 }

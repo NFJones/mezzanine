@@ -3437,6 +3437,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
                 ],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let execution = service
@@ -3979,6 +3980,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let execution = service
@@ -4167,6 +4169,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 

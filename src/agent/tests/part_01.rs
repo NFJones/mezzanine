@@ -22,10 +22,11 @@ use super::{
     ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
     OpenAiResponsesProvider, PaneReadinessOverrideStore, PaneReadinessState, PaneShellExecutor,
-    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTransport, ReadinessOverrideRevocation,
-    Result, ShellClassification, ShellExecutionOutput, ShellExecutionRequest, ShellTransaction,
-    ShellTransactionInput, ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache,
-    ToolInventory, action_result_context_content, agent_subshell_enter_command, append_mcp_context,
+    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTransport, ProviderTranscriptEvent,
+    ReadinessOverrideRevocation, Result, ShellClassification, ShellExecutionOutput,
+    ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
+    ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache, ToolInventory,
+    action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
     append_scheduler_context, apply_patch_write_plan_from_read_output, assemble_model_request,
     baseline_slash_commands, bootstrap_script, bootstrap_script_for_classification,
@@ -3287,6 +3288,7 @@ fn turn_execution_can_be_converted_to_transcript_entries() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![ActionResult::running(
@@ -3317,6 +3319,156 @@ fn turn_execution_can_be_converted_to_transcript_entries() {
     assert!(entries.iter().any(|entry| {
         entry.role == TranscriptRole::Tool && entry.content.contains("action_id=a1")
     }));
+}
+
+/// Verifies provider-native replay metadata is durable but not visible.
+///
+/// DeepSeek thinking-mode tool calls require the original assistant
+/// `reasoning_content`, native `tool_calls`, and matching `role: tool` result
+/// to be available on later requests. Mezzanine stores those as hidden system
+/// transcript entries so visible assistant and tool transcript records remain
+/// provider-neutral and do not expose raw provider JSON.
+#[test]
+fn turn_execution_transcript_stores_hidden_provider_native_tool_call_events() {
+    let turn = turn();
+    let action = shell_action("a1");
+    let execution = AgentTurnExecution {
+        request: assemble_model_request(
+            &ModelProfile {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                reasoning_profile: Some("high".to_string()),
+                latency_preference: None,
+                multimodal_required: false,
+                provider_options: std::collections::BTreeMap::new(),
+                safety_tier: None,
+            },
+            &turn,
+            &AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "run pwd".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap(),
+        response: ModelResponse {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            raw_text: "executing".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: vec![ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+                content: "".to_string(),
+                reasoning_content: Some("I need command output.".to_string()),
+                tool_calls: vec![serde_json::json!({
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                        "arguments": "{}"
+                    }
+                })],
+            }],
+        },
+        latest_response_usage: Default::default(),
+        action_results: vec![ActionResult::running(
+            &turn,
+            &action,
+            vec!["shell command accepted for pane execution".to_string()],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
+    let hidden_events = entries
+        .iter()
+        .filter(|entry| entry.role == TranscriptRole::System)
+        .map(|entry| ProviderTranscriptEvent::from_transcript_content(&entry.content).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(hidden_events.len(), 2);
+    assert!(matches!(
+        hidden_events[0],
+        ProviderTranscriptEvent::DeepSeekAssistantToolCall { .. }
+    ));
+    assert!(matches!(
+        hidden_events[1],
+        ProviderTranscriptEvent::DeepSeekToolResult { .. }
+    ));
+    let ProviderTranscriptEvent::DeepSeekToolResult {
+        tool_call_id,
+        content,
+    } = &hidden_events[1]
+    else {
+        panic!("expected DeepSeek tool-result event");
+    };
+    assert_eq!(tool_call_id, "call_1");
+    assert!(content.contains("action_id=a1"));
+    let visible = entries
+        .iter()
+        .filter(|entry| entry.role != TranscriptRole::System)
+        .map(|entry| entry.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!visible.contains("reasoning_content"));
+    assert!(!visible.contains("call_1"));
+}
+
+/// Verifies request assembly carries hidden provider-native transcript events
+/// without wrapping them in normal context labels.
+///
+/// Provider replay markers are not natural-language prompt context. They must
+/// remain byte-stable hidden payloads so DeepSeek can decode and render them as
+/// native Chat Completions messages, while other provider renderers can omit
+/// them safely.
+#[test]
+fn assemble_model_request_preserves_hidden_provider_transcript_events_without_labeling() {
+    let turn = turn();
+    let event_content = ProviderTranscriptEvent::DeepSeekToolResult {
+        tool_call_id: "call_1".to_string(),
+        content: "action_id=a1 status=success".to_string(),
+    }
+    .to_transcript_content();
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn,
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::Transcript,
+                label: "previous provider-native event".to_string(),
+                content: event_content.clone(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "continue".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let event_message = request
+        .messages
+        .iter()
+        .find(|message| ProviderTranscriptEvent::from_transcript_content(&message.content).is_some())
+        .unwrap();
+
+    assert_eq!(event_message.role, ModelMessageRole::System);
+    assert_eq!(event_message.content, event_content);
+    assert!(!event_message.content.contains("previous provider-native event"));
 }
 
 /// Verifies transcript persistence does not recursively store prompt context.
@@ -3370,6 +3522,7 @@ fn turn_execution_transcript_omits_recursive_request_context() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -3451,6 +3604,7 @@ fn turn_execution_transcript_omits_expanded_skill_request_context() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -3621,6 +3775,7 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -3725,6 +3880,7 @@ fn turn_execution_transcript_preserves_visible_say_text() {
                 actions: vec![say_action("say-1", &visible_text)],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -3789,6 +3945,7 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![ActionResult::succeeded(

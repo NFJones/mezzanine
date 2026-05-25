@@ -340,6 +340,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![result],
@@ -412,6 +413,7 @@ fn runtime_provider_completion_accepts_terminal_capability_failure_state() {
                 actions: vec![action],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![result],
@@ -476,6 +478,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -522,6 +525,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -583,6 +587,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
                 actions: Vec::new(),
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),
@@ -628,6 +633,7 @@ impl ModelProvider for RuntimeEchoProvider {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
+            provider_transcript_events: Vec::new(),
         })
     }
 }
@@ -813,6 +819,7 @@ fn runtime_capability_response(
             }],
             final_turn: false,
         }),
+        provider_transcript_events: Vec::new(),
     }
 }
 
@@ -904,6 +911,7 @@ fn runtime_say_response_for_agent(
             }],
             final_turn,
         }),
+        provider_transcript_events: Vec::new(),
     }
 }
 
@@ -1045,6 +1053,7 @@ impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
+            provider_transcript_events: Vec::new(),
         })
     }
 }
@@ -1081,6 +1090,7 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
+            provider_transcript_events: Vec::new(),
         })
     }
 }
@@ -1120,6 +1130,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
+            provider_transcript_events: Vec::new(),
         })
     }
 }
@@ -1152,7 +1163,8 @@ impl ModelProvider for RuntimeAutoSizingProvider {
                 usage: Default::default(),
                 quota_usage: Default::default(),
                 action_batch: None,
-            });
+                provider_transcript_events: Vec::new(),
+});
         }
         Ok(runtime_say_response(
             &request.turn_id,
@@ -2476,6 +2488,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -2648,6 +2661,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
                 ],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -3110,6 +3124,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
                 actions,
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service.pending_agent_provider_tasks.remove("turn-1");
@@ -3225,6 +3240,7 @@ fn runtime_config_change_resumes_after_full_access_change() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 

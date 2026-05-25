@@ -6,9 +6,9 @@
 
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, AuthStore, BTreeMap, ExposeSecret, MaapBatch,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, Result,
-    SecretString, parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
-    validate_non_empty,
+    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
+    ProviderTranscriptEvent, Result, SecretString, parse_fenced_maap_action_batch_for_turn,
+    parse_maap_action_batch_json_for_turn, validate_non_empty,
 };
 use crate::auth::{AuthCredentialKind, AuthMetadata};
 use std::future::Future;
@@ -198,6 +198,11 @@ pub struct ModelResponse {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub action_batch: Option<MaapBatch>,
+    /// Hidden provider-native transcript events required for future requests.
+    ///
+    /// Provider adapters populate this only when the provider API requires
+    /// non-neutral message fields to be replayed for multi-turn correctness.
+    pub provider_transcript_events: Vec<ProviderTranscriptEvent>,
 }
 
 /// Defines the Model Provider behavior contract for this subsystem.
@@ -1016,6 +1021,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
             usage,
             quota_usage,
             action_batch,
+            provider_transcript_events: Vec::new(),
         })
     }
 }
@@ -1128,6 +1134,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 usage,
                 quota_usage,
                 action_batch,
+                provider_transcript_events: Vec::new(),
             })
         })
     }

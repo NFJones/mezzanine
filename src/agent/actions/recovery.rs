@@ -362,6 +362,7 @@ fn failed_provider_error_execution(
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: Vec::new(),

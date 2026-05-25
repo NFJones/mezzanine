@@ -48,6 +48,11 @@ mod prompt;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod provider;
+/// Exposes provider-native transcript event helpers.
+///
+/// The nested module keeps hidden provider continuity payloads outside visible
+/// transcript rendering while allowing compatible providers to replay them.
+mod provider_transcript;
 /// Exposes the readiness module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -144,6 +149,7 @@ pub(crate) use provider::{
     provider_error_invites_retry, provider_error_is_context_limit_exceeded,
     provider_error_is_output_limit_exceeded,
 };
+pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use readiness::{
     BootstrapDecision, PaneReadinessOverride, PaneReadinessOverrideStore, PaneReadinessState,
     ReadinessDecision, ReadinessOverrideRevocation, decide_bootstrap_before_user_prompt,

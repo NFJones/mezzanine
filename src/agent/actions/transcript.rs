@@ -7,7 +7,8 @@
 use super::super::{
     ActionResult, AgentAction, AgentActionPayload, AgentTranscriptStore, AgentTurnRecord,
     AgentTurnState, ContextSourceKind, MaapBatch, MezError, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelResponse, ModelTokenUsage, Result, TranscriptEntry, TranscriptRole,
+    ModelRequest, ModelResponse, ModelTokenUsage, ProviderTranscriptEvent, Result, TranscriptEntry,
+    TranscriptRole,
 };
 use super::action_result_transcript_content;
 
@@ -70,6 +71,19 @@ pub fn transcript_entries_for_execution(
         });
         sequence = sequence.saturating_add(1);
     }
+    for event in provider_transcript_entries_for_execution(execution) {
+        entries.push(TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence,
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: event.to_transcript_content(),
+        });
+        sequence = sequence.saturating_add(1);
+    }
     entries.push(TranscriptEntry {
         conversation_id: conversation_id.to_string(),
         sequence,
@@ -99,6 +113,38 @@ pub fn transcript_entries_for_execution(
         entry.validate()?;
     }
     Ok(entries)
+}
+
+/// Builds hidden provider-native transcript entries for future provider replay.
+fn provider_transcript_entries_for_execution(
+    execution: &AgentTurnExecution,
+) -> Vec<ProviderTranscriptEvent> {
+    let mut events = Vec::new();
+    for event in &execution.response.provider_transcript_events {
+        events.push(event.clone());
+        for tool_call_id in event.deepseek_tool_call_ids() {
+            events.push(ProviderTranscriptEvent::DeepSeekToolResult {
+                tool_call_id,
+                content: provider_tool_result_content_for_execution(execution),
+            });
+        }
+    }
+    events
+}
+
+/// Returns compact provider-facing tool output for hidden native replay.
+fn provider_tool_result_content_for_execution(execution: &AgentTurnExecution) -> String {
+    let content = execution
+        .action_results
+        .iter()
+        .map(action_result_transcript_content)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if content.trim().is_empty() {
+        "Mezzanine accepted the provider tool call without additional action output.".to_string()
+    } else {
+        content
+    }
 }
 
 /// Returns the assistant-history context produced by one model execution.

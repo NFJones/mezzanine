@@ -191,6 +191,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
         last_request: RefCell::new(None),
     };
@@ -272,7 +273,8 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -293,7 +295,8 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 actions: vec![shell_action("shell-1")],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
@@ -395,7 +398,8 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -411,7 +415,8 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
                 actions: vec![say_action("say-1", "done")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
@@ -507,7 +512,8 @@ fn turn_runner_capability_limit_execution_matches_terminal_batch() {
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let provider = SequencedProvider::new(vec![
         Ok(capability_response()),
         Ok(capability_response()),
@@ -594,7 +600,8 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
                 actions: vec![abort_action("abort-1", "need more repository context")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -610,7 +617,8 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -626,7 +634,8 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
                 actions: vec![say_action("say-1", "Ready.")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
@@ -719,7 +728,8 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -745,7 +755,8 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
                 }],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
@@ -821,7 +832,8 @@ fn turn_runner_accepts_say_with_capability_request() {
                 ],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -837,7 +849,8 @@ fn turn_runner_accepts_say_with_capability_request() {
                 actions: vec![shell_action("shell-1")],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -921,7 +934,8 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
                 ],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -937,7 +951,8 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
                 actions: vec![say_action("say-2", "Ready to proceed.")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1034,7 +1049,8 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
                 }],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1134,7 +1150,8 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
                 actions: vec![say_action("say-1", "retry later")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1214,7 +1231,8 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
                 actions: vec![say_action("say-1", "retry later")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1294,7 +1312,8 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
                 actions: vec![say_action("say-1", "retry later")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1365,7 +1384,8 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
                 )],
                 final_turn: false,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
         Ok(ModelResponse {
             provider: "batch".to_string(),
             model: "test".to_string(),
@@ -1381,7 +1401,8 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
                 actions: vec![say_action("say-1", "hello")],
                 final_turn: true,
             }),
-        }),
+            provider_transcript_events: Vec::new(),
+}),
     ]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1451,6 +1472,7 @@ fn turn_runner_fails_response_without_action_batch() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: None,
+            provider_transcript_events: Vec::new(),
         },
     };
     let policy = PermissionPolicy::default();

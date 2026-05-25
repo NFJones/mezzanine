@@ -3631,6 +3631,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(batch),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![failed, pending],
@@ -3775,6 +3776,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(response_batch),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![crate::agent::ActionResult::succeeded(
@@ -3941,6 +3943,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(response_batch),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![crate::agent::ActionResult::succeeded(

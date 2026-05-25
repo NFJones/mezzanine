@@ -460,6 +460,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(response_batch),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![crate::agent::ActionResult::running(
@@ -710,6 +711,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 usage: Default::default(),
                 quota_usage: Default::default(),
                 action_batch: Some(batch),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![crate::agent::ActionResult::running(
@@ -835,6 +837,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 usage: Default::default(),
                 quota_usage: Default::default(),
                 action_batch: Some(second_batch),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![crate::agent::ActionResult::running(
@@ -1001,6 +1004,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(response_batch),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![crate::agent::ActionResult::running(
@@ -1169,6 +1173,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(response_batch),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![crate::agent::ActionResult::running(

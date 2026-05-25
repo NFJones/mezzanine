@@ -616,6 +616,7 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -698,6 +699,7 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default()
@@ -773,6 +775,7 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
                 actions: vec![config_change_action("config-1")],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let mut policy = PermissionPolicy::default()
@@ -863,6 +866,7 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default()
@@ -946,6 +950,7 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -1029,6 +1034,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -1118,6 +1124,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default()
@@ -1207,6 +1214,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default()
@@ -1297,6 +1305,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -1383,6 +1392,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -1471,7 +1481,8 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let invalid = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
@@ -1495,7 +1506,8 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             }],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let corrected = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
@@ -1511,7 +1523,8 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             actions: vec![say_action("say-1", "I cannot access that MCP server.")],
             final_turn: true,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1627,7 +1640,8 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let mut heredoc_action = shell_action("shell-heredoc");
     if let AgentActionPayload::ShellCommand {
         command, summary, ..
@@ -1651,7 +1665,8 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             actions: vec![heredoc_action],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let corrected = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
@@ -1667,7 +1682,8 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             actions: vec![say_action("say-1", "I will use a file action instead.")],
             final_turn: true,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
@@ -1764,7 +1780,8 @@ fn turn_runner_retries_malformed_provider_maap_output() {
             actions: vec![say_action("say-1", "Corrected.")],
             final_turn: true,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let provider = SequencedProvider::new(vec![Err(malformed), Ok(corrected)]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -1851,7 +1868,8 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let invalid = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
@@ -1875,7 +1893,8 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             }],
             final_turn: false,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let corrected = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
@@ -1891,7 +1910,8 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             actions: vec![say_action("say-1", "Corrected asynchronously.")],
             final_turn: true,
         }),
-    };
+        provider_transcript_events: Vec::new(),
+};
     let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
@@ -2034,6 +2054,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
                 actions: vec![mcp_action("mcp-1")],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -2129,6 +2150,7 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -2203,6 +2225,7 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -2289,6 +2312,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default()
@@ -2380,6 +2404,7 @@ fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default()
@@ -2486,6 +2511,7 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -2559,6 +2585,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
                 actions: vec![shell_action("a1")],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -2639,6 +2666,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
                 actions: vec![shell_action("a1")],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();
@@ -2706,6 +2734,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
                 actions: vec![shell_action("a1")],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     );
     let policy = PermissionPolicy::default();

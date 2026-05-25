@@ -88,6 +88,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -218,6 +219,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -326,6 +328,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -425,6 +428,7 @@ fn execute_runtime_send_message_action(
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -644,6 +648,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let execution = service
@@ -676,6 +681,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
         },
         last_request: RefCell::new(None),
     };
@@ -757,6 +763,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 ],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     let first = service
@@ -848,6 +855,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             usage: Default::default(),
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
         },
         last_request: RefCell::new(None),
     };
@@ -929,6 +937,7 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service
@@ -1031,6 +1040,7 @@ fn dispatch_protocol_test_shell_action(
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service
@@ -1108,6 +1118,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
     service
@@ -1318,6 +1329,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1434,6 +1446,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1615,6 +1628,7 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -1704,6 +1718,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![timed_out],
@@ -1814,6 +1829,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![failed],
@@ -1935,6 +1951,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![failed],
@@ -2046,6 +2063,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![failed],
@@ -2210,6 +2228,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -2396,6 +2415,7 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
                     actions: vec![action],
                     final_turn: false,
                 }),
+                provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             action_results: vec![failed],
@@ -2533,6 +2553,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![failed],
@@ -2654,6 +2675,7 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -2803,6 +2825,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
                 actions: vec![success_action.clone(), failed_action.clone()],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![
@@ -2974,6 +2997,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
                 actions: vec![first_action, second_action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![first_result, second_result],
@@ -3045,6 +3069,7 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
                 }],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
     };
 
@@ -3147,6 +3172,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
                 actions: vec![action],
                 final_turn: true,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![result],
@@ -3279,6 +3305,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
                 actions: vec![patch_action, read_action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![failed, pending],
@@ -3373,6 +3400,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
                 actions: vec![action],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         action_results: vec![denied],

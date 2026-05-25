@@ -4006,6 +4006,7 @@ mod tests {
                 }],
                 final_turn: false,
             }),
+            provider_transcript_events: Vec::new(),
         };
 
         let summary = runtime_model_compaction_summary_from_response(&response).unwrap();

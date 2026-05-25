@@ -1459,6 +1459,7 @@ mod tests {
                     usage: Default::default(),
                     quota_usage: Vec::new(),
                     action_batch: None,
+                    provider_transcript_events: Vec::new(),
                 })
             })
         }
