@@ -2675,15 +2675,14 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(resumed.contains("conversation_id=saved"), "{resumed}");
-    service.record_agent_provider_token_usage(
-        "%1",
-        crate::agent::ModelTokenUsage {
-            input_tokens: 321,
-            output_tokens: 45,
-            reasoning_tokens: 12,
-            cached_input_tokens: Some(123),
-        },
-    );
+    let saved_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-5.5");
+    let saved_token_usage = crate::agent::ModelTokenUsage {
+        input_tokens: 321,
+        output_tokens: 45,
+        reasoning_tokens: 12,
+        cached_input_tokens: Some(123),
+    };
+    service.record_agent_provider_token_usage("%1", saved_token_usage);
     let routing = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"restore-routing","method":"agent/shell/command","params":{"idempotency_key":"restore-routing","input":"/routing on"}}"#,
         &primary,
@@ -2714,12 +2713,13 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     );
     assert_eq!(
         saved_metadata[0].token_usage,
-        crate::agent::ModelTokenUsage {
-            input_tokens: 321,
-            output_tokens: 45,
-            reasoning_tokens: 12,
-            cached_input_tokens: Some(123),
-        }
+        saved_token_usage
+    );
+    assert_eq!(
+        saved_metadata[0]
+            .token_usage_by_model
+            .get(&saved_token_usage_key),
+        Some(&saved_token_usage)
     );
     assert_eq!(saved_metadata[0].routing_enabled, Some(true));
     assert_eq!(
@@ -2744,13 +2744,9 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         restored
             .agent_token_usage_by_conversation
             .get("saved")
+            .and_then(|usage_by_model| usage_by_model.get(&saved_token_usage_key))
             .copied(),
-        Some(crate::agent::ModelTokenUsage {
-            input_tokens: 321,
-            output_tokens: 45,
-            reasoning_tokens: 12,
-            cached_input_tokens: Some(123),
-        })
+        Some(saved_token_usage)
     );
     assert_eq!(
         restored.agent_routing_overrides.get("%1").copied(),
@@ -2818,6 +2814,13 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
             content: "resume with prior token totals".to_string(),
         })
         .unwrap();
+    let saved_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-saved");
+    let saved_token_usage = crate::agent::ModelTokenUsage {
+        input_tokens: 900,
+        output_tokens: 80,
+        reasoning_tokens: 33,
+        cached_input_tokens: Some(450),
+    };
     transcript_store
         .save_agent_session_metadata(
             &mezzanine_session_id,
@@ -2837,12 +2840,11 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 working_directory: None,
                 project_root: None,
                 context_usage: Some("42%".to_string()),
-                token_usage: crate::agent::ModelTokenUsage {
-                    input_tokens: 900,
-                    output_tokens: 80,
-                    reasoning_tokens: 33,
-                    cached_input_tokens: Some(450),
-                },
+                token_usage: saved_token_usage,
+                token_usage_by_model: std::collections::BTreeMap::from([(
+                    saved_token_usage_key,
+                    saved_token_usage,
+                )]),
             }],
         )
         .unwrap();
@@ -2885,8 +2887,12 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
 
     assert!(
         status.contains(
-            "| Provider tokens | input=450 raw_input=900 output=80 reasoning=33 cached_input=450 cache_hit=50.00% total=980 |"
+            "| Provider tokens | gpt-saved via openai: input=450 raw_input=900 output=80 reasoning=33 cached_input=450 cache_hit=50.00% total=980 |"
         ),
+        "{status}"
+    );
+    assert!(
+        status.contains("| openai | gpt-saved | 450 | 900 | 80 | 33 | 450 | 50.00% | 980 |"),
         "{status}"
     );
 }
@@ -2932,6 +2938,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 project_root: None,
                 context_usage: None,
                 token_usage: Default::default(),
+                token_usage_by_model: Default::default(),
             }],
         )
         .unwrap();
@@ -2978,6 +2985,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 project_root: None,
                 context_usage: None,
                 token_usage: Default::default(),
+                token_usage_by_model: Default::default(),
             }],
         )
         .unwrap();

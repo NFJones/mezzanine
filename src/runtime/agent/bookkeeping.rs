@@ -315,8 +315,13 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .unwrap_or_else(|| format!("pane:{pane_id}"));
+        let token_usage_key = profile
+            .map(|profile| ModelTokenUsageKey::new(profile.provider.clone(), profile.model.clone()))
+            .unwrap_or_else(ModelTokenUsageKey::unknown);
         self.agent_token_usage_by_conversation
             .entry(conversation_id.clone())
+            .or_default()
+            .entry(token_usage_key)
             .or_default()
             .add_assign(usage);
         if let Some(display) = profile.and_then(|profile| {

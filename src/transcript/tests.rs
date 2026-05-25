@@ -1,6 +1,6 @@
 //! Tests for transcript persistence, forking, and TSV escaping.
 
-use std::fs;
+use std::{collections::BTreeMap, fs};
 
 use super::{
     AgentPresentationEntry, AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry,
@@ -374,6 +374,13 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
     ));
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
+    let owned_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-fast");
+    let owned_token_usage = crate::agent::ModelTokenUsage {
+        input_tokens: 100,
+        output_tokens: 20,
+        reasoning_tokens: 5,
+        cached_input_tokens: Some(80),
+    };
     let owned = AgentSessionMetadata {
         mezzanine_session_id: "$live".to_string(),
         pane_id: "%1".to_string(),
@@ -390,12 +397,8 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         working_directory: Some("/workspace/live".to_string()),
         project_root: Some("/workspace".to_string()),
         context_usage: Some("10%".to_string()),
-        token_usage: crate::agent::ModelTokenUsage {
-            input_tokens: 100,
-            output_tokens: 20,
-            reasoning_tokens: 5,
-            cached_input_tokens: Some(80),
-        },
+        token_usage: owned_token_usage,
+        token_usage_by_model: BTreeMap::from([(owned_token_usage_key, owned_token_usage)]),
     };
     let foreign = AgentSessionMetadata {
         mezzanine_session_id: "$other".to_string(),
@@ -414,6 +417,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         project_root: None,
         context_usage: None,
         token_usage: Default::default(),
+        token_usage_by_model: Default::default(),
     };
 
     assert_eq!(

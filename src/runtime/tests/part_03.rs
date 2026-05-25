@@ -3156,6 +3156,23 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             cached_input_tokens: Some(20),
         },
     );
+    let deepseek_profile = runtime_model_profile("deepseek", "deepseek-chat");
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        crate::agent::ModelTokenUsage {
+            input_tokens: 200,
+            output_tokens: 50,
+            reasoning_tokens: 20,
+            cached_input_tokens: Some(100),
+        },
+        crate::agent::ModelTokenUsage {
+            input_tokens: 200,
+            output_tokens: 50,
+            reasoning_tokens: 20,
+            cached_input_tokens: Some(100),
+        },
+        Some(&deepseek_profile),
+    );
     service
         .subagent_scopes
         .register(
@@ -3203,9 +3220,19 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     );
     assert!(response.contains("| Context | 4 blocks"), "{response}");
     assert!(
-        response.contains(
-            "| Provider tokens | input=20 raw_input=120 output=34 reasoning=9 cached_input=100 cache_hit=83.33% total=154 |"
-        ),
+        response.contains("| Provider tokens | 2 models; see Provider Token Usage |"),
+        "{response}"
+    );
+    assert!(
+        response.contains("### Provider Token Usage"),
+        "{response}"
+    );
+    assert!(
+        response.contains("| openai | gpt-fast | 20 | 120 | 34 | 9 | 100 | 83.33% | 154 |"),
+        "{response}"
+    );
+    assert!(
+        response.contains("| deepseek | deepseek-chat | 100 | 200 | 50 | 20 | 100 | 50.00% | 250 |"),
         "{response}"
     );
     assert!(!response.contains("Provider rate limits"), "{response}");
@@ -3215,6 +3242,75 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(!response.contains("requires_runtime"), "{response}");
+}
+
+/// Verifies runtime-wide metrics preserve provider token counters per model.
+///
+/// Aggregate token counts remain available for operational totals, but the
+/// metrics display must also expose provider/model buckets so cost-oriented
+/// readers do not have to infer mixed-model usage from one combined counter.
+#[test]
+fn runtime_show_metrics_reports_provider_tokens_by_model() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.runtime_metrics.record_provider_token_usage(
+        crate::agent::ModelTokenUsage {
+            input_tokens: 120,
+            output_tokens: 34,
+            reasoning_tokens: 9,
+            cached_input_tokens: Some(80),
+        },
+        crate::agent::ModelTokenUsage {
+            input_tokens: 120,
+            output_tokens: 34,
+            reasoning_tokens: 9,
+            cached_input_tokens: Some(80),
+        },
+        &crate::agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
+    );
+    service.runtime_metrics.record_provider_token_usage(
+        crate::agent::ModelTokenUsage {
+            input_tokens: 200,
+            output_tokens: 50,
+            reasoning_tokens: 20,
+            cached_input_tokens: Some(100),
+        },
+        crate::agent::ModelTokenUsage {
+            input_tokens: 200,
+            output_tokens: 50,
+            reasoning_tokens: 20,
+            cached_input_tokens: Some(100),
+        },
+        &crate::agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
+    );
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"show-metrics","method":"terminal/command","params":{"idempotency_key":"show-metrics","input":"show-metrics"}}"#,
+        &primary,
+    );
+
+    assert!(
+        response.contains("provider_input_tokens = 320"),
+        "{response}"
+    );
+    assert!(
+        response.contains("[runtime provider tokens by model]"),
+        "{response}"
+    );
+    assert!(
+        response.contains(
+            "provider_model_tokens[gpt-fast via openai] = provider=openai model=gpt-fast input=40 raw_input=120 output=34 reasoning=9 cached_input=80 cache_hit=66.67% total=154"
+        ),
+        "{response}"
+    );
+    assert!(
+        response.contains(
+            "provider_model_tokens[deepseek-chat via deepseek] = provider=deepseek model=deepseek-chat input=100 raw_input=200 output=50 reasoning=20 cached_input=100 cache_hit=50.00% total=250"
+        ),
+        "{response}"
+    );
 }
 
 /// Verifies that `/diff` reads the active pane's Git repository and includes

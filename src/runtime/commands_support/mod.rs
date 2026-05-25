@@ -28,8 +28,8 @@ use super::{
     validate_config_text,
 };
 use crate::agent::{
-    ContextSourceKind, ModelMessageRole, ModelRequest, append_mcp_context,
-    assemble_model_request_with_retained_tail_percent,
+    ContextSourceKind, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
+    append_mcp_context, assemble_model_request_with_retained_tail_percent,
 };
 use crate::layout::SplitDirection;
 use crate::terminal::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES};
@@ -2144,6 +2144,42 @@ fn runtime_metrics_histogram_lines(
     }));
     lines
 }
+
+/// Formats provider token usage for the runtime metrics command.
+fn runtime_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
+    format!(
+        "input={} raw_input={} output={} reasoning={} cached_input={} cache_hit={} total={}",
+        usage.billed_input_tokens(),
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.reasoning_tokens,
+        usage.cached_input_tokens_display(),
+        usage.cached_input_hit_ratio_display(),
+        usage.total_tokens()
+    )
+}
+
+/// Builds stable per-model provider token metrics lines.
+fn runtime_provider_token_usage_by_model_lines(
+    usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if usage_by_model.is_empty() {
+        lines.push("provider_model_tokens = none".to_string());
+        return lines;
+    }
+    for (key, usage) in usage_by_model {
+        lines.push(format!(
+            "provider_model_tokens[{}] = provider={} model={} {}",
+            key.display_name(),
+            key.provider,
+            key.model,
+            runtime_provider_token_usage_metrics(*usage)
+        ));
+    }
+    lines
+}
+
 /// Runs the runtime show metrics display operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -2402,6 +2438,11 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
     ] {
         lines.extend(runtime_metrics_histogram_lines(name, histogram));
     }
+    lines.push("".to_string());
+    lines.push("[runtime provider tokens by model]".to_string());
+    lines.extend(runtime_provider_token_usage_by_model_lines(
+        &runtime_metrics.provider_token_usage_by_model,
+    ));
     lines.push("".to_string());
     let Some(metrics) = service.async_runtime_metrics() else {
         lines.push("metrics source=async-runtime status=unavailable".to_string());

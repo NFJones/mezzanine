@@ -7,7 +7,8 @@
 use crate::error::{MezError, Result};
 
 use super::types::{AgentPresentationEntry, AgentSessionMetadata, TranscriptEntry, TranscriptRole};
-use crate::agent::ModelTokenUsage;
+use crate::agent::{ModelTokenUsage, ModelTokenUsageKey};
+use std::collections::BTreeMap;
 
 /// Defines the TRANSCRIPT VERSION const used by this subsystem.
 ///
@@ -259,12 +260,17 @@ impl AgentSessionMetadata {
         if let Some(context_usage) = self.context_usage.as_deref() {
             validate_non_empty("context usage", context_usage)?;
         }
+        for key in self.token_usage_by_model.keys() {
+            validate_non_empty("token usage provider", &key.provider)?;
+            validate_non_empty("token usage model", &key.model)?;
+        }
         Ok(())
     }
 
     /// Encodes one agent-session metadata row into the store's TSV format.
     pub(super) fn encode(&self) -> Result<String> {
         self.validate()?;
+        let token_usage_by_model = encode_token_usage_by_model(&self.token_usage_by_model)?;
         Ok([
             AGENT_SESSION_METADATA_VERSION.to_string(),
             self.mezzanine_session_id.clone(),
@@ -291,6 +297,7 @@ impl AgentSessionMetadata {
                 .unwrap_or_default(),
             self.approval_policy.clone().unwrap_or_default(),
             self.context_usage.clone().unwrap_or_default(),
+            token_usage_by_model,
         ]
         .into_iter()
         .map(|field| escape_field(&field))
@@ -306,7 +313,8 @@ impl AgentSessionMetadata {
             || fields.len() == 14
             || fields.len() == 18
             || fields.len() == 19
-            || fields.len() == 20)
+            || fields.len() == 20
+            || fields.len() == 21)
             || fields[0] != AGENT_SESSION_METADATA_VERSION
         {
             return Err(MezError::invalid_args(
@@ -346,11 +354,115 @@ impl AgentSessionMetadata {
             working_directory: fields.get(12).filter(|value| !value.is_empty()).cloned(),
             project_root: fields.get(13).filter(|value| !value.is_empty()).cloned(),
             token_usage,
+            token_usage_by_model: fields
+                .get(20)
+                .filter(|value| !value.is_empty())
+                .map(|value| decode_token_usage_by_model(value))
+                .transpose()?
+                .unwrap_or_default(),
             approval_policy: fields.get(18).filter(|value| !value.is_empty()).cloned(),
             context_usage: fields.get(19).filter(|value| !value.is_empty()).cloned(),
         };
         metadata.validate()?;
         Ok(metadata)
+    }
+}
+
+/// Encodes per-model token usage into one stable TSV field.
+fn encode_token_usage_by_model(
+    usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+) -> Result<String> {
+    if usage_by_model.is_empty() {
+        return Ok(String::new());
+    }
+    let rows = usage_by_model
+        .iter()
+        .map(|(key, usage)| {
+            serde_json::json!({
+                "provider": key.provider,
+                "model": key.model,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "reasoning_tokens": usage.reasoning_tokens,
+                "cached_input_tokens": usage.cached_input_tokens
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&rows).map_err(|error| {
+        MezError::invalid_state(format!(
+            "agent session token usage JSON encoding failed: {error}"
+        ))
+    })
+}
+
+/// Decodes per-model token usage from one stable TSV field.
+fn decode_token_usage_by_model(
+    value: &str,
+) -> Result<BTreeMap<ModelTokenUsageKey, ModelTokenUsage>> {
+    let rows = serde_json::from_str::<serde_json::Value>(value).map_err(|error| {
+        MezError::invalid_args(format!(
+            "agent session token usage JSON is invalid: {error}"
+        ))
+    })?;
+    let Some(rows) = rows.as_array() else {
+        return Err(MezError::invalid_args(
+            "agent session token usage JSON must be an array",
+        ));
+    };
+    let mut usage_by_model = BTreeMap::new();
+    for row in rows {
+        let object = row.as_object().ok_or_else(|| {
+            MezError::invalid_args("agent session token usage row must be an object")
+        })?;
+        let provider = json_string_field(object, "provider")?;
+        let model = json_string_field(object, "model")?;
+        let usage = ModelTokenUsage {
+            input_tokens: json_u64_field(object, "input_tokens")?,
+            output_tokens: json_u64_field(object, "output_tokens")?,
+            reasoning_tokens: json_u64_field(object, "reasoning_tokens")?,
+            cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,
+        };
+        usage_by_model
+            .entry(ModelTokenUsageKey::new(provider, model))
+            .or_insert(ModelTokenUsage::default())
+            .add_assign(usage);
+    }
+    Ok(usage_by_model)
+}
+
+/// Returns a required string field from a JSON object.
+fn json_string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<String> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| MezError::invalid_args(format!("agent session token usage missing {field}")))
+}
+
+/// Returns a required unsigned integer field from a JSON object.
+fn json_u64_field(object: &serde_json::Map<String, serde_json::Value>, field: &str) -> Result<u64> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| MezError::invalid_args(format!("agent session token usage missing {field}")))
+}
+
+/// Returns an optional unsigned integer field from a JSON object.
+fn json_optional_u64_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<u64>> {
+    match object.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
+            MezError::invalid_args(format!(
+                "agent session token usage field {field} must be u64"
+            ))
+        }),
     }
 }
 

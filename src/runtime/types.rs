@@ -14,12 +14,12 @@ use super::{
     HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry,
     McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse,
     MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
-    OpenAiResponsesProvider, OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId,
-    PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path,
-    PathBuf, PathScopes, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage,
-    ReqwestProviderHttpTransport, Result, ScopeRegistry, Session, SessionApprovalStore,
-    SessionMemoryStore, SessionRecord, SessionRegistry, Size, SplitDirection, Stdio,
-    SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
+    ModelTokenUsageKey, OpenAiResponsesProvider, OpenOptions, OsString, PaneExitStatus,
+    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
+    PasteBuffers, Path, PathBuf, PathScopes, PermissionPolicy, ProjectTrustStore,
+    ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, ScopeRegistry, Session,
+    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size, SplitDirection,
+    Stdio, SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
     TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent,
     WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid, encode_control_body,
     encode_event_notification, encode_mmp_body, execute_streamable_http_exchange,
@@ -138,6 +138,8 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) provider_cached_input_tokens: u64,
     /// Accumulated provider input tokens not reported as cache hits.
     pub(super) provider_billed_input_tokens: u64,
+    /// Accumulated provider token usage grouped by provider/model.
+    pub(super) provider_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Number of shell action dispatch attempts that reached dispatch accounting.
     pub(super) shell_action_batches: u64,
     /// Number of shell-backed agent actions dispatched to panes.
@@ -307,6 +309,7 @@ impl RuntimeMetricsSnapshot {
         &mut self,
         response: &ModelResponse,
         latest_usage: ModelTokenUsage,
+        model_key: &ModelTokenUsageKey,
     ) {
         self.provider_responses_succeeded = self.provider_responses_succeeded.saturating_add(1);
         self.provider_response_action_counts.record(
@@ -316,7 +319,7 @@ impl RuntimeMetricsSnapshot {
                 .map(|batch| batch.actions.len() as u64)
                 .unwrap_or(0),
         );
-        self.record_provider_token_usage(response.usage, latest_usage);
+        self.record_provider_token_usage(response.usage, latest_usage, model_key);
     }
 
     /// Records one provider request that failed before yielding a usable response.
@@ -329,6 +332,7 @@ impl RuntimeMetricsSnapshot {
         &mut self,
         usage: ModelTokenUsage,
         latest_usage: ModelTokenUsage,
+        model_key: &ModelTokenUsageKey,
     ) {
         self.provider_input_tokens = self
             .provider_input_tokens
@@ -345,6 +349,12 @@ impl RuntimeMetricsSnapshot {
         self.provider_billed_input_tokens = self
             .provider_billed_input_tokens
             .saturating_add(usage.billed_input_tokens());
+        if !usage.is_zero() {
+            self.provider_token_usage_by_model
+                .entry(model_key.clone())
+                .or_default()
+                .add_assign(usage);
+        }
         self.provider_input_tokens_per_response
             .record(latest_usage.input_tokens);
         self.provider_output_tokens_per_response
@@ -4000,8 +4010,9 @@ pub struct RuntimeSessionService {
     /// Pane-local automatic sizing profile overrides selected through model
     /// presets. Missing entries inherit the configured default.
     pub(super) agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
-    /// Cumulative provider token usage keyed by agent conversation id.
-    pub(super) agent_token_usage_by_conversation: BTreeMap<String, ModelTokenUsage>,
+    /// Cumulative provider token usage keyed by conversation and provider/model.
+    pub(super) agent_token_usage_by_conversation:
+        BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
     /// Latest provider-response input context usage percentage keyed by
     /// conversation id.
     pub(super) agent_context_usage_by_conversation: BTreeMap<String, String>,

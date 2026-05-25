@@ -821,8 +821,13 @@ impl RuntimeSessionService {
                 execution.final_turn
             ),
         )?;
-        self.runtime_metrics
-            .record_provider_response(&execution.response, execution.latest_response_usage);
+        let token_usage_key =
+            ModelTokenUsageKey::new(model_profile.provider.clone(), model_profile.model.clone());
+        self.runtime_metrics.record_provider_response(
+            &execution.response,
+            execution.latest_response_usage,
+            &token_usage_key,
+        );
         self.record_agent_provider_token_usage_with_profile(
             &turn.pane_id,
             execution.response.usage,
@@ -1053,8 +1058,13 @@ impl RuntimeSessionService {
                 execution.final_turn
             ),
         )?;
-        self.runtime_metrics
-            .record_provider_response(&execution.response, execution.latest_response_usage);
+        let token_usage_key =
+            ModelTokenUsageKey::new(model_profile.provider.clone(), model_profile.model.clone());
+        self.runtime_metrics.record_provider_response(
+            &execution.response,
+            execution.latest_response_usage,
+            &token_usage_key,
+        );
         self.record_agent_provider_token_usage_with_profile(
             &turn.pane_id,
             execution.response.usage,

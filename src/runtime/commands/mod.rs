@@ -38,9 +38,9 @@ use super::{
 use crate::agent::{
     AgentActionPayload, AllowedActionSet, AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
-    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
-    ReqwestProviderHttpTransport, append_mcp_context, model_context_text_word_count,
-    openai_default_reasoning_levels_for_model,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderCapabilities, ProviderModelCatalog,
+    ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport, append_mcp_context,
+    model_context_text_word_count, openai_default_reasoning_levels_for_model,
     openai_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
@@ -2959,10 +2959,10 @@ impl RuntimeSessionService {
             .and_then(|turn| self.agent_turn_executions.get(&turn.turn_id))
             .map(|execution| execution.request.messages.len())
             .unwrap_or(0);
-        let token_usage = self
+        let token_usage_by_model = self
             .agent_token_usage_by_conversation
             .get(&session.session_id)
-            .copied()
+            .cloned()
             .unwrap_or_default();
         let running_turn = session
             .running_turn_id
@@ -3052,16 +3052,7 @@ impl RuntimeSessionService {
             ],
             vec![
                 "Provider tokens".to_string(),
-                format!(
-                    "input={} raw_input={} output={} reasoning={} cached_input={} cache_hit={} total={}",
-                    token_usage.billed_input_tokens(),
-                    token_usage.input_tokens,
-                    token_usage.output_tokens,
-                    token_usage.reasoning_tokens,
-                    token_usage.cached_input_tokens_display(),
-                    token_usage.cached_input_hit_ratio_display(),
-                    token_usage.total_tokens()
-                ),
+                Self::runtime_agent_provider_token_usage_summary(&token_usage_by_model),
             ],
             vec![
                 "Latest turn".to_string(),
@@ -3070,6 +3061,24 @@ impl RuntimeSessionService {
         ];
         let mut lines = vec!["## Agent Status".to_string(), String::new()];
         lines.extend(runtime_markdown_table(&["Field", "Value"], &rows));
+        if !token_usage_by_model.is_empty() {
+            lines.push(String::new());
+            lines.push("### Provider Token Usage".to_string());
+            lines.extend(runtime_markdown_table(
+                &[
+                    "Provider",
+                    "Model",
+                    "Input",
+                    "Raw input",
+                    "Output",
+                    "Reasoning",
+                    "Cached input",
+                    "Cache hit",
+                    "Total",
+                ],
+                &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
+            ));
+        }
         if !active_scopes.is_empty() {
             let scope_rows = active_scopes
                 .into_iter()
@@ -3090,6 +3099,63 @@ impl RuntimeSessionService {
             ));
         }
         Ok(lines.join("\n"))
+    }
+
+    /// Returns the compact `/status` summary for per-model provider tokens.
+    fn runtime_agent_provider_token_usage_summary(
+        usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) -> String {
+        match usage_by_model.len() {
+            0 => "none".to_string(),
+            1 => usage_by_model
+                .iter()
+                .next()
+                .map(|(key, usage)| {
+                    format!(
+                        "{}: {}",
+                        key.display_name(),
+                        Self::runtime_agent_provider_token_usage_metrics(*usage)
+                    )
+                })
+                .unwrap_or_else(|| "none".to_string()),
+            count => format!("{count} models; see Provider Token Usage"),
+        }
+    }
+
+    /// Builds markdown table rows for per-model provider token accounting.
+    fn runtime_agent_provider_token_usage_rows(
+        usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) -> Vec<Vec<String>> {
+        usage_by_model
+            .iter()
+            .map(|(key, usage)| {
+                vec![
+                    key.provider.clone(),
+                    key.model.clone(),
+                    usage.billed_input_tokens().to_string(),
+                    usage.input_tokens.to_string(),
+                    usage.output_tokens.to_string(),
+                    usage.reasoning_tokens.to_string(),
+                    usage.cached_input_tokens_display(),
+                    usage.cached_input_hit_ratio_display(),
+                    usage.total_tokens().to_string(),
+                ]
+            })
+            .collect()
+    }
+
+    /// Formats one provider/model token usage value for compact displays.
+    fn runtime_agent_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
+        format!(
+            "input={} raw_input={} output={} reasoning={} cached_input={} cache_hit={} total={}",
+            usage.billed_input_tokens(),
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.reasoning_tokens,
+            usage.cached_input_tokens_display(),
+            usage.cached_input_hit_ratio_display(),
+            usage.total_tokens()
+        )
     }
 
     /// Moves the current terminal view into history and clears the viewport.

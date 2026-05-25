@@ -94,6 +94,50 @@ enum DeepSeekMaapRequestStrategy {
     ForcedToolNonThinking,
 }
 
+/// Stable provider/model identity for token-cost accounting.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ModelTokenUsageKey {
+    /// Provider id that served the request.
+    pub provider: String,
+    /// Provider model id that served the request.
+    pub model: String,
+}
+
+impl ModelTokenUsageKey {
+    /// Builds a normalized provider/model token-accounting key.
+    ///
+    /// Empty values are retained as `unknown` so accounting can still be
+    /// grouped when a legacy call path lacks exact profile metadata.
+    pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        Self {
+            provider: non_empty_or_unknown(provider),
+            model: non_empty_or_unknown(model),
+        }
+    }
+
+    /// Builds the fallback key used for legacy aggregate-only metadata.
+    pub fn unknown() -> Self {
+        Self::new("unknown", "unknown")
+    }
+
+    /// Returns a compact display label for provider/model usage tables.
+    pub fn display_name(&self) -> String {
+        format!("{} via {}", self.model, self.provider)
+    }
+}
+
+/// Returns a normalized provider/model identity component.
+fn non_empty_or_unknown(value: String) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Provider-reported token usage for one or more model requests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ModelTokenUsage {

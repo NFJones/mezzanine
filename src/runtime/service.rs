@@ -18,14 +18,14 @@ use super::{
     DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredProjectConfigWrite,
     DeferredProjectInstructionWrite, EventKind, EventLog, FocusedShellHookQueue, HostClipboard,
     KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan,
-    MemoryRecord, MessageService, MezError, ModelProfile, PaneProcessManager,
-    PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf, PermissionAuthorityChange,
-    PermissionPolicy, ProjectTrustStore, Result, RuntimeConfigApplyReport,
-    RuntimeHttpMcpTransportState, RuntimeLifecycleState, RuntimeMcpRetryReport,
-    RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore, RuntimePresetRegistry,
-    RuntimeProviderConfig, RuntimeProviderRegistry, RuntimeRegistryUpdatePlan,
-    RuntimeSessionService, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
-    SessionRegistry, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
+    MemoryRecord, MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
+    PaneProcessManager, PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf,
+    PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, Result,
+    RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
+    RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
+    RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, ScopeRegistry, Session, SessionApprovalStore,
+    SessionMemoryStore, SessionRegistry, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
     agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
     discover_existing_overlays, discover_project_root, discover_streamable_http_mcp_server,
@@ -61,6 +61,30 @@ use super::{
 };
 
 // RuntimeSessionService construction, accessors, and live config application.
+
+/// Returns persisted per-model token accounting with legacy aggregate fallback.
+fn runtime_agent_token_usage_by_model_from_metadata(
+    metadata: &AgentSessionMetadata,
+) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+    if !metadata.token_usage_by_model.is_empty() {
+        return metadata.token_usage_by_model.clone();
+    }
+    if metadata.token_usage.is_zero() {
+        return BTreeMap::new();
+    }
+    BTreeMap::from([(ModelTokenUsageKey::unknown(), metadata.token_usage)])
+}
+
+/// Aggregates per-model token accounting for legacy metadata readers.
+fn runtime_agent_total_token_usage_by_model(
+    usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+) -> ModelTokenUsage {
+    let mut total = ModelTokenUsage::default();
+    for usage in usage_by_model.values() {
+        total.add_assign(*usage);
+    }
+    total
+}
 
 impl RuntimeSessionService {
     /// Runs the new operation for this subsystem.
@@ -1828,12 +1852,13 @@ impl RuntimeSessionService {
                 self.pane_current_working_directories
                     .insert(metadata.pane_id.clone(), PathBuf::from(working_directory));
             }
-            if metadata.token_usage.is_zero() {
+            let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
+            if token_usage_by_model.is_empty() {
                 self.agent_token_usage_by_conversation
                     .remove(&metadata.conversation_id);
             } else {
                 self.agent_token_usage_by_conversation
-                    .insert(metadata.conversation_id.clone(), metadata.token_usage);
+                    .insert(metadata.conversation_id.clone(), token_usage_by_model);
             }
             self.record_pane_transcript_ref(
                 &metadata.pane_id,
@@ -1902,6 +1927,11 @@ impl RuntimeSessionService {
                     .as_deref()
                     .map(PathBuf::from)
                     .map(|path| discover_project_root(&path).to_string_lossy().into_owned());
+                let token_usage_by_model = self
+                    .agent_token_usage_by_conversation
+                    .get(&session.session_id)
+                    .cloned()
+                    .unwrap_or_default();
                 AgentSessionMetadata {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
@@ -1924,11 +1954,8 @@ impl RuntimeSessionService {
                         .map(ToOwned::to_owned),
                     working_directory,
                     project_root,
-                    token_usage: self
-                        .agent_token_usage_by_conversation
-                        .get(&session.session_id)
-                        .copied()
-                        .unwrap_or_default(),
+                    token_usage: runtime_agent_total_token_usage_by_model(&token_usage_by_model),
+                    token_usage_by_model,
                     context_usage: self
                         .agent_context_usage_by_conversation
                         .get(&session.session_id)
@@ -1969,12 +1996,13 @@ impl RuntimeSessionService {
                 metadata.approval_policy.as_deref(),
                 "agent-session-resume",
             )?;
-            if metadata.token_usage.is_zero() {
+            let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
+            if token_usage_by_model.is_empty() {
                 self.agent_token_usage_by_conversation
                     .remove(conversation_id);
             } else {
                 self.agent_token_usage_by_conversation
-                    .insert(conversation_id.to_string(), metadata.token_usage);
+                    .insert(conversation_id.to_string(), token_usage_by_model);
             }
             if let Some(context_usage) = metadata.context_usage {
                 self.agent_context_usage_by_conversation

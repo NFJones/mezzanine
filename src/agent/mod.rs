@@ -127,7 +127,7 @@ pub use provider::{
     AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER,
     CHATGPT_RESPONSES_ENDPOINT, DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS,
-    DeepSeekChatCompletionsProvider, ModelResponse, ModelTokenUsage,
+    DeepSeekChatCompletionsProvider, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
     OpenAiPromptCacheDiagnostics, OpenAiResponsesProvider, ProviderCapabilities,
     ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog, ProviderModelInfo,

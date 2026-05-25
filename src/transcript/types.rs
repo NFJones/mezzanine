@@ -4,7 +4,8 @@
 //! filesystem-backed store handle. Encoding and I/O behavior live in sibling
 //! modules.
 
-use crate::agent::ModelTokenUsage;
+use crate::agent::{ModelTokenUsage, ModelTokenUsageKey};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Role associated with one transcript entry.
@@ -122,6 +123,8 @@ pub struct AgentSessionMetadata {
     pub project_root: Option<String>,
     /// Provider-reported token usage accumulated for this conversation.
     pub token_usage: ModelTokenUsage,
+    /// Provider-reported token usage accumulated per provider/model.
+    pub token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Last provider-reported context usage label shown in pane status.
     pub context_usage: Option<String>,
 }
