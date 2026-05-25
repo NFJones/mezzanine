@@ -221,14 +221,9 @@ fn runtime_agent_execution_prompt_display_lines(
         }
         AgentTurnState::Completed => {}
         AgentTurnState::Failed => {
-            lines.extend(
-                execution
-                    .response
-                    .raw_text
-                    .lines()
-                    .take(200)
-                    .map(ToOwned::to_owned),
-            );
+            lines.extend(runtime_agent_failed_execution_prompt_display_lines(
+                execution,
+            ));
         }
         AgentTurnState::Blocked => {
             lines.push("agent: blocked pending approval".to_string());
@@ -239,4 +234,115 @@ fn runtime_agent_execution_prompt_display_lines(
         AgentTurnState::Queued | AgentTurnState::Interrupted => {}
     }
     lines
+}
+
+/// Returns prompt display lines for a failed provider execution.
+fn runtime_agent_failed_execution_prompt_display_lines(
+    execution: &AgentTurnExecution,
+) -> Vec<String> {
+    let failure = runtime_agent_execution_failure_error(execution);
+    let mut lines = vec![format!("agent: failure: {}", failure.message())];
+    lines.extend(
+        execution
+            .response
+            .raw_text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .filter(|line| !runtime_agent_failed_execution_raw_text_is_placeholder(execution, line))
+            .take(200)
+            .map(ToOwned::to_owned),
+    );
+    lines
+}
+
+/// Returns true when provider raw text is only an internal execution marker.
+fn runtime_agent_failed_execution_raw_text_is_placeholder(
+    execution: &AgentTurnExecution,
+    line: &str,
+) -> bool {
+    line == "executing"
+        && (execution.response.action_batch.is_some()
+            || !execution.response.provider_transcript_events.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies failed DeepSeek tool-call turns display the action failure
+    /// diagnostic instead of the provider's `executing` placeholder.
+    ///
+    /// DeepSeek responses with only tool calls use `executing` as local
+    /// fallback raw text. If a later action result fails, the prompt footer must
+    /// show the failed action diagnostic so users can see why the turn stopped.
+    #[test]
+    fn failed_deepseek_execution_prompt_shows_action_error_not_executing_placeholder() {
+        let execution = AgentTurnExecution {
+            request: crate::agent::ModelRequest {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                reasoning_effort: Some("high".to_string()),
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                prompt_cache_session_id: None,
+                turn_id: "turn-2".to_string(),
+                agent_id: "agent-1".to_string(),
+                available_mcp_tools: Vec::new(),
+                interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+                allowed_actions: crate::agent::AllowedActionSet::action_execution_base(),
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+                raw_text: "executing".to_string(),
+                usage: Default::default(),
+                quota_usage: Vec::new(),
+                action_batch: Some(MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect the target files".to_string(),
+                    thought: None,
+                    turn_id: "turn-2".to_string(),
+                    agent_id: "agent-1".to_string(),
+                    actions: Vec::new(),
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            action_results: vec![ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: "turn-2".to_string(),
+                agent_id: "agent-1".to_string(),
+                action_id: "a1".to_string(),
+                action_type: "shell_command",
+                status: ActionStatus::Failed,
+                content: vec![crate::agent::ActionContentBlock::text(
+                    "shell command failed",
+                )],
+                structured_content_json: None,
+                is_error: true,
+                error: Some(crate::agent::ActionError {
+                    code: "shell_failed".to_string(),
+                    message: "command exited with status 1".to_string(),
+                    data_json: None,
+                }),
+            }],
+            final_turn: false,
+            terminal_state: AgentTurnState::Failed,
+        };
+
+        let lines =
+            runtime_agent_execution_prompt_display_lines("turn-2", "deepseek", &execution, 0, 5);
+
+        assert!(lines.contains(&"agent: turn turn-2 failed".to_string()));
+        assert!(lines.contains(&"agent: provider deepseek responded".to_string()));
+        assert!(lines.contains(&"agent: recorded 5 transcript entries".to_string()));
+        assert!(lines.contains(
+            &"agent: failure: agent action shell_failed: command exited with status 1".to_string(),
+        ));
+        assert!(!lines.iter().any(|line| line == "executing"));
+    }
 }
