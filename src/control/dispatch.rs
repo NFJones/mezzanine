@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::registry::{ControlDispatchKind, ControlParamsSchema, control_method_spec};
 use super::snapshot::require_session_target_matches;
 use super::{
     AgentShellStore, AgentTurnLedger, AuditLog, AuthenticationMaterial, AuthenticationMechanism,
@@ -1200,14 +1201,20 @@ pub(super) fn dispatch_parsed_request(
     mcp_registry: Option<&McpRegistry>,
 ) -> Result<String> {
     validate_control_method_params_schema(request)?;
-    match request.method.as_str() {
-        "control/initialize" => {
+    let Some(method_spec) = control_method_spec(&request.method) else {
+        return Err(MezError::not_implemented(format!(
+            "unknown control method `{}`",
+            request.method
+        )));
+    };
+    match method_spec.dispatch {
+        ControlDispatchKind::ControlInitialize => {
             let mut connection = ControlConnectionState::new(true, true);
             let init = initialize_control_connection(request, session, &mut connection)?;
             Ok(initialize_result_json(&init))
         }
-        "control/shutdown" => Ok(r#"{"closed":true}"#.to_string()),
-        "control/cancel" => {
+        ControlDispatchKind::ControlShutdown => Ok(r#"{"closed":true}"#.to_string()),
+        ControlDispatchKind::ControlCancel => {
             let params = request
                 .params
                 .as_deref()
@@ -1216,33 +1223,33 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("control/cancel requires request_id"))?;
             Ok(r#"{"cancel_requested":false}"#.to_string())
         }
-        "session/attach" => dispatch_session_attach_parsed(request, session),
-        "session/list" => Ok(format!(
+        ControlDispatchKind::SessionAttach => dispatch_session_attach_parsed(request, session),
+        ControlDispatchKind::SessionList => Ok(format!(
             r#"{{"sessions":[{}]}}"#,
             session_summary_json(session)
         )),
-        "session/get" => Ok(format!(
+        ControlDispatchKind::SessionGet => Ok(format!(
             r#"{{"session":{}}}"#,
             session_state_json_for_params(session, request.params.as_deref())?
         )),
-        "window/list" => Ok(format!(
+        ControlDispatchKind::WindowList => Ok(format!(
             r#"{{"windows":{}}}"#,
             windows_json_for_params(session, request.params.as_deref())?
         )),
-        "pane/list" => Ok(format!(
+        ControlDispatchKind::PaneList => Ok(format!(
             r#"{{"panes":{}}}"#,
             panes_json_for_params(session, request.params.as_deref())?
         )),
-        "frame/read" => frame_read_json(session, request.params.as_deref()),
-        "client/list" => Ok(format!(
+        ControlDispatchKind::FrameRead => frame_read_json(session, request.params.as_deref()),
+        ControlDispatchKind::ClientList => Ok(format!(
             r#"{{"clients":{}}}"#,
             clients_json_for_params(session, request.params.as_deref())?
         )),
-        "observer/list" => Ok(format!(
+        ControlDispatchKind::ObserverList => Ok(format!(
             r#"{{"observers":{}}}"#,
             observers_json_for_params(session, request.params.as_deref())?
         )),
-        "observer/inspect" => {
+        ControlDispatchKind::ObserverInspect => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("observer/inspect requires a params object")
             })?;
@@ -1255,7 +1262,7 @@ pub(super) fn dispatch_parsed_request(
                 observer_json(session, &observer_id)?
             ))
         }
-        "window/create" => {
+        ControlDispatchKind::WindowCreate => {
             let params = request
                 .params
                 .as_deref()
@@ -1277,7 +1284,7 @@ pub(super) fn dispatch_parsed_request(
                 pane_state_json(session, window, pane)
             ))
         }
-        "window/rename" => {
+        ControlDispatchKind::WindowRename => {
             let params = request
                 .params
                 .as_deref()
@@ -1294,7 +1301,7 @@ pub(super) fn dispatch_parsed_request(
                 window_state_json(session, window)
             ))
         }
-        "window/select" => {
+        ControlDispatchKind::WindowSelect => {
             let params = request
                 .params
                 .as_deref()
@@ -1311,7 +1318,7 @@ pub(super) fn dispatch_parsed_request(
                 json_escape(&active.id.to_string())
             ))
         }
-        "window/close" => {
+        ControlDispatchKind::WindowClose => {
             let params = request
                 .params
                 .as_deref()
@@ -1322,7 +1329,7 @@ pub(super) fn dispatch_parsed_request(
             session.kill_window(primary_client_id, target.as_deref(), force)?;
             Ok(r#"{"closed":true}"#.to_string())
         }
-        "pane/create" => {
+        ControlDispatchKind::PaneCreate => {
             let params = request
                 .params
                 .as_deref()
@@ -1358,7 +1365,7 @@ pub(super) fn dispatch_parsed_request(
                 layout_state_json(window)
             ))
         }
-        "pane/select" => {
+        ControlDispatchKind::PaneSelect => {
             let params = request
                 .params
                 .as_deref()
@@ -1376,7 +1383,7 @@ pub(super) fn dispatch_parsed_request(
                 json_escape(&pane.id.to_string())
             ))
         }
-        "pane/resize" => {
+        ControlDispatchKind::PaneResize => {
             let params = request
                 .params
                 .as_deref()
@@ -1395,7 +1402,7 @@ pub(super) fn dispatch_parsed_request(
                     .unwrap_or_else(|| "null".to_string())
             ))
         }
-        "pane/swap" => {
+        ControlDispatchKind::PaneSwap => {
             let params = request
                 .params
                 .as_deref()
@@ -1410,7 +1417,7 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
             Ok(format!(r#"{{"layout":{}}}"#, layout_state_json(window)))
         }
-        "pane/break" => {
+        ControlDispatchKind::PaneBreak => {
             let params = request
                 .params
                 .as_deref()
@@ -1427,7 +1434,7 @@ pub(super) fn dispatch_parsed_request(
                 pane_state_json(session, window, pane)
             ))
         }
-        "pane/join" | "pane/move" => {
+        ControlDispatchKind::PaneJoinMove => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args(format!("{} requires a params object", request.method))
             })?;
@@ -1456,7 +1463,7 @@ pub(super) fn dispatch_parsed_request(
                 layout_state_json(window)
             ))
         }
-        "pane/close" => {
+        ControlDispatchKind::PaneClose => {
             let params = request
                 .params
                 .as_deref()
@@ -1467,9 +1474,11 @@ pub(super) fn dispatch_parsed_request(
             session.kill_pane(primary_client_id, target.as_deref(), force)?;
             Ok(r#"{"closed":true}"#.to_string())
         }
-        "pane/capture" => dispatch_pane_capture_request(request, session, &[]),
-        "terminal/view" => Err(MezError::invalid_state("terminal runtime is not attached")),
-        "terminal/step" => {
+        ControlDispatchKind::PaneCapture => dispatch_pane_capture_request(request, session, &[]),
+        ControlDispatchKind::TerminalView => {
+            Err(MezError::invalid_state("terminal runtime is not attached"))
+        }
+        ControlDispatchKind::TerminalStep => {
             let params = request
                 .params
                 .as_deref()
@@ -1477,7 +1486,7 @@ pub(super) fn dispatch_parsed_request(
             require_idempotency_key(params)?;
             Err(MezError::invalid_state("terminal runtime is not attached"))
         }
-        "terminal/command" => {
+        ControlDispatchKind::TerminalCommand => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("terminal/command requires a params object")
             })?;
@@ -1486,7 +1495,7 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("terminal/command requires input"))?;
             Err(MezError::invalid_state("terminal runtime is not attached"))
         }
-        "session/rename" => {
+        ControlDispatchKind::SessionRename => {
             let params = request
                 .params
                 .as_deref()
@@ -1497,7 +1506,7 @@ pub(super) fn dispatch_parsed_request(
             session.rename_session(primary_client_id, name)?;
             Ok(r#"{"renamed":true}"#.to_string())
         }
-        "session/kill" => {
+        ControlDispatchKind::SessionKill => {
             let params = request
                 .params
                 .as_deref()
@@ -1507,7 +1516,7 @@ pub(super) fn dispatch_parsed_request(
             session.kill_session(primary_client_id, force)?;
             Ok(r#"{"killed":true}"#.to_string())
         }
-        "client/detach" => {
+        ControlDispatchKind::ClientDetach => {
             let params = request
                 .params
                 .as_deref()
@@ -1518,7 +1527,7 @@ pub(super) fn dispatch_parsed_request(
             session.detach_client_target(primary_client_id, &client_id)?;
             Ok(r#"{"detached":true}"#.to_string())
         }
-        "client/select_primary" => {
+        ControlDispatchKind::ClientSelectPrimary => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("client/select_primary requires a params object")
             })?;
@@ -1532,7 +1541,7 @@ pub(super) fn dispatch_parsed_request(
                 json_escape(&selected.to_string())
             ))
         }
-        "observer/approve" => {
+        ControlDispatchKind::ObserverApprove => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("observer/approve requires a params object")
             })?;
@@ -1547,7 +1556,7 @@ pub(super) fn dispatch_parsed_request(
                 observer_json(session, &observer_id)?
             ))
         }
-        "observer/reject" => {
+        ControlDispatchKind::ObserverReject => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("observer/reject requires a params object")
             })?;
@@ -1563,7 +1572,7 @@ pub(super) fn dispatch_parsed_request(
                 observer_json(session, &observer_id)?
             ))
         }
-        "observer/revoke" => {
+        ControlDispatchKind::ObserverRevoke => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("observer/revoke requires a params object")
             })?;
@@ -1574,15 +1583,15 @@ pub(super) fn dispatch_parsed_request(
             session.revoke_observer_client_with_reason(primary_client_id, &client_id, reason)?;
             Ok(r#"{"revoked":true}"#.to_string())
         }
-        "agent/list" => Ok(format!(
+        ControlDispatchKind::AgentList => Ok(format!(
             r#"{{"agents":{}}}"#,
             agents_json_for_params(session, request.params.as_deref())?
         )),
-        "agent/task/list" => {
+        ControlDispatchKind::AgentTaskList => {
             validate_agent_task_list_params(session, request.params.as_deref())?;
             Ok(r#"{"tasks":[]}"#.to_string())
         }
-        "agent/spawn" => {
+        ControlDispatchKind::AgentSpawn => {
             let params = request
                 .params
                 .as_deref()
@@ -1619,21 +1628,20 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("agent/spawn requires prompt"))?;
             Err(MezError::invalid_state("agent runtime is not attached"))
         }
-        "agent/shell/show" | "agent/shell/hide" => {
+        ControlDispatchKind::AgentShellVisibility { visible } => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args(format!("{} requires a params object", request.method))
             })?;
             require_idempotency_key(params)?;
             let target = pane_target_checked_resolved(session, params)?;
             let (window, pane) = target_or_active_pane(session, target.as_deref())?;
-            let visible = request.method == "agent/shell/show";
             Ok(format!(
                 r#"{{"agent":{},"visible":{}}}"#,
                 agent_state_json(session.id.as_str(), window, pane, visible),
                 visible
             ))
         }
-        "agent/shell/command" => {
+        ControlDispatchKind::AgentShellCommand => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("agent/shell/command requires a params object")
             })?;
@@ -1647,18 +1655,18 @@ pub(super) fn dispatch_parsed_request(
                 None,
             ))
         }
-        "event/list" => {
+        ControlDispatchKind::EventList => {
             let event_log = EventLog::new(MAX_EVENT_REPLAY_RETENTION, 1_048_576)?;
             dispatch_event_list_request(request, session, primary_client_id, &event_log)
         }
-        "approval/list" => {
+        ControlDispatchKind::ApprovalList => {
             let approval_queue = BlockedApprovalQueue::default();
             Ok(format!(
                 r#"{{"approvals":{}}}"#,
                 approvals_json_for_params(session, &approval_queue, request.params.as_deref())?
             ))
         }
-        "approval/decide" => {
+        ControlDispatchKind::ApprovalDecide => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("approval/decide requires a params object")
             })?;
@@ -1681,7 +1689,7 @@ pub(super) fn dispatch_parsed_request(
             )?;
             Ok(format!(r#"{{"approval":{}}}"#, approval_json(approval)))
         }
-        "snapshot/list" => {
+        ControlDispatchKind::SnapshotList => {
             nullable_state_request_session_target_matches(
                 session,
                 request.params.as_deref(),
@@ -1689,7 +1697,7 @@ pub(super) fn dispatch_parsed_request(
             )?;
             Ok(r#"{"snapshots":[]}"#.to_string())
         }
-        "snapshot/create" => {
+        ControlDispatchKind::SnapshotCreate => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("snapshot/create requires a params object")
             })?;
@@ -1701,7 +1709,7 @@ pub(super) fn dispatch_parsed_request(
                 "snapshot repository is not configured",
             ))
         }
-        "snapshot/resume" | "snapshot/delete" => {
+        ControlDispatchKind::SnapshotResume | ControlDispatchKind::SnapshotDelete => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args(format!("{} requires a params object", request.method))
             })?;
@@ -1713,14 +1721,14 @@ pub(super) fn dispatch_parsed_request(
                 "snapshot repository is not configured",
             ))
         }
-        "project/trust/list" => {
+        ControlDispatchKind::ProjectTrustList => {
             project_trust_state_filter_from_params(
                 request.params.as_deref(),
                 "project/trust/list params",
             )?;
             Ok(r#"{"projects":[]}"#.to_string())
         }
-        "project/trust/inspect" => {
+        ControlDispatchKind::ProjectTrustInspect => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("project/trust/inspect requires a params object")
             })?;
@@ -1732,7 +1740,7 @@ pub(super) fn dispatch_parsed_request(
                 "project not found",
             ))
         }
-        "project/trust/decide" => {
+        ControlDispatchKind::ProjectTrustDecide => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("project/trust/decide requires a params object")
             })?;
@@ -1749,7 +1757,7 @@ pub(super) fn dispatch_parsed_request(
                 "project trust store is not configured",
             ))
         }
-        "project/trust/revoke" => {
+        ControlDispatchKind::ProjectTrustRevoke => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("project/trust/revoke requires a params object")
             })?;
@@ -1761,7 +1769,7 @@ pub(super) fn dispatch_parsed_request(
                 "project trust store is not configured",
             ))
         }
-        "mcp/list" => {
+        ControlDispatchKind::McpList => {
             nullable_state_request_session_target_matches(
                 session,
                 request.params.as_deref(),
@@ -1775,7 +1783,7 @@ pub(super) fn dispatch_parsed_request(
                 mcp_tools_json(registry)
             ))
         }
-        "mcp/retry" => {
+        ControlDispatchKind::McpRetry => {
             let params = request
                 .params
                 .as_deref()
@@ -1786,11 +1794,7 @@ pub(super) fn dispatch_parsed_request(
                 .ok_or_else(|| MezError::invalid_args("mcp/retry requires server_id"))?;
             Err(MezError::invalid_state("MCP runtime is not attached"))
         }
-        method if is_config_control_method(method) => dispatch_config_parsed_request(request, &[]),
-        _ => Err(MezError::not_implemented(format!(
-            "unknown control method `{}`",
-            request.method
-        ))),
+        ControlDispatchKind::Config => dispatch_config_parsed_request(request, &[]),
     }
 }
 
@@ -1801,253 +1805,17 @@ pub(super) fn dispatch_parsed_request(
 /// on duplicated control-flow logic.
 pub(crate) fn validate_control_method_params_schema(request: &JsonRpcRequest) -> Result<()> {
     let params = request.params.as_deref().unwrap_or("{}");
-    match request.method.as_str() {
-        "control/initialize" => Ok(()),
-        "control/shutdown" | "session/list" => {
-            reject_unknown_json_fields(params, &format!("{} params", request.method), &[])
-        }
-        "control/cancel" => {
-            reject_unknown_json_fields(params, "control/cancel params", &["request_id"])
-        }
-        "session/attach" => reject_unknown_json_fields(
-            params,
-            "session/attach params",
-            &["target", "role", "client", "idempotency_key"],
-        ),
-        "session/get" => reject_unknown_json_fields(params, "session/get params", &["target"]),
-        "session/rename" => reject_unknown_json_fields(
-            params,
-            "session/rename params",
-            &["name", "idempotency_key"],
-        ),
-        "session/kill" => {
-            reject_unknown_json_fields(params, "session/kill params", &["force", "idempotency_key"])
-        }
-        "client/list" | "window/list" | "pane/list" => {
-            reject_unknown_json_fields(params, &format!("{} params", request.method), &["target"])
-        }
-        "client/detach" | "client/select_primary" => reject_unknown_json_fields(
+    let Some(method_spec) = control_method_spec(&request.method) else {
+        return Ok(());
+    };
+    match method_spec.params_schema {
+        ControlParamsSchema::Unchecked => Ok(()),
+        ControlParamsSchema::Allowed(allowed_fields) => reject_unknown_json_fields(
             params,
             &format!("{} params", request.method),
-            &["client_id", "idempotency_key"],
+            allowed_fields,
         ),
-        "observer/list" => {
-            reject_unknown_json_fields(params, "observer/list params", &["target", "state"])
-        }
-        "observer/inspect" => {
-            reject_unknown_json_fields(params, "observer/inspect params", &["observer_request_id"])
-        }
-        "observer/approve" => reject_unknown_json_fields(
-            params,
-            "observer/approve params",
-            &["observer_request_id", "idempotency_key"],
-        ),
-        "observer/reject" => reject_unknown_json_fields(
-            params,
-            "observer/reject params",
-            &["observer_request_id", "reason", "idempotency_key"],
-        ),
-        "observer/revoke" => reject_unknown_json_fields(
-            params,
-            "observer/revoke params",
-            &["client_id", "reason", "idempotency_key"],
-        ),
-        "window/create" => reject_unknown_json_fields(
-            params,
-            "window/create params",
-            &[
-                "target",
-                "name",
-                "start_directory",
-                "shell_command",
-                "select",
-                "idempotency_key",
-            ],
-        ),
-        "window/rename" | "window/select" | "window/close" => reject_unknown_json_fields(
-            params,
-            &format!("{} params", request.method),
-            &[
-                "target",
-                "window_id",
-                "window_name",
-                "window_index",
-                "name",
-                "force",
-                "idempotency_key",
-            ],
-        ),
-        "pane/create" => reject_unknown_json_fields(
-            params,
-            "pane/create params",
-            &[
-                "target",
-                "pane_id",
-                "pane_title",
-                "pane_index",
-                "split",
-                "start_directory",
-                "shell_command",
-                "size",
-                "select",
-                "idempotency_key",
-            ],
-        ),
-        "pane/select" | "pane/resize" | "pane/break" | "pane/close" | "pane/capture" => {
-            reject_unknown_json_fields(
-                params,
-                &format!("{} params", request.method),
-                &[
-                    "target",
-                    "pane_id",
-                    "pane_title",
-                    "pane_index",
-                    "size",
-                    "name",
-                    "force",
-                    "range",
-                    "include_history",
-                    "idempotency_key",
-                ],
-            )
-        }
-        "pane/swap" | "pane/join" | "pane/move" => reject_unknown_json_fields(
-            params,
-            &format!("{} params", request.method),
-            &[
-                "source",
-                "source_pane_id",
-                "target",
-                "pane_id",
-                "pane_title",
-                "pane_index",
-                "destination",
-                "destination_pane_id",
-                "destination_window_id",
-                "position",
-                "idempotency_key",
-            ],
-        ),
-        "frame/read" => reject_unknown_json_fields(
-            params,
-            "frame/read params",
-            &[
-                "target",
-                "window_id",
-                "window_name",
-                "window_index",
-                "pane_id",
-                "pane_title",
-                "pane_index",
-            ],
-        ),
-        "terminal/view" => reject_unknown_json_fields(
-            params,
-            "terminal/view params",
-            &["client_size", "view_offset", "viewport"],
-        ),
-        "terminal/step" => reject_unknown_json_fields(
-            params,
-            "terminal/step params",
-            &["idempotency_key", "client_size", "render", "input_bytes"],
-        ),
-        "terminal/command" => reject_unknown_json_fields(
-            params,
-            "terminal/command params",
-            &["idempotency_key", "input"],
-        ),
-        "agent/list" => reject_unknown_json_fields(params, "agent/list params", &["target"]),
-        "agent/task/list" => reject_unknown_json_fields(
-            params,
-            "agent/task/list params",
-            &["target", "agent_id", "pane_id"],
-        ),
-        "agent/spawn" => reject_unknown_json_fields(
-            params,
-            "agent/spawn params",
-            &[
-                "parent_agent",
-                "placement",
-                "role",
-                "cooperation_mode",
-                "read_scopes",
-                "write_scopes",
-                "prompt",
-                "idempotency_key",
-            ],
-        ),
-        "agent/shell/show" | "agent/shell/hide" => reject_unknown_json_fields(
-            params,
-            &format!("{} params", request.method),
-            &[
-                "target",
-                "pane_id",
-                "pane_title",
-                "pane_index",
-                "idempotency_key",
-            ],
-        ),
-        "agent/shell/command" => reject_unknown_json_fields(
-            params,
-            "agent/shell/command params",
-            &["input", "idempotency_key"],
-        ),
-        "mcp/list" => reject_unknown_json_fields(params, "mcp/list params", &["target"]),
-        "mcp/retry" => reject_unknown_json_fields(
-            params,
-            "mcp/retry params",
-            &["server_id", "id", "idempotency_key"],
-        ),
-        "approval/list" => {
-            reject_unknown_json_fields(params, "approval/list params", &["target", "state"])
-        }
-        "approval/decide" => reject_unknown_json_fields(
-            params,
-            "approval/decide params",
-            &[
-                "approval_id",
-                "decision",
-                "scope",
-                "instruction",
-                "idempotency_key",
-            ],
-        ),
-        "snapshot/list" => reject_unknown_json_fields(params, "snapshot/list params", &["target"]),
-        "snapshot/create" => reject_unknown_json_fields(
-            params,
-            "snapshot/create params",
-            &["target", "name", "idempotency_key"],
-        ),
-        "snapshot/resume" => reject_unknown_json_fields(
-            params,
-            "snapshot/resume params",
-            &["snapshot_id", "idempotency_key"],
-        ),
-        "snapshot/delete" => reject_unknown_json_fields(
-            params,
-            "snapshot/delete params",
-            &["snapshot_id", "idempotency_key"],
-        ),
-        "project/trust/list" => {
-            reject_unknown_json_fields(params, "project/trust/list params", &["state"])
-        }
-        "project/trust/inspect" => {
-            reject_unknown_json_fields(params, "project/trust/inspect params", &["project_root"])
-        }
-        "project/trust/decide" => reject_unknown_json_fields(
-            params,
-            "project/trust/decide params",
-            &["project_root", "decision", "reason", "idempotency_key"],
-        ),
-        "project/trust/revoke" => reject_unknown_json_fields(
-            params,
-            "project/trust/revoke params",
-            &["project_root", "reason", "idempotency_key"],
-        ),
-        method if is_config_control_method(method) => {
-            validate_config_control_params_schema(request)
-        }
-        _ => Ok(()),
+        ControlParamsSchema::Config => validate_config_control_params_schema(request),
     }
 }
 

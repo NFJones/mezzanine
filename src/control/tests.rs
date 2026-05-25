@@ -6,6 +6,7 @@
 
 // Control module tests.
 
+use super::registry::control_method_spec;
 use super::types::PRIMARY_CONTROL_METHODS;
 use super::{
     AGENT_CONTROL_METHODS, AUTOMATION_CONTROL_METHODS, AgentShellStore, AgentTurnLedger,
@@ -662,6 +663,20 @@ fn baseline_control_methods_reject_unknown_params_outside_extensions() {
         &primary,
     );
     assert!(accepted.contains(r#""window":"#));
+}
+
+/// Verifies that advertised primary control methods are backed by the shared
+/// method registry that now owns dispatch and schema metadata. This prevents a
+/// future control method from being added to capabilities without a matching
+/// dispatch/schema entry.
+#[test]
+fn advertised_primary_control_methods_have_registry_entries() {
+    for method in PRIMARY_CONTROL_METHODS {
+        assert!(
+            control_method_spec(method).is_some(),
+            "{method} is advertised but missing from the control method registry"
+        );
+    }
 }
 
 /// Verifies that approval control methods use the same unknown-parameter schema

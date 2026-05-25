@@ -74,6 +74,11 @@ mod initialize;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod json;
+/// Exposes the registry module boundary.
+///
+/// The nested module keeps method metadata in one place so dispatch,
+/// validation, and future capability views do not duplicate method strings.
+mod registry;
 /// Exposes the snapshot module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
