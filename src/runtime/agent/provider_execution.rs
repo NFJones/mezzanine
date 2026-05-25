@@ -47,18 +47,20 @@ impl RuntimeSessionService {
         let context = append_mcp_context(context, &mcp_summary)?;
         self.agent_turn_contexts
             .insert(turn_id.to_string(), context.clone());
+        let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
         {
-            let (selected_profile, decision, fallback) =
+            let auto_sizing_execution =
                 runtime_execute_auto_sizing_with_provider(provider, &auto_sizing, &turn, &context);
+            routing_token_usage_by_model = auto_sizing_execution.token_usage_by_model();
             self.record_auto_sizing_outcome(
                 &turn,
-                &selected_profile,
-                decision.as_ref(),
-                fallback.as_deref(),
+                &auto_sizing_execution.selected_profile,
+                auto_sizing_execution.decision.as_ref(),
+                auto_sizing_execution.fallback.as_deref(),
             )?;
-            model_profile = selected_profile;
+            model_profile = auto_sizing_execution.selected_profile;
             self.agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile.clone());
         }
@@ -148,7 +150,7 @@ impl RuntimeSessionService {
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
-        let execution = loop {
+        let mut execution = loop {
             let mut provider_ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider,
@@ -265,6 +267,7 @@ impl RuntimeSessionService {
                 }
             }
         };
+        execution.routing_token_usage_by_model = routing_token_usage_by_model;
         self.apply_agent_provider_execution(
             &turn,
             &model_profile,
@@ -309,18 +312,20 @@ impl RuntimeSessionService {
         let context = append_mcp_context(context, &mcp_summary)?;
         self.agent_turn_contexts
             .insert(turn_id.to_string(), context.clone());
+        let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
         {
-            let (selected_profile, decision, fallback) =
+            let auto_sizing_execution =
                 runtime_execute_auto_sizing_with_provider(provider, &auto_sizing, &turn, &context);
+            routing_token_usage_by_model = auto_sizing_execution.token_usage_by_model();
             self.record_auto_sizing_outcome(
                 &turn,
-                &selected_profile,
-                decision.as_ref(),
-                fallback.as_deref(),
+                &auto_sizing_execution.selected_profile,
+                auto_sizing_execution.decision.as_ref(),
+                auto_sizing_execution.fallback.as_deref(),
             )?;
-            model_profile = selected_profile;
+            model_profile = auto_sizing_execution.selected_profile;
             self.agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile.clone());
         }
@@ -378,7 +383,7 @@ impl RuntimeSessionService {
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
-        let execution = loop {
+        let mut execution = loop {
             let mut provider_ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider,
@@ -495,6 +500,7 @@ impl RuntimeSessionService {
                 }
             }
         };
+        execution.routing_token_usage_by_model = routing_token_usage_by_model;
         self.apply_agent_provider_execution_async(
             &turn,
             &model_profile,
@@ -823,6 +829,14 @@ impl RuntimeSessionService {
         )?;
         let token_usage_key =
             ModelTokenUsageKey::new(model_profile.provider.clone(), model_profile.model.clone());
+        for (key, usage) in &execution.routing_token_usage_by_model {
+            self.runtime_metrics
+                .record_provider_token_usage(*usage, *usage, key);
+        }
+        self.record_agent_provider_token_usage_by_model(
+            &turn.pane_id,
+            &execution.routing_token_usage_by_model,
+        );
         self.runtime_metrics.record_provider_response(
             &execution.response,
             execution.latest_response_usage,
@@ -1061,6 +1075,14 @@ impl RuntimeSessionService {
         )?;
         let token_usage_key =
             ModelTokenUsageKey::new(model_profile.provider.clone(), model_profile.model.clone());
+        for (key, usage) in &execution.routing_token_usage_by_model {
+            self.runtime_metrics
+                .record_provider_token_usage(*usage, *usage, key);
+        }
+        self.record_agent_provider_token_usage_by_model(
+            &turn.pane_id,
+            &execution.routing_token_usage_by_model,
+        );
         self.runtime_metrics.record_provider_response(
             &execution.response,
             execution.latest_response_usage,

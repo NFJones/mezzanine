@@ -4761,6 +4761,8 @@ The baseline command capabilities are:
   display SHOULD be `text/markdown; charset=utf-8` and SHOULD present the main
   status data as a markdown table. If a provider omits cached-token accounting,
   the status display SHOULD show that counter as unknown rather than as zero.
+  Provider token counters MUST include auxiliary routing/model-sizing provider
+  requests as separate provider/model rows when token usage is reported.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
 - `/statusline`: Configure agent shell status-line fields.

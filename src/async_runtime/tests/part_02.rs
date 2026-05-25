@@ -3635,6 +3635,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![failed, pending],
         final_turn: false,
         terminal_state: crate::agent::AgentTurnState::Failed,
@@ -3781,6 +3782,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![crate::agent::ActionResult::succeeded(
             &turn,
             &action,
@@ -3949,6 +3951,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![crate::agent::ActionResult::succeeded(
             &turn,
             &action,

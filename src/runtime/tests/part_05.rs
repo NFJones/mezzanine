@@ -508,6 +508,35 @@ reasoning_profile = "high"
         executions[0].request.reasoning_effort.as_deref(),
         Some("high")
     );
+    let router_usage_key = crate::agent::ModelTokenUsageKey::new("runtime-batch", "gpt-router");
+    assert_eq!(
+        executions[0]
+            .routing_token_usage_by_model
+            .get(&router_usage_key)
+            .copied(),
+        Some(crate::agent::ModelTokenUsage {
+            input_tokens: 90,
+            output_tokens: 10,
+            reasoning_tokens: 3,
+            cached_input_tokens: Some(30),
+        })
+    );
+    let status = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"auto-sizing-token-status","method":"agent/shell/command","params":{"idempotency_key":"auto-sizing-token-status","input":"/status"}}"#,
+        &primary,
+    );
+    assert!(
+        status.contains("| Provider tokens | 2 models; see Provider Token Usage |"),
+        "{status}"
+    );
+    assert!(
+        status.contains("| runtime-batch | gpt-router | 60 | 90 | 10 | 3 | 30 | 33.33% | 100 |"),
+        "{status}"
+    );
+    assert!(
+        status.contains("| runtime-batch | gpt-5.5 | 100 | 150 | 40 | 12 | 50 | 33.33% | 190 |"),
+        "{status}"
+    );
     let normal_request_context = requests[1]
         .messages
         .iter()
@@ -4025,6 +4054,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![
                 crate::agent::ActionResult::running(
                     &parent_turn,
@@ -4186,6 +4216,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![crate::agent::ActionResult::running(
                 &parent_turn,
                 &spawn,

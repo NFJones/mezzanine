@@ -313,6 +313,7 @@ mod tests {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![ActionResult {
                 protocol: "maap/1".to_string(),
                 turn_id: "turn-2".to_string(),

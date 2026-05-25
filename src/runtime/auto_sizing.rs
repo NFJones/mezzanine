@@ -9,9 +9,10 @@ use serde::Deserialize;
 
 use super::{
     AgentContext, AgentTurnRecord, AsyncModelProvider, ContextSourceKind, MezError, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, Result, RuntimeAutoSizingDecision,
-    RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
-    RuntimeProviderConfig, openai_default_reasoning_levels_for_model,
+    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, Result, RuntimeAutoSizingDecision, RuntimeAutoSizingDispatch,
+    RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile, RuntimeProviderConfig,
+    openai_default_reasoning_levels_for_model,
 };
 use crate::agent::{AllowedActionSet, ModelInteractionKind, model_context_text_word_count};
 
@@ -26,17 +27,49 @@ const AUTO_SIZING_CONVERSATION_CONTEXT_BLOCK_WORDS: usize = 2 * 1024;
 /// Maximum bytes retained from one user, assistant, or memory context block.
 const AUTO_SIZING_CONVERSATION_CONTEXT_BLOCK_BYTES: usize = 32 * 1024;
 
+/// Result of one internal auto-sizing router request.
+///
+/// The selected profile drives the user-visible provider turn, while router
+/// usage is kept separate so token accounting can attribute preflight routing
+/// cost to the routing model instead of the selected execution model.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAutoSizingExecution {
+    /// Effective profile selected for the user-visible provider turn.
+    pub(crate) selected_profile: ModelProfile,
+    /// Parsed router decision when the router returned valid JSON.
+    #[cfg(test)]
+    pub(crate) decision: Option<RuntimeAutoSizingDecision>,
+    /// Fallback reason when routing could not select a valid target.
+    #[cfg(test)]
+    pub(crate) fallback: Option<String>,
+    /// Provider/model key for the router request.
+    pub(crate) router_token_usage_key: ModelTokenUsageKey,
+    /// Token usage reported by the router request.
+    pub(crate) router_token_usage: ModelTokenUsage,
+}
+
+impl RuntimeAutoSizingExecution {
+    /// Returns the router usage as a per-model accounting map.
+    pub(crate) fn token_usage_by_model(
+        &self,
+    ) -> std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        if self.router_token_usage.is_zero() {
+            return std::collections::BTreeMap::new();
+        }
+        std::collections::BTreeMap::from([(
+            self.router_token_usage_key.clone(),
+            self.router_token_usage,
+        )])
+    }
+}
+
 /// Executes an internal auto-sizing request with an async provider.
 pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncModelProvider>(
     provider: &P,
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> (
-    ModelProfile,
-    Option<RuntimeAutoSizingDecision>,
-    Option<String>,
-) {
+) -> RuntimeAutoSizingExecution {
     let request = match runtime_auto_sizing_request(auto_sizing, turn, context) {
         Ok(request) => request,
         Err(error) => {
@@ -44,10 +77,7 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
         }
     };
     match provider.send_request_async(&request).await {
-        Ok(response) => runtime_auto_sizing_profile_from_response(auto_sizing, &response)
-            .unwrap_or_else(|error| {
-                runtime_auto_sizing_fallback(auto_sizing, error.message().to_string())
-            }),
+        Ok(response) => runtime_auto_sizing_execution_from_response(auto_sizing, &response),
         Err(error) => runtime_auto_sizing_fallback(auto_sizing, error.message().to_string()),
     }
 }
@@ -59,11 +89,7 @@ pub(crate) fn runtime_execute_auto_sizing_with_provider<P: crate::agent::ModelPr
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> (
-    ModelProfile,
-    Option<RuntimeAutoSizingDecision>,
-    Option<String>,
-) {
+) -> RuntimeAutoSizingExecution {
     let request = match runtime_auto_sizing_request(auto_sizing, turn, context) {
         Ok(request) => request,
         Err(error) => {
@@ -71,10 +97,7 @@ pub(crate) fn runtime_execute_auto_sizing_with_provider<P: crate::agent::ModelPr
         }
     };
     match provider.send_request(&request) {
-        Ok(response) => runtime_auto_sizing_profile_from_response(auto_sizing, &response)
-            .unwrap_or_else(|error| {
-                runtime_auto_sizing_fallback(auto_sizing, error.message().to_string())
-            }),
+        Ok(response) => runtime_auto_sizing_execution_from_response(auto_sizing, &response),
         Err(error) => runtime_auto_sizing_fallback(auto_sizing, error.message().to_string()),
     }
 }
@@ -486,6 +509,29 @@ fn runtime_auto_sizing_profile_from_response(
     Ok((profile, Some(decision), None))
 }
 
+/// Builds the full auto-sizing execution result from one router response.
+fn runtime_auto_sizing_execution_from_response(
+    auto_sizing: &RuntimeAutoSizingDispatch,
+    response: &ModelResponse,
+) -> RuntimeAutoSizingExecution {
+    let selection = runtime_auto_sizing_profile_from_response(auto_sizing, response)
+        .unwrap_or_else(|error| {
+            runtime_auto_sizing_selection_fallback(auto_sizing, error.message().to_string())
+        });
+    RuntimeAutoSizingExecution {
+        selected_profile: selection.0,
+        #[cfg(test)]
+        decision: selection.1,
+        #[cfg(test)]
+        fallback: selection.2,
+        router_token_usage_key: ModelTokenUsageKey::new(
+            auto_sizing.router_profile.provider.clone(),
+            auto_sizing.router_profile.model.clone(),
+        ),
+        router_token_usage: response.usage,
+    }
+}
+
 fn runtime_auto_sizing_decision_from_text(text: &str) -> Result<RuntimeAutoSizingDecision> {
     let value = serde_json::from_str::<AutoSizingDecisionJson>(text.trim()).map_err(|error| {
         MezError::invalid_state(format!(
@@ -543,7 +589,7 @@ fn runtime_auto_sizing_target_for_size<'a>(
     }
 }
 
-fn runtime_auto_sizing_fallback(
+fn runtime_auto_sizing_selection_fallback(
     auto_sizing: &RuntimeAutoSizingDispatch,
     message: String,
 ) -> (
@@ -555,6 +601,25 @@ fn runtime_auto_sizing_fallback(
         RuntimeAutoSizingFallbackPolicy::UseDefaultProfile => {
             (auto_sizing.default_profile.clone(), None, Some(message))
         }
+    }
+}
+
+fn runtime_auto_sizing_fallback(
+    auto_sizing: &RuntimeAutoSizingDispatch,
+    message: String,
+) -> RuntimeAutoSizingExecution {
+    let selection = runtime_auto_sizing_selection_fallback(auto_sizing, message);
+    RuntimeAutoSizingExecution {
+        selected_profile: selection.0,
+        #[cfg(test)]
+        decision: selection.1,
+        #[cfg(test)]
+        fallback: selection.2,
+        router_token_usage_key: ModelTokenUsageKey::new(
+            auto_sizing.router_profile.provider.clone(),
+            auto_sizing.router_profile.model.clone(),
+        ),
+        router_token_usage: ModelTokenUsage::default(),
     }
 }
 

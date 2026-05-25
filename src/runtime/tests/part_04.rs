@@ -959,6 +959,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![crate::agent::ActionResult::running(
                 &turn,
                 &action,
@@ -1891,6 +1892,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![result],
             final_turn: false,
             terminal_state: AgentTurnState::Running,
@@ -2905,6 +2907,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![crate::agent::ActionResult::running(
                 &turn,
                 &action,

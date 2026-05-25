@@ -7,8 +7,8 @@
 use super::super::{
     ActionResult, AgentAction, AgentActionPayload, AgentTranscriptStore, AgentTurnRecord,
     AgentTurnState, ContextSourceKind, MaapBatch, MezError, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelResponse, ModelTokenUsage, ProviderTranscriptEvent, Result, TranscriptEntry,
-    TranscriptRole,
+    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderTranscriptEvent,
+    Result, TranscriptEntry, TranscriptRole,
 };
 use super::action_result_transcript_content;
 
@@ -29,6 +29,15 @@ pub struct AgentTurnExecution {
     /// single provider response so UI context-window percentages describe the
     /// last prompt sent to the model instead of an accumulated turn total.
     pub latest_response_usage: ModelTokenUsage,
+    /// Provider token usage for auxiliary model calls made before the main
+    /// turn request.
+    ///
+    /// Automatic routing/model-sizing requests use a provider model but are not
+    /// part of the user-visible assistant response. Keeping them separate lets
+    /// runtime status and metrics account for their cost under the router model
+    /// without attributing those tokens to the selected execution model.
+    pub routing_token_usage_by_model:
+        std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Structured `action_results` value carried by this API type.
     pub action_results: Vec<ActionResult>,
     /// Structured `final_turn` value carried by this API type.

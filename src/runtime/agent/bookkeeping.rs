@@ -333,6 +333,45 @@ impl RuntimeSessionService {
         let _ = self.checkpoint_agent_session_metadata();
     }
 
+    /// Stores auxiliary provider token usage for the active pane conversation.
+    ///
+    /// Router/auto-sizing requests happen before the main assistant response and
+    /// therefore do not have a user-visible model profile for context-window
+    /// display. They should still appear in provider/model token accounting so
+    /// `/status` and durable metadata include their cost.
+    pub(in crate::runtime) fn record_agent_provider_token_usage_by_model(
+        &mut self,
+        pane_id: &str,
+        usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) {
+        if usage_by_model.is_empty() {
+            return;
+        }
+        let conversation_id = self
+            .agent_shell_store
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .unwrap_or_else(|| format!("pane:{pane_id}"));
+        let mut changed = false;
+        let conversation_usage = self
+            .agent_token_usage_by_conversation
+            .entry(conversation_id)
+            .or_default();
+        for (key, usage) in usage_by_model {
+            if usage.is_zero() {
+                continue;
+            }
+            conversation_usage
+                .entry(key.clone())
+                .or_default()
+                .add_assign(*usage);
+            changed = true;
+        }
+        if changed {
+            let _ = self.checkpoint_agent_session_metadata();
+        }
+    }
+
     /// Stores the latest provider-reported quota usage for the active pane conversation.
     pub(in crate::runtime) fn record_agent_provider_quota_usage(
         &mut self,

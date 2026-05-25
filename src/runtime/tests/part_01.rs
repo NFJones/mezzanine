@@ -343,6 +343,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![result],
         final_turn: true,
         terminal_state: AgentTurnState::Failed,
@@ -416,6 +417,7 @@ fn runtime_provider_completion_accepts_terminal_capability_failure_state() {
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![result],
         final_turn: true,
         terminal_state: AgentTurnState::Failed,
@@ -481,6 +483,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: Vec::new(),
         final_turn: true,
         terminal_state: AgentTurnState::Failed,
@@ -528,6 +531,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: Vec::new(),
         final_turn: false,
         terminal_state: AgentTurnState::Running,
@@ -590,6 +594,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: Vec::new(),
         final_turn: false,
         terminal_state: AgentTurnState::Running,
@@ -1161,17 +1166,29 @@ impl ModelProvider for RuntimeAutoSizingProvider {
                 provider: self.provider_id().to_string(),
                 model: request.model.clone(),
                 raw_text: r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.92,"rationale":"multi-file feature work"}"#.to_string(),
-                usage: Default::default(),
+                usage: crate::agent::ModelTokenUsage {
+                    input_tokens: 90,
+                    output_tokens: 10,
+                    reasoning_tokens: 3,
+                    cached_input_tokens: Some(30),
+                },
                 quota_usage: Default::default(),
                 action_batch: None,
                 provider_transcript_events: Vec::new(),
-});
+            });
         }
-        Ok(runtime_say_response(
+        let mut response = runtime_say_response(
             &request.turn_id,
             "auto-sized response",
             true,
-        ))
+        );
+        response.usage = crate::agent::ModelTokenUsage {
+            input_tokens: 150,
+            output_tokens: 40,
+            reasoning_tokens: 12,
+            cached_input_tokens: Some(50),
+        };
+        Ok(response)
     }
 }
 

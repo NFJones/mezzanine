@@ -72,8 +72,9 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
             redirect_instruction: None,
         })
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let input = encode_control_body(&format!(
@@ -175,8 +176,9 @@ async fn async_actor_handles_control_requests_with_snapshot_repository() {
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let mut connection = ControlConnectionState::trusted_existing_client(primary.clone());
@@ -302,8 +304,9 @@ async fn async_actor_defers_user_config_mutation_to_persistence_worker() {
             text: std::fs::read_to_string(&config_path).unwrap(),
         }])
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let config_path_json = serde_json::to_string(&config_path.to_string_lossy()).unwrap();
@@ -464,6 +467,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![crate::agent::ActionResult::running(
             &turn,
             &action,
@@ -473,8 +477,9 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         final_turn: false,
         terminal_state: crate::agent::AgentTurnState::Running,
     };
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -583,8 +588,9 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         .unwrap();
     service.permission_policy_mut().set_approval_bypass(true);
 
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let pane_worker_handle = handle.clone();
     let client_handle = handle.clone();
     let pane_worker_done = StdArc::new(AtomicBool::new(false));
@@ -681,9 +687,9 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 reasoning_effort: task
                     .model_profile
                     .provider_options
-                .get("reasoning_effort")
-                .cloned()
-                .or_else(|| task.model_profile.reasoning_profile.clone()),
+                    .get("reasoning_effort")
+                    .cloned()
+                    .or_else(|| task.model_profile.reasoning_profile.clone()),
                 thinking_enabled: task.model_profile.thinking_enabled(),
                 latency_preference: task.model_profile.latency_preference.clone(),
                 prompt_cache_retention: task
@@ -716,6 +722,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![crate::agent::ActionResult::running(
                 &turn,
                 &action,
@@ -808,9 +815,9 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 reasoning_effort: next_task
                     .model_profile
                     .provider_options
-                .get("reasoning_effort")
-                .cloned()
-                .or_else(|| next_task.model_profile.reasoning_profile.clone()),
+                    .get("reasoning_effort")
+                    .cloned()
+                    .or_else(|| next_task.model_profile.reasoning_profile.clone()),
                 thinking_enabled: next_task.model_profile.thinking_enabled(),
                 latency_preference: next_task.model_profile.latency_preference.clone(),
                 prompt_cache_retention: next_task
@@ -843,6 +850,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![crate::agent::ActionResult::running(
                 &second_turn,
                 &second_action,
@@ -1011,6 +1019,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![crate::agent::ActionResult::running(
             &turn,
             &action,
@@ -1020,8 +1029,9 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         final_turn: false,
         terminal_state: crate::agent::AgentTurnState::Running,
     };
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let client = async move {
         let mut provider_batch = RuntimeEventBatch::new();
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
@@ -1181,6 +1191,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![crate::agent::ActionResult::running(
             &turn,
             &missing_action,
@@ -1190,8 +1201,9 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         final_turn: false,
         terminal_state: crate::agent::AgentTurnState::Running,
     };
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let client = async move {
         let mut provider_batch = RuntimeEventBatch::new();
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
@@ -1311,6 +1323,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![crate::agent::ActionResult::running(
             &turn,
             &action,
@@ -1386,7 +1399,7 @@ async fn wait_for_shell_transaction_timer_settlement(
 ) -> Result<()> {
     let mut scheduled_key = None;
     let mut cancelled_keys = Vec::new();
-    for _ in 0..200 {
+    for _ in 0..1000 {
         let timer_effects = handle.drain_timer_side_effects(16).await?;
         for effect in timer_effects {
             match effect {
@@ -1443,8 +1456,9 @@ async fn async_agent_provider_service_keeps_running_after_prompt_provider_failur
         .unwrap();
     assert!(start.contains(r#""state":"running""#), "{start}");
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let service_handle = handle.clone();
     let timer_handle = handle.clone();
     let shutdown_handle = handle.clone();
@@ -1512,8 +1526,9 @@ async fn async_agent_provider_service_wakes_when_prompt_queues_work() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let provider_handle = handle.clone();
     let provider = async move {
@@ -1581,8 +1596,9 @@ async fn async_agent_provider_service_wakes_when_prompt_queues_work() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_serializes_lifecycle_render_and_shutdown() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
 
     let client = async {
         assert_eq!(
@@ -1620,8 +1636,9 @@ async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let mut processes = handle
@@ -1686,8 +1703,9 @@ async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_step_uses_runtime_rendered_view() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
 
     let client = async {
         let readiness = vec![
@@ -1759,8 +1777,9 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let readiness = vec![AttachedTerminalFdReadiness {
@@ -1864,8 +1883,9 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let mut processes = handle
@@ -1920,8 +1940,9 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
 
     let client = async {
         let mut processes = handle
@@ -1966,8 +1987,9 @@ async fn async_attached_terminal_loop_can_defer_pane_input_to_worker() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Input,
@@ -2040,8 +2062,9 @@ async fn async_attached_terminal_loop_preserves_large_deferred_paste_across_read
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let paste = b"large-paste-".repeat(16);
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![
@@ -2130,8 +2153,9 @@ async fn async_attached_terminal_service_can_defer_pane_input_to_worker() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Input,
@@ -2205,8 +2229,9 @@ async fn async_attached_terminal_service_routes_input_while_output_is_pending() 
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = SlowOutputAttachedTerminalLoopIo::new(
         vec![vec![AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Input,
@@ -2283,8 +2308,9 @@ async fn async_attached_terminal_loop_renders_and_applies_primary_actions() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![
             AttachedTerminalFdReadiness {
@@ -2371,8 +2397,9 @@ async fn async_attached_terminal_loop_routes_runtime_errors_to_actor_overlay() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
     let wrong_primary = ClientId::new('c', 4242);
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![
             AttachedTerminalFdReadiness {
@@ -2481,8 +2508,9 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
     let command_history_path = transcript_store.command_prompt_history_file();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![
             vec![
@@ -2643,8 +2671,9 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![
             vec![
@@ -2791,8 +2820,9 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![
             AttachedTerminalFdReadiness {
@@ -2895,8 +2925,9 @@ async fn async_attached_terminal_loop_full_redraws_after_agent_prompt_exit() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeResizingAttachedTerminalLoopIo {
         inner: FakeAttachedTerminalLoopIo {
             readiness_batches: vec![vec![
@@ -2976,8 +3007,9 @@ async fn async_attached_terminal_loop_full_redraws_after_agent_prompt_exit() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_loop_renders_observer_without_applying_input() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![
             AttachedTerminalFdReadiness {
@@ -3054,8 +3086,9 @@ async fn async_attached_terminal_loop_schedules_render_timers_after_direct_flush
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Output,
@@ -3117,8 +3150,9 @@ async fn async_attached_terminal_loop_schedules_render_timers_after_direct_flush
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_runs_batches_until_hangup() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Input,
@@ -3182,8 +3216,9 @@ async fn async_attached_terminal_service_runs_batches_until_hangup() {
 /// quiet periods no longer have a periodic foreground redraw sleep.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_wakes_between_batches_on_side_effects() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![Vec::new(), Vec::new()],
         input_batches: Vec::new(),
@@ -3246,8 +3281,9 @@ async fn async_attached_terminal_service_wakes_between_batches_on_side_effects()
 /// idle.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_has_no_idle_batch_timer() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
     let mut io = IdleAsyncAttachedTerminalLoopIo::new(write_count.clone(), write_notify.clone());
@@ -3303,8 +3339,9 @@ async fn async_attached_terminal_service_has_no_idle_batch_timer() {
 /// awaiting fresh input so a quiet terminal cannot strand a repaint forever.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_attached_terminal_service_drains_stranded_render_effect_before_waiting() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let client_id = ClientId::new('c', 9024);
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
@@ -3368,8 +3405,9 @@ async fn async_attached_terminal_service_rate_limits_bursty_render_invalidations
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
 
@@ -3459,8 +3497,9 @@ async fn async_attached_terminal_service_polls_terminal_size_while_idle() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
     let invalidate_count = StdArc::new(AtomicUsize::new(0));
@@ -3540,8 +3579,9 @@ async fn async_attached_terminal_service_resize_bypasses_pending_render_rate_lim
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
     let invalidate_count = StdArc::new(AtomicUsize::new(0));
@@ -3635,8 +3675,9 @@ async fn async_attached_terminal_service_does_not_flush_stale_pending_output_bef
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
     let pending_output_bytes = StdArc::new(AtomicUsize::new(0));
@@ -3731,8 +3772,9 @@ async fn async_attached_terminal_service_does_not_flush_stale_pending_output_bef
 /// CLI error handler during clean primary shutdown or terminal teardown.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_treats_broken_pipe_as_output_hangup() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![AttachedTerminalFdReadiness {
             role: AttachedTerminalFdRole::Output,
@@ -3795,8 +3837,9 @@ async fn async_attached_terminal_service_propagates_primary_terminal_resize() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeResizingAttachedTerminalLoopIo {
         inner: FakeAttachedTerminalLoopIo {
             readiness_batches: vec![Vec::new()],
@@ -3863,8 +3906,9 @@ async fn async_attached_terminal_service_coalesces_resize_storm_timers() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeResizingAttachedTerminalLoopIo {
         inner: FakeAttachedTerminalLoopIo {
             readiness_batches: vec![Vec::new(), Vec::new()],
@@ -3991,8 +4035,9 @@ async fn async_attached_terminal_service_schedules_resize_debounce_timer() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeResizingAttachedTerminalLoopIo {
         inner: FakeAttachedTerminalLoopIo {
             readiness_batches: vec![Vec::new(), Vec::new()],
@@ -4062,8 +4107,9 @@ async fn async_attached_terminal_service_schedules_resize_debounce_timer() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_service_can_be_supervised_by_name() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let actor_handle = handle.clone();
     let io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![AttachedTerminalFdReadiness {
@@ -4133,8 +4179,9 @@ async fn async_attached_terminal_service_exits_cleanly_after_primary_detach() {
     service
         .detach_primary(&primary, Size::new(80, 24).unwrap())
         .unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
     let mut io = FakeAttachedTerminalLoopIo::default();
 
     let client = async {
@@ -4178,8 +4225,9 @@ async fn async_attached_terminal_service_exits_cleanly_after_primary_detach() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_rejects_requests_after_shutdown() {
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let retained_handle = handle.clone();
 
     let client = async {
@@ -4206,8 +4254,9 @@ async fn async_control_connection_authorizes_and_round_trips_control_frame() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let input = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
@@ -4256,8 +4305,9 @@ async fn async_control_connection_loop_preserves_initialized_caller() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let initialize = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
@@ -4323,8 +4373,9 @@ async fn async_control_listener_serves_stateful_connection_until_client_closes()
     ));
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).unwrap();
-    let (handle, actor) =
-        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
     let initialize = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );

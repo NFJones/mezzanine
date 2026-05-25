@@ -20,8 +20,8 @@ use super::{
 };
 use crate::agent::{
     ActionResult, ActionStatus, AgentActionPayload, AgentContext, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ModelProfile,
-    ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
+    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ModelProfile, ModelTokenUsage,
+    ModelTokenUsageKey, ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
@@ -1275,41 +1275,48 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_tools,
     } = dispatch;
     let main_model_provider = model_profile.provider.clone();
+    let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
     if let Some(auto_sizing) = auto_sizing.as_ref()
         && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
     {
         match auto_sizing_provider {
             RuntimeAgentProviderDispatchProvider::OpenAi(router_provider) => {
-                let (selected_profile, _decision, _fallback) =
-                    runtime_execute_auto_sizing_with_async_provider(
-                        router_provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await;
-                if selected_profile.provider == main_model_provider {
-                    model_profile = selected_profile;
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                if auto_sizing_execution.selected_profile.provider == main_model_provider {
+                    model_profile = auto_sizing_execution.selected_profile;
                 }
             }
             RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
-                let (selected_profile, _decision, _fallback) =
-                    runtime_execute_auto_sizing_with_async_provider(
-                        router_provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await;
-                if selected_profile.provider == main_model_provider {
-                    model_profile = selected_profile;
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                if auto_sizing_execution.selected_profile.provider == main_model_provider {
+                    model_profile = auto_sizing_execution.selected_profile;
                 }
             }
         }
     }
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            model_profile = runtime_apply_same_provider_auto_sizing_if_needed(
+            let auto_sizing_result = runtime_apply_same_provider_auto_sizing_if_needed(
                 &provider,
                 model_profile,
                 auto_sizing_provider.is_some(),
@@ -1318,6 +1325,11 @@ async fn execute_runtime_agent_provider_dispatch(
                 &context,
             )
             .await;
+            model_profile = auto_sizing_result.0;
+            merge_model_token_usage_by_model(
+                &mut routing_token_usage_by_model,
+                auto_sizing_result.1,
+            );
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1332,10 +1344,12 @@ async fn execute_runtime_agent_provider_dispatch(
             let execution = runner
                 .run_turn_async(&mut ledger, turn.clone(), context)
                 .await?;
-            execute_provider_worker_network_actions(&turn, execution).await
+            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            execution.routing_token_usage_by_model = routing_token_usage_by_model;
+            Ok(execution)
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-            model_profile = runtime_apply_same_provider_auto_sizing_if_needed(
+            let auto_sizing_result = runtime_apply_same_provider_auto_sizing_if_needed(
                 &provider,
                 model_profile,
                 auto_sizing_provider.is_some(),
@@ -1344,6 +1358,11 @@ async fn execute_runtime_agent_provider_dispatch(
                 &context,
             )
             .await;
+            model_profile = auto_sizing_result.0;
+            merge_model_token_usage_by_model(
+                &mut routing_token_usage_by_model,
+                auto_sizing_result.1,
+            );
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1358,7 +1377,9 @@ async fn execute_runtime_agent_provider_dispatch(
             let execution = runner
                 .run_turn_async(&mut ledger, turn.clone(), context)
                 .await?;
-            execute_provider_worker_network_actions(&turn, execution).await
+            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            execution.routing_token_usage_by_model = routing_token_usage_by_model;
+            Ok(execution)
         }
     }
 }
@@ -1451,23 +1472,37 @@ async fn runtime_apply_same_provider_auto_sizing_if_needed<P: AsyncModelProvider
     auto_sizing: Option<&crate::runtime::RuntimeAutoSizingDispatch>,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> ModelProfile {
+) -> (
+    ModelProfile,
+    std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+) {
     if has_separate_router_provider {
-        return current_profile;
+        return (current_profile, std::collections::BTreeMap::new());
     }
     let Some(auto_sizing) = auto_sizing else {
-        return current_profile;
+        return (current_profile, std::collections::BTreeMap::new());
     };
     let current_provider = current_profile.provider.clone();
     if auto_sizing.router_profile.provider != current_provider {
-        return current_profile;
+        return (current_profile, std::collections::BTreeMap::new());
     }
-    let (selected_profile, _decision, _fallback) =
+    let auto_sizing_execution =
         runtime_execute_auto_sizing_with_async_provider(provider, auto_sizing, turn, context).await;
-    if selected_profile.provider == current_provider {
-        selected_profile
+    let usage_by_model = auto_sizing_execution.token_usage_by_model();
+    if auto_sizing_execution.selected_profile.provider == current_provider {
+        (auto_sizing_execution.selected_profile, usage_by_model)
     } else {
-        current_profile
+        (current_profile, usage_by_model)
+    }
+}
+
+/// Merges per-model token usage maps with saturating counters.
+fn merge_model_token_usage_by_model(
+    target: &mut std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    source: std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+) {
+    for (key, usage) in source {
+        target.entry(key).or_default().add_assign(usage);
     }
 }
 
@@ -1545,7 +1580,12 @@ mod tests {
                     provider: self.provider_id().to_string(),
                     model: request.model.clone(),
                     raw_text: r#"{"version":1,"size":"large","reasoning_effort":"xhigh","confidence":0.91,"rationale":"deep review"}"#.to_string(),
-                    usage: Default::default(),
+                    usage: ModelTokenUsage {
+                        input_tokens: 31,
+                        output_tokens: 7,
+                        reasoning_tokens: 3,
+                        cached_input_tokens: Some(11),
+                    },
                     quota_usage: Vec::new(),
                     action_batch: None,
                     provider_transcript_events: Vec::new(),
@@ -1626,16 +1666,18 @@ mod tests {
                 content: "deeply inspect the codebase".to_string(),
             }],
         };
-        let selected = runtime_apply_same_provider_auto_sizing_if_needed(
-            &provider,
-            test_model_profile("deepseek-v4-pro", Some("high")),
-            false,
-            Some(&test_auto_sizing_dispatch()),
-            &turn,
-            &context,
-        )
-        .await;
+        let (selected, routing_token_usage_by_model) =
+            runtime_apply_same_provider_auto_sizing_if_needed(
+                &provider,
+                test_model_profile("deepseek-v4-pro", Some("high")),
+                false,
+                Some(&test_auto_sizing_dispatch()),
+                &turn,
+                &context,
+            )
+            .await;
 
+        assert!(!routing_token_usage_by_model.is_empty());
         assert_eq!(selected.provider, "deepseek");
         assert_eq!(selected.model, "deepseek-v4-pro");
         assert_eq!(selected.reasoning_profile.as_deref(), Some("xhigh"));
@@ -1692,16 +1734,18 @@ mod tests {
                 content: "generate a random number".to_string(),
             }],
         };
-        let selected = runtime_apply_same_provider_auto_sizing_if_needed(
-            &provider,
-            test_model_profile("deepseek-v4-pro", Some("high")),
-            false,
-            Some(&auto_sizing),
-            &turn,
-            &context,
-        )
-        .await;
+        let (selected, routing_token_usage_by_model) =
+            runtime_apply_same_provider_auto_sizing_if_needed(
+                &provider,
+                test_model_profile("deepseek-v4-pro", Some("high")),
+                false,
+                Some(&auto_sizing),
+                &turn,
+                &context,
+            )
+            .await;
 
+        assert!(routing_token_usage_by_model.is_empty());
         assert_eq!(selected.provider, "deepseek");
         assert_eq!(selected.model, "deepseek-v4-pro");
         assert!(
