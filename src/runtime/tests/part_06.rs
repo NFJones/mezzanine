@@ -2793,6 +2793,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             reasoning_effort: None,
+            thinking_enabled: None,
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,

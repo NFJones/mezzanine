@@ -1006,6 +1006,17 @@ impl RuntimeSessionService {
                             .as_ref()
                             .and_then(|(_name, profile)| profile.reasoning_profile.clone())
                     });
+                let agent_thinking_profile = latest_turn
+                    .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())
+                    .or_else(|| {
+                        active_agent_profile
+                            .as_ref()
+                            .map(|(_name, profile)| profile.clone())
+                    });
+                let agent_thinking = agent_thinking_profile.as_ref().and_then(|profile| {
+                    self.model_profile_thinking_enabled(profile)
+                        .map(|enabled| if enabled { "on" } else { "off" }.to_string())
+                });
                 let agent_routing = agent_session.map(|_| {
                     if self
                         .agent_routing_overrides
@@ -1075,6 +1086,7 @@ impl RuntimeSessionService {
                         agent_status,
                         agent_model,
                         agent_reasoning,
+                        agent_thinking,
                         agent_routing,
                         agent_latency,
                         agent_preset: self.agent_preset_display_value_for_pane(pane_id.as_str()),

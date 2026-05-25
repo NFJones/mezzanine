@@ -2355,6 +2355,7 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
             agent_status: Some("running".to_string()),
             agent_model: Some("gpt-5.5".to_string()),
             agent_reasoning: Some("high".to_string()),
+            agent_thinking: Some("on".to_string()),
             ..TerminalPaneFrameContext::default()
         },
     );
@@ -2378,7 +2379,7 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
 
     assert_eq!(
         view.lines[0],
-        " 0 shell                                                  gpt-5.5   high   running  "
+        " 0 shell                                       gpt-5.5   high   thinking   running  "
     );
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 0
@@ -2392,6 +2393,10 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
             && span.length == " high ".len()
+    }));
+    assert!(view.line_style_spans[0].iter().any(|span| {
+        span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
+            && span.length == " thinking ".len()
     }));
     assert!(!view.lines[0].contains("Nova"));
     assert!(!view.lines[0].contains("~/repos/mezzanine"));
@@ -2788,6 +2793,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
             agent_status: Some("running".to_string()),
             agent_model: Some("gpt-5.5".to_string()),
             agent_reasoning: Some("high".to_string()),
+            agent_thinking: Some("on".to_string()),
             agent_routing: Some("auto:on".to_string()),
             agent_context_usage: Some("42%".to_string()),
             ..TerminalPaneFrameContext::default()
@@ -2808,6 +2814,7 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
     for field in [
         PaneAgentStatusField::Model,
         PaneAgentStatusField::Reasoning,
+        PaneAgentStatusField::Thinking,
         PaneAgentStatusField::Routing,
         PaneAgentStatusField::ApprovalPolicy,
     ] {
@@ -2817,10 +2824,17 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
         );
     }
     let approval_columns = cells_for_field(&cells, PaneAgentStatusField::ApprovalPolicy);
-    let status_columns = cells_for_field(&cells, PaneAgentStatusField::Routing);
+    let reasoning_columns = cells_for_field(&cells, PaneAgentStatusField::Reasoning);
+    let thinking_columns = cells_for_field(&cells, PaneAgentStatusField::Thinking);
+    let routing_columns = cells_for_field(&cells, PaneAgentStatusField::Routing);
     assert!(
-        approval_columns.iter().max() > status_columns.iter().min(),
+        approval_columns.iter().max() > routing_columns.iter().min(),
         "approval and routing pills should occupy distinct cells: {cells:?}"
+    );
+    assert!(
+        reasoning_columns.iter().max() < thinking_columns.iter().min()
+            && thinking_columns.iter().max() < routing_columns.iter().min(),
+        "thinking should sit between reasoning and routing pills: {cells:?}"
     );
 }
 

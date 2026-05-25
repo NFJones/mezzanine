@@ -104,6 +104,7 @@ Common slash commands:
 | `/help` | Show the live command list. |
 | `/status` | Inspect the current pane agent session. |
 | `/model` | Inspect or change the active model selection. |
+| `/thinking` | Toggle provider thinking mode when supported. |
 | `/approval` | Inspect or change the session approval mode. |
 | `/permissions` | Inspect or change permission policy. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |

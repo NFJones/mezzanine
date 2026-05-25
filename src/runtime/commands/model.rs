@@ -299,6 +299,110 @@ impl RuntimeSessionService {
             })
     }
 
+    /// Executes `/thinking` as a pane-local provider thinking-mode override.
+    pub(in crate::runtime) fn execute_agent_shell_thinking_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("thinking command must be a slash command"))?;
+        let agent_id = format!("agent-{pane_id}");
+        let (active_name, active_profile) =
+            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        let Some(enabled_before) = self.model_profile_thinking_enabled(&active_profile) else {
+            return Err(MezError::invalid_args(format!(
+                "provider `{}` does not support a thinking-mode toggle",
+                active_profile.provider
+            )));
+        };
+        let mode = runtime_single_mode_arg(&invocation.args, "thinking", "status")?;
+        if matches!(mode.as_str(), "status" | "show") {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "thinking".to_string(),
+                body: format!(
+                    "active_profile={} provider={} model={} enabled={} explicit={} source=runtime-thinking",
+                    active_name,
+                    active_profile.provider,
+                    active_profile.model,
+                    enabled_before,
+                    active_profile.thinking_enabled().is_some()
+                ),
+            });
+        }
+        let enabled = match mode.as_str() {
+            "on" => true,
+            "off" => false,
+            "toggle" => !enabled_before,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "thinking slash command expects on, off, toggle, status, or no argument",
+                ));
+            }
+        };
+        let mut profile = active_profile.clone();
+        profile.provider_options.insert(
+            "thinking".to_string(),
+            if enabled { "enabled" } else { "disabled" }.to_string(),
+        );
+        let profile_name = self.insert_runtime_generated_model_profile(profile);
+        let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
+        self.set_model_profile_override(scope.clone(), &profile_name)?;
+        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "thinking".to_string(),
+            body: format!(
+                "scope={} profile={} provider={} model={} reasoning_profile={} thinking={} changed={} source=runtime-thinking",
+                runtime_model_override_scope_name(&scope),
+                profile_name,
+                profile.provider,
+                profile.model,
+                profile.reasoning_profile.as_deref().unwrap_or("none"),
+                if enabled { "enabled" } else { "disabled" },
+                enabled != enabled_before
+            ),
+            visibility: self
+                .agent_shell_store
+                .get(pane_id)
+                .map(|session| session.visibility)
+                .unwrap_or(AgentShellVisibility::Hidden),
+        })
+    }
+
+    /// Reports whether one profile supports and currently enables provider
+    /// thinking mode.
+    pub(in crate::runtime) fn model_profile_thinking_enabled(
+        &self,
+        profile: &ModelProfile,
+    ) -> Option<bool> {
+        if !self.model_profile_supports_thinking_toggle(profile) {
+            return None;
+        }
+        Some(profile.thinking_enabled().unwrap_or_else(|| {
+            profile
+                .reasoning_profile
+                .as_deref()
+                .is_some_and(|reasoning| !reasoning.trim().is_empty())
+                || profile
+                    .provider_options
+                    .get("reasoning_effort")
+                    .is_some_and(|effort| !effort.trim().is_empty())
+        }))
+    }
+
+    /// Reports whether the provider behind one model profile exposes a native
+    /// thinking-mode toggle.
+    pub(in crate::runtime) fn model_profile_supports_thinking_toggle(
+        &self,
+        profile: &ModelProfile,
+    ) -> bool {
+        self.provider_registry
+            .provider(&profile.provider)
+            .is_some_and(|provider| {
+                ProviderCapabilities::for_kind(&provider.kind).supports_thinking_toggle
+            })
+    }
+
     /// Executes `/model --routing` against the auto-sizing router profile.
     ///
     /// The routing model is the provider request used to classify turn size
@@ -1225,6 +1329,24 @@ impl RuntimeSessionService {
             .or_insert(profile);
         Ok(profile_name)
     }
+
+    /// Inserts a runtime-generated profile while preserving all provider
+    /// options carried by the supplied profile.
+    fn insert_runtime_generated_model_profile(&mut self, profile: ModelProfile) -> String {
+        let profile_name = runtime_generated_model_profile_name(
+            &self.provider_registry,
+            &profile.provider,
+            &profile.model,
+            profile.reasoning_profile.as_deref(),
+            &profile,
+        );
+        self.provider_registry
+            .profiles
+            .entry(profile_name.clone())
+            .or_insert(profile);
+        profile_name
+    }
+
     pub(in crate::runtime) fn active_model_profile_for_pane(
         &self,
         pane_id: &str,
@@ -1776,6 +1898,11 @@ fn runtime_generated_model_profile_name(
         Some(reasoning) => format!("{model}:{reasoning}"),
         None => model.to_string(),
     };
+    let base = match profile.thinking_enabled() {
+        Some(true) => format!("{base}:thinking-on"),
+        Some(false) => format!("{base}:thinking-off"),
+        None => base,
+    };
     let preferred = match profile
         .latency_preference
         .as_deref()
@@ -1814,6 +1941,7 @@ fn runtime_profile_name_available_or_matching(
         existing.provider == profile.provider
             && existing.model == profile.model
             && existing.reasoning_profile == profile.reasoning_profile
+            && existing.provider_options == profile.provider_options
             && existing.latency_preference.as_deref().unwrap_or("default")
                 == profile.latency_preference.as_deref().unwrap_or("default")
     })

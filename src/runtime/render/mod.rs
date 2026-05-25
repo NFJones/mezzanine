@@ -3072,6 +3072,19 @@ impl RuntimeSessionService {
             }
             return Ok(());
         }
+        if field == PaneAgentStatusField::Thinking {
+            self.pane_agent_status_selector = None;
+            let outcome =
+                self.execute_agent_shell_thinking_command(&pane_id, "/thinking toggle")?;
+            let response =
+                runtime_agent_shell_command_response_json(&pane_id, "/thinking", Some(&outcome));
+            if let Ok(display_output) =
+                runtime_agent_shell_display_output(&response, &self.ui_theme)
+            {
+                self.set_agent_prompt_display_output(&pane_id, display_output)?;
+            }
+            return Ok(());
+        }
         let frame_context = self.terminal_frame_context();
         let cells = self.active_window_mouse_pane_agent_status_cells(&frame_context);
         let field_cells = cells
@@ -3101,6 +3114,7 @@ impl RuntimeSessionService {
                     self.active_model_profile_for_pane(&pane_id, &agent_id, None)?;
                 self.configured_reasoning_levels_for_pane_model(&pane_id, &active_profile.model)?
             }
+            PaneAgentStatusField::Thinking => Vec::new(),
             PaneAgentStatusField::ApprovalPolicy => {
                 vec![
                     "ask".to_string(),
@@ -3193,6 +3207,7 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Reasoning => {
                 self.apply_pane_reasoning_picker_selection(&selector.pane_id, &value)?
             }
+            PaneAgentStatusField::Thinking => return Ok(()),
             PaneAgentStatusField::ApprovalPolicy => {
                 let outcome = self.execute_agent_shell_approval_command(
                     &selector.pane_id,
@@ -3220,6 +3235,7 @@ impl RuntimeSessionService {
             match field {
                 PaneAgentStatusField::Model => "/model",
                 PaneAgentStatusField::Reasoning => "/model reasoning",
+                PaneAgentStatusField::Thinking => "/thinking",
                 PaneAgentStatusField::Routing => "/routing",
                 PaneAgentStatusField::ApprovalPolicy => "/approval",
                 PaneAgentStatusField::Latency => "/latency",
@@ -3240,7 +3256,9 @@ impl RuntimeSessionService {
         field: PaneAgentStatusField,
     ) -> Option<String> {
         match field {
-            PaneAgentStatusField::Model | PaneAgentStatusField::Reasoning => {
+            PaneAgentStatusField::Model
+            | PaneAgentStatusField::Reasoning
+            | PaneAgentStatusField::Thinking => {
                 let agent_id = format!("agent-{pane_id}");
                 let (_active_name, profile) = self
                     .active_model_profile_for_pane(pane_id, &agent_id, None)
@@ -3250,6 +3268,9 @@ impl RuntimeSessionService {
                         Some(format!("{}: {}", profile.provider, profile.model))
                     }
                     PaneAgentStatusField::Reasoning => profile.reasoning_profile,
+                    PaneAgentStatusField::Thinking => self
+                        .model_profile_thinking_enabled(&profile)
+                        .map(|enabled| if enabled { "on" } else { "off" }.to_string()),
                     _ => None,
                 }
             }

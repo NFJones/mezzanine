@@ -469,6 +469,7 @@ mod tests {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
             reasoning_effort: None,
+            thinking_enabled: None,
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,

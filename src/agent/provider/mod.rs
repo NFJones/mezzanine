@@ -288,6 +288,8 @@ pub struct ProviderCapabilities {
     pub supports_max_output_tokens: bool,
     /// Whether reasoning effort controls are accepted.
     pub supports_reasoning_controls: bool,
+    /// Whether provider thinking mode can be explicitly enabled or disabled.
+    pub supports_thinking_toggle: bool,
     /// Whether the service_tier field is accepted.
     pub supports_service_tier: bool,
     /// Whether prompt cache retention is supported.
@@ -308,6 +310,7 @@ impl ProviderCapabilities {
                 supports_responses_api: true,
                 supports_max_output_tokens: true,
                 supports_reasoning_controls: true,
+                supports_thinking_toggle: false,
                 supports_service_tier: true,
                 supports_prompt_cache_retention: true,
                 supports_streaming: true,
@@ -318,6 +321,7 @@ impl ProviderCapabilities {
                 supports_responses_api: false,
                 supports_max_output_tokens: true,
                 supports_reasoning_controls: true,
+                supports_thinking_toggle: true,
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
                 supports_streaming: true,
@@ -328,6 +332,7 @@ impl ProviderCapabilities {
                 supports_responses_api: false,
                 supports_max_output_tokens: false,
                 supports_reasoning_controls: false,
+                supports_thinking_toggle: false,
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
                 supports_streaming: false,

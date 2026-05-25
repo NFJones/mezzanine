@@ -237,6 +237,7 @@ Useful slash commands include:
 | `/help`        | Show agent shell help.                                |
 | `/status`      | Show the current pane agent session.                  |
 | `/model`       | Inspect or change model selection.                    |
+| `/thinking`    | Toggle provider thinking mode when supported.         |
 | `/approval`    | Inspect or change approval mode.                      |
 | `/permissions` | Inspect or change permission policy.                  |
 | `/list-skills` | Show the skills available to the active pane.         |
@@ -409,6 +410,7 @@ Common tasks:
 | Inspect trust state               | `mez config trust list`            |
 | Trust a project root              | `mez config trust trust PATH`      |
 | Change model selection at runtime | `/model`                           |
+| Toggle supported thinking mode    | `/thinking`                        |
 | Change approval mode at runtime   | `/approval`                        |
 
 Credentials belong in `mez auth`, not in config files.

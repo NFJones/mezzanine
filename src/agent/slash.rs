@@ -221,6 +221,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("model", &[], SlashCommandEffect::PolicyMutation, true),
+        slash("thinking", &[], SlashCommandEffect::PolicyMutation, true),
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
         slash("routing", &[], SlashCommandEffect::PolicyMutation, true),
         slash("personality", &[], SlashCommandEffect::PolicyMutation, true),
@@ -495,6 +496,10 @@ fn execute_agent_shell_command_with_context_inner(
         "latency" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "latency preference changes require the live runtime".to_string(),
+        },
+        "thinking" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "provider thinking mode changes require the live runtime".to_string(),
         },
         "clear" => {
             let session = store.start_new_conversation(pane_id)?;

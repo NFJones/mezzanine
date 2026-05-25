@@ -102,6 +102,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
             .get("reasoning_effort")
             .cloned()
             .or_else(|| profile.reasoning_profile.clone()),
+        thinking_enabled: profile.thinking_enabled(),
         latency_preference: profile.latency_preference.clone(),
         prompt_cache_retention: profile
             .provider_options

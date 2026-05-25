@@ -1336,6 +1336,7 @@ pub(super) fn runtime_pane_agent_selector_rendition(
         match field {
             PaneAgentStatusField::Model => ui_theme.colors.agent_model,
             PaneAgentStatusField::Reasoning => ui_theme.colors.agent_reasoning,
+            PaneAgentStatusField::Thinking => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Routing => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::ApprovalPolicy => ui_theme.colors.agent_status_blocked,
             PaneAgentStatusField::Latency => ui_theme.colors.agent_reasoning,

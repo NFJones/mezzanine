@@ -946,6 +946,7 @@ fn runtime_model_request_fixture_for_agent(
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
         reasoning_effort: None,
+        thinking_enabled: None,
         latency_preference: None,
         prompt_cache_retention: None,
         max_output_tokens: None,

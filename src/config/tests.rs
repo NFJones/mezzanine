@@ -732,12 +732,13 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 3"));
+    assert!(plan.text.contains("version = 4"));
     assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
     assert!(!plan.text.contains("nested_muxxer"));
     assert!(plan.text.contains("routing = true"));
     assert!(plan.text.contains("routing_enabled = true"));
     assert!(plan.text.contains("\"agent.routing\""));
+    assert!(plan.text.contains("\"agent.thinking\""));
     assert!(!plan.text.contains("auto_reasoning"));
     assert!(!plan.text.contains("agent.auto_reasoning"));
     assert!(!plan.text.contains("default_command"));
@@ -768,7 +769,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"3".to_string()));
+    assert_eq!(values.get("version"), Some(&"4".to_string()));
     assert_eq!(
         values.get("terminal.nested_multiplexer"),
         Some(&"disabled".to_string())
@@ -779,6 +780,19 @@ fn migrates_json_primary_config_to_current_schema() {
         values.get("model_presets.deepseek.default_model_profile"),
         Some(&"deepseek-fast".to_string())
     );
+    let migrated_json: serde_json::Value = serde_json::from_str(&plan.text).unwrap();
+    let pane_fields = migrated_json["frames"]["pane"]["visible_fields"]
+        .as_array()
+        .unwrap();
+    let reasoning_index = pane_fields
+        .iter()
+        .position(|value| value.as_str() == Some("agent.reasoning"))
+        .unwrap();
+    let thinking_index = pane_fields
+        .iter()
+        .position(|value| value.as_str() == Some("agent.thinking"))
+        .unwrap();
+    assert_eq!(thinking_index, reasoning_index + 1);
 
     let validation = validate_config_text(ConfigFormat::Json, &plan.text, ConfigScope::Primary);
     assert!(validation.valid, "{:?}", validation.diagnostics);

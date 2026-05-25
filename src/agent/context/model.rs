@@ -150,6 +150,23 @@ impl ModelProfile {
             .filter(|tokens| *tokens > 0)
     }
 
+    /// Returns an explicit thinking-mode override, if configured.
+    ///
+    /// Providers that expose a native thinking toggle use this separate control
+    /// so reasoning effort can continue to describe the level to use when
+    /// thinking is enabled.
+    pub fn thinking_enabled(&self) -> Option<bool> {
+        self.provider_options
+            .get("thinking")
+            .or_else(|| self.provider_options.get("thinking_mode"))
+            .or_else(|| self.provider_options.get("thinking_enabled"))
+            .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+                "enabled" | "on" | "true" => Some(true),
+                "disabled" | "off" | "false" => Some(false),
+                _ => None,
+            })
+    }
+
     /// Returns the output-token cap to use after a provider output-limit
     /// failure.
     pub fn output_limit_retry_tokens(&self) -> usize {
@@ -374,6 +391,8 @@ pub struct ModelRequest {
     /// The field is runtime-owned per request so temporary turn sizing can
     /// adjust reasoning without mutating saved model profiles.
     pub reasoning_effort: Option<String>,
+    /// Explicit provider thinking-mode override for providers that support it.
+    pub thinking_enabled: Option<bool>,
     /// Latency/cost preference for provider request routing, when configured.
     ///
     /// The value is runtime-owned per request so pane-local profile overrides

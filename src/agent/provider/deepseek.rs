@@ -122,16 +122,20 @@ fn deepseek_chat_completions_request_body_with_strategy(
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
-    if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking {
-        body["thinking"] = serde_json::json!({"type": "disabled"});
-    } else if let Some(reasoning_effort) = request
-        .reasoning_effort
-        .as_deref()
-        .filter(|effort| !effort.is_empty())
+    if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking
+        || request.thinking_enabled == Some(false)
     {
-        let deepseek_effort = deepseek_reasoning_effort(reasoning_effort);
-        body["reasoning_effort"] = serde_json::json!(deepseek_effort);
+        body["thinking"] = serde_json::json!({"type": "disabled"});
+    } else if deepseek_thinking_enabled_for_request(request) {
         body["thinking"] = serde_json::json!({"type": "enabled"});
+        if let Some(reasoning_effort) = request
+            .reasoning_effort
+            .as_deref()
+            .filter(|effort| !effort.is_empty())
+        {
+            let deepseek_effort = deepseek_reasoning_effort(reasoning_effort);
+            body["reasoning_effort"] = serde_json::json!(deepseek_effort);
+        }
     }
     if capabilities.supports_tool_calls && strategy != DeepSeekMaapRequestStrategy::NoTool {
         if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking {
@@ -208,15 +212,24 @@ pub(super) fn deepseek_maap_request_strategy(
     if request.interaction_kind == ModelInteractionKind::Repair {
         return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
     }
-    if request
-        .reasoning_effort
-        .as_deref()
-        .is_some_and(|effort| !effort.is_empty())
-    {
+    if request.thinking_enabled == Some(false) {
+        return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
+    }
+    if deepseek_thinking_enabled_for_request(request) {
         DeepSeekMaapRequestStrategy::AutoToolThinking
     } else {
         DeepSeekMaapRequestStrategy::ForcedToolNonThinking
     }
+}
+
+/// Returns whether DeepSeek thinking mode is active for this request.
+fn deepseek_thinking_enabled_for_request(request: &ModelRequest) -> bool {
+    request.thinking_enabled == Some(true)
+        || (request.thinking_enabled != Some(false)
+            && request
+                .reasoning_effort
+                .as_deref()
+                .is_some_and(|effort| !effort.is_empty()))
 }
 
 /// Returns the DeepSeek stream flag after accounting for MAAP tool strategy.
@@ -550,6 +563,7 @@ mod tests {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
             reasoning_effort: Some("high".to_string()),
+            thinking_enabled: None,
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,

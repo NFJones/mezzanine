@@ -424,6 +424,7 @@ pub(super) fn runtime_model_compaction_request(
             .get("reasoning_effort")
             .cloned()
             .or_else(|| profile.reasoning_profile.clone()),
+        thinking_enabled: profile.thinking_enabled(),
         prompt_cache_retention: profile.provider_options.get("prompt_cache_retention").cloned(),
         latency_preference: profile.latency_preference.clone(),
         max_output_tokens: profile.max_output_tokens(),

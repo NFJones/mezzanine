@@ -923,6 +923,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 reasoning_effort: None,
+                thinking_enabled: None,
                 latency_preference: None,
                 prompt_cache_retention: None,
                 max_output_tokens: None,
@@ -3814,6 +3815,110 @@ fn runtime_slash_command_latency_displays_and_applies_override() {
     assert_eq!(profile.latency_preference.as_deref(), Some("slow"));
 }
 
+/// Verifies that `/thinking` exposes DeepSeek's native thinking-mode toggle as
+/// a pane-local model-profile override.
+///
+/// DeepSeek thinking and reasoning effort are separate provider controls: a
+/// profile may retain its reasoning level while the operator disables thinking
+/// to force strict MAAP tool calls. This test exercises the same control path
+/// used by live agent-shell commands and confirms the resulting provider task
+/// receives the generated profile.
+#[test]
+fn runtime_slash_command_thinking_displays_and_applies_deepseek_override() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\nmodels = [\"deepseek-v4-pro\"]\ndefault_model = \"deepseek-v4-pro\"\n\n[model_profiles.default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let status_outcome = service
+        .execute_agent_shell_thinking_command("%1", "/thinking")
+        .unwrap();
+    let status_text = match status_outcome {
+        super::AgentShellCommandOutcome::Display { body, .. } => body,
+        other => panic!("expected Display outcome for /thinking without args, got {other:?}"),
+    };
+    assert!(status_text.contains("enabled=true"), "{status_text}");
+    assert!(status_text.contains("explicit=false"), "{status_text}");
+
+    let apply = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"thinking","method":"agent/shell/command","params":{"idempotency_key":"thinking","input":"/thinking off"}}"#,
+        &primary,
+    );
+    assert!(apply.contains("source=runtime-thinking"), "{apply}");
+    assert!(apply.contains("thinking=disabled"), "{apply}");
+    assert!(apply.contains("changed=true"), "{apply}");
+
+    let (_name, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(profile.thinking_enabled(), Some(false));
+    assert_eq!(profile.reasoning_profile.as_deref(), Some("high"));
+    assert_eq!(
+        service.model_profile_thinking_enabled(&profile),
+        Some(false)
+    );
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(pane_context.agent_thinking.as_deref(), Some("off"));
+
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"prompt","method":"agent/shell/command","params":{"idempotency_key":"prompt","input":"use the current DeepSeek thinking setting"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].model_profile.thinking_enabled(), Some(false));
+}
+
+/// Verifies unsupported providers reject `/thinking` instead of mutating
+/// provider-neutral model profiles.
+///
+/// The thinking toggle is intentionally a provider capability, not a universal
+/// model-profile field. OpenAI remains unaffected by the DeepSeek adapter's
+/// compatibility controls, so the command should fail fast before creating a
+/// runtime-generated profile for an unsupported provider.
+#[test]
+fn runtime_slash_command_thinking_rejects_unsupported_provider() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let error = service
+        .execute_agent_shell_thinking_command("%1", "/thinking off")
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("does not support a thinking-mode toggle"),
+        "{error}"
+    );
+}
+
 /// Verifies that generated runtime model profiles produce distinct identities
 /// when latency preference differs so pane-local overrides for the same
 /// provider/model/reasoning tuple do not collapse together.
@@ -3977,6 +4082,96 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
     assert!(rendered.contains("full-access"), "{rendered}");
     assert!(rendered.contains("route"), "{rendered}");
     assert!(rendered.contains("gpt"), "{rendered}");
+}
+
+/// Verifies the DeepSeek thinking status pill is an immediate toggle rather
+/// than a dropdown selector.
+///
+/// The pane frame exposes thinking next to reasoning only when the provider
+/// supports the capability. Clicking it should reuse the `/thinking toggle`
+/// runtime mutation path, update the pane-local generated profile, and refresh
+/// the frame context without opening selector state.
+#[test]
+fn runtime_pane_agent_status_thinking_pill_toggles_deepseek_profile() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"deepseek\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\nmodels = [\"deepseek-v4-pro\"]\ndefault_model = \"deepseek-v4-pro\"\n\n[model_profiles.default]\nprovider = \"deepseek\"\nmodel = \"deepseek-v4-pro\"\nreasoning_profile = \"high\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let first_toggle = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Thinking,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(first_toggle.view_refresh_required);
+    assert!(!first_toggle.full_redraw_required);
+    assert!(service.pane_agent_status_selector.is_none());
+    let (_off_name, off_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(off_profile.thinking_enabled(), Some(false));
+    let off_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert_eq!(
+        off_config
+            .frame_context
+            .panes
+            .get("%1")
+            .and_then(|pane| pane.agent_thinking.as_deref()),
+        Some("off")
+    );
+
+    let second_toggle = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::OpenPaneAgentStatusSelector {
+                        pane_index: 0,
+                        field: PaneAgentStatusField::Thinking,
+                    },
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(second_toggle.view_refresh_required);
+    assert!(service.pane_agent_status_selector.is_none());
+    let (_on_name, on_profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    assert_eq!(on_profile.thinking_enabled(), Some(true));
 }
 
 /// Verifies that pane-frame agent selectors remain modal until the user makes

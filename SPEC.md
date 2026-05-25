@@ -816,6 +816,8 @@ Pane frames MUST support the following fields:
 - `agent.status`: Agent state, such as idle, running, waiting, or errored.
 - `agent.model`: Active provider model name when visible by policy.
 - `agent.reasoning`: Active reasoning profile or effort when visible by policy.
+- `agent.thinking`: Provider thinking-mode state when the active provider
+  supports a native thinking toggle.
 - `agent.routing`: Pane-local routing enablement state.
 - `agent.preset`: Active model preset name when the pane model and
   auto-sizing profile group match a configured preset, or an implementation
@@ -2491,6 +2493,13 @@ policy. Mezzanine MAY omit redundant provider-default retention fields while
 preserving behavior. Mezzanine MUST send `24h` only for OpenAI model families
 that support extended prompt-cache retention, and MUST NOT silently translate an
 unsupported explicit `in_memory` request into extended retention.
+For DeepSeek profiles, `provider_options.thinking` MAY be set to `enabled` or
+`disabled` to explicitly control native thinking mode independently of
+`provider_options.reasoning_effort`. When omitted, Mezzanine MAY infer DeepSeek
+thinking mode from a configured reasoning profile or reasoning effort. The
+DeepSeek adapter MUST keep this behavior scoped to DeepSeek request
+serialization and MUST NOT emit thinking controls for providers that do not
+support them.
 
 Generated default configuration MUST include the auto-sizing model profiles
 referenced by `agents.auto_sizing`: `auto-size-router` using `gpt-5.4-mini`,
@@ -4724,6 +4733,13 @@ The baseline command capabilities are:
   or reasoning profile. Pane-frame agent status controls MUST expose the latency
   selector only when the active provider supports a provider-visible latency
   preference.
+- `/thinking`: Inspect or change the pane-local provider thinking-mode toggle
+  when the active provider supports one. It MUST accept `on`, `off`, `toggle`,
+  and `status`, and MUST display the active setting when invoked without
+  arguments or with `status` or `show`. The command MUST apply a pane-scoped
+  model-profile override without changing the provider, model, reasoning
+  profile, or latency preference. Providers that do not expose a native
+  thinking toggle MUST reject the command without mutating model profiles.
 - `/logout`: Log out of a provider account.
 - `/list-mcp`: List configured Model Context Protocol servers and tools.
 - `/model`: Inspect and change the active model and reasoning settings. The
@@ -6987,6 +7003,12 @@ cached live catalog when one is available. Selector choices MUST apply
 pane-scoped model profile overrides, MUST preserve the current reasoning
 preference when the newly selected model supports it, and MUST NOT block normal
 pane interaction after the drop-down is closed.
+
+When the active provider supports a native thinking toggle, pane-frame agent
+status controls MUST expose an `agent.thinking` pill immediately after
+`agent.reasoning`. The pill MUST display `thinking` and use distinct color
+treatment for enabled and disabled states. Activating the pill MUST apply the
+same pane-scoped mutation as `/thinking toggle` without opening a dropdown.
 
 When `agents.routing` or the pane-local `/routing` preference is
 enabled, Mezzanine MUST run an auto-sizing decision before the normal provider

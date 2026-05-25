@@ -365,6 +365,8 @@ pub enum PaneAgentStatusField {
     Model,
     /// Active reasoning profile or effort shown in the pane-frame status pills.
     Reasoning,
+    /// Provider thinking-mode state shown in the pane-frame status pills.
+    Thinking,
     /// Pane-local routing state shown in the pane-frame status pills.
     Routing,
     /// Active approval mode shown in the pane-frame status pills.
@@ -381,6 +383,7 @@ impl PaneAgentStatusField {
         match self {
             Self::Model => "agent.model",
             Self::Reasoning => "agent.reasoning",
+            Self::Thinking => "agent.thinking",
             Self::Routing => "agent.routing",
             Self::ApprovalPolicy => "policy.mode",
             Self::Latency => "agent.latency",

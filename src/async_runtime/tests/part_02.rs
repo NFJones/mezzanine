@@ -3603,6 +3603,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            thinking_enabled: task.model_profile.thinking_enabled(),
             latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
@@ -3748,6 +3749,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            thinking_enabled: task.model_profile.thinking_enabled(),
             latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile
@@ -3915,6 +3917,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
                 .get("reasoning_effort")
                 .cloned()
                 .or_else(|| task.model_profile.reasoning_profile.clone()),
+            thinking_enabled: task.model_profile.thinking_enabled(),
             latency_preference: task.model_profile.latency_preference.clone(),
             prompt_cache_retention: task
                 .model_profile

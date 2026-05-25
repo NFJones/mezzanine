@@ -323,6 +323,7 @@ pub(super) fn pane_frame_right_status_rendition(
         "pane.pwd" => ui_theme.colors.pane_pwd.rendition(),
         "agent.model" => ui_theme.colors.agent_model.rendition(),
         "agent.reasoning" => ui_theme.colors.agent_reasoning.rendition(),
+        "agent.thinking" => pane_frame_agent_thinking_rendition(&segment.value, ui_theme),
         "agent.routing" => pane_frame_agent_routing_rendition(&segment.value, ui_theme),
         "agent.latency" => pane_frame_latency_rendition(&segment.value, ui_theme),
         "agent.preset" => ui_theme.colors.agent_model.rendition(),
@@ -330,6 +331,18 @@ pub(super) fn pane_frame_right_status_rendition(
         "agent.context_usage" => pane_frame_agent_context_usage_rendition(&segment.value, ui_theme),
         "agent.status" => pane_frame_agent_status_rendition(&segment.value, ui_theme),
         "policy.mode" => pane_frame_policy_mode_rendition(&segment.value, ui_theme),
+        _ => ui_theme.colors.scroll_indicator.rendition(),
+    }
+}
+
+/// Returns the thinking-mode pill rendition for a pane-local value.
+pub(super) fn pane_frame_agent_thinking_rendition(
+    value: &str,
+    ui_theme: &UiTheme,
+) -> GraphicRendition {
+    match value {
+        "on" => ui_theme.colors.agent_reasoning.rendition(),
+        "off" => ui_theme.colors.agent_status_idle.rendition(),
         _ => ui_theme.colors.scroll_indicator.rendition(),
     }
 }
@@ -1222,6 +1235,7 @@ pub(super) fn pane_frame_right_aligned_display_value(field: &str, value: String)
         "pane.pwd"
             | "agent.model"
             | "agent.reasoning"
+            | "agent.thinking"
             | "agent.routing"
             | "agent.latency"
             | "agent.preset"
@@ -1244,6 +1258,9 @@ pub(super) fn pane_frame_right_aligned_segment_value(field: &str, value: &str) -
     }
     if field == "agent.routing" && !value.trim().is_empty() {
         return "route".to_string();
+    }
+    if field == "agent.thinking" && !value.trim().is_empty() {
+        return "thinking".to_string();
     }
     value.to_string()
 }
@@ -1790,6 +1807,7 @@ pub(super) fn pane_agent_status_field_from_frame_field(
     match field {
         "agent.model" => Some(PaneAgentStatusField::Model),
         "agent.reasoning" => Some(PaneAgentStatusField::Reasoning),
+        "agent.thinking" => Some(PaneAgentStatusField::Thinking),
         "agent.routing" => Some(PaneAgentStatusField::Routing),
         "agent.latency" => Some(PaneAgentStatusField::Latency),
         "agent.preset" => Some(PaneAgentStatusField::Preset),
@@ -2182,6 +2200,10 @@ pub(super) fn pane_frame_field_value(
                 .unwrap_or_default(),
             "agent.reasoning" => {
                 optional_pane_context_value(pane_context, |ctx| &ctx.agent_reasoning)
+                    .unwrap_or_default()
+            }
+            "agent.thinking" => {
+                optional_pane_context_value(pane_context, |ctx| &ctx.agent_thinking)
                     .unwrap_or_default()
             }
             "agent.routing" => optional_pane_context_value(pane_context, |ctx| &ctx.agent_routing)

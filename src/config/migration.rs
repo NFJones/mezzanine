@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 3;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 4;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +64,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             2 => {
                 current_text = migrate_v2_to_v3(format, &current_text)?;
                 current_version = 3;
+            }
+            3 => {
+                current_text = migrate_v3_to_v4(format, &current_text)?;
+                current_version = 4;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -128,6 +132,18 @@ fn migrate_v2_to_v3(format: ConfigFormat, text: &str) -> Result<String> {
     match format {
         ConfigFormat::Toml => migrate_toml_v2_to_v3(text),
         ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v2_to_v3(format, text),
+    }
+}
+
+/// Applies the version 3 to version 4 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v3_to_v4(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v3_to_v4(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v3_to_v4(format, text),
     }
 }
 
@@ -283,6 +299,46 @@ fn migrate_json_compatible_v2_to_v3(format: ConfigFormat, text: &str) -> Result<
         "agent.routing",
     );
     set_json_path_value(&mut document, "version", serde_json::json!(3))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
+/// Applies the version 3 to version 4 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v3_to_v4(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    ensure_toml_agent_thinking_visible_field(&mut document)?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(4))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 3 to version 4 migration to JSON and YAML config files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v3_to_v4(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    ensure_json_agent_thinking_visible_field(&mut document)?;
+    set_json_path_value(&mut document, "version", serde_json::json!(4))?;
 
     match format {
         ConfigFormat::Json => serde_json::to_string_pretty(&document)
@@ -492,6 +548,130 @@ fn ensure_json_agent_preset_visible_field(document: &mut serde_json::Value) -> R
         array.push(serde_json::json!("agent.preset"));
     }
     Ok(())
+}
+
+/// Ensures the pane visible-field list exposes the DeepSeek thinking toggle
+/// immediately after the reasoning field.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+fn ensure_toml_agent_thinking_visible_field(document: &mut toml_edit::DocumentMut) -> Result<()> {
+    copy_toml_default_if_absent(
+        document,
+        &DEFAULT_CONFIG_TOML
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| MezError::config(format!("invalid built-in TOML config: {error}")))?,
+        "frames.pane.visible_fields",
+    )?;
+    ensure_toml_string_array_value_after(
+        document,
+        "frames.pane.visible_fields",
+        "agent.thinking",
+        "agent.reasoning",
+    )
+}
+
+/// Ensures the pane visible-field list exposes the DeepSeek thinking toggle
+/// immediately after the reasoning field.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+fn ensure_json_agent_thinking_visible_field(document: &mut serde_json::Value) -> Result<()> {
+    copy_json_default_if_absent(
+        document,
+        &{
+            let default_table =
+                toml::from_str::<toml::Table>(DEFAULT_CONFIG_TOML).map_err(|error| {
+                    MezError::config(format!("invalid built-in default config: {error}"))
+                })?;
+            serde_json::to_value(default_table).map_err(|error| {
+                MezError::config(format!("invalid built-in default config: {error}"))
+            })?
+        },
+        "frames.pane.visible_fields",
+    )?;
+    ensure_json_string_array_value_after(
+        document,
+        "frames.pane.visible_fields",
+        "agent.thinking",
+        "agent.reasoning",
+    );
+    Ok(())
+}
+
+/// Inserts one string value into a TOML array after an anchor string when it is
+/// not already present.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+/// - `path`: The dotted string-array path.
+/// - `value`: The value to insert if absent.
+/// - `after`: The anchor value after which the new value should appear.
+fn ensure_toml_string_array_value_after(
+    document: &mut toml_edit::DocumentMut,
+    path: &str,
+    value: &str,
+    after: &str,
+) -> Result<()> {
+    let segments = split_config_path(path);
+    let Some(leaf) = segments.last() else {
+        return Ok(());
+    };
+    let Some(parent) = toml_parent_table_mut(
+        document.as_table_mut(),
+        &segments[..segments.len().saturating_sub(1)],
+        false,
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(toml_edit::Item::Value(array_value)) = parent.get_mut(leaf) else {
+        return Ok(());
+    };
+    let Some(array) = array_value.as_array_mut() else {
+        return Ok(());
+    };
+    if array.iter().any(|item| item.as_str() == Some(value)) {
+        return Ok(());
+    }
+    let index = array
+        .iter()
+        .position(|item| item.as_str() == Some(after))
+        .map(|position| position + 1)
+        .unwrap_or_else(|| array.len());
+    array.insert(index, value);
+    Ok(())
+}
+
+/// Inserts one string value into a JSON-compatible array after an anchor string
+/// when it is not already present.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+/// - `path`: The dotted string-array path.
+/// - `value`: The value to insert if absent.
+/// - `after`: The anchor value after which the new value should appear.
+fn ensure_json_string_array_value_after(
+    document: &mut serde_json::Value,
+    path: &str,
+    value: &str,
+    after: &str,
+) {
+    let Some(array_value) = json_value_at_mut(document, path) else {
+        return;
+    };
+    let Some(array) = array_value.as_array_mut() else {
+        return;
+    };
+    if array.iter().any(|item| item.as_str() == Some(value)) {
+        return;
+    }
+    let index = array
+        .iter()
+        .position(|item| item.as_str() == Some(after))
+        .map(|position| position + 1)
+        .unwrap_or_else(|| array.len());
+    array.insert(index, serde_json::Value::String(value.to_string()));
 }
 
 /// Renames one key inside every TOML table stored under a parent table.

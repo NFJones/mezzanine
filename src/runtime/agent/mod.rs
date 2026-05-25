@@ -283,6 +283,7 @@ mod tests {
                 provider: "deepseek".to_string(),
                 model: "deepseek-v4-pro".to_string(),
                 reasoning_effort: Some("high".to_string()),
+                thinking_enabled: None,
                 latency_preference: None,
                 prompt_cache_retention: None,
                 max_output_tokens: None,

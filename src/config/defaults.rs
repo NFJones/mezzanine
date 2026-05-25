@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 3
+version = 4
 
 [session]
 detach_behavior = "keep-running"
@@ -79,7 +79,7 @@ enabled = true
 position = "border"
 template = " #{pane.index} #{pane.title} "
 style = "default"
-visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 
 [theme]
 active = "kanagawa"
@@ -345,6 +345,7 @@ approval_policy = "ask"
 fallback_profiles = []
 
 [model_profiles.deepseek-default.provider_options]
+thinking = "enabled"
 reasoning_effort = "high"
 
 [model_profiles.deepseek-fast]
@@ -362,6 +363,7 @@ approval_policy = "ask"
 fallback_profiles = []
 
 [model_profiles.deepseek-fast.provider_options]
+thinking = "enabled"
 reasoning_effort = "high"
 
 [model_presets.openai]

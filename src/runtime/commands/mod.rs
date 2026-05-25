@@ -762,6 +762,17 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "thinking"
+                {
+                    let thinking_outcome =
+                        self.execute_agent_shell_thinking_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&thinking_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "compact"
                 {
                     let compact_outcome =
@@ -1181,6 +1192,18 @@ impl RuntimeSessionService {
                     &pane_id,
                     input,
                     Some(&latency_outcome),
+                ));
+            }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "thinking"
+            {
+                let thinking_outcome =
+                    self.execute_agent_shell_thinking_command(&pane_id, input)?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&thinking_outcome),
                 ));
             }
             if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
@@ -2951,6 +2974,10 @@ impl RuntimeSessionService {
             .as_deref()
             .unwrap_or("none")
             .to_string();
+        let thinking = self
+            .model_profile_thinking_enabled(&model_profile)
+            .map(|enabled| if enabled { "enabled" } else { "disabled" })
+            .unwrap_or("unsupported");
         let rows = vec![
             vec!["Pane".to_string(), session.pane_id.clone()],
             vec!["Session".to_string(), session.session_id.clone()],
@@ -2980,6 +3007,7 @@ impl RuntimeSessionService {
                     reasoning_profile
                 ),
             ],
+            vec!["Thinking".to_string(), thinking.to_string()],
             vec![
                 "Prompt profile".to_string(),
                 format!("{AGENT_PROMPT_PROFILE_NAME} v{AGENT_PROMPT_PROFILE_VERSION}"),
@@ -3813,6 +3841,7 @@ const RUNTIME_STATUSLINE_FIELDS: &[&str] = &[
     "agent.status",
     "agent.model",
     "agent.reasoning",
+    "agent.thinking",
     "agent.context_usage",
     "policy.mode",
     "observer.pending_count",

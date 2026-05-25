@@ -303,6 +303,7 @@ fn slash_command_registry_contains_required_baseline_commands() {
         "diff",
         "exit",
         "init",
+        "thinking",
         "logout",
         "list-mcp",
         "model",
@@ -4140,6 +4141,128 @@ fn deepseek_chat_completions_request_body_uses_auto_maap_tool_with_thinking_when
     assert_eq!(value["tools"].as_array().unwrap().len(), 1);
     assert!(action_types.contains(&"send_message".to_string()));
     assert!(action_types.contains(&"spawn_agent".to_string()));
+}
+
+/// Verifies an explicit DeepSeek thinking disable overrides configured
+/// reasoning effort before request serialization.
+///
+/// DeepSeek rejects forced `tool_choice` while thinking is enabled, but the
+/// user-facing `/thinking off` command must let an operator prioritize strict
+/// MAAP tool-call reliability without deleting the profile's reasoning level.
+/// This regression keeps those controls independent: reasoning remains on the
+/// profile, while the provider request disables thinking and omits
+/// `reasoning_effort`.
+#[test]
+fn deepseek_chat_completions_request_body_disables_thinking_when_profile_toggle_is_off() {
+    let mut provider_options = std::collections::BTreeMap::new();
+    provider_options.insert("thinking".to_string(), "disabled".to_string());
+    provider_options.insert("reasoning_effort".to_string(), "xhigh".to_string());
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("xhigh".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options,
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "spawn two subagents".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+
+    assert_eq!(request.thinking_enabled, Some(false));
+    assert_eq!(
+        value["thinking"],
+        serde_json::json!({
+            "type": "disabled"
+        })
+    );
+    assert!(value.get("reasoning_effort").is_none());
+    assert_eq!(
+        value["tool_choice"],
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+            }
+        })
+    );
+}
+
+/// Verifies an explicit DeepSeek thinking enable can activate provider
+/// thinking mode without requiring a separate reasoning-effort value.
+///
+/// Operators may want to leave DeepSeek's effort choice at the provider
+/// default while still enabling native thinking. This request shape should
+/// advertise the MAAP tool in model-selected mode, omit forced `tool_choice`,
+/// and avoid inventing a `reasoning_effort` field the profile did not carry.
+#[test]
+fn deepseek_chat_completions_request_body_enables_thinking_without_reasoning_effort() {
+    let mut provider_options = std::collections::BTreeMap::new();
+    provider_options.insert("thinking".to_string(), "enabled".to_string());
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options,
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "spawn two subagents".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+
+    assert_eq!(request.thinking_enabled, Some(true));
+    assert_eq!(
+        value["thinking"],
+        serde_json::json!({
+            "type": "enabled"
+        })
+    );
+    assert!(value.get("reasoning_effort").is_none());
+    assert!(value.get("tool_choice").is_none());
+    assert!(value.get("tools").is_some());
 }
 
 /// Verifies DeepSeek no-tool requests can use thinking mode without sending a

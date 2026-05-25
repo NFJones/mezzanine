@@ -60,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `2` | Config schema version. |
+| `version` | integer | `4` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -202,7 +202,7 @@ Default `frames.window.visible_fields`:
 Default `frames.pane.visible_fields`:
 
 ```toml
-["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.routing", "agent.latency", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 ```
 
 ### Frame template fields
@@ -217,8 +217,9 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.index`, `pane.title`, `pane.active`, `pane.size`, `pane.primary_pid`,
 `pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `agent.id`,
 `agent.name`, `agent.status`, `agent.model`, `agent.reasoning`,
-`agent.routing`, `agent.latency`, `agent.context_usage`, `policy.mode`,
-`observer.pending_count`, and `history.position`.
+`agent.thinking`, `agent.routing`, `agent.latency`, `agent.preset`,
+`agent.context_usage`, `policy.mode`, `observer.pending_count`, and
+`history.position`.
 
 ### `theme`
 
@@ -485,11 +486,12 @@ Default model profiles:
 | `auto-size-large` | `fallback_profiles` | `[]` |
 | `auto-size-large.provider_options` | `reasoning_effort` | `"high"` |
 
-OpenAI provider options under a model profile:
+Provider options under a model profile:
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `model_profiles.<name>.provider_options.reasoning_effort` | string | profile-specific | Reasoning effort sent to the provider. |
+| `model_profiles.<name>.provider_options.thinking` | string | `"enabled"` for generated DeepSeek profiles | DeepSeek thinking mode override: `enabled` or `disabled`. |
 | `model_profiles.<name>.provider_options.prompt_cache_retention` | string | omitted | Optional OpenAI cache retention: `in_memory` or `24h` when supported. |
 
 ### `permissions`
