@@ -282,12 +282,16 @@ fn deepseek_maap_tool_choice() -> serde_json::Value {
 
 /// Builds concise provider-facing guidance for DeepSeek's single MAAP tool.
 fn deepseek_maap_tool_description(request: &ModelRequest) -> String {
+    let capability_map = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; respond_only=final text only.";
+    let anti_examples = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks.";
     if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
-        return "Submit exactly one MAAP/1 capability routing batch through this function. Current allowed action types: say,request_capability. If the task needs shell, patch, web search, URL fetch, MCP, messaging, subagent, or config work, emit request_capability for that capability immediately. Do not emit blocked say merely because the executable action is not yet available. Use final say only when no external action capability is needed.".to_string();
+        return format!(
+            "Submit exactly one MAAP/1 capability routing batch through this function. Return a function call, not prose. Current allowed action types: say,request_capability. If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Use final say only when no external action capability is needed. {capability_map} {anti_examples}"
+        );
     }
     format!(
-        "Submit exactly one MAAP/1 action batch through this function. Current allowed action types: {}. Use only the action objects in this function schema. Do not answer this Mezzanine agent turn in prose outside the function call. If the needed action is absent and request_capability is available, request that capability instead of answering in prose.",
-        request.allowed_actions.action_type_names().join(",")
+        "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
+        request.allowed_actions.action_type_names().join(","),
     )
 }
 

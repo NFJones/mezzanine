@@ -401,7 +401,7 @@ fn maap_request_capability_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": AgentCapability::all_names(),
-                    "description": "Coarse action family to expose through the controller when the current schema lacks actions needed for the task. This is not a user permission request."
+                    "description": "Coarse action family to expose through the controller when the current schema lacks actions needed for the task. This is not a user permission request. Capability map: shell exposes shell_command and apply_patch for local files, rg/sed/cat, git, builds, tests, and patch edits; network_search exposes web_search; network_fetch exposes fetch_url; mcp exposes mcp_call; subagent exposes send_message and spawn_agent; config_change exposes config_change; respond_only is only for final text."
                 }),
             ),
             (
@@ -409,7 +409,7 @@ fn maap_request_capability_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "minLength": 1,
-                    "description": "Brief task-specific explanation of why this capability is needed."
+                    "description": "Brief task-specific explanation naming the next concrete action or evidence needed. Do not ask the user to grant access here."
                 }),
             ),
         ],
@@ -491,7 +491,7 @@ fn maap_apply_patch_action_schema() -> serde_json::Value {
         "apply_patch",
         [described_string_property(
             "patch",
-            "Direct Mezzanine patch text, not Markdown, heredoc, shell, or git apply input. Must start with *** Begin Patch and end with *** End Patch. Use Add/Update/Delete/Move file directives with relative safe paths only; paths must not be absolute or contain .. traversal. Prefer one small anchored update with a distinctive @@ header and 1-6 exact current old/context lines; use multiple small hunks instead of one brittle hunk. Hunk lines use one leading prefix: space context, - removed, + added; *** End of File means no final newline. This is the only semantic file-content mutation action. After mismatch or ambiguity, use existing diagnostics or reread only missing/stale owner ranges, skip already-applied changes, and retry with a smaller fresh anchored patch.",
+            "Direct Mezzanine patch text, not Markdown, heredoc, shell, or git apply input. Must start with *** Begin Patch and end with *** End Patch. Accepted file directives are exactly *** Add File, *** Update File, *** Delete File, and optional *** Move to immediately after *** Update File; there is no *** Replace File directive. For whole-file replacement, use *** Update File with hunks that remove old content and add new content. Use relative safe paths only; paths must not be absolute or contain .. traversal. Prefer one small anchored update with a distinctive @@ header and 1-6 exact current old/context lines; use multiple small hunks instead of one brittle hunk. Hunk lines use one leading prefix: space context, - removed, + added; *** End of File means no final newline. This is the only semantic file-content mutation action. After mismatch or ambiguity, use existing diagnostics or reread only missing/stale owner ranges, skip already-applied changes, and retry with a smaller fresh anchored patch.",
         )],
         &["patch"],
     )

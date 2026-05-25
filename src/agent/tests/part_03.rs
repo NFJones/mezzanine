@@ -1859,7 +1859,33 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         capability_schema["properties"]["capability"]["enum"],
         serde_json::json!(crate::agent::AgentCapability::all_names())
     );
+    let capability_description = capability_schema["properties"]["capability"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        capability_description.contains("Capability map: shell exposes shell_command and apply_patch"),
+        "{capability_description}"
+    );
+    assert!(
+        capability_description.contains("network_search exposes web_search"),
+        "{capability_description}"
+    );
+    assert!(
+        capability_description.contains("network_fetch exposes fetch_url"),
+        "{capability_description}"
+    );
+    let capability_reason_description = capability_schema["properties"]["reason"]["description"]
+        .as_str()
+        .unwrap();
     assert_eq!(capability_schema["properties"]["reason"]["minLength"], 1);
+    assert!(
+        capability_reason_description.contains("next concrete action or evidence needed"),
+        "{capability_reason_description}"
+    );
+    assert!(
+        capability_reason_description.contains("Do not ask the user to grant access here"),
+        "{capability_reason_description}"
+    );
     assert!(
         value["instructions"]
             .as_str()
@@ -3507,7 +3533,15 @@ fn openai_responses_request_body_describes_apply_patch_format() {
     assert!(description.contains("*** Begin Patch"), "{description}");
     assert!(description.contains("*** End Patch"), "{description}");
     assert!(
-        description.contains("Add/Update/Delete/Move file directives"),
+        description.contains("Accepted file directives are exactly *** Add File, *** Update File, *** Delete File"),
+        "{description}"
+    );
+    assert!(
+        description.contains("there is no *** Replace File directive"),
+        "{description}"
+    );
+    assert!(
+        description.contains("For whole-file replacement, use *** Update File with hunks"),
         "{description}"
     );
     assert!(description.contains("relative safe paths"), "{description}");

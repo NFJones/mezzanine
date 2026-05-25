@@ -4014,7 +4014,12 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(!action_types.contains(&"spawn_agent".to_string()));
     let description = tool["function"]["description"].as_str().unwrap();
     assert!(description.contains("capability routing batch"));
-    assert!(description.contains("Do not emit blocked say"));
+    assert!(description.contains("Return a function call, not prose"));
+    assert!(description.contains("Capability map: shell=local files"));
+    assert!(description.contains("Wrong: say(blocked"));
+    assert!(description.contains("Right: request_capability(capability=\"shell\""));
+    assert!(description.contains("Wrong: *** Replace File"));
+    assert!(description.contains("Right: *** Update File with anchored hunks"));
     let parameters = &tool["function"]["parameters"];
     assert!(parameters["properties"].get("thought").is_none());
     assert!(
@@ -4074,6 +4079,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
     let tool = deepseek_maap_function_tool(&value);
     let action_types = deepseek_tool_action_types(tool);
+    let description = tool["function"]["description"].as_str().unwrap();
 
     assert_eq!(
         value["thinking"],
@@ -4096,10 +4102,19 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(action_types.contains(&"send_message".to_string()));
     assert!(action_types.contains(&"spawn_agent".to_string()));
     assert!(
-        tool["function"]["description"].as_str().unwrap().contains(
+        description.contains(
             "Current allowed action types: say,request_capability,send_message,spawn_agent"
         )
     );
+    assert!(
+        description.contains("request_capability for that capability instead of say(blocked)"),
+        "{description}"
+    );
+    assert!(
+        description.contains("Capability map: shell=local files"),
+        "{description}"
+    );
+    assert!(description.contains("Wrong: say(blocked"), "{description}");
 }
 
 /// Verifies DeepSeek MAAP requests use the provider's thinking-mode tool-call
