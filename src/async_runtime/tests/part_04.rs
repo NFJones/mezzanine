@@ -25,7 +25,7 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let primary_initialize = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"primary-init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
@@ -109,7 +109,7 @@ async fn async_runtime_daemon_supervises_named_control_and_message_listeners() {
     let message_listener = UnixListener::bind(&message_path).unwrap();
 
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let initialize = encode_control_body(
         r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
     );
@@ -207,7 +207,7 @@ async fn async_runtime_daemon_pane_worker_feeds_pty_output_into_rendered_view() 
         .start_initial_pane_process(Some("sh -c 'printf async-daemon-tick; sleep 1'"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let services = build_async_runtime_daemon_services(
         handle.clone(),
         AsyncRuntimeDaemonListeners::control_only(listener),
@@ -275,7 +275,7 @@ async fn async_message_connection_dispatches_hello() {
     use tokio::net::UnixStream;
 
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let input = encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#);
 
@@ -325,7 +325,7 @@ async fn async_message_connection_loop_preserves_agent_connection() {
     use tokio::net::UnixStream;
 
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let hello = encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#);
     let discover = encode_mmp_body(r#"{"protocol":"mmp/1","type":"discover"}"#);
@@ -390,7 +390,7 @@ async fn async_message_listener_serves_stateful_connection_until_client_closes()
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let hello = encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#);
     let discover = encode_mmp_body(r#"{"protocol":"mmp/1","type":"discover"}"#);
 
@@ -450,7 +450,7 @@ async fn async_message_listener_can_schedule_multiple_connections() {
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let hello = encode_mmp_body(r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#);
 
     let client_one_path = path.clone();
@@ -548,7 +548,7 @@ async fn async_message_connection_flushes_fanout_after_response_write() {
             .cloned(),
     };
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let input = encode_mmp_body(r#"{"protocol":"mmp/1","type":"heartbeat","id":"hb1"}"#);
 
@@ -638,7 +638,7 @@ async fn async_message_connection_notification_flushes_later_fanout() {
         delivery_cursor: Some(target_cursor),
     };
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let producer_handle = handle.clone();
     let target_id = target.agent_id.clone();
     let sender_id = sender.agent_id.clone();
@@ -740,7 +740,7 @@ async fn async_message_connection_exits_on_lifecycle_change_without_idle_poll() 
         delivery_cursor: Some(target_cursor),
     };
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let trigger_handle = handle.clone();
     let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let (release_client, hold_client) = oneshot::channel::<()>();
@@ -816,7 +816,7 @@ async fn async_event_flush_writes_notifications_and_advances_cursor() {
         .attach("events-primary", EventAudience::Primary, true, 0)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
 
     let client = async {
@@ -881,7 +881,7 @@ async fn async_event_connection_serves_until_shutdown_predicate() {
         .attach("events-primary", EventAudience::Primary, true, 0)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
 
     let client = async {
@@ -941,7 +941,7 @@ async fn async_event_connection_notification_flushes_later_events() {
         )
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let producer_handle = handle.clone();
     let (mut client_stream, mut server_stream) = UnixStream::pair().unwrap();
 
@@ -1034,11 +1034,7 @@ async fn async_event_connection_rejects_wrong_unix_peer_owner() {
     use crate::event::EventAudience;
     use tokio::net::UnixStream;
 
-    let (handle, _actor) = AsyncRuntimeSessionActor::new(
-        test_service_with_event_log(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
+    let (handle, _actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log()).build().unwrap();
     let (_client_stream, mut server_stream) = UnixStream::pair().unwrap();
     let mut connections = RuntimeEventConnectionTable::default();
     connections
@@ -1083,7 +1079,7 @@ async fn async_event_listener_accepts_and_streams_visible_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut stream = UnixStream::connect(&path).await.unwrap();

@@ -17,7 +17,7 @@ use super::{
     AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
     AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig,
     AsyncRuntimeMessageConnectionConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor, AsyncRuntimeSessionActor,
+    AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor,
     AsyncRuntimeSideEffectServiceConfig, AsyncTerminalOutputWriteReport, ClientEvent,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, Duration, PaneEvent, PersistenceTarget,
     PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, Result, RuntimeEvent,
@@ -67,6 +67,7 @@ use crate::layout::Size;
 use crate::runtime::RuntimeEventConnectionTable;
 use crate::session::{ClientState, Session};
 use crate::shell::resolve_shell;
+use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
     AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole, MuxAction,
@@ -929,7 +930,7 @@ fn async_runtime_event_batch_preserves_delivery_order() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_accepts_runtime_event_batches_in_order() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let client_id = ClientId::parse('c', "c1").unwrap();
     let mut batch = RuntimeEventBatch::new();
     batch.push(RuntimeEvent::Client(ClientEvent::Resize {
@@ -969,7 +970,7 @@ async fn async_actor_applies_primary_client_resize_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -1007,7 +1008,7 @@ async fn async_actor_applies_client_resize_signal_as_render_invalidation() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -1059,7 +1060,7 @@ async fn async_actor_applies_primary_client_input_events() {
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -1102,7 +1103,7 @@ async fn async_actor_applies_client_output_ready_events_as_render_side_effects()
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -1143,7 +1144,7 @@ async fn async_actor_applies_primary_client_disconnect_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -1206,7 +1207,7 @@ async fn async_actor_applies_render_timer_events_as_side_effects() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let resize_key =
@@ -1295,7 +1296,7 @@ async fn async_actor_ignores_stale_resize_debounce_timer_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let stale_key = RuntimeTimerKey::new(RuntimeTimerKind::ResizeDebounce, primary.as_str(), 1);
@@ -1362,7 +1363,7 @@ async fn async_actor_ignores_stale_status_refresh_timer_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let stale_key = RuntimeTimerKey::new(RuntimeTimerKind::StatusRefresh, primary.as_str(), 1);
@@ -1451,7 +1452,7 @@ async fn async_actor_drains_render_side_effects_without_stealing_provider_dispat
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let provider_key =
@@ -1585,7 +1586,7 @@ context_window_tokens = 128000
         .bind_conversation("%1", "async-compact", 3)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let response = handle
@@ -1689,7 +1690,7 @@ context_window_tokens = 128000
         .bind_conversation("%1", "async-attached-compact", 3)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let mut io = FakeAttachedTerminalLoopIo {
         readiness_batches: vec![vec![
             AttachedTerminalFdReadiness {
@@ -1787,7 +1788,7 @@ async fn async_actor_coalesces_render_side_effects_by_client() {
         .unwrap();
     let other = ClientId::new('c', 9006);
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let queued = handle
@@ -1857,14 +1858,13 @@ async fn async_actor_coalesces_render_side_effects_before_capacity_check() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        service,
-        AsyncRuntimeActorConfig {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
             side_effect_buffer: 2,
             ..AsyncRuntimeActorConfig::default()
-        },
-    )
-    .unwrap();
+        })
+        .build()
+        .unwrap();
 
     let client = async {
         let queued = handle
@@ -1915,14 +1915,13 @@ async fn async_actor_coalesces_client_flush_side_effects_before_capacity_check()
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        service,
-        AsyncRuntimeActorConfig {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
             side_effect_buffer: 2,
             ..AsyncRuntimeActorConfig::default()
-        },
-    )
-    .unwrap();
+        })
+        .build()
+        .unwrap();
 
     let client = async {
         let queued = handle
@@ -1998,14 +1997,13 @@ async fn async_actor_coalesces_registry_persistence_before_capacity_check() {
     let mut service = test_service();
     service.set_session_registry(registry.clone());
     let update = service.registry_update_plan();
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        service,
-        AsyncRuntimeActorConfig {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
             side_effect_buffer: 2,
             ..AsyncRuntimeActorConfig::default()
-        },
-    )
-    .unwrap();
+        })
+        .build()
+        .unwrap();
 
     let client = async {
         let queued = handle
@@ -2062,14 +2060,13 @@ async fn async_actor_does_not_persist_registry_for_pane_output_bursts() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     service.set_session_registry(registry);
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        service,
-        AsyncRuntimeActorConfig {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .config(AsyncRuntimeActorConfig {
             side_effect_buffer: 2,
             ..AsyncRuntimeActorConfig::default()
-        },
-    )
-    .unwrap();
+        })
+        .build()
+        .unwrap();
 
     let client = async {
         for index in 0..128 {
@@ -2120,7 +2117,7 @@ async fn async_actor_drains_render_side_effects_for_one_client() {
         .unwrap();
     let other = ClientId::new('c', 9016);
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         handle
@@ -2190,7 +2187,7 @@ async fn async_render_side_effect_service_composes_flush_effects() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let flushed = StdArc::new(Mutex::new(Vec::new()));
     let flushed_for_service = flushed.clone();
 
@@ -2292,7 +2289,7 @@ async fn async_render_side_effect_service_refreshes_active_agent_status_without_
         .unwrap();
     assert!(start.contains(r#""state":"running""#), "{start}");
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         handle
@@ -2357,7 +2354,7 @@ async fn async_render_side_effect_service_retargets_status_refresh_for_agent_ani
         .enter_or_resume("%1")
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         handle
@@ -2461,7 +2458,7 @@ async fn async_client_output_flush_service_writes_styled_flush_effects() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let other_client = ClientId::new('c', 9005);
@@ -2543,7 +2540,7 @@ async fn async_client_output_flush_service_prefers_new_frame_over_stale_pending_
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let write_count = StdArc::new(AtomicUsize::new(0));
     let write_notify = StdArc::new(tokio::sync::Notify::new());
     let pending_output_bytes = StdArc::new(AtomicUsize::new(256));
@@ -2614,11 +2611,10 @@ async fn async_client_output_flush_service_prefers_new_frame_over_stale_pending_
 /// subscribers.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_hook_completion_events_to_event_log() {
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        test_service_with_event_log(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
+    let (handle, actor) =
+        AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+            .build()
+            .unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2672,7 +2668,7 @@ async fn async_actor_applies_hook_completion_events_to_event_log() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_pane_output_events_to_rendered_view() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2724,7 +2720,7 @@ async fn async_actor_applies_foreground_process_metadata_to_pane_title() {
         .start_initial_pane_process(Some("sleep 30"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2777,7 +2773,7 @@ async fn async_actor_queues_render_side_effects_for_applied_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2847,7 +2843,7 @@ async fn async_actor_queues_provider_dispatch_side_effects_for_provider_poll_tim
     let expected_agent = AgentId::opaque(task.agent_id.clone()).unwrap();
     let expected_turn = task.turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", 1);
@@ -2955,7 +2951,7 @@ async fn async_actor_ignores_stale_provider_poll_timer_events() {
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let stale_key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", 1);
@@ -3041,7 +3037,7 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut failure = RuntimeEventBatch::new();
@@ -3169,7 +3165,7 @@ max_output_tokens = 4096
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut failure = RuntimeEventBatch::new();
@@ -3286,7 +3282,7 @@ async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_time
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut failure = RuntimeEventBatch::new();
@@ -3423,7 +3419,7 @@ async fn async_actor_schedules_provider_retry_timer_for_controller_retry_hint() 
     let expected_turn = pending[0].turn_id.clone();
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let retry_message = "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID b331baf5-b254-46d7-8d3f-58b563ce7ee8 in your message.";
@@ -3499,7 +3495,7 @@ async fn async_actor_fails_non_retryable_provider_failures_without_retry_timer()
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut failure = RuntimeEventBatch::new();
@@ -3560,7 +3556,7 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -3655,7 +3651,7 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let client = async {
         handle
             .render_client_frame(
@@ -3714,7 +3710,7 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let client = async {
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Pane(PaneEvent::Output {
@@ -3772,7 +3768,7 @@ async fn async_side_effect_service_drains_actor_queue() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let applied = StdArc::new(Mutex::new(Vec::new()));
 
     let client = {
@@ -3830,7 +3826,7 @@ async fn async_side_effect_service_drains_actor_queue() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_side_effect_service_exits_after_final_empty_poll_without_sleep() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let client = async {
         let report = tokio::time::timeout(
@@ -3870,7 +3866,7 @@ async fn async_side_effect_service_exits_after_final_empty_poll_without_sleep() 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_side_effect_service_uses_bounded_idle_probe_when_unbounded() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let worker_handle = handle.clone();
     let shutdown_handle = handle.clone();
@@ -3923,7 +3919,7 @@ async fn async_side_effect_service_uses_bounded_idle_probe_when_unbounded() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_filtered_side_effect_drain_renotifies_retained_work() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let agent_id = AgentId::opaque("agent-%1").unwrap();
 
     let client = async {
@@ -3971,7 +3967,7 @@ async fn async_filtered_side_effect_drain_renotifies_retained_work() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_side_effect_delivery_watcher_broadcasts_to_all_workers() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut first_worker = handle.side_effect_delivery_watcher();
     let mut second_worker = handle.side_effect_delivery_watcher();
 
@@ -4014,7 +4010,7 @@ async fn async_side_effect_service_wakes_when_actor_queues_effects() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
     let applied = StdArc::new(Mutex::new(Vec::new()));
 
     let worker_handle = handle.clone();
@@ -4081,7 +4077,7 @@ async fn async_side_effect_service_wakes_when_actor_queues_effects() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_applies_process_exit_events_to_session_state() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -4117,7 +4113,7 @@ async fn async_actor_applies_process_spawn_events_to_event_log() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -4173,7 +4169,7 @@ async fn async_actor_persists_registry_after_applied_runtime_events() {
     let mut service = test_service();
     service.set_session_registry(registry.clone());
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -4241,7 +4237,7 @@ async fn async_actor_defers_compatibility_registry_updates_once() {
         .unwrap();
     service.set_session_registry(registry.clone());
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();

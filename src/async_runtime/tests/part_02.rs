@@ -9,7 +9,7 @@ async fn async_actor_applies_process_failure_events_to_event_log() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -55,7 +55,7 @@ async fn async_actor_applies_pane_io_completion_events_to_event_log() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -118,7 +118,7 @@ async fn async_actor_applies_forced_shutdown_events_without_primary() {
     assert_eq!(service.lifecycle_state(), RuntimeLifecycleState::Detached);
 
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -177,7 +177,7 @@ async fn async_actor_primary_detach_retains_worker_owned_panes() {
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut processes = handle
@@ -236,7 +236,7 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut processes = handle
@@ -336,7 +336,7 @@ async fn async_actor_forced_shutdown_terminates_worker_owned_panes() {
         .detach_primary(&primary, Size::new(80, 24).unwrap())
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut processes = handle
@@ -397,7 +397,7 @@ async fn async_actor_applies_graceful_shutdown_events() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -462,7 +462,7 @@ async fn async_actor_applies_failed_shutdown_events() {
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -936,7 +936,7 @@ async fn async_pty_pane_process_io_bridges_live_portable_pty() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_driver_service_submits_output_to_actor() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_output(b"driver-service-output\n".to_vec());
     let mut driver =
@@ -992,7 +992,7 @@ async fn async_pane_process_driver_service_submits_output_to_actor() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_pane_process_driver_service_wakes_between_empty_polls_on_side_effects() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_no_output();
     backend.push_no_output();
@@ -1047,7 +1047,7 @@ async fn async_pane_process_driver_service_wakes_between_empty_polls_on_side_eff
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_pane_process_driver_service_unbounded_waits_for_notifications() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_no_output();
     backend.push_no_output();
@@ -1095,7 +1095,7 @@ async fn async_pane_process_driver_service_unbounded_waits_for_notifications() {
 #[tokio::test]
 async fn async_pane_process_driver_service_wakes_on_live_output_activity() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
     let process = spawn_pane_process(
         &shell,
@@ -1159,7 +1159,7 @@ async fn async_pane_process_driver_service_wakes_on_live_output_activity() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_io_side_effect_service_executes_pane_effects() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_write_result(Ok(5));
     backend.push_resize_result(Ok(()));
@@ -1263,7 +1263,7 @@ fn async_pane_io_default_drain_limits_interleave_paste_with_output() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_defers_large_input_remainders() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let backend = AsyncFakePaneProcessIo::default();
     let mut driver =
         AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
@@ -1339,7 +1339,7 @@ async fn async_pane_process_service_defers_large_input_remainders() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_retries_partial_input_remainders() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_write_result(Ok(2));
     backend.push_write_result(Ok(4));
@@ -1430,7 +1430,7 @@ async fn async_pane_process_driver_rejects_zero_byte_input_progress() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_pane_io_side_effect_service_unbounded_waits_for_notifications() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_write_result(Ok(4));
     let mut driver =
@@ -1484,7 +1484,7 @@ async fn async_pane_io_side_effect_service_unbounded_waits_for_notifications() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_pane_io_side_effect_service_wakes_on_lifecycle_change_without_idle_poll() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let backend = AsyncFakePaneProcessIo::default();
     let mut driver =
         AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
@@ -1550,7 +1550,7 @@ async fn async_pane_io_side_effect_service_wakes_on_lifecycle_change_without_idl
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_serializes_output_and_side_effects() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_output(b"combined-service-output\n".to_vec());
     backend.push_write_result(Ok(5));
@@ -1642,7 +1642,7 @@ async fn async_pane_process_service_serializes_output_and_side_effects() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_batches_bursty_output_events() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_output(b"one".to_vec());
     backend.push_output(b"two".to_vec());
@@ -1688,7 +1688,7 @@ async fn async_pane_process_service_batches_bursty_output_events() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_throttles_metadata_during_output_bursts() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_output(b"first".to_vec());
     backend.push_output(b"second".to_vec());
@@ -1741,7 +1741,7 @@ async fn async_pane_process_service_throttles_metadata_during_output_bursts() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_wakes_for_pane_side_effects() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_no_output();
     backend.push_no_output();
@@ -1802,7 +1802,7 @@ async fn async_pane_process_service_wakes_for_pane_side_effects() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_pane_process_service_uses_metadata_deadline_for_quiet_panes() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_no_output();
     backend.push_no_output();
@@ -1854,7 +1854,7 @@ async fn async_pane_process_service_uses_metadata_deadline_for_quiet_panes() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_wakes_on_terminal_lifecycle_and_terminates_backend() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_terminate_result(Ok(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
@@ -1922,7 +1922,7 @@ async fn async_pane_process_service_wakes_on_terminal_lifecycle_and_terminates_b
 #[tokio::test(flavor = "current_thread")]
 async fn async_pane_process_service_reports_exit_after_output_turn() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_output(b"final output before exit\n".to_vec());
     backend.push_exit_result(Ok(Some(ProcessEvent::Exited {
@@ -1974,7 +1974,7 @@ async fn async_pane_process_service_reports_exit_after_output_turn() {
 #[tokio::test]
 async fn async_pane_process_service_waits_for_live_output_before_exit() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
     let process = spawn_pane_process(
         &shell,
@@ -2037,7 +2037,7 @@ async fn async_pane_process_supervisor_claims_live_manager_panes() {
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let supervisor_handle = handle.clone();
     let supervisor = async move {
@@ -2088,7 +2088,7 @@ async fn async_pane_process_supervisor_wakes_on_worker_completion() {
     let mut service = test_service();
     service.start_initial_pane_process(Some("true")).unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let supervisor_handle = handle.clone();
     let supervisor = async move {
@@ -2151,7 +2151,7 @@ async fn async_timer_side_effect_service_fires_scheduled_timers() {
     let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
     let expected_turn = pending[0].turn_id.clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", 1);
@@ -2211,7 +2211,7 @@ async fn async_timer_side_effect_service_fires_scheduled_timers() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_timer_side_effect_service_cancels_scheduled_timers() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let client = async {
         let key = RuntimeTimerKey::new(RuntimeTimerKind::CursorBlink, "primary", 9);
@@ -2272,7 +2272,7 @@ async fn async_hook_side_effect_service_executes_program_hooks() {
     std::fs::create_dir_all(&root).unwrap();
     let payload_path = root.join("payload.json");
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let client = async {
         let queued = handle
@@ -2361,7 +2361,7 @@ async fn async_actor_defers_completed_program_hooks_to_hook_worker() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2404,11 +2404,7 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("audit.jsonl");
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        test_service_with_event_log(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log()).build().unwrap();
 
     let client = async {
         let queued = handle
@@ -2473,7 +2469,7 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_persistence_side_effect_service_wakes_on_lifecycle_change_without_idle_poll() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let worker_handle = handle.clone();
     let shutdown_handle = handle.clone();
@@ -2541,11 +2537,7 @@ async fn async_persistence_side_effect_service_honors_create_new_mode() {
     ));
     let _ = std::fs::remove_dir_all(&root);
     let path = root.join("config.toml");
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        test_service_with_event_log(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log()).build().unwrap();
 
     let client = async {
         let queued = handle
@@ -2639,7 +2631,7 @@ async fn async_actor_defers_audit_writes_to_persistence_worker() {
         required: true,
     }));
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let response = handle
@@ -2710,7 +2702,7 @@ async fn async_actor_defers_file_pane_pipe_writes_to_persistence_worker() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let started = handle
@@ -2797,7 +2789,7 @@ async fn async_actor_stops_file_pane_pipe_after_persistence_failure() {
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2882,7 +2874,7 @@ async fn async_actor_stops_command_pane_pipe_after_health_timer() {
     assert!(started.contains("pipe=started"), "{started}");
     assert!(started.contains("mode=command"), "{started}");
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -2943,7 +2935,7 @@ async fn async_actor_schedules_command_pane_pipe_health_after_start() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let started = handle
@@ -3014,11 +3006,7 @@ async fn async_persistence_side_effect_service_reports_failures_without_crashing
     ));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        test_service_with_event_log(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log()).build().unwrap();
 
     let client = async {
         let queued = handle
@@ -3089,11 +3077,7 @@ async fn async_persistence_side_effect_service_rejects_config_symlink_destinatio
     let link_path = root.join("config.toml");
     let linked_target = root.join("linked-target.toml");
     std::os::unix::fs::symlink(&linked_target, &link_path).unwrap();
-    let (handle, actor) = AsyncRuntimeSessionActor::new(
-        test_service_with_event_log(),
-        AsyncRuntimeActorConfig::default(),
-    )
-    .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log()).build().unwrap();
 
     let client = async {
         let queued = handle
@@ -3315,7 +3299,7 @@ async fn async_runtime_service_supervisor_reports_cancelled_services_as_shutdown
 #[tokio::test(flavor = "current_thread")]
 async fn async_agent_provider_service_polls_runtime_queue() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
     let service_handle = handle.clone();
     let service = async move {
         let report = run_async_agent_provider_service(
@@ -3345,7 +3329,7 @@ async fn async_agent_provider_service_polls_runtime_queue() {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn async_agent_provider_service_uses_bounded_idle_probe() {
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(test_service(), AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(test_service()).build().unwrap();
 
     let client = async {
         let config = AsyncAgentProviderServiceConfig::new(1)
@@ -3394,7 +3378,7 @@ async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let service_handle = handle.clone();
     let service = async move {
@@ -3467,7 +3451,7 @@ async fn async_actor_applies_agent_provider_failure_events() {
     assert_eq!(pending.len(), 1);
     let task = pending[0].clone();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -3654,7 +3638,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         terminal_state: crate::agent::AgentTurnState::Failed,
     };
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut provider_batch = RuntimeEventBatch::new();
@@ -3806,7 +3790,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
         terminal_state: crate::agent::AgentTurnState::Completed,
     };
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -3972,7 +3956,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         terminal_state: crate::agent::AgentTurnState::Completed,
     };
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -4057,7 +4041,7 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
         .clone();
     let prompt_history_path = transcript_store.prompt_history_file();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let response = handle
@@ -4140,7 +4124,7 @@ async fn async_actor_defers_agent_init_scaffold_to_persistence_worker() {
         .enter_or_resume("%1")
         .unwrap();
     let (handle, actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
 
     let client = async {
         let response = handle
