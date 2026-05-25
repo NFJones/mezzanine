@@ -483,6 +483,17 @@ pub(super) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<String>>,
     },
+    /// Represents the Refresh Provider Info case for this enumeration.
+    ///
+    /// Callers use this variant to refresh cached provider metadata without
+    /// routing through a terminal-command string.
+    RefreshProviderInfo {
+        /// Stores the reply value for this data structure.
+        ///
+        /// The field is part of structured state exchanged across this module
+        /// boundary and should remain aligned with the owning type invariant.
+        reply: oneshot::Sender<Result<String>>,
+    },
     /// Represents the Show Primary Display Overlay case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

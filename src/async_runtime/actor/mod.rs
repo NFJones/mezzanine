@@ -732,6 +732,11 @@ impl AsyncRuntimeSessionActor {
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
             }
+            AsyncRuntimeRequest::RefreshProviderInfo { reply } => {
+                let result = self.service.refresh_provider_info_async().await;
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::ShowPrimaryDisplayOverlay { lines, reply } => {
                 let result = self.service.show_primary_display_overlay(lines);
                 let _ = reply.send(result);
@@ -4423,6 +4428,11 @@ impl AsyncRuntimeSessionHandle {
             reply,
         })
         .await?
+    }
+    /// Refreshes cached provider metadata through actor-owned runtime state.
+    pub async fn refresh_provider_info(&self) -> Result<String> {
+        self.request(|reply| AsyncRuntimeRequest::RefreshProviderInfo { reply })
+            .await?
     }
 
     /// Shows a primary-client modal display overlay through actor-owned state.

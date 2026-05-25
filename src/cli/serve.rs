@@ -36,8 +36,6 @@ use tokio::process::Child;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 static LIVE_SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-/// Maximum time the daemon spends on best-effort startup provider discovery.
-const STARTUP_PROVIDER_INFO_REFRESH_TIMEOUT: StdDuration = StdDuration::from_secs(2);
 
 /// Runs the run new operation for this subsystem.
 ///
@@ -829,11 +827,6 @@ pub(super) async fn run_foreground_control_daemon(
     );
     let snapshot_repository = SnapshotRepository::new(config.root.join("snapshots"));
     service.replace_config_layers_async(config.layers).await?;
-    let _ = tokio::time::timeout(
-        STARTUP_PROVIDER_INFO_REFRESH_TIMEOUT,
-        service.refresh_provider_info_async(),
-    )
-    .await;
     match startup {
         RuntimeDaemonStartup::Initial { explicit_command } => {
             service.start_initial_pane_process(explicit_command.as_deref())?;
@@ -889,6 +882,7 @@ pub(super) async fn run_foreground_control_daemon(
         let daemon = async move {
             let mut services =
                 build_async_runtime_daemon_services(handle.clone(), listeners, config)?;
+            services.push(build_startup_provider_info_refresh_service(handle.clone()));
             if let Some(primary_client_id) = attached_primary_client_id {
                 let resize_client_id = primary_client_id.clone();
                 services.push(build_foreground_attached_primary_client_service(
@@ -941,6 +935,21 @@ pub(super) fn spawn_openai_auth_refresh_if_needed(auth_store: AuthStore) -> bool
         }
         Ok(false) | Err(_) => false,
     }
+}
+/// Builds the startup provider-information refresh worker for the runtime daemon.
+///
+/// The worker preserves the provider metadata refresh behavior that helps model
+/// commands resolve provider details, but it runs after the actor starts so the
+/// foreground launch path can render the TUI without waiting for auth or network
+/// metadata refreshes. Refresh failures are intentionally ignored because the
+/// previous startup path also treated provider metadata refresh as best-effort.
+pub(super) fn build_startup_provider_info_refresh_service(
+    handle: crate::async_runtime::AsyncRuntimeSessionHandle,
+) -> AsyncRuntimeService {
+    AsyncRuntimeService::new_auxiliary("startup-provider-info-refresh", async move {
+        let _ = handle.refresh_provider_info().await;
+        Ok(AsyncRuntimeServiceExit::completed(1))
+    })
 }
 
 /// Runs the build foreground attached primary client service operation for this subsystem.
