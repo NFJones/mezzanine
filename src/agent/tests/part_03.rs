@@ -2143,6 +2143,163 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         stable_b_diagnostics.cacheable_prefix_sha256
     );
 }
+
+/// Verifies long OpenAI sessions preserve append-only stable-prefix continuity
+/// until an explicit compaction changes the sequence.
+///
+/// Prompt caching can only reuse the prior request when the next request keeps
+/// the already-rendered stable context byte-identical and appends newly durable
+/// transcript material after it. This regression simulates many user/model
+/// turns, rebuilds each provider request from the growing transcript, and
+/// asserts that every stable input item from the previous request remains the
+/// byte-for-byte leading sequence of the next request.
+///
+/// The current user instruction is intentionally not part of the reusable
+/// prefix for its own turn. It should become durable transcript context only
+/// on the following request, alongside the assistant output it produced.
+#[test]
+fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let mut transcript = Vec::new();
+    let mut previous_instructions: Option<String> = None;
+    let mut previous_stable_input: Option<Vec<serde_json::Value>> = None;
+    let mut previous_diagnostics: Option<crate::agent::OpenAiPromptCacheDiagnostics> = None;
+    let mut initial_stable_input_len = None;
+
+    for turn_index in 0..32 {
+        let mut turn = turn();
+        turn.turn_id = format!("turn-{turn_index}");
+        let current_user = format!(
+            "current-user-turn-{turn_index}: investigate cache continuity {}",
+            "with stable transcript replay ".repeat(8)
+        );
+        let mut blocks = vec![
+            ContextBlock {
+                source: ContextSourceKind::Configuration,
+                label: "session identity".to_string(),
+                content: "session_id=session-cache-continuity session_name=cache-test"
+                    .to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ProjectGuidance,
+                label: "project guidance".to_string(),
+                content: "keep provider request prefixes byte stable".to_string(),
+            },
+        ];
+        blocks.extend(transcript.clone());
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: current_user.clone(),
+        });
+
+        let request = assemble_model_request(&profile, &turn, &AgentContext::new(blocks).unwrap())
+            .unwrap();
+        let (instructions, stable_input) = openai_test_stable_prefix_parts(&request);
+        let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+        let initial_len = *initial_stable_input_len.get_or_insert(stable_input.len());
+        assert_eq!(
+            stable_input.len(),
+            initial_len + turn_index * 2,
+            "turn {turn_index} should contain the stable seed plus one durable user/assistant pair per completed turn"
+        );
+
+        if let Some(previous_instructions) = &previous_instructions {
+            assert_eq!(
+                previous_instructions, &instructions,
+                "turn {turn_index} changed stable instructions"
+            );
+        }
+        if let Some(previous_stable_input) = &previous_stable_input {
+            assert_eq!(
+                stable_input.len(),
+                previous_stable_input.len() + 2,
+                "turn {turn_index} should append one durable user/assistant pair"
+            );
+            for (message_index, previous_message) in previous_stable_input.iter().enumerate() {
+                let previous_bytes = serde_json::to_vec(previous_message).unwrap();
+                let current_bytes = serde_json::to_vec(&stable_input[message_index]).unwrap();
+                assert_eq!(
+                    previous_bytes, current_bytes,
+                    "turn {turn_index} changed stable input message {message_index}"
+                );
+            }
+        }
+        if let Some(previous_diagnostics) = &previous_diagnostics {
+            assert_eq!(
+                previous_diagnostics.prompt_cache_key, diagnostics.prompt_cache_key,
+                "turn {turn_index} changed prompt cache routing key"
+            );
+            assert_eq!(
+                previous_diagnostics.instructions_sha256, diagnostics.instructions_sha256,
+                "turn {turn_index} changed cached instructions"
+            );
+            assert_eq!(
+                previous_diagnostics.tools_sha256, diagnostics.tools_sha256,
+                "turn {turn_index} changed cached tool schema"
+            );
+            assert_eq!(
+                previous_diagnostics.tool_choice_sha256, diagnostics.tool_choice_sha256,
+                "turn {turn_index} changed tool choice"
+            );
+            assert!(
+                diagnostics.stable_input_bytes >= previous_diagnostics.stable_input_bytes,
+                "turn {turn_index} shrank stable input without compaction"
+            );
+        }
+
+        let stable_material = openai_stable_prefix_material_for_request(&request).unwrap();
+        assert!(
+            !stable_material.contains(&current_user),
+            "turn {turn_index} leaked current user input into its own stable prefix"
+        );
+        if turn_index > 0 {
+            assert!(
+                stable_material.contains(&format!("current-user-turn-{}", turn_index - 1)),
+                "turn {turn_index} did not append the previous user input"
+            );
+            assert!(
+                stable_material.contains(&format!("assistant-output-turn-{}", turn_index - 1)),
+                "turn {turn_index} did not append the previous assistant output"
+            );
+        }
+
+        previous_instructions = Some(instructions);
+        previous_stable_input = Some(stable_input);
+        previous_diagnostics = Some(diagnostics);
+        transcript.push(ContextBlock {
+            source: ContextSourceKind::TranscriptUser,
+            label: "transcript user".to_string(),
+            content: current_user,
+        });
+        transcript.push(ContextBlock {
+            source: ContextSourceKind::TranscriptAssistant,
+            label: "transcript assistant".to_string(),
+            content: format!(
+                "assistant-output-turn-{turn_index}: cache continuity finding {}",
+                "previous bytes remain immutable ".repeat(16)
+            ),
+        });
+    }
+}
+
+/// Returns the rendered OpenAI stable-prefix instructions and input messages
+/// for request-shape tests.
+fn openai_test_stable_prefix_parts(request: &ModelRequest) -> (String, Vec<serde_json::Value>) {
+    let material = openai_stable_prefix_material_for_request(request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&material).unwrap();
+    let instructions = value["instructions"].as_str().unwrap().to_string();
+    let stable_input = value["stable_input"].as_array().unwrap().clone();
+    (instructions, stable_input)
+}
 /// Verifies historical tool transcript entries are summarized into the evidence
 /// ledger instead of replayed as raw provider input.
 ///

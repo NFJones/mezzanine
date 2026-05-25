@@ -254,11 +254,27 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
 
 /// Returns true for late controller state that should never enter the stable prefix.
 fn openai_message_is_volatile_controller_state(message: &ModelMessage) -> bool {
+    if openai_message_is_volatile_configuration_state(message) {
+        return true;
+    }
     let content = message.content.trim_start();
     content.starts_with("[capability ")
         || content.starts_with("[capability decisions]")
         || content.starts_with("[controller failure summary]")
         || content.starts_with(OPENAI_CONTEXT_COMPACTED_PREFIX)
+}
+
+/// Returns true when a rendered configuration message carries volatile runtime
+/// identity that context ordering already excludes from the reusable prefix.
+fn openai_message_is_volatile_configuration_state(message: &ModelMessage) -> bool {
+    if message.source != ContextSourceKind::Configuration {
+        return false;
+    }
+    let content = message.content.trim_start();
+    content.starts_with("[session identity]")
+        || content.starts_with("[pane identity]")
+        || content.starts_with("[provider output-limit retry guidance]")
+        || content.starts_with("[environment signature for pane ")
 }
 
 /// Builds the OpenAI structured-output schema for internal auto-sizing
