@@ -4048,8 +4048,10 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains(
         "implementation requests as permission to inspect, edit, validate, repair, and finish"
     ));
-    assert!(prompt.contains("request the missing capability immediately"));
-    assert!(prompt.contains("do not spend the turn on a user-facing plan or explanation"));
+    assert!(
+        prompt.contains("the next action MUST be request_capability for the missing action family")
+    );
+    assert!(prompt.contains("blocked say, or explanation asking the user to grant access"));
     assert!(prompt.contains("Work in this loop: inspect the smallest context"));
     assert!(prompt.contains("make the smallest coherent change or deliverable report"));
     assert!(prompt.contains("When the user asks to form a plan from a repository artifact"));

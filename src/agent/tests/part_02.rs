@@ -96,6 +96,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("request any missing execution capability"));
     assert!(prompt.contains("If the needed action family is absent"));
     assert!(prompt.contains("emit request_capability immediately with no progress say"));
+    assert!(prompt.contains("This is a required control action, not a suggestion"));
+    assert!(prompt.contains("takes precedence over blocked say, final say"));
     assert!(prompt.contains("prefer rg or rg --files"));
     assert!(prompt.contains("Agent-authored heredocs and here-strings"));
     assert!(prompt.contains("filesystem operations that are not structured patches"));
