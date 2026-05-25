@@ -7,7 +7,7 @@
 
 use super::schema::maap_action_batch_schema;
 use super::{
-    AllowedActionSet, DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DeepSeekMaapRequestStrategy, MezError,
+    AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MezError,
     ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
     ProviderHttpResponse, Result, parse_maap_action_batch_json_for_turn,
@@ -31,6 +31,19 @@ pub fn build_deepseek_chat_completions_http_request(
         timeout_ms,
         deepseek_maap_request_strategy(request),
     )
+}
+
+/// Derives the DeepSeek Chat Completions endpoint from a configured base URL.
+pub(super) fn deepseek_chat_completions_endpoint_for_base_url(base_url: &str) -> Result<String> {
+    validate_non_empty("DeepSeek provider base URL", base_url)?;
+    let base_url = base_url.trim().trim_end_matches('/');
+    if base_url.ends_with("/chat/completions") {
+        return Ok(base_url.to_string());
+    }
+    if let Some(prefix) = base_url.strip_suffix("/models") {
+        return Ok(format!("{prefix}/chat/completions"));
+    }
+    Ok(format!("{base_url}/chat/completions"))
 }
 
 /// Builds a DeepSeek Chat Completions HTTP request with an explicit MAAP strategy.
@@ -350,14 +363,20 @@ fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
             .get("completion_tokens")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0),
-        reasoning_tokens: usage
-            .get("reasoning_tokens")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
+        reasoning_tokens: deepseek_reasoning_tokens_from_usage(usage),
         cached_input_tokens: usage
             .get("prompt_cache_hit_tokens")
             .and_then(serde_json::Value::as_u64),
     }
+}
+
+/// Extracts DeepSeek reasoning token usage from the documented nested shape.
+fn deepseek_reasoning_tokens_from_usage(usage: &serde_json::Value) -> u64 {
+    usage
+        .pointer("/completion_tokens_details/reasoning_tokens")
+        .or_else(|| usage.get("reasoning_tokens"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
 }
 
 /// Parses a DeepSeek Chat Completions streaming (SSE) response body.
@@ -394,6 +413,7 @@ pub(super) fn build_deepseek_models_http_request(
     timeout_ms: u64,
 ) -> Result<ProviderHttpRequest> {
     validate_non_empty("DeepSeek model listing credential", api_key)?;
+    let chat_endpoint = deepseek_chat_completions_endpoint_for_base_url(chat_endpoint)?;
     let models_endpoint = chat_endpoint.replace("/chat/completions", "/models");
     let mut headers = BTreeMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
@@ -401,7 +421,7 @@ pub(super) fn build_deepseek_models_http_request(
     Ok(ProviderHttpRequest {
         method: "GET".to_string(),
         url: if models_endpoint == chat_endpoint {
-            DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT.replace("/chat/completions", "/models")
+            DEEPSEEK_MODELS_ENDPOINT.to_string()
         } else {
             models_endpoint
         },
@@ -410,4 +430,77 @@ pub(super) fn build_deepseek_models_http_request(
         timeout_ms,
         max_response_bytes: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies configured DeepSeek base URLs expand to the current documented
+    /// Chat Completions and Models endpoints.
+    ///
+    /// User-facing configuration names this setting `base_url`, so callers must
+    /// be able to provide `https://api.deepseek.com` exactly as shown in the
+    /// DeepSeek SDK examples. Existing endpoint URLs remain accepted so tests
+    /// and advanced users can still target a proxy or explicit route.
+    #[test]
+    fn deepseek_base_url_derives_documented_chat_and_models_endpoints() {
+        assert_eq!(
+            deepseek_chat_completions_endpoint_for_base_url("https://api.deepseek.com").unwrap(),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            deepseek_chat_completions_endpoint_for_base_url("https://api.deepseek.com/").unwrap(),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            deepseek_chat_completions_endpoint_for_base_url(
+                "https://api.deepseek.com/chat/completions"
+            )
+            .unwrap(),
+            "https://api.deepseek.com/chat/completions"
+        );
+        assert_eq!(
+            deepseek_chat_completions_endpoint_for_base_url("https://proxy.example/models")
+                .unwrap(),
+            "https://proxy.example/chat/completions"
+        );
+
+        let models =
+            build_deepseek_models_http_request("deepseek-key", "https://api.deepseek.com", 1000)
+                .unwrap();
+        assert_eq!(models.url, "https://api.deepseek.com/models");
+    }
+
+    /// Verifies DeepSeek usage parsing follows the documented nested reasoning
+    /// token shape while retaining compatibility with older flat responses.
+    ///
+    /// DeepSeek reports prompt cache accounting directly in `usage` and
+    /// reasoning tokens under `completion_tokens_details.reasoning_tokens`.
+    /// Capturing both fields keeps runtime cost and cache metrics accurate for
+    /// thinking-mode sessions.
+    #[test]
+    fn deepseek_usage_parses_nested_reasoning_and_prompt_cache_hits() {
+        let usage = parse_deepseek_usage(&serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 30,
+            "prompt_cache_hit_tokens": 75,
+            "prompt_cache_miss_tokens": 25,
+            "completion_tokens_details": {
+                "reasoning_tokens": 12
+            }
+        }));
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 30);
+        assert_eq!(usage.reasoning_tokens, 12);
+        assert_eq!(usage.cached_input_tokens, Some(75));
+
+        let flat = parse_deepseek_usage(&serde_json::json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "reasoning_tokens": 3
+        }));
+        assert_eq!(flat.reasoning_tokens, 3);
+    }
 }

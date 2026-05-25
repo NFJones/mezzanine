@@ -3978,7 +3978,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
         "deepseek-key",
-        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
         false,
         1000,
     )
@@ -4046,7 +4046,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
         "deepseek-key",
-        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
         false,
         1000,
     )
@@ -4118,7 +4118,7 @@ fn deepseek_chat_completions_request_body_uses_auto_maap_tool_with_thinking_when
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
         "deepseek-key",
-        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
         false,
         1000,
     )
@@ -4171,7 +4171,7 @@ fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
         "deepseek-key",
-        "https://api.deepseek.com/v1/chat/completions",
+        "https://api.deepseek.com/chat/completions",
         false,
         1000,
     )

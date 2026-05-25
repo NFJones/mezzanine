@@ -37,8 +37,9 @@ pub use catalog::{
 pub use deepseek::build_deepseek_chat_completions_http_request;
 use deepseek::{
     build_deepseek_chat_completions_http_request_with_strategy, build_deepseek_models_http_request,
-    deepseek_effective_stream, deepseek_maap_request_strategy,
-    deepseek_should_retry_with_forced_maap, parse_deepseek_chat_completions_http_response,
+    deepseek_chat_completions_endpoint_for_base_url, deepseek_effective_stream,
+    deepseek_maap_request_strategy, deepseek_should_retry_with_forced_maap,
+    parse_deepseek_chat_completions_http_response,
 };
 use errors::{
     openai_provider_error_detail, openai_provider_failure_json, provider_maap_parse_error,
@@ -68,10 +69,10 @@ pub const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses
 /// Default direct OpenAI model catalog endpoint used with API-key auth.
 pub const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
 /// Default DeepSeek Chat Completions API endpoint.
-pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/v1/chat/completions";
+pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
 /// Default DeepSeek models listing endpoint.
 #[allow(dead_code)]
-pub const DEEPSEEK_MODELS_ENDPOINT: &str = "https://api.deepseek.com/v1/models";
+pub const DEEPSEEK_MODELS_ENDPOINT: &str = "https://api.deepseek.com/models";
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 /// OpenAI project routing header for project-scoped API accounting.
@@ -849,7 +850,7 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
 /// Builds a DeepSeek Chat Completions provider from auth metadata.
 ///
 /// DeepSeek only supports direct API-key authentication. Endpoint overrides
-/// are passed through to the provider.
+/// are expanded to the provider's documented Chat Completions endpoint.
 pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
     auth_store: &AuthStore,
     base_url_override: Option<&str>,
@@ -861,8 +862,9 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
         .ok_or_else(|| MezError::invalid_state("DeepSeek provider is not authenticated"))?;
     let credential = auth_store.provider_secret("deepseek")?;
     let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
-    if let Some(endpoint) = base_url_override.filter(|e| !e.trim().is_empty()) {
-        provider = provider.with_endpoint(endpoint);
+    if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
+        provider =
+            provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
     }
     provider = provider.with_timeout(timeout_ms);
     Ok(provider)
