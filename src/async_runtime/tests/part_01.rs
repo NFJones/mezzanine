@@ -3738,6 +3738,11 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
             output.contains("provider_prompt_cacheable_prefix_bytes"),
             "{output}"
         );
+        assert!(
+            output.contains("provider_prompt_stable_prefix_bytes"),
+            "{output}"
+        );
+        assert!(output.contains("provider_request_shape_bytes"), "{output}");
         assert!(output.contains("[async runtime counts]"), "{output}");
         assert!(output.contains("commands_processed ="), "{output}");
         assert!(output.contains("[async runtime histograms]"), "{output}");

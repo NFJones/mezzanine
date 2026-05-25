@@ -2154,9 +2154,25 @@ fn openai_maap_schema_is_stable_across_allowed_action_surfaces() {
         capability_diagnostics.tools_sha256,
         execution_diagnostics.tools_sha256
     );
+    assert_ne!(
+        capability_diagnostics.tool_choice_sha256,
+        execution_diagnostics.tool_choice_sha256
+    );
     assert_eq!(
         capability_diagnostics.stable_input_sha256,
         execution_diagnostics.stable_input_sha256
+    );
+    assert_eq!(
+        capability_diagnostics.stable_prompt_prefix_sha256,
+        execution_diagnostics.stable_prompt_prefix_sha256
+    );
+    assert_eq!(
+        capability_diagnostics.cacheable_prefix_sha256,
+        execution_diagnostics.cacheable_prefix_sha256
+    );
+    assert_ne!(
+        capability_diagnostics.provider_request_shape_sha256,
+        execution_diagnostics.provider_request_shape_sha256
     );
     assert_ne!(
         capability_diagnostics.volatile_input_sha256,
@@ -2261,6 +2277,10 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
     assert_eq!(
         stable_a_value["prompt_cache_key"],
         stable_b_value["prompt_cache_key"]
+    );
+    assert_ne!(
+        stable_a_diagnostics.stable_prompt_prefix_sha256,
+        stable_b_diagnostics.stable_prompt_prefix_sha256
     );
     assert_ne!(
         stable_a_diagnostics.cacheable_prefix_sha256,
@@ -2853,6 +2873,18 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     assert_eq!(diagnostics.stable_input_sha256.len(), 64);
     assert!(diagnostics.volatile_input_bytes > 2);
     assert_eq!(diagnostics.volatile_input_sha256.len(), 64);
+    assert!(diagnostics.stable_prompt_prefix_bytes > diagnostics.instructions_bytes);
+    assert_eq!(diagnostics.stable_prompt_prefix_sha256.len(), 64);
+    assert_eq!(
+        diagnostics.cacheable_prefix_bytes,
+        diagnostics.stable_prompt_prefix_bytes
+    );
+    assert_eq!(
+        diagnostics.cacheable_prefix_sha256,
+        diagnostics.stable_prompt_prefix_sha256
+    );
+    assert!(diagnostics.provider_request_shape_bytes > diagnostics.tools_bytes);
+    assert_eq!(diagnostics.provider_request_shape_sha256.len(), 64);
     assert!(diagnostics.cacheable_prefix_bytes > diagnostics.instructions_bytes);
     assert_eq!(diagnostics.cacheable_prefix_sha256.len(), 64);
 }

@@ -166,7 +166,11 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) provider_prompt_stable_input_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of volatile input bytes in cache diagnostics.
     pub(super) provider_prompt_volatile_input_bytes: crate::async_runtime::RuntimeHistogram,
-    /// Histogram of complete observable cacheable prefix bytes.
+    /// Histogram of stable prompt-prefix bytes in cache diagnostics.
+    pub(super) provider_prompt_stable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of provider request-shape bytes tracked outside the prompt prefix.
+    pub(super) provider_request_shape_bytes: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of stable observable cacheable prefix bytes.
     pub(super) provider_prompt_cacheable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response input tokens.
     pub(super) provider_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
@@ -194,6 +198,10 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) last_allowed_actions: Option<String>,
     /// Most recent prompt-cache key observed by runtime metrics.
     pub(super) last_prompt_cache_key: Option<String>,
+    /// Most recent stable prompt-prefix digest observed by runtime metrics.
+    pub(super) last_stable_prompt_prefix_sha256: Option<String>,
+    /// Most recent provider request-shape digest observed by runtime metrics.
+    pub(super) last_provider_request_shape_sha256: Option<String>,
     /// Most recent tool-choice digest observed by runtime metrics.
     pub(super) last_tool_choice_sha256: Option<String>,
 }
@@ -275,9 +283,17 @@ impl RuntimeMetricsSnapshot {
                 .record(diagnostics.stable_input_bytes as u64);
             self.provider_prompt_volatile_input_bytes
                 .record(diagnostics.volatile_input_bytes as u64);
+            self.provider_prompt_stable_prefix_bytes
+                .record(diagnostics.stable_prompt_prefix_bytes as u64);
+            self.provider_request_shape_bytes
+                .record(diagnostics.provider_request_shape_bytes as u64);
             self.provider_prompt_cacheable_prefix_bytes
                 .record(diagnostics.cacheable_prefix_bytes as u64);
             self.last_prompt_cache_key = Some(diagnostics.prompt_cache_key.clone());
+            self.last_stable_prompt_prefix_sha256 =
+                Some(diagnostics.stable_prompt_prefix_sha256.clone());
+            self.last_provider_request_shape_sha256 =
+                Some(diagnostics.provider_request_shape_sha256.clone());
             self.last_tool_choice_sha256 = Some(diagnostics.tool_choice_sha256.clone());
         } else if diagnostics_failed {
             self.provider_prompt_cache_diagnostics_failed = self

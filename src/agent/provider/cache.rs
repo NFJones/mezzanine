@@ -37,17 +37,25 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub tool_choice_bytes: usize,
     /// SHA-256 of the OpenAI request-level `tool_choice` value.
     pub tool_choice_sha256: String,
-    /// Bytes in the stable input prefix following instructions/tools/schema.
+    /// Bytes in the stable input prefix following system instructions.
     pub stable_input_bytes: usize,
-    /// SHA-256 of the stable input prefix following instructions/tools/schema.
+    /// SHA-256 of the stable input prefix following system instructions.
     pub stable_input_sha256: String,
     /// Bytes in volatile input suffix material.
     pub volatile_input_bytes: usize,
     /// SHA-256 of volatile input suffix material.
     pub volatile_input_sha256: String,
-    /// Bytes in the complete cacheable prefix material Mezzanine can observe.
+    /// Bytes in provider-visible stable prompt-prefix material.
+    pub stable_prompt_prefix_bytes: usize,
+    /// SHA-256 of provider-visible stable prompt-prefix material.
+    pub stable_prompt_prefix_sha256: String,
+    /// Bytes in request-control shape material tracked outside the prompt prefix.
+    pub provider_request_shape_bytes: usize,
+    /// SHA-256 of request-control shape material tracked outside the prompt prefix.
+    pub provider_request_shape_sha256: String,
+    /// Bytes in the stable cacheable prompt prefix material Mezzanine can observe.
     pub cacheable_prefix_bytes: usize,
-    /// SHA-256 of the complete cacheable prefix material Mezzanine can observe.
+    /// SHA-256 of the stable cacheable prompt prefix material Mezzanine can observe.
     pub cacheable_prefix_sha256: String,
 }
 
@@ -378,18 +386,33 @@ pub fn openai_prompt_cache_diagnostics_for_request(
     let volatile_input_text = serde_json::to_string(&rendered.volatile_input).map_err(|error| {
         MezError::invalid_state(format!("OpenAI volatile-input diagnostics failed: {error}"))
     })?;
-    let cacheable_prefix = serde_json::to_string(&serde_json::json!({
-        "cache_family": "responses-routing-v4",
-        "instructions": rendered.instructions,
+    let stable_prompt_prefix =
+        openai_stable_prefix_material(&rendered.instructions, &rendered.stable_input).map_err(
+            |error| {
+                MezError::invalid_state(format!(
+                    "OpenAI stable prompt-prefix diagnostics failed: {error}"
+                ))
+            },
+        )?;
+    let provider_request_shape = serde_json::to_string(&serde_json::json!({
+        "cache_family": "responses-request-shape-v1",
+        "model": request.model,
+        "reasoning_effort": request.reasoning_effort,
+        "latency_preference": request.latency_preference,
+        "prompt_cache_retention": request.prompt_cache_retention,
+        "max_output_tokens": request.max_output_tokens,
+        "parallel_tool_calls": false,
+        "store": false,
         "response_format": response_format,
         "tools": tools,
         "tool_choice": tool_choice,
-        "stable_input": rendered.stable_input,
     }))
     .map_err(|error| {
-        MezError::invalid_state(format!("OpenAI cache-prefix diagnostics failed: {error}"))
+        MezError::invalid_state(format!("OpenAI request-shape diagnostics failed: {error}"))
     })?;
 
+    let stable_prompt_prefix_sha256 = sha256_hex(stable_prompt_prefix.as_bytes());
+    let provider_request_shape_sha256 = sha256_hex(provider_request_shape.as_bytes());
     Ok(OpenAiPromptCacheDiagnostics {
         prompt_cache_key: openai_prompt_cache_key(request),
         instructions_bytes: rendered.instructions.len(),
@@ -404,8 +427,12 @@ pub fn openai_prompt_cache_diagnostics_for_request(
         stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
         volatile_input_bytes: volatile_input_text.len(),
         volatile_input_sha256: sha256_hex(volatile_input_text.as_bytes()),
-        cacheable_prefix_bytes: cacheable_prefix.len(),
-        cacheable_prefix_sha256: sha256_hex(cacheable_prefix.as_bytes()),
+        stable_prompt_prefix_bytes: stable_prompt_prefix.len(),
+        stable_prompt_prefix_sha256: stable_prompt_prefix_sha256.clone(),
+        provider_request_shape_bytes: provider_request_shape.len(),
+        provider_request_shape_sha256,
+        cacheable_prefix_bytes: stable_prompt_prefix.len(),
+        cacheable_prefix_sha256: stable_prompt_prefix_sha256,
     })
 }
 
@@ -421,7 +448,6 @@ pub(crate) fn openai_stable_prefix_material_for_request(request: &ModelRequest) 
 }
 
 /// Builds canonical provider-visible stable-prefix material.
-#[cfg(test)]
 fn openai_stable_prefix_material(
     instructions: &str,
     stable_input: &[serde_json::Value],

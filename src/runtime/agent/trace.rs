@@ -813,6 +813,10 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
         "stable_input_sha256": diagnostics.stable_input_sha256,
         "volatile_input_bytes": diagnostics.volatile_input_bytes,
         "volatile_input_sha256": diagnostics.volatile_input_sha256,
+        "stable_prompt_prefix_bytes": diagnostics.stable_prompt_prefix_bytes,
+        "stable_prompt_prefix_sha256": diagnostics.stable_prompt_prefix_sha256,
+        "provider_request_shape_bytes": diagnostics.provider_request_shape_bytes,
+        "provider_request_shape_sha256": diagnostics.provider_request_shape_sha256,
         "cacheable_prefix_bytes": diagnostics.cacheable_prefix_bytes,
         "cacheable_prefix_sha256": diagnostics.cacheable_prefix_sha256
     })
