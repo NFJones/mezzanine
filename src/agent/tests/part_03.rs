@@ -2950,12 +2950,12 @@ fn openai_responses_request_body_includes_reasoning_effort() {
     assert_eq!(value["prompt_cache_retention"], "24h");
 }
 
-/// Verifies OpenAI Responses request bodies carry a configured output-token
-/// cap without changing the prompt-cache routing key. This gives runtime
-/// recovery a provider-native control for output-limit retries while keeping
-/// cache identity tied to stable prompt material.
+/// Verifies OpenAI Responses request bodies omit a configured output-token
+/// cap while keeping the parsed request setting available for providers that
+/// support an explicit output limit. The Responses endpoint has rejected the
+/// field for affected requests, so the request builder must not forward it.
 #[test]
-fn openai_responses_request_body_includes_configured_max_output_tokens() {
+fn openai_responses_request_body_omits_configured_max_output_tokens() {
     let mut provider_options = std::collections::BTreeMap::new();
     provider_options.insert("max_output_tokens".to_string(), "12000".to_string());
     let request = assemble_model_request(
@@ -2982,7 +2982,7 @@ fn openai_responses_request_body_includes_configured_max_output_tokens() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
 
     assert_eq!(request.max_output_tokens, Some(12000));
-    assert_eq!(value["max_output_tokens"], 12000);
+    assert!(value.get("max_output_tokens").is_none());
     assert!(
         value["prompt_cache_key"]
             .as_str()

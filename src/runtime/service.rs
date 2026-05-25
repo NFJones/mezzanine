@@ -1987,6 +1987,24 @@ impl RuntimeSessionService {
             if metadata.conversation_id != conversation_id {
                 continue;
             }
+            if let Some(profile) = metadata.pane_model_profile.as_ref() {
+                self.model_profile_overrides
+                    .pane_profiles
+                    .insert(pane_id.to_string(), profile.clone());
+            } else {
+                self.model_profile_overrides.pane_profiles.remove(pane_id);
+            }
+            if metadata.planning_enabled {
+                self.agent_planning_modes.insert(pane_id.to_string());
+            } else {
+                self.agent_planning_modes.remove(pane_id);
+            }
+            if let Some(style) = metadata.response_style.as_ref() {
+                self.agent_response_styles
+                    .insert(pane_id.to_string(), style.clone());
+            } else {
+                self.agent_response_styles.remove(pane_id);
+            }
             if let Some(enabled) = metadata.routing_enabled {
                 self.agent_routing_overrides
                     .insert(pane_id.to_string(), enabled);

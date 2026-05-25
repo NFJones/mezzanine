@@ -1296,6 +1296,8 @@ impl AgentMarkdownRenderer {
                 let foreground = self.diff_addition_foreground;
                 self.push_style(|style| {
                     style.foreground = Some(foreground);
+                    style.background = None;
+                    style.inverse = false;
                     style.bold = true;
                 });
             }
@@ -1303,6 +1305,8 @@ impl AgentMarkdownRenderer {
                 let foreground = self.diff_deletion_foreground;
                 self.push_style(|style| {
                     style.foreground = Some(foreground);
+                    style.background = None;
+                    style.inverse = false;
                     style.bold = true;
                 });
             }

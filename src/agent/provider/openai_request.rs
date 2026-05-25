@@ -59,12 +59,6 @@ pub(super) fn openai_responses_request_body_with_stream(
     {
         body["service_tier"] = serde_json::json!(service_tier);
     }
-    if let Some(max_output_tokens) = request
-        .max_output_tokens
-        .filter(|max_output_tokens| *max_output_tokens > 0)
-    {
-        body["max_output_tokens"] = serde_json::json!(max_output_tokens);
-    }
     if let Some(retention) = request
         .prompt_cache_retention
         .as_deref()
