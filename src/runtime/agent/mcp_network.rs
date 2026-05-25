@@ -153,20 +153,44 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
     ) -> Result<usize> {
-        if execution.terminal_state != AgentTurnState::Running {
-            return Ok(0);
-        }
         let Some(batch) = execution.response.action_batch.clone() else {
             return Ok(0);
         };
+        let can_execute_running_actions = execution.terminal_state == AgentTurnState::Running;
         let mut executed = 0usize;
+        let mut preexecuted = 0usize;
         for index in 0..execution.action_results.len() {
-            if execution.action_results[index].status != ActionStatus::Running
-                || !matches!(
-                    execution.action_results[index].action_type,
-                    "web_search" | "fetch_url"
-                )
-            {
+            if !matches!(
+                execution.action_results[index].action_type,
+                "web_search" | "fetch_url"
+            ) {
+                continue;
+            }
+            if execution.action_results[index].status != ActionStatus::Running {
+                if matches!(
+                    execution.action_results[index].status,
+                    ActionStatus::Succeeded | ActionStatus::Failed
+                ) {
+                    let action = batch
+                        .actions
+                        .iter()
+                        .find(|action| action.id == execution.action_results[index].action_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "settled network result does not match an action",
+                            )
+                        })?;
+                    self.record_preexecuted_network_action_result(
+                        turn,
+                        &action,
+                        &execution.action_results[index],
+                    )?;
+                    preexecuted = preexecuted.saturating_add(1);
+                }
+                continue;
+            }
+            if !can_execute_running_actions {
                 continue;
             }
             let action = batch
@@ -274,7 +298,55 @@ impl RuntimeSessionService {
             self.pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
         }
-        Ok(executed)
+        Ok(executed.saturating_add(preexecuted))
+    }
+
+    /// Records presentation and audit side effects for network actions that
+    /// were executed by the async provider worker before actor ingress.
+    fn record_preexecuted_network_action_result(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        result: &ActionResult,
+    ) -> Result<()> {
+        let Some(plan) = network_action_plan(action)? else {
+            return Ok(());
+        };
+        if !self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)? {
+            self.append_agent_status_text_to_terminal_buffer(
+                &turn.pane_id,
+                &format!(
+                    "agent: {}",
+                    runtime_agent_action_summary(action)
+                        .unwrap_or_else(|| "network action".to_string())
+                ),
+            )?;
+        }
+        self.record_network_action_history(&turn.turn_id, &plan.policy_command);
+        if !result.is_error && self.agent_verbose_enabled(&turn.pane_id) {
+            self.append_agent_action_result_text_to_terminal_buffer(
+                &turn.pane_id,
+                action,
+                result,
+                &result.content_text(),
+            )?;
+        }
+        let outcome = if result.is_error {
+            "failed"
+        } else {
+            "succeeded"
+        };
+        self.append_agent_network_action_audit(turn, action, outcome)?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "action {} {} reason=provider_worker_network_action",
+                action.id,
+                runtime_action_status_name(result.status)
+            ),
+        )?;
+        Ok(())
     }
 
     /// Executes one approved runtime-owned network action from a legacy

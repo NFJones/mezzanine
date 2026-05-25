@@ -1241,6 +1241,114 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         .unwrap();
 }
 
+/// Verifies provider workers settle runtime-owned network actions pre-ingress.
+///
+/// Large research turns should not submit `fetch_url` actions back to the
+/// single-owner runtime actor while they are still marked running. This covers
+/// the async worker boundary directly with an unsupported URL, which exercises
+/// the network executor without performing external HTTP during the test.
+#[tokio::test(flavor = "current_thread")]
+async fn async_provider_worker_executes_network_actions_before_actor_completion() {
+    let turn = crate::agent::AgentTurnRecord {
+        turn_id: "turn-network-worker".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: crate::agent::AgentTurnState::Running,
+        cooperation_mode: None,
+    };
+    let action = crate::agent::AgentAction {
+        id: "fetch-local-file".to_string(),
+        rationale: "try a local file URL".to_string(),
+        payload: crate::agent::AgentActionPayload::FetchUrl {
+            url: "file:///tmp/provider-doc.md".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let execution = crate::agent::AgentTurnExecution {
+        request: crate::agent::ModelRequest {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            prompt_cache_session_id: None,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            available_mcp_tools: Vec::new(),
+            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::for_capability(
+                crate::agent::AgentCapability::NetworkFetch,
+            ),
+            messages: vec![crate::agent::ModelMessage {
+                role: crate::agent::ModelMessageRole::User,
+                source: crate::agent::ContextSourceKind::UserInstruction,
+                content: "research provider docs".to_string(),
+            }],
+        },
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "fetch local file".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "fetch one provider documentation source".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        action_results: vec![crate::agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["network action accepted for runtime execution".to_string()],
+            Some(r#"{"state":"pending_runtime_network"}"#.to_string()),
+        )],
+        final_turn: false,
+        terminal_state: crate::agent::AgentTurnState::Running,
+    };
+
+    let execution = super::client::execute_provider_worker_network_actions(&turn, execution)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        execution.terminal_state,
+        crate::agent::AgentTurnState::Failed
+    );
+    let result = &execution.action_results[0];
+    assert_eq!(result.status, crate::agent::ActionStatus::Failed);
+    let error = result.error.as_ref().unwrap();
+    assert_eq!(error.code, "unsupported_url_scheme");
+    assert!(
+        error
+            .message
+            .contains("fetch_url supports only http:// or https:// URLs"),
+        "{}",
+        error.message
+    );
+    assert!(
+        result
+            .structured_content_json
+            .as_deref()
+            .unwrap()
+            .contains(r#""kind":"fetch_url""#)
+    );
+}
+
 /// Waits for rendered primary-client text to contain a target string and
 /// returns the most recent rendered text for assertions.
 async fn wait_for_rendered_text(

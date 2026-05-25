@@ -18,7 +18,11 @@ use super::{
     merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop,
     run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
-use crate::agent::{AgentContext, AgentTurnRecord, AsyncModelProvider, ModelProfile};
+use crate::agent::{
+    ActionResult, ActionStatus, AgentActionPayload, AgentContext, AgentTurnExecution,
+    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ModelProfile,
+    ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
+};
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
 use crate::ids::AgentId;
@@ -1325,7 +1329,10 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
             };
-            runner.run_turn_async(&mut ledger, turn, context).await
+            let execution = runner
+                .run_turn_async(&mut ledger, turn.clone(), context)
+                .await?;
+            execute_provider_worker_network_actions(&turn, execution).await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             model_profile = runtime_apply_same_provider_auto_sizing_if_needed(
@@ -1348,8 +1355,90 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
             };
-            runner.run_turn_async(&mut ledger, turn, context).await
+            let execution = runner
+                .run_turn_async(&mut ledger, turn.clone(), context)
+                .await?;
+            execute_provider_worker_network_actions(&turn, execution).await
         }
+    }
+}
+
+/// Executes runtime-owned network actions before returning provider work to the
+/// actor.
+///
+/// Provider workers already run outside the single-owner session actor. Keeping
+/// `fetch_url` and `web_search` HTTP there prevents a large research batch from
+/// monopolizing the actor while still returning ordinary action results for the
+/// actor to present, audit, persist, and feed into any continuation request.
+pub(super) async fn execute_provider_worker_network_actions(
+    turn: &AgentTurnRecord,
+    mut execution: AgentTurnExecution,
+) -> Result<AgentTurnExecution> {
+    if execution.terminal_state != AgentTurnState::Running {
+        return Ok(execution);
+    }
+    let Some(batch) = execution.response.action_batch.clone() else {
+        return Ok(execution);
+    };
+    let transport = ReqwestProviderHttpTransport;
+    for index in 0..execution.action_results.len() {
+        if execution.action_results[index].status != ActionStatus::Running
+            || !matches!(
+                execution.action_results[index].action_type,
+                "web_search" | "fetch_url"
+            )
+        {
+            continue;
+        }
+        let action_id = execution.action_results[index].action_id.clone();
+        let action = batch
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state("running network result does not match an action")
+            })?;
+        if !matches!(
+            action.payload,
+            AgentActionPayload::WebSearch { .. } | AgentActionPayload::FetchUrl { .. }
+        ) {
+            continue;
+        }
+        execution.action_results[index] =
+            execute_network_action_with_transport_async(turn, &action, &transport).await?;
+    }
+    execution.terminal_state =
+        async_agent_turn_state_from_action_results(&execution.action_results, execution.final_turn);
+    Ok(execution)
+}
+
+/// Computes the provider-worker terminal state after network actions settle.
+fn async_agent_turn_state_from_action_results(
+    results: &[ActionResult],
+    final_turn: bool,
+) -> AgentTurnState {
+    if results
+        .iter()
+        .any(|result| result.status == ActionStatus::Blocked)
+    {
+        AgentTurnState::Blocked
+    } else if results.iter().any(|result| result.is_error) {
+        AgentTurnState::Failed
+    } else if results
+        .iter()
+        .any(|result| result.status == ActionStatus::Running)
+    {
+        AgentTurnState::Running
+    } else if final_turn
+        || (!results.is_empty()
+            && results
+                .iter()
+                .all(|result| matches!(result.action_type, "complete")))
+    {
+        AgentTurnState::Completed
+    } else {
+        AgentTurnState::Running
     }
 }
 

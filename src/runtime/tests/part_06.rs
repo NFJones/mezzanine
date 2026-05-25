@@ -2917,6 +2917,210 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies provider-worker network results are applied without actor-side HTTP.
+///
+/// A large research turn can return many already-settled `fetch_url` results
+/// from the async provider worker. The runtime actor must present and audit
+/// those results, then queue model recovery for failed fetches, without trying
+/// to run the network requests again while applying the provider completion.
+#[tokio::test]
+async fn runtime_provider_completion_records_preexecuted_network_results_before_recovery() {
+    let mut service = test_runtime_service();
+    let audit_root = temp_root("runtime-preexecuted-network-audit");
+    let audit_path = audit_root.join("audit.jsonl");
+    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+        enabled: true,
+        required: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+    }));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 160)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-preexecuted-network-results","input":"research provider docs"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let success_action = crate::agent::AgentAction {
+        id: "fetch-ok".to_string(),
+        rationale: "fetch an available provider document".to_string(),
+        payload: crate::agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/ok".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let failed_action = crate::agent::AgentAction {
+        id: "fetch-404".to_string(),
+        rationale: "fetch a provider document that moved".to_string(),
+        payload: crate::agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/missing".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let success_result = crate::agent::ActionResult::succeeded(
+        &turn,
+        &success_action,
+        vec!["provider document body".to_string()],
+        Some(
+            crate::agent::network_action_structured_content_json(
+                &success_action,
+                serde_json::Value::Null,
+                serde_json::json!({
+                    "url": "https://example.test/ok",
+                    "status_code": 200,
+                    "body_bytes": 22,
+                    "returned_bytes": 22,
+                    "requested_max_bytes": null,
+                    "max_bytes": 16384,
+                    "hard_max_bytes": 262144,
+                    "truncated": false
+                }),
+            )
+            .unwrap(),
+        ),
+    );
+    let mut failed_result = crate::agent::ActionResult::failed(
+        &turn,
+        &failed_action,
+        ActionStatus::Failed,
+        "network_http_error",
+        "network request returned HTTP 404",
+    )
+    .unwrap();
+    failed_result.structured_content_json = Some(
+        crate::agent::network_action_structured_content_json(
+            &failed_action,
+            serde_json::Value::Null,
+            serde_json::json!({
+                "url": "https://example.test/missing",
+                "status_code": 404,
+                "body_bytes": 0
+            }),
+        )
+        .unwrap(),
+    );
+    let mut request = runtime_model_request_fixture("turn-1");
+    request.provider = "runtime-batch".to_string();
+    request.model = "test".to_string();
+    request.agent_id = turn.agent_id.clone();
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::NetworkFetch);
+    request.messages = vec![crate::agent::ModelMessage {
+        role: crate::agent::ModelMessageRole::User,
+        source: ContextSourceKind::UserInstruction,
+        content: "research provider docs".to_string(),
+    }];
+    let execution = crate::agent::AgentTurnExecution {
+        request,
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "provider docs fetch batch".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "fetch provider documentation sources".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![success_action, failed_action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        action_results: vec![success_result, failed_result],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    let applied = service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+
+    assert!(applied);
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == "turn-1")
+    );
+    assert!(!service.agent_turn_executions.contains_key("turn-1"));
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("[action_result fetch-ok fetch_url succeeded]")
+            && block.content.contains("provider document body")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("[action_result fetch-404 fetch_url failed]")
+            && block.content.contains("network request returned HTTP 404")
+    }));
+    let history = service
+        .agent_turn_network_action_history
+        .get("turn-1")
+        .unwrap();
+    assert_eq!(history.requests.len(), 2);
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent: fetch url: https://example.test/ok"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text.contains("provider document body"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text.contains("agent warning: URL fetch failed (HTTP 404)"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text.contains("model received the response detail")
+            && pane_text.contains("for recovery"),
+        "{pane_text}"
+    );
+    let audit = fs::read_to_string(&audit_path).unwrap();
+    assert!(audit.contains(r#""event_type":"external_integration""#), "{audit}");
+    assert!(audit.contains(r#""action_id":"fetch-ok""#), "{audit}");
+    assert!(audit.contains(r#""action_id":"fetch-404""#), "{audit}");
+    assert!(audit.contains(r#""outcome":"succeeded""#), "{audit}");
+    assert!(audit.contains(r#""outcome":"failed""#), "{audit}");
+    service.pane_processes_mut().terminate_all().unwrap();
+    let _ = fs::remove_dir_all(audit_root);
+}
+
 /// Verifies failure-feedback accounting is per failed action, not per batch.
 ///
 /// A single model response may contain multiple correctable action failures.
