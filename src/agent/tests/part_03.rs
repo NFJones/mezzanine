@@ -119,6 +119,108 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
     assert!(batch.final_turn);
 }
 
+/// Verifies DeepSeek does not return a successful provider response when the
+/// strict fallback still omits the required MAAP batch.
+///
+/// The runtime can repair provider malformed-output errors, but it cannot
+/// repair a response that was accepted as successful with `action_batch=None`.
+/// This locks the adapter to converting missing DeepSeek MAAP output into a
+/// provider diagnostic that preserves the bad response text.
+#[test]
+fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let transport = SequencedFakeProviderHttpTransport::new(vec![
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "deepseek-v4-pro",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "reasoning_content": "I should answer somehow.",
+                            "content": "I can help with that."
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "reasoning_tokens": 3
+                }
+            })
+            .to_string(),
+        },
+        ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "deepseek-v4-pro",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Still no tool call."
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 6,
+                    "reasoning_tokens": 0
+                }
+            })
+            .to_string(),
+        },
+    ]);
+    let provider = DeepSeekChatCompletionsProvider::new("deepseek-key", transport).unwrap();
+
+    let error = provider.send_request(&request).unwrap_err();
+
+    let requests = provider.transport.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    let second_body: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
+    assert_eq!(second_body["thinking"]["type"], "disabled");
+    assert_eq!(
+        second_body["tool_choice"]["function"]["name"],
+        OPENAI_MAAP_FUNCTION_TOOL_NAME
+    );
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.provider_raw_text(), Some("Still no tool call."));
+    assert!(
+        error
+            .message()
+            .contains("DeepSeek response did not call the submit_maap_action_batch tool"),
+        "{}",
+        error.message()
+    );
+    let failure_json: serde_json::Value =
+        serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+    assert_eq!(failure_json["type"], "malformed_model_output");
+}
+
 /// Recursively validates strict-schema object requirements with a path that
 /// makes provider 400 regressions diagnosable from test failures.
 fn assert_openai_strict_schema_shape_at(schema: &serde_json::Value, path: &str) {

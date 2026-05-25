@@ -5,13 +5,14 @@
 //! Provider dispatch remains in the parent module so shared trait wiring stays
 //! centralized.
 
+use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
-    AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MezError,
+    AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MaapBatch, MezError,
     ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_maap_action_batch_json_for_turn,
-    provider_quota_usage_from_headers, validate_non_empty,
+    ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
+    parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
 use std::collections::BTreeMap;
 
@@ -204,6 +205,9 @@ pub(super) fn deepseek_maap_request_strategy(
     {
         return DeepSeekMaapRequestStrategy::NoTool;
     }
+    if request.interaction_kind == ModelInteractionKind::Repair {
+        return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
+    }
     if request
         .reasoning_effort
         .as_deref()
@@ -350,31 +354,7 @@ fn parse_deepseek_chat_completions_response_body(
     };
     let provider_transcript_events =
         deepseek_provider_transcript_events_for_message(message, reasoning_content);
-    let action_batch = if let Some(parsed) = message
-        .get("tool_calls")
-        .and_then(|tool_calls| tool_calls.as_array())
-        .filter(|tool_calls| !tool_calls.is_empty())
-    {
-        let maap_json = parsed
-            .iter()
-            .find_map(|call| {
-                let name = call.get("function")?.get("name")?.as_str()?;
-                if name == OPENAI_MAAP_FUNCTION_TOOL_NAME {
-                    call.get("function")?.get("arguments")?.as_str()
-                } else {
-                    None
-                }
-            })
-            .unwrap_or("");
-        if maap_json.is_empty() {
-            None
-        } else {
-            parse_maap_action_batch_json_for_turn(maap_json, &request.turn_id, &request.agent_id)
-                .ok()
-        }
-    } else {
-        None
-    };
+    let action_batch = parse_deepseek_maap_action_batch(message, &raw_text, request)?;
     let usage = root
         .get("usage")
         .map(parse_deepseek_usage)
@@ -388,6 +368,72 @@ fn parse_deepseek_chat_completions_response_body(
         action_batch,
         provider_transcript_events,
     })
+}
+
+/// Parses a DeepSeek MAAP action batch from either function-call arguments or
+/// a content fallback.
+///
+/// DeepSeek should normally return the negotiated MAAP tool call. The content
+/// fallbacks keep the adapter compatible with proxies or model variants that
+/// return compact JSON or a fenced MAAP block despite being asked for a tool.
+fn parse_deepseek_maap_action_batch(
+    message: &serde_json::Value,
+    raw_text: &str,
+    request: &ModelRequest,
+) -> Result<Option<MaapBatch>> {
+    if let Some(tool_calls) = message
+        .get("tool_calls")
+        .and_then(serde_json::Value::as_array)
+        .filter(|tool_calls| !tool_calls.is_empty())
+    {
+        return parse_deepseek_maap_tool_calls(tool_calls, request);
+    }
+    parse_deepseek_content_maap_action_batch(raw_text, request)
+}
+
+/// Parses a DeepSeek MAAP batch from provider-native function calls.
+fn parse_deepseek_maap_tool_calls(
+    tool_calls: &[serde_json::Value],
+    request: &ModelRequest,
+) -> Result<Option<MaapBatch>> {
+    let Some(maap_call) = tool_calls.iter().find(|call| {
+        call.pointer("/function/name")
+            .and_then(serde_json::Value::as_str)
+            == Some(OPENAI_MAAP_FUNCTION_TOOL_NAME)
+    }) else {
+        return Ok(None);
+    };
+    let missing_arguments_raw_text = maap_call.to_string();
+    let arguments = maap_call
+        .pointer("/function/arguments")
+        .and_then(serde_json::Value::as_str)
+        .filter(|arguments| !arguments.trim().is_empty())
+        .ok_or_else(|| {
+            provider_maap_parse_error(
+                MezError::invalid_args(format!(
+                    "DeepSeek tool call {OPENAI_MAAP_FUNCTION_TOOL_NAME} did not include JSON arguments"
+                )),
+                &missing_arguments_raw_text,
+            )
+        })?;
+    parse_maap_action_batch_json_for_turn(arguments, &request.turn_id, &request.agent_id)
+        .map(Some)
+        .map_err(|error| provider_maap_parse_error(error, arguments))
+}
+
+/// Parses a DeepSeek content fallback when no MAAP tool call is present.
+fn parse_deepseek_content_maap_action_batch(
+    raw_text: &str,
+    request: &ModelRequest,
+) -> Result<Option<MaapBatch>> {
+    let trimmed = raw_text.trim();
+    if trimmed.starts_with('{') {
+        return parse_maap_action_batch_json_for_turn(trimmed, &request.turn_id, &request.agent_id)
+            .map(Some)
+            .map_err(|error| provider_maap_parse_error(error, raw_text));
+    }
+    parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
+        .map_err(|error| provider_maap_parse_error(error, raw_text))
 }
 
 /// Captures DeepSeek-native assistant tool-call metadata for transcript replay.
@@ -583,6 +629,119 @@ mod tests {
             "reasoning_tokens": 3
         }));
         assert_eq!(flat.reasoning_tokens, 3);
+    }
+
+    /// Verifies DeepSeek repair retries prioritize MAAP tool compliance over
+    /// thinking-mode continuity.
+    ///
+    /// Initial DeepSeek requests with reasoning still use thinking mode, but
+    /// MAAP repair requests are corrective control-plane retries. For those
+    /// requests the provider must disable thinking and force the MAAP tool so
+    /// a malformed or missing action batch does not loop through another
+    /// thinking response that can decline the tool call.
+    #[test]
+    fn deepseek_repair_request_forces_tool_without_thinking() {
+        let mut request = deepseek_test_request(Vec::new());
+        request.interaction_kind = ModelInteractionKind::Repair;
+
+        let http = build_deepseek_chat_completions_http_request(
+            &request,
+            "deepseek-key",
+            "https://api.deepseek.com/chat/completions",
+            true,
+            1000,
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&http.body).unwrap();
+
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert_eq!(
+            body["tool_choice"]["function"]["name"],
+            OPENAI_MAAP_FUNCTION_TOOL_NAME
+        );
+    }
+
+    /// Verifies DeepSeek content fallbacks can still produce a valid MAAP
+    /// batch when a proxy or model variant ignores the advertised function
+    /// tool but returns the compact JSON object in assistant content.
+    #[test]
+    fn deepseek_response_parses_content_json_maap_fallback() {
+        let request = deepseek_test_request(Vec::new());
+        let body = serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": serde_json::json!({
+                        "rationale": "content fallback still produced structured output",
+                        "actions": [{
+                            "type": "say",
+                            "status": "final",
+                            "text": "hello"
+                        }]
+                    }).to_string()
+                }
+            }]
+        })
+        .to_string();
+
+        let response = parse_deepseek_chat_completions_response_body(&body, &request).unwrap();
+
+        let batch = response.action_batch.unwrap();
+        assert_eq!(
+            batch.rationale,
+            "content fallback still produced structured output"
+        );
+        assert!(batch.final_turn);
+    }
+
+    /// Verifies malformed DeepSeek MAAP tool arguments are rejected as
+    /// repairable malformed provider output.
+    ///
+    /// The prior parser converted failed argument parsing into `None`, which
+    /// let the runner surface a generic missing-batch failure and discarded the
+    /// actual malformed arguments needed for a repair retry.
+    #[test]
+    fn deepseek_response_rejects_malformed_maap_tool_arguments() {
+        let request = deepseek_test_request(Vec::new());
+        let malformed_arguments = serde_json::json!({
+            "rationale": "missing action content",
+            "actions": []
+        })
+        .to_string();
+        let body = serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                            "arguments": malformed_arguments
+                        }
+                    }]
+                }
+            }]
+        })
+        .to_string();
+
+        let error = parse_deepseek_chat_completions_response_body(&body, &request).unwrap_err();
+
+        assert!(
+            error
+                .message()
+                .contains("provider MAAP output is malformed"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            error.provider_raw_text(),
+            Some(malformed_arguments.as_str())
+        );
     }
 
     /// Verifies DeepSeek thinking-mode tool-call responses retain provider

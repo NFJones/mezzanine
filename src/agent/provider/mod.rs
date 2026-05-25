@@ -577,6 +577,29 @@ impl<T> DeepSeekChatCompletionsProvider<T> {
     }
 }
 
+/// Returns whether a DeepSeek request must produce a structured MAAP batch.
+fn deepseek_response_requires_maap(request: &ModelRequest) -> bool {
+    request.interaction_kind != ModelInteractionKind::AutoSizing
+        && !request.allowed_actions.actions.is_empty()
+}
+
+/// Converts a successful DeepSeek response without required MAAP into a
+/// repairable malformed-output provider error.
+fn deepseek_required_maap_response(
+    response: ModelResponse,
+    request: &ModelRequest,
+) -> Result<ModelResponse> {
+    if response.action_batch.is_some() || !deepseek_response_requires_maap(request) {
+        return Ok(response);
+    }
+    Err(provider_maap_parse_error(
+        MezError::invalid_args(format!(
+            "DeepSeek response did not call the {OPENAI_MAAP_FUNCTION_TOOL_NAME} tool or return a MAAP JSON object"
+        )),
+        &response.raw_text,
+    ))
+}
+
 #[cfg(test)]
 impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider<T> {
     fn provider_id(&self) -> &str {
@@ -679,7 +702,7 @@ impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider
             }
             parsed = fallback;
         }
-        Ok(parsed)
+        deepseek_required_maap_response(parsed, request)
     }
 }
 
@@ -792,7 +815,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
                 }
                 parsed = fallback;
             }
-            Ok(parsed)
+            deepseek_required_maap_response(parsed, request)
         })
     }
 }
