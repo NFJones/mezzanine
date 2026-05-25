@@ -723,6 +723,9 @@ path = "/bin/bash"
 visible_fields = ["pane.index", "agent.auto_reasoning", "agent.model"]
 [agents]
 auto_reasoning = true
+auto_compact = true
+auto_compact_threshold = 0.5
+implementation_pressure_after_shell_actions = 8
 [personalities.careful]
 auto_reasoning_enabled = true
 "#;
@@ -732,10 +735,10 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 5"));
+    assert!(plan.text.contains("version = 6"));
     assert!(
         plan.text
-            .contains("implementation_pressure_after_shell_actions = 8")
+            .contains("implementation_pressure_after_shell_actions = 5")
     );
     assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
     assert!(!plan.text.contains("nested_muxxer"));
@@ -745,6 +748,8 @@ auto_reasoning_enabled = true
     assert!(plan.text.contains("\"agent.thinking\""));
     assert!(!plan.text.contains("auto_reasoning"));
     assert!(!plan.text.contains("agent.auto_reasoning"));
+    assert!(!plan.text.contains("auto_compact"));
+    assert!(!plan.text.contains("auto_compact_threshold"));
     assert!(!plan.text.contains("default_command"));
     assert!(!plan.text.contains("path = \"/bin/bash\""));
     assert!(plan.text.contains("\"agent.preset\""));
@@ -768,16 +773,23 @@ fn migrates_json_primary_config_to_current_schema() {
   },
   "shell": {
     "command": "zsh"
+  },
+  "agents": {
+    "auto_compact": true,
+    "auto_compact_threshold": 0.5,
+    "implementation_pressure_after_shell_actions": 8
   }
 }"#;
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"5".to_string()));
+    assert_eq!(values.get("version"), Some(&"6".to_string()));
     assert_eq!(
         values.get("agents.implementation_pressure_after_shell_actions"),
-        Some(&"8".to_string())
+        Some(&"5".to_string())
     );
+    assert!(!values.contains_key("agents.auto_compact"));
+    assert!(!values.contains_key("agents.auto_compact_threshold"));
     assert_eq!(
         values.get("terminal.nested_multiplexer"),
         Some(&"disabled".to_string())

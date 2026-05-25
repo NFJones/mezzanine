@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 5;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 6;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +72,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             4 => {
                 current_text = migrate_v4_to_v5(format, &current_text)?;
                 current_version = 5;
+            }
+            5 => {
+                current_text = migrate_v5_to_v6(format, &current_text)?;
+                current_version = 6;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -160,6 +164,18 @@ fn migrate_v4_to_v5(format: ConfigFormat, text: &str) -> Result<String> {
     match format {
         ConfigFormat::Toml => migrate_toml_v4_to_v5(text),
         ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v4_to_v5(format, text),
+    }
+}
+
+/// Applies the version 5 to version 6 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v5_to_v6(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v5_to_v6(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v5_to_v6(format, text),
     }
 }
 
@@ -423,6 +439,60 @@ fn migrate_json_compatible_v4_to_v5(format: ConfigFormat, text: &str) -> Result<
     }
 }
 
+/// Applies the version 5 to version 6 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v5_to_v6(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    remove_toml_path(&mut document, "agents.auto_compact")?;
+    remove_toml_path(&mut document, "agents.auto_compact_threshold")?;
+    set_toml_default_usize_if_absent_or_old_default(
+        &mut document,
+        "agents.implementation_pressure_after_shell_actions",
+        8,
+        5,
+    )?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(6))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 5 to version 6 migration to JSON and YAML config files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v5_to_v6(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    remove_json_path(&mut document, "agents.auto_compact");
+    remove_json_path(&mut document, "agents.auto_compact_threshold");
+    set_json_default_usize_if_absent_or_old_default(
+        &mut document,
+        "agents.implementation_pressure_after_shell_actions",
+        8,
+        5,
+    )?;
+    set_json_path_value(&mut document, "version", serde_json::json!(6))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
 /// Parses a JSON or YAML config file into a JSON value tree.
 ///
 /// # Parameters
@@ -513,6 +583,55 @@ fn copy_json_default_if_absent(
         return Ok(());
     };
     set_json_path_value(target, path, value)
+}
+
+/// Sets a TOML integer default when a path is absent or still has the previous
+/// schema's built-in default.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+/// - `path`: The dotted config path to update.
+/// - `old_default`: The previous schema default value.
+/// - `new_default`: The replacement schema default value.
+fn set_toml_default_usize_if_absent_or_old_default(
+    document: &mut toml_edit::DocumentMut,
+    path: &str,
+    old_default: i64,
+    new_default: i64,
+) -> Result<()> {
+    let should_set = match toml_item_at(document.as_table(), path) {
+        None => true,
+        Some(toml_edit::Item::Value(value)) => value.as_integer() == Some(old_default),
+        Some(_) => false,
+    };
+    if should_set {
+        set_toml_path_item(document, path, toml_edit::value(new_default))?;
+    }
+    Ok(())
+}
+
+/// Sets a JSON-compatible integer default when a path is absent or still has
+/// the previous schema's built-in default.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+/// - `path`: The dotted config path to update.
+/// - `old_default`: The previous schema default value.
+/// - `new_default`: The replacement schema default value.
+fn set_json_default_usize_if_absent_or_old_default(
+    document: &mut serde_json::Value,
+    path: &str,
+    old_default: u64,
+    new_default: u64,
+) -> Result<()> {
+    let should_set = match json_value_at(document, path) {
+        None => true,
+        Some(value) => value.as_u64() == Some(old_default),
+    };
+    if should_set {
+        set_json_path_value(document, path, serde_json::json!(new_default))?;
+    }
+    Ok(())
 }
 
 /// Normalizes one renamed TOML key, preserving canonical-key precedence.

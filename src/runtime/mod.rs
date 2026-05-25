@@ -272,7 +272,6 @@ pub use sockets::{
 };
 pub use types::{
     AttachedClientStepApplication, AuxiliarySocketKind, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
-    DEFAULT_AGENT_AUTO_COMPACT, DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD,
     DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_ROUTING,
     DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
@@ -325,8 +324,7 @@ use commands_support::{
 };
 use config::{
     RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json,
-    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_compact_from_config,
-    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_sizing_from_config,
+    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config,
     runtime_agent_implementation_pressure_after_shell_actions_from_config,

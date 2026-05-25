@@ -2428,22 +2428,23 @@ The `history` table MUST support `lines`, `rotate_lines`, `persist`, and
 `history.rotate_lines` MUST default to `1000`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
-`shell_only`, `auto_compact`, `auto_compact_threshold`,
-`compaction_raw_retention_percent`, `routing`, `action_failure_retry_limit`,
+`shell_only`, `compaction_raw_retention_percent`, `routing`,
+`action_failure_retry_limit`, `implementation_pressure_after_shell_actions`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, `max_depth`,
 `prompt_profile`, and `default_agent_role`.
-`agents.auto_compact_threshold` MUST be a number greater than `0` and at most
-`1`, and MUST default to `0.95`.
 `agents.compaction_raw_retention_percent` MUST be an integer from `1` to `100`,
-and MUST default to `10`.
+MUST default to `10`, and MUST apply to manual compaction and provider
+context-limit recovery rather than proactive threshold compaction.
 `agents.routing` MUST be a boolean and MUST default to `false`.
 `agents.action_failure_retry_limit` MUST be a positive integer and MUST default
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one
 bad action in a batch cannot consume the recovery budget for a different
 failed action.
+`agents.implementation_pressure_after_shell_actions` MUST be a positive integer
+and MUST default to `5`.
 
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,
@@ -4710,8 +4711,8 @@ The baseline command capabilities are:
   by estimated replay size, defaulting to 10%. Non-model
   runtime command paths MAY produce an implementation summary, but an explicit
   user `/compact` MUST attempt real transcript compaction whenever active
-  durable transcript entries exist, regardless of the auto-compaction threshold
-  or retained-tail budget. It MUST no-op only when there are no transcript
+  durable transcript entries exist, regardless of retained-tail budget. It MUST
+  no-op only when there are no transcript
   entries to compact or no durable transcript entries are available.
 - `/copy`: Copy the latest non-empty model-authored `say.text` emitted for
   the active pane. The command MUST accept `pane`, `buffer [name]`, and

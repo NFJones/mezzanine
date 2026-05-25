@@ -8,8 +8,7 @@ use super::{
     ActionResult, AgentAction, AgentId, AgentTurnRecord, ApprovalDecision, ApprovalPolicy,
     AuditConfig, AuditLog, AuditRetentionPolicy, BTreeMap, BlockedApprovalRequest, CommandRule,
     CommandRuleScope, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigScope,
-    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_AUTO_COMPACT,
-    DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_ROUTING,
     DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MAX_CONCURRENT_AGENTS,
@@ -1994,37 +1993,6 @@ pub(super) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<
         "max_concurrent_agents",
         DEFAULT_MAX_CONCURRENT_AGENTS,
     )
-}
-
-/// Parses whether automatic agent context compaction is enabled.
-pub(super) fn runtime_agent_auto_compact_from_config(root: &Value) -> Result<bool> {
-    let Some(agents) = runtime_json_object(root, "agents") else {
-        return Ok(DEFAULT_AGENT_AUTO_COMPACT);
-    };
-    let Some(value) = agents.get("auto_compact") else {
-        return Ok(DEFAULT_AGENT_AUTO_COMPACT);
-    };
-    runtime_json_bool(Some(value))
-        .ok_or_else(|| MezError::config("agents.auto_compact must be a boolean"))
-}
-
-/// Parses the context-window fraction that triggers automatic compaction.
-pub(super) fn runtime_agent_auto_compact_threshold_from_config(root: &Value) -> Result<f64> {
-    let Some(agents) = runtime_json_object(root, "agents") else {
-        return Ok(DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD);
-    };
-    let Some(value) = agents.get("auto_compact_threshold") else {
-        return Ok(DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD);
-    };
-    let threshold = value.as_f64().ok_or_else(|| {
-        MezError::config("agents.auto_compact_threshold must be a number between 0 and 1")
-    })?;
-    if !(0.0..=1.0).contains(&threshold) || threshold == 0.0 {
-        return Err(MezError::config(
-            "agents.auto_compact_threshold must be greater than 0 and at most 1",
-        ));
-    }
-    Ok(threshold)
 }
 
 /// Parses the retained raw-tail percentage used during context compaction.

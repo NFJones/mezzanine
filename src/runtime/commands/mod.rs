@@ -3044,10 +3044,8 @@ impl RuntimeSessionService {
             vec![
                 "Context".to_string(),
                 format!(
-                    "{context_blocks} blocks, {request_messages} request messages, window={} tokens, auto_compact={} threshold={:.2}",
-                    model_profile.context_window_tokens(),
-                    self.agent_auto_compact,
-                    self.agent_auto_compact_threshold
+                    "{context_blocks} blocks, {request_messages} request messages, window={} tokens, compaction=provider-rejection/manual",
+                    model_profile.context_window_tokens()
                 ),
             ],
             vec![

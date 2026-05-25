@@ -58,10 +58,6 @@ pub const DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT: usize = 2;
 pub const DEFAULT_MAX_SUBAGENT_DEPTH: usize = 2;
 /// Default policy for parent turns after spawning child subagents.
 pub const DEFAULT_SUBAGENT_WAIT_POLICY: SubagentWaitPolicy = SubagentWaitPolicy::Join;
-/// Whether agent turns compact conversation context automatically by default.
-pub const DEFAULT_AGENT_AUTO_COMPACT: bool = true;
-/// Default fraction of the active model context window that triggers compaction.
-pub const DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD: f64 = 0.95;
 /// Default percent of the active model context retained as uncompacted raw tail.
 pub const DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT: usize = 10;
 /// Whether agent turns use automatic model and reasoning sizing by default.
@@ -69,7 +65,7 @@ pub const DEFAULT_AGENT_ROUTING: bool = false;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 /// Default number of successive successful shell commands before nudging implementation.
-pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 8;
+pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 5;
 /// Default router profile for automatic model and reasoning sizing.
 pub const DEFAULT_AUTO_SIZING_ROUTER_PROFILE: &str = "auto-size-router";
 /// Default small target profile for automatic model and reasoning sizing.
@@ -3996,10 +3992,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) agent_response_styles: BTreeMap<String, String>,
-    /// Whether new agent prompts may compact transcript context before a turn.
-    pub(super) agent_auto_compact: bool,
-    /// Fraction of the active model context budget that triggers auto compact.
-    pub(super) agent_auto_compact_threshold: f64,
     /// Percent of the active model context retained as uncompacted raw tail.
     pub(super) agent_compaction_raw_retention_percent: usize,
     /// Panes currently running model-backed context compaction, keyed by start

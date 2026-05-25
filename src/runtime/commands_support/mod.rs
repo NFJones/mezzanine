@@ -3893,8 +3893,6 @@ pub(super) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.max_root_subagents"
                 | "agents.max_subagents_per_subagent"
                 | "agents.max_depth"
-                | "agents.auto_compact"
-                | "agents.auto_compact_threshold"
                 | "agents.compaction_raw_retention_percent"
                 | "agents.routing"
                 | "agents.action_failure_retry_limit"

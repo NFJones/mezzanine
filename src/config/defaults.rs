@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 5
+version = 6
 
 [session]
 detach_behavior = "keep-running"
@@ -175,12 +175,10 @@ search_mode = "literal"
 default_provider = "openai"
 default_model_profile = "default"
 shell_only = true
-auto_compact = true
-auto_compact_threshold = 0.95
 compaction_raw_retention_percent = 10
 routing = false
 action_failure_retry_limit = 5
-implementation_pressure_after_shell_actions = 8
+implementation_pressure_after_shell_actions = 5
 custom_system_prompt = ""
 default_personality = ""
 subagent_placement = "new-window"

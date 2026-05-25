@@ -600,7 +600,6 @@ fn runtime_agent_shell_compact_summarizes_transcript_into_memory_context() {
             text: r#"[agents]
 default_provider = "openai"
 default_model_profile = "compact-test"
-auto_compact = false
 [providers.openai]
 kind = "openai"
 models = ["gpt-compact-test"]
@@ -781,7 +780,7 @@ context_window_tokens = 4500
 ///
 /// Provider responses and provider context-limit errors are the source of truth
 /// for context-size handling, so prompt submission must start the turn even when
-/// a local estimate would have crossed the configured threshold.
+/// a local estimate would have crossed the model window.
 #[test]
 fn runtime_agent_prompt_does_not_preflight_compact_before_context_append() {
     let mut service = test_runtime_service();
@@ -795,8 +794,6 @@ fn runtime_agent_prompt_does_not_preflight_compact_before_context_append() {
             text: r#"[agents]
 default_provider = "openai"
 default_model_profile = "compact-preflight-test"
-auto_compact = true
-auto_compact_threshold = 0.50
 [providers.openai]
 kind = "openai"
 models = ["gpt-compact-preflight-test"]
@@ -883,8 +880,6 @@ fn runtime_agent_turn_sends_active_context_before_provider_limit_feedback() {
             text: r#"[agents]
 default_provider = "runtime-batch"
 default_model_profile = "compact-active-turn-test"
-auto_compact = true
-auto_compact_threshold = 0.50
 [providers.runtime-batch]
 kind = "openai"
 models = ["test"]
@@ -1000,8 +995,6 @@ fn runtime_provider_context_limit_error_compacts_context_and_retries() {
             text: r#"[agents]
 default_provider = "runtime-batch"
 default_model_profile = "provider-context-limit-test"
-auto_compact = false
-auto_compact_threshold = 0.50
 [providers.runtime-batch]
 kind = "openai"
 models = ["test"]
@@ -1077,7 +1070,7 @@ context_window_tokens = 40000
         "{second_request_text}"
     );
     assert!(
-        !second_request_text.contains("provider-context-limit-"),
+        second_request_text.contains("provider-context-limit-"),
         "{second_request_text}"
     );
     let pane_text = service
@@ -1111,7 +1104,6 @@ fn runtime_provider_context_window_error_compacts_context_and_retries() {
             text: r#"[agents]
 default_provider = "runtime-batch"
 default_model_profile = "provider-context-window-test"
-auto_compact = false
 [providers.runtime-batch]
 kind = "openai"
 models = ["test"]
@@ -1187,7 +1179,7 @@ context_window_tokens = 40000
         "{second_request_text}"
     );
     assert!(
-        !second_request_text.contains("provider-context-window-"),
+        second_request_text.contains("provider-context-window-"),
         "{second_request_text}"
     );
     let retry_notice = service
@@ -1221,7 +1213,6 @@ fn runtime_provider_output_limit_error_guides_compact_retry_without_compaction()
             text: r#"[agents]
 default_provider = "runtime-batch"
 default_model_profile = "provider-output-limit-test"
-auto_compact = false
 [providers.runtime-batch]
 kind = "openai"
 models = ["test"]
@@ -1333,8 +1324,6 @@ fn runtime_routing_context_limit_recovery_uses_minimum_target_window() {
 default_provider = "runtime-batch"
 default_model_profile = "default"
 routing = true
-auto_compact = false
-auto_compact_threshold = 0.50
 
 [agents.auto_sizing]
 router_model_profile = "router"
@@ -1442,14 +1431,12 @@ context_window_tokens = 100000
         .collect::<Vec<_>>()
         .join("\n");
     assert!(stored_context.contains("[context compacted]"));
-    assert!(
-        stored_context.contains("label=synthetic routing action result"),
-        "{stored_context}"
-    );
-    assert!(
-        !stored_context.contains("routing-context-pressure-"),
-        "{stored_context}"
-    );
+    let stored_blocks = &service.agent_turn_contexts.get("turn-1").unwrap().blocks;
+    assert!(stored_blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.label == "synthetic routing action result"
+            && block.content.contains("routing-context-pressure-")
+    }));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -2096,7 +2083,6 @@ fn runtime_agent_shell_compact_retains_bounded_recent_transcript_tail() {
             text: r#"[agents]
 default_provider = "openai"
 default_model_profile = "compact-tail-test"
-auto_compact = false
 [providers.openai]
 kind = "openai"
 models = ["gpt-compact-tail-test"]

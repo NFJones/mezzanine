@@ -685,17 +685,17 @@ fn startup_config_layers_migrate_existing_primary_config() {
     let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
 
     assert_eq!(layers.len(), 1);
-    assert_eq!(effective.get("version"), Some("5"));
+    assert_eq!(effective.get("version"), Some("6"));
     assert_eq!(
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
     );
     assert_eq!(
         effective.get("agents.implementation_pressure_after_shell_actions"),
-        Some("8")
+        Some("5")
     );
-    assert!(migrated.contains("version = 5"));
-    assert!(migrated.contains("implementation_pressure_after_shell_actions = 8"));
+    assert!(migrated.contains("version = 6"));
+    assert!(migrated.contains("implementation_pressure_after_shell_actions = 5"));
     assert!(migrated.contains("[model_presets.deepseek]"));
     assert!(!migrated.contains("nested_muxxer"));
     assert!(!migrated.contains("default_command"));

@@ -32,8 +32,6 @@ pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInterac
 
 /// Maximum bytes from one context block copied into a provider request.
 const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
-/// Maximum exact bytes pinned as hot action evidence during compaction.
-const MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES: usize = 16 * 1024;
 /// Marker used for deterministic local compaction summaries in provider context.
 const MODEL_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
 /// Default raw suffix percent retained after local context compaction.

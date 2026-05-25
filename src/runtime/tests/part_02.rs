@@ -1561,7 +1561,7 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
 #[test]
 fn runtime_config_reload_applies_implementation_pressure_threshold() {
     let mut service = test_runtime_service();
-    assert_eq!(service.agent_implementation_pressure_after_shell_actions, 8);
+    assert_eq!(service.agent_implementation_pressure_after_shell_actions, 5);
     let root = temp_root("runtime-implementation-pressure-threshold");
     let path = root.join("config.toml");
     fs::write(
@@ -1762,16 +1762,15 @@ fn runtime_config_reload_applies_subagent_capacity_limits() {
     );
 }
 
-/// Verifies the runtime applies compaction threshold and raw-retention config.
+/// Verifies the runtime applies raw-retention config for compaction recovery.
 ///
-/// Both values are live agent options: the trigger threshold decides when
-/// compaction starts, while the raw-retention percentage decides how much exact
-/// recent context remains after compaction.
+/// Provider context-limit recovery and manual compaction both use the
+/// raw-retention percentage to decide how much exact recent context remains
+/// after compaction.
 #[test]
-fn runtime_config_reload_applies_compaction_thresholds() {
+fn runtime_config_reload_applies_compaction_raw_retention() {
     let mut service = test_runtime_service();
 
-    assert_eq!(service.agent_auto_compact_threshold, 0.95);
     assert_eq!(service.agent_compaction_raw_retention_percent, 10);
 
     service
@@ -1781,13 +1780,10 @@ fn runtime_config_reload_applies_compaction_thresholds() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text:
-                "[agents]\nauto_compact_threshold = 0.80\ncompaction_raw_retention_percent = 25\n"
-                    .to_string(),
+            text: "[agents]\ncompaction_raw_retention_percent = 25\n".to_string(),
         }])
         .unwrap();
 
-    assert_eq!(service.agent_auto_compact_threshold, 0.80);
     assert_eq!(service.agent_compaction_raw_retention_percent, 25);
 }
 

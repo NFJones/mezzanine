@@ -2439,8 +2439,8 @@ fn model_request_preserves_oversized_context_until_provider_feedback() {
 fn explicit_context_compaction_uses_configured_retained_tail_percent() {
     let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
         AgentContext::new(vec![ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            label: "action result".to_string(),
+            source: ContextSourceKind::Transcript,
+            label: "older transcript".to_string(),
             content: "x".repeat(2 * 1024 * 1024),
         }])
         .unwrap(),
@@ -2459,7 +2459,7 @@ fn explicit_context_compaction_uses_configured_retained_tail_percent() {
     assert!(memory_block.content.contains("retained_tail_percent=25"));
 }
 
-/// Verifies explicit compaction keeps hot execution evidence and repo guidance
+/// Verifies explicit compaction keeps current execution evidence and repo guidance
 /// exact while folding older unrelated context into a bulk summary. These
 /// blocks are what prevent long recovery turns from rereading instructions or
 /// repeating recently completed commands after provider-limit compaction.
@@ -2474,7 +2474,10 @@ fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             label: "action result".to_string(),
-            content: "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence".to_string(),
+            content: format!(
+                "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence large-action-marker {}",
+                "large exact evidence ".repeat(2_000)
+            ),
         },
     ];
     for index in 0..40 {
@@ -2504,6 +2507,10 @@ fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result
     }));
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult && block.content.contains("fresh evidence")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content.contains("large-action-marker")
     }));
     assert!(
         context

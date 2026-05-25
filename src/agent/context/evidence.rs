@@ -6,7 +6,7 @@
 //! keeping large raw tool outputs out of the stable prompt prefix.
 
 use super::compaction::{model_context_single_line, model_context_source_kind_name};
-use super::{ContextBlock, ContextSourceKind, MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES};
+use super::{ContextBlock, ContextSourceKind};
 use std::collections::HashSet;
 
 /// Prepares context blocks for provider requests and compaction.
@@ -265,10 +265,6 @@ fn action_result_marker_status(marker: &str) -> Option<&str> {
 
 /// Builds a short action-output summary for the evidence ledger.
 fn evidence_summary_for_block(block: &ContextBlock) -> String {
-    if block.content.len() > MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES {
-        return "oversized output omitted; see compacted inventory or rerun a bounded query if needed"
-            .to_string();
-    }
     let summary_source = block
         .content
         .split_once("output:")

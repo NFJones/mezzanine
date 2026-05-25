@@ -9,8 +9,8 @@ use super::{
     AgentTranscriptStore, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AgentTurnTrigger,
     AuditActor, AuditDeferredWrite, AuditLog, AuditRecord, AuthStore, BTreeMap, BTreeSet,
     BlockedApprovalQueue, BlockedApprovalRequest, ConfigFormat, ConfigLayer, ConfigScope,
-    ControlIdempotencyCache, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_AUTO_COMPACT,
-    DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    ControlIdempotencyCache, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
+    DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_ROUTING,
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MAX_ROOT_SUBAGENTS,
     DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
@@ -31,8 +31,7 @@ use super::{
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
     discover_existing_overlays, discover_project_root, discover_streamable_http_mcp_server,
     ensure_absolute, ensure_no_mez_separator, fs, json_escape,
-    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_compact_from_config,
-    runtime_agent_auto_compact_threshold_from_config, runtime_agent_auto_sizing_from_config,
+    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config,
     runtime_agent_implementation_pressure_after_shell_actions_from_config,
@@ -316,8 +315,6 @@ impl RuntimeSessionService {
             agent_turn_model_profiles: BTreeMap::new(),
             agent_planning_modes: BTreeSet::new(),
             agent_response_styles: BTreeMap::new(),
-            agent_auto_compact: DEFAULT_AGENT_AUTO_COMPACT,
-            agent_auto_compact_threshold: DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD,
             agent_compaction_raw_retention_percent: DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
             agent_compacting_panes: BTreeMap::new(),
             pending_agent_compaction_tasks: BTreeMap::new(),
@@ -777,9 +774,6 @@ impl RuntimeSessionService {
             runtime_max_subagents_per_subagent_from_config(&structured)?;
         self.max_subagent_depth = runtime_max_subagent_depth_from_config(&structured)?;
         self.subagent_wait_policy = runtime_subagent_wait_policy_from_config(&structured)?;
-        self.agent_auto_compact = runtime_agent_auto_compact_from_config(&structured)?;
-        self.agent_auto_compact_threshold =
-            runtime_agent_auto_compact_threshold_from_config(&structured)?;
         self.agent_compaction_raw_retention_percent =
             runtime_agent_compaction_raw_retention_percent_from_config(&structured)?;
         self.agent_routing = runtime_agent_routing_from_config(&structured)?;

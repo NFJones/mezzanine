@@ -78,10 +78,9 @@ impl RuntimeSessionService {
     /// Locally compacts active-turn context after a provider rejects the request
     /// as too large.
     ///
-    /// This recovery path is intentionally independent of proactive
-    /// `agents.auto_compact`: once the provider has rejected the exact request,
-    /// the only recoverable continuation is to reduce model-visible active-turn
-    /// context and retry with the same durable turn.
+    /// Once the provider has rejected the exact request, the recoverable
+    /// continuation is to reduce model-visible active-turn context and retry
+    /// with the same durable turn.
     pub(crate) fn recover_agent_provider_context_limit_failure(
         &mut self,
         agent_id: &AgentId,
@@ -140,7 +139,7 @@ impl RuntimeSessionService {
                 &turn.pane_id,
                 turn_id,
                 &format!(
-                    "auto_compact recovery_skipped reason=provider_context_limit attempt={} budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
+                    "context_limit_recovery skipped attempt={} budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
                     recovery_attempt,
                     budget_words,
                     retained_tail_percent,
@@ -169,7 +168,7 @@ impl RuntimeSessionService {
             &turn.pane_id,
             turn_id,
             &format!(
-                "auto_compact recovery_applied reason=provider_context_limit attempt={} budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
+                "context_limit_recovery applied attempt={} budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
                 recovery_attempt,
                 budget_words,
                 retained_tail_percent,

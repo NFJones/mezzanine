@@ -454,8 +454,6 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "default_provider",
     "default_model_profile",
     "shell_only",
-    "auto_compact",
-    "auto_compact_threshold",
     "compaction_raw_retention_percent",
     "routing",
     "action_failure_retry_limit",

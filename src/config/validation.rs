@@ -288,15 +288,6 @@ pub fn validate_config_text(
                 path,
                 message: "unsupported subagent wait policy; use join or detach".to_string(),
             });
-        } else if path == "agents.auto_compact_threshold" {
-            match value.parse::<f64>() {
-                Ok(threshold) if threshold > 0.0 && threshold <= 1.0 => {}
-                _ => diagnostics.push(ConfigDiagnostic {
-                    path,
-                    message: "auto compact threshold must be greater than 0 and at most 1"
-                        .to_string(),
-                }),
-            }
         } else if path == "agents.auto_sizing.fallback_policy" && value != "use-default-profile" {
             diagnostics.push(ConfigDiagnostic {
                 path,

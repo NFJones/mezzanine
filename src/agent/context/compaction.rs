@@ -8,8 +8,8 @@
 use super::evidence::prepare_model_context_blocks;
 use super::{
     AgentContext, ContextBlock, ContextSourceKind, DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT,
-    MODEL_CONTEXT_BLOCK_LIMIT_BYTES, MODEL_CONTEXT_COMPACTED_PREFIX,
-    MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES, ModelContextCompactionReport, model_context_block_header,
+    MODEL_CONTEXT_BLOCK_LIMIT_BYTES, MODEL_CONTEXT_COMPACTED_PREFIX, ModelContextCompactionReport,
+    model_context_block_header,
 };
 use crate::error::Result;
 use std::collections::HashSet;
@@ -103,10 +103,11 @@ fn compact_model_context_blocks(
         tail_budget,
         retained_tail_percent,
     ));
+    let protected_floor = prepared.len();
     prepared.extend(retained_tail.iter().cloned());
 
     while model_context_total_words(&prepared) > context_budget_words {
-        if prepared.len() <= 1 {
+        if prepared.len() <= protected_floor {
             break;
         }
         if let Some(omitted) = prepared.pop() {
@@ -131,14 +132,9 @@ fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> 
             protected.insert(index);
         }
     }
-    let mut hot_action_results = 0usize;
     for (index, block) in blocks.iter().enumerate().rev() {
-        if block.source == ContextSourceKind::ActionResult
-            && block.content.len() <= MODEL_CONTEXT_HOT_ACTION_LIMIT_BYTES
-            && hot_action_results < 8
-        {
+        if block.source == ContextSourceKind::ActionResult {
             protected.insert(index);
-            hot_action_results = hot_action_results.saturating_add(1);
         }
     }
     protected
