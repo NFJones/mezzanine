@@ -3559,6 +3559,18 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
+        description.contains("copied verbatim from current file content"),
+        "{description}"
+    );
+    assert!(
+        description.contains("never infer or reconstruct likely code as old context"),
+        "{description}"
+    );
+    assert!(
+        description.contains("If the exact target line was not read"),
+        "{description}"
+    );
+    assert!(
         description.contains("multiple small hunks"),
         "{description}"
     );

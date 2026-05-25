@@ -5986,8 +5986,13 @@ schema instead of duplicating the full grammar. The prompt MUST still instruct
 models to emit the patch string directly without Markdown fences, heredoc
 wrappers, or `apply_patch <<...` shell text. It MUST state that the most
 reliable update shape is a small file operation with a copied `@@` anchor and a
-small number of exact old/context lines, and MUST recommend several small
-anchored hunks over one large brittle hunk. It MUST state that after an
+small number of exact old/context lines, and MUST state that each old/context
+line comes from current file content or fresh action-result evidence rather
+than inferred, normalized, simplified, or reconstructed code. If the model has
+not read the exact target line it wants to use as old/context, the prompt MUST
+direct it to read that bounded region before patching. The prompt MUST
+recommend several small anchored hunks over one large brittle hunk. It MUST
+state that after an
 `apply_patch` hunk or context mismatch, the model should reuse already-read
 fresh current context when available, otherwise re-read only missing or stale
 candidate/owner ranges, and retry with a smaller fresh Mezzanine patch using a

@@ -4223,6 +4223,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(!prompt.contains("Canonical apply_patch grammar"));
     assert!(prompt.contains("Emit the patch string directly"));
     assert!(prompt.contains("1-6 exact old/context lines"));
+    assert!(prompt.contains("must be copied verbatim from current file content"));
+    assert!(prompt.contains("never infer, normalize, simplify, or reconstruct likely code"));
+    assert!(prompt.contains("If you have not read the exact line"));
     assert!(prompt.contains("several small anchored hunks"));
     assert!(prompt.contains("without Markdown fences, heredocs"));
     assert!(!prompt.contains("For recovery compatibility"));

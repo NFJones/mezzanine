@@ -144,6 +144,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(!prompt.contains("Canonical apply_patch grammar"));
     assert!(prompt.contains("Emit the patch string directly"));
     assert!(prompt.contains("1-6 exact old/context lines"));
+    assert!(prompt.contains("must be copied verbatim from current file content"));
+    assert!(prompt.contains("do not infer, normalize, simplify, or reconstruct likely code"));
+    assert!(prompt.contains("If the exact target line has not been read"));
     assert!(prompt.contains("several small anchored hunks"));
     assert!(prompt.contains("without Markdown fences, heredocs"));
     assert!(!prompt.contains("For recovery compatibility"));
@@ -4020,6 +4023,8 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(description.contains("Right: request_capability(capability=\"shell\""));
     assert!(description.contains("Wrong: *** Replace File"));
     assert!(description.contains("Right: *** Update File with anchored hunks"));
+    assert!(description.contains("Wrong: inferred apply_patch old context"));
+    assert!(description.contains("copy old/context lines verbatim from read file evidence"));
     let parameters = &tool["function"]["parameters"];
     assert!(parameters["properties"].get("thought").is_none());
     assert!(
