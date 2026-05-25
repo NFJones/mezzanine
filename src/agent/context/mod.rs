@@ -112,6 +112,13 @@ pub enum ContextSourceKind {
     /// This generated block lets provider continuations reuse command, test,
     /// patch, and file-read facts without replaying large raw tool outputs.
     EvidenceLedger,
+    /// Represents compact immutable evidence promoted from settled turn actions.
+    ///
+    /// These generated blocks are safe to place in provider cache-prefix
+    /// material after a later assistant response has already observed the raw
+    /// action result. They preserve continuity without replaying large volatile
+    /// result payloads forever.
+    CommittedEvidence,
     /// Represents the Action Result case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -183,6 +190,7 @@ impl TrustDomain {
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::EvidenceLedger
+            | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::ActionResult => TrustDomain::ModelOutput,
             ContextSourceKind::TranscriptUser => TrustDomain::UserInput,
         }
@@ -285,7 +293,8 @@ impl ContextBlock {
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::TranscriptAssistant
-            | ContextSourceKind::TranscriptTool => ContextStability::SessionStable,
+            | ContextSourceKind::TranscriptTool
+            | ContextSourceKind::CommittedEvidence => ContextStability::SessionStable,
             ContextSourceKind::EvidenceLedger => ContextStability::TurnVolatile,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
@@ -304,7 +313,8 @@ impl ContextBlock {
             | ContextSourceKind::Memory
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant => {
+            | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::CommittedEvidence => {
                 if self.stability() == ContextStability::TurnVolatile {
                     ContextCachePolicy::Ineligible
                 } else if self.source == ContextSourceKind::ProjectGuidance {
@@ -337,6 +347,7 @@ impl ContextBlock {
                 | ContextSourceKind::TranscriptAssistant
                 | ContextSourceKind::TranscriptTool
                 | ContextSourceKind::EvidenceLedger
+                | ContextSourceKind::CommittedEvidence
                 | ContextSourceKind::ActionResult
                 | ContextSourceKind::LocalMessage
         )

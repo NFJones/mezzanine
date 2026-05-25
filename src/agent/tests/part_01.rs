@@ -2233,6 +2233,11 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
         label: "historical tool result".to_string(),
         content: "prior command output".to_string(),
     };
+    let committed_evidence = ContextBlock {
+        source: ContextSourceKind::CommittedEvidence,
+        label: "committed evidence".to_string(),
+        content: "compact prior action evidence".to_string(),
+    };
     let pane_identity = ContextBlock {
         source: ContextSourceKind::Configuration,
         label: "pane identity".to_string(),
@@ -2254,6 +2259,16 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
         ContextCachePolicy::Ineligible
     );
     assert!(!transcript_tool.stable_prefix_eligible());
+    assert_eq!(
+        committed_evidence.stability(),
+        ContextStability::SessionStable
+    );
+    assert_eq!(
+        committed_evidence.cache_policy(),
+        ContextCachePolicy::Eligible
+    );
+    assert!(committed_evidence.stable_prefix_eligible());
+    assert!(committed_evidence.recoverable_for_compaction());
     assert_eq!(pane_identity.stability(), ContextStability::TurnVolatile);
     assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
     assert!(!pane_identity.stable_prefix_eligible());

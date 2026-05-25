@@ -2610,6 +2610,134 @@ fn openai_current_action_results_remain_volatile_suffix() {
     assert!(diagnostics.volatile_input_bytes > 2);
 }
 
+/// Verifies a long OpenAI session promotes already-observed action results into
+/// compact stable-prefix evidence without replaying large raw action output.
+///
+/// The latest action result is still raw current execution evidence, but
+/// earlier results that a later assistant response already observed are safe to
+/// carry forward as immutable committed evidence. This keeps the reusable
+/// provider prefix growing across long sessions while preventing fetched pages
+/// and command output from permanently bloating the volatile suffix.
+#[test]
+fn openai_long_session_promotes_observed_action_results_to_stable_committed_evidence() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let mut blocks = Vec::new();
+    for index in 0..12 {
+        let stable_seed = format!("provider-doc-{index}-title");
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::TranscriptUser,
+            label: format!("historical user {index}"),
+            content: format!("Read provider document {index}."),
+        });
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::TranscriptAssistant,
+            label: format!("historical assistant plan {index}"),
+            content: format!("I will fetch provider document {index}."),
+        });
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: format!("fetch result {index}"),
+            content: format!(
+                "[action_result fetch-{index} fetch_url succeeded]\n\
+                 content:\n\
+                 summary_seed={stable_seed}; provider document {index} confirms tool-calling support. {}\n\
+                 RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_{index}",
+                "stable filler ".repeat(30)
+            ),
+        });
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::TranscriptAssistant,
+            label: format!("historical assistant observed {index}"),
+            content: format!("I observed fetch-{index} and can use {stable_seed}."),
+        });
+    }
+    blocks.push(ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "Compare the provider evidence and continue from the current fetch.".to_string(),
+    });
+    blocks.push(ContextBlock {
+        source: ContextSourceKind::ActionResult,
+        label: "current fetch result".to_string(),
+        content: "[action_result fetch-current fetch_url succeeded]\ncontent:\nCURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE".to_string(),
+    });
+
+    let request =
+        assemble_model_request(&profile, &turn(), &AgentContext::new(blocks).unwrap()).unwrap();
+
+    let committed = request
+        .messages
+        .iter()
+        .filter(|message| message.source == ContextSourceKind::CommittedEvidence)
+        .collect::<Vec<_>>();
+    assert_eq!(committed.len(), 12);
+    assert!(
+        committed
+            .iter()
+            .all(|message| message.content.contains("[committed_evidence]"))
+    );
+    assert!(!request.messages.iter().any(|message| {
+        message.source == ContextSourceKind::ActionResult && message.content.contains("fetch-0")
+    }));
+    assert_eq!(
+        request
+            .messages
+            .iter()
+            .filter(|message| message.source == ContextSourceKind::ActionResult)
+            .count(),
+        1
+    );
+    assert!(request.messages.iter().any(|message| {
+        message.source == ContextSourceKind::ActionResult
+            && message
+                .content
+                .contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE")
+    }));
+
+    let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
+    assert!(prefix.contains("[committed_evidence]"));
+    assert!(prefix.contains("committed evidence fetch-0"));
+    assert!(prefix.contains("provider-doc-0-title"));
+    assert!(prefix.contains("provider-doc-11-title"));
+    assert!(!prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED"));
+    assert!(!prefix.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));
+
+    let body_text = openai_responses_request_body(&request).unwrap();
+    assert!(body_text.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));
+    assert!(!body_text.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED"));
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let input = body["input"].as_array().unwrap();
+    let user_index = input
+        .iter()
+        .position(|message| {
+            message["content"][0]["text"].as_str().is_some_and(|text| {
+                text.contains("Compare the provider evidence and continue from the current fetch.")
+            })
+        })
+        .expect("current user instruction should be rendered into input");
+    let current_result_index = input
+        .iter()
+        .position(|message| {
+            message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"))
+        })
+        .expect("current action result should be rendered into input");
+    assert!(current_result_index > user_index);
+
+    let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+    assert!(diagnostics.stable_input_bytes > 2);
+    assert!(diagnostics.volatile_input_bytes > 2);
+}
+
 /// Verifies volatile controller state remains out of OpenAI `instructions` and
 /// out of the stable input prefix.
 ///

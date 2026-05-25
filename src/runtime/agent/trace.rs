@@ -284,6 +284,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::TranscriptTool => "transcript_tool",
         ContextSourceKind::EvidenceLedger => "evidence_ledger",
+        ContextSourceKind::CommittedEvidence => "committed_evidence",
         ContextSourceKind::ActionResult => "action_result",
     }
 }

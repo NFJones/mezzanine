@@ -216,7 +216,8 @@ fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
         | ContextSourceKind::Memory
         | ContextSourceKind::Transcript
         | ContextSourceKind::TranscriptUser
-        | ContextSourceKind::TranscriptAssistant => true,
+        | ContextSourceKind::TranscriptAssistant
+        | ContextSourceKind::CommittedEvidence => true,
         ContextSourceKind::Policy => !message.content.starts_with("[scheduler state]\n"),
         ContextSourceKind::UserInstruction
         | ContextSourceKind::LocalMessage

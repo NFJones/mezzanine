@@ -12,7 +12,8 @@ use std::collections::HashSet;
 /// Prepares context blocks for provider requests and compaction.
 pub(super) fn prepare_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
     let deduped = dedupe_historical_context_blocks(blocks);
-    with_generated_evidence_ledger(deduped)
+    let committed = with_generated_committed_evidence(deduped);
+    with_generated_evidence_ledger(committed)
 }
 
 /// Removes repeated historical transcript blocks before request assembly.
@@ -63,6 +64,55 @@ fn with_generated_evidence_ledger(blocks: Vec<ContextBlock>) -> Vec<ContextBlock
         .unwrap_or(blocks.len());
     blocks.insert(insert_at, ledger);
     blocks
+}
+
+/// Promotes action results already observed by a later assistant response.
+///
+/// The newest action results after the latest assistant response stay raw and
+/// volatile so the next provider call receives full execution evidence. Older
+/// results have already been available to a model continuation, so subsequent
+/// requests receive compact immutable summaries in the stable prefix instead of
+/// replaying large raw outputs indefinitely.
+fn with_generated_committed_evidence(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
+    let blocks = blocks
+        .into_iter()
+        .filter(|block| block.source != ContextSourceKind::CommittedEvidence)
+        .collect::<Vec<_>>();
+    let Some(latest_assistant_index) = blocks
+        .iter()
+        .rposition(|block| block.source == ContextSourceKind::TranscriptAssistant)
+    else {
+        return blocks;
+    };
+    let mut promoted = Vec::with_capacity(blocks.len());
+    for (index, block) in blocks.into_iter().enumerate() {
+        if block.source == ContextSourceKind::ActionResult
+            && index < latest_assistant_index
+            && let Some(committed) = committed_evidence_block_for_action_result(&block)
+        {
+            promoted.push(committed);
+            continue;
+        }
+        promoted.push(block);
+    }
+    promoted
+}
+
+/// Builds a compact stable-prefix block for one settled action result.
+fn committed_evidence_block_for_action_result(block: &ContextBlock) -> Option<ContextBlock> {
+    let entry = evidence_ledger_entry_for_block(block)?;
+    let action_id = action_result_marker_id(block.content.lines().next().unwrap_or_default())
+        .unwrap_or("unknown");
+    Some(ContextBlock {
+        source: ContextSourceKind::CommittedEvidence,
+        label: format!("committed evidence {action_id}"),
+        content: [
+            "[committed_evidence]".to_string(),
+            "Compact immutable current-turn evidence already observed by a later assistant response. Use it to avoid repeating completed work; raw action output may be omitted from the volatile suffix.".to_string(),
+            entry,
+        ]
+        .join("\n"),
+    })
 }
 
 /// Builds a compact provider-visible evidence ledger from action/tool blocks.
@@ -196,6 +246,12 @@ fn action_result_marker_type(marker: &str) -> Option<&str> {
     let mut fields = marker.trim_end_matches(']').split_whitespace();
     let _action_id = fields.next()?;
     fields.next()
+}
+
+/// Extracts an action id from a standard action-result marker.
+fn action_result_marker_id(marker: &str) -> Option<&str> {
+    let marker = marker.trim().strip_prefix("[action_result ")?;
+    marker.trim_end_matches(']').split_whitespace().next()
 }
 
 /// Extracts an action status from a standard action-result marker.

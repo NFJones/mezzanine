@@ -124,7 +124,9 @@ fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> 
     for (index, block) in blocks.iter().enumerate() {
         if matches!(
             block.source,
-            ContextSourceKind::ProjectGuidance | ContextSourceKind::EvidenceLedger
+            ContextSourceKind::ProjectGuidance
+                | ContextSourceKind::EvidenceLedger
+                | ContextSourceKind::CommittedEvidence
         ) {
             protected.insert(index);
         }
@@ -272,6 +274,7 @@ pub(super) fn model_context_source_kind_name(source: ContextSourceKind) -> &'sta
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::TranscriptTool => "transcript_tool",
         ContextSourceKind::EvidenceLedger => "evidence_ledger",
+        ContextSourceKind::CommittedEvidence => "committed_evidence",
         ContextSourceKind::ActionResult => "action_result",
     }
 }
