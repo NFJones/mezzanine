@@ -51,6 +51,7 @@ Contributing in this repository? See [Contributor Notes](#contributor-notes).
   - [Work in the multiplexer](#work-in-the-multiplexer)
   - [Use the agent shell](#use-the-agent-shell)
   - [Project context](#project-context)
+- [Provider Support](#provider-support)
 - [Agent Model and Safety](#agent-model-and-safety)
 - [Advanced Tasks](#advanced-tasks)
   - [Debug a failing test in the current repository](#debug-a-failing-test-in-the-current-repository)
@@ -270,6 +271,33 @@ the command-surface breakdown, explicit skill syntax, and built-in skill usage.
   depends on the overlay is blocked or skipped with diagnostics.
 - Inspect trust state with `mez config trust list`; trust, reject, or revoke
   project roots through `mez config trust ...`.
+## Provider Support
+Mezzanine currently ships with native support for a small provider set. The table below summarizes the
+currently supported providers and the provider families that should eventually
+be supported.
+
+Abstract feature labels in the table mean:
+- **Streaming**: incremental token or event streaming during a turn.
+- **Tools**: provider support for Mezzanine MAAP tool/function calls.
+- **Structured output**: schema-shaped or otherwise strongly structured model
+  responses.
+- **Reasoning controls**: explicit thinking or reasoning-effort controls.
+- **Catalog refresh**: explicit runtime model-list discovery or refresh.
+
+| Provider / family   | Status      | API shape                                                                    | Streaming | Tools | Structured output | Reasoning controls | Catalog refresh |
+| ------------------- | ----------- | ---------------------------------------------------------------------------- | --------- | ----- | ----------------- | ------------------ | --------------- |
+| OpenAI              | Supported   | Native Responses API plus the future generic OpenAI-compatible adapter class | Yes       | Yes   | Yes               | Partial            | Yes             |
+| Generic OpenAI API  | Unsupported | OpenAI-compatible API                                                        |           |       |                   |                    |                 |
+| DeepSeek            | Supported   | Native Chat Completions API                                                  | Partial   | Yes   | Partial           | Yes                | Partial         |
+| Anthropic           | Unsupported | Native Messages API                                                          |           |       |                   |                    |                 |
+| Gemini direct API   | Unsupported | OpenAI-compatible first, native later if needed                              |           |       |                   |                    |                 |
+| Mistral             | Unsupported | OpenAI-compatible or native API                                              |           |       |                   |                    |                 |
+| Perplexity          | Unsupported | Native API or compatibility path to be determined                            |           |       |                   |                    |                 |
+| xAI                 | Unsupported | Responses-compatible hosted API                                              |           |       |                   |                    |                 |
+| Bedrock / Vertex AI | Unsupported | Cloud deployment backends over multiple provider families                    |           |       |                   |                    |                 |
+| Cohere              | Unsupported | Native or compatibility path to be determined                                |           |       |                   |                    |                 |
+
+Current support reflects behavior implemented in the repository today.
 
 ## Agent Model and Safety
 
