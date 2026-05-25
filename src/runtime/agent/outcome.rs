@@ -6,6 +6,7 @@
 //! facade leaves the facade focused on state transitions and dispatch.
 
 use super::*;
+use crate::skills::is_valid_skill_name;
 
 impl RuntimeSessionService {
     /// Queues one bounded provider continuation after model-correctable action

@@ -1,0 +1,903 @@
+//! Runtime agent subagent orchestration helpers.
+//!
+//! This module owns MAAP subagent spawning, joined-child dependencies, MMP task
+//! status/result delivery, and terminal subagent cleanup. It keeps parent-child
+//! lifecycle coordination out of the main runtime agent facade.
+
+use super::*;
+
+impl RuntimeSessionService {
+    /// Clears joined-subagent dependencies owned by or waiting on a turn.
+    pub(in crate::runtime) fn clear_joined_subagent_dependencies_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) {
+        self.joined_subagent_dependencies
+            .retain(|child_turn_id, dependency| {
+                child_turn_id != turn_id
+                    && dependency.parent_turn_id != turn_id
+                    && dependency.child_turn_id != turn_id
+            });
+    }
+
+    /// Reports whether one joined-subagent dependency still has a live child
+    /// turn that can make progress.
+    pub(in crate::runtime) fn joined_subagent_dependency_has_live_child(
+        &self,
+        dependency: &JoinedSubagentDependency,
+    ) -> bool {
+        self.agent_turn_ledger.turns().iter().any(|turn| {
+            turn.turn_id == dependency.child_turn_id
+                && matches!(
+                    turn.state,
+                    AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                )
+        })
+    }
+
+    /// Reports whether a running parent execution is waiting on a live joined
+    /// subagent dependency.
+    ///
+    /// A running `spawn_agent` action only represents progress when it still
+    /// maps to the child turn that was created for that specific parent action.
+    /// Stale action results without a live dependency must not mask a stranded
+    /// parent turn.
+    pub(in crate::runtime) fn execution_waiting_for_live_joined_subagents(
+        &self,
+        parent_turn_id: &str,
+        execution: &AgentTurnExecution,
+    ) -> bool {
+        execution.terminal_state == AgentTurnState::Running
+            && execution.action_results.iter().any(|result| {
+                result.action_type == "spawn_agent"
+                    && result.status == ActionStatus::Running
+                    && self
+                        .joined_subagent_dependencies
+                        .values()
+                        .any(|dependency| {
+                            dependency.parent_turn_id == parent_turn_id
+                                && dependency.parent_action_id == result.action_id
+                                && self.joined_subagent_dependency_has_live_child(dependency)
+                        })
+            })
+    }
+
+    /// Executes any provider-produced MAAP `spawn_agent` actions in a running
+    /// turn and rewrites their planned running results to terminal action
+    /// results. Successful spawns create the child pane, child turn, MMP task
+    /// status, and audit record through the shared runtime spawn helper;
+    /// failures are returned as action-level errors so the parent turn can be
+    /// transcripted normally.
+    pub(in crate::runtime) fn execute_running_spawn_actions_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
+        if execution.terminal_state != AgentTurnState::Running {
+            return Ok(0);
+        }
+        let Some(batch) = execution.response.action_batch.clone() else {
+            return Ok(0);
+        };
+        let mut executed = 0usize;
+        for index in 0..execution.action_results.len() {
+            if execution.action_results[index].status != ActionStatus::Running
+                || execution.action_results[index].action_type != "spawn_agent"
+            {
+                continue;
+            }
+            let action = batch
+                .actions
+                .iter()
+                .find(|action| action.id == execution.action_results[index].action_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("running spawn result does not match an action")
+                })?;
+            if !self
+                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+            {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    "agent: spawn agent",
+                )?;
+            }
+            execution.action_results[index] = match self
+                .execute_spawn_action_for_turn(turn, &action)
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    let status = if error.kind() == crate::error::MezErrorKind::Forbidden {
+                        ActionStatus::Denied
+                    } else {
+                        ActionStatus::Failed
+                    };
+                    let mut result = ActionResult::failed(
+                        turn,
+                        &action,
+                        status,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?;
+                    result.structured_content_json = Some(format!(
+                        r#"{{"spawn":null,"delivery_status":"failed","error":{{"code":"{}","message":"{}"}}}}"#,
+                        runtime_mezzanine_error_code(error.kind()),
+                        json_escape(error.message())
+                    ));
+                    result
+                }
+            };
+            executed = executed.saturating_add(1);
+        }
+        if execution.action_results.iter().any(|result| {
+            result.action_type == "spawn_agent" && result.status == ActionStatus::Running
+        }) {
+            execution.final_turn = false;
+        }
+        execution.terminal_state = runtime_agent_turn_state_from_action_results(
+            &execution.action_results,
+            execution.final_turn,
+        );
+        if execution.terminal_state == AgentTurnState::Running
+            && runtime_execution_ready_for_provider_continuation(execution)
+        {
+            for result in execution
+                .action_results
+                .iter()
+                .filter(|result| result.action_type == "spawn_agent")
+            {
+                self.agent_turn_contexts
+                    .get_mut(&turn.turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("running agent turn context is unavailable")
+                    })?
+                    .blocks
+                    .push(ContextBlock {
+                        source: ContextSourceKind::ActionResult,
+                        label: format!("action result {}", result.action_id),
+                        content: action_result_context_content(result),
+                    });
+            }
+            self.pending_agent_provider_tasks
+                .insert(turn.turn_id.clone());
+        }
+        Ok(executed)
+    }
+
+    /// Executes one MAAP `spawn_agent` action through the runtime subagent
+    /// creation path.
+    ///
+    /// The action's simple MAAP placement string is parsed through the same
+    /// control schema helper used by `agent/spawn`. Unsupported placements,
+    /// invalid cooperation modes, scope inheritance errors, or audit failures are
+    /// returned to the caller before child state can leak.
+    pub(in crate::runtime) fn execute_spawn_action_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+    ) -> Result<ActionResult> {
+        let AgentActionPayload::SpawnAgent {
+            role,
+            placement,
+            cooperation_mode,
+            read_scopes,
+            write_scopes,
+            task_prompt,
+        } = &action.payload
+        else {
+            return Err(MezError::invalid_args(
+                "subagent execution requires a spawn_agent action",
+            ));
+        };
+        let controller =
+            self.session.primary_client_id().cloned().ok_or_else(|| {
+                MezError::invalid_state("spawn_agent requires an attached primary")
+            })?;
+        let normalized_cooperation_mode = runtime_cooperation_mode(cooperation_mode)?;
+        let normalized_role =
+            self.maap_spawn_role_for_action(role, normalized_cooperation_mode, write_scopes);
+        let prompt = if normalized_role != *role {
+            format!(
+                "[requested role alias: {}; using built-in profile: {}]\n{}",
+                role, normalized_role, task_prompt
+            )
+        } else {
+            task_prompt.clone()
+        };
+        let normalized_cooperation_mode_name =
+            runtime_cooperation_mode_name(normalized_cooperation_mode);
+        let params = serde_json::json!({
+            "parent_agent": {
+                "agent_id": turn.agent_id,
+            },
+            "placement": placement,
+            "role": normalized_role,
+            "cooperation_mode": normalized_cooperation_mode_name,
+            "read_scopes": read_scopes,
+            "write_scopes": write_scopes,
+            "prompt": prompt,
+        })
+        .to_string();
+        let spawn = runtime_subagent_spawn_request(&params, false)?;
+        let placement_mode = runtime_subagent_placement_mode(&params)?;
+        let spawn_json = self.spawn_runtime_subagent(&controller, spawn, placement_mode)?;
+        if self.subagent_wait_policy == SubagentWaitPolicy::Join {
+            let (child_agent_id, child_display_name, child_turn_id) =
+                runtime_spawn_json_agent_and_turn(&spawn_json)?;
+            self.joined_subagent_dependencies.insert(
+                child_turn_id.clone(),
+                JoinedSubagentDependency {
+                    parent_turn_id: turn.turn_id.clone(),
+                    parent_action_id: action.id.clone(),
+                    child_turn_id: child_turn_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_display_name: child_display_name.clone(),
+                },
+            );
+            let child_label =
+                runtime_subagent_display_label(&child_agent_id, child_display_name.as_deref());
+            let task_summary = runtime_agent_terminal_preview(task_prompt);
+            return Ok(ActionResult::running(
+                turn,
+                action,
+                vec![format!(
+                    "subagent {child_label} spawn accepted for {placement} placement; waiting for task result: {task_summary}"
+                )],
+                Some(format!(
+                    r#"{{"spawn":{},"placement":"{}","delivery_status":"accepted","join_policy":"join","join_state":"waiting","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","error":null}}"#,
+                    spawn_json,
+                    json_escape(placement),
+                    json_escape(&child_agent_id),
+                    child_display_name
+                        .as_deref()
+                        .map(|name| format!(r#""{}""#, json_escape(name)))
+                        .unwrap_or_else(|| "null".to_string()),
+                    json_escape(&child_turn_id)
+                )),
+            ));
+        }
+        Ok(ActionResult::succeeded(
+            turn,
+            action,
+            vec![format!(
+                "subagent spawn accepted for {} placement: {}",
+                placement,
+                runtime_agent_terminal_preview(task_prompt)
+            )],
+            Some(format!(
+                r#"{{"spawn":{},"placement":"{}","delivery_status":"accepted","join_policy":"detach","error":null}}"#,
+                spawn_json,
+                json_escape(placement)
+            )),
+        ))
+    }
+
+    /// Normalizes common model-produced descriptive read-only roles to the
+    /// built-in explorer profile used by the runtime subagent harness.
+    ///
+    /// Provider models often describe a subagent's job as a role such as
+    /// `repo-searcher`. MAAP execution keeps configured custom roles exact, but
+    /// maps common read-only aliases onto `explorer` so safe delegation requests
+    /// do not fail after the model already emitted an otherwise valid action.
+    fn maap_spawn_role_for_action(
+        &self,
+        role: &str,
+        cooperation_mode: crate::subagent::CooperationMode,
+        write_scopes: &[String],
+    ) -> String {
+        if self.subagent_profiles.contains_key(role) {
+            return role.to_string();
+        }
+        if cooperation_mode == crate::subagent::CooperationMode::ExploreOnly
+            && write_scopes.is_empty()
+            && Self::maap_read_only_subagent_role_alias(role)
+        {
+            return "explorer".to_string();
+        }
+        role.to_string()
+    }
+
+    /// Reports whether a provider-produced descriptive role name is a safe
+    /// read-only alias for the built-in explorer profile.
+    fn maap_read_only_subagent_role_alias(role: &str) -> bool {
+        matches!(
+            role,
+            "repo-searcher"
+                | "repository-searcher"
+                | "searcher"
+                | "researcher"
+                | "inspector"
+                | "reader"
+                | "scanner"
+                | "finder"
+        )
+    }
+
+    /// Runs the append subagent spawn audit operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn append_subagent_spawn_audit(
+        &mut self,
+        spawn: &SubagentSpawnRequest,
+        child_agent_id: &str,
+        pane_id: &str,
+    ) -> Result<()> {
+        let Some(audit_log) = self.audit_log.as_mut() else {
+            return Ok(());
+        };
+        let record = AuditRecord::subagent_spawn(
+            self.session.id.to_string(),
+            AuditActor {
+                kind: "agent".to_string(),
+                id: spawn.parent_agent_id.clone(),
+            },
+            spawn.parent_agent_id.clone(),
+            child_agent_id.to_string(),
+            spawn.requested_role.clone(),
+            runtime_cooperation_mode_name(spawn.cooperation_mode),
+            "accepted",
+        )
+        .with_pane_id(pane_id.to_string());
+        let _ = audit_log.append(record)?;
+        Ok(())
+    }
+
+    /// Runs the emit subagent task result for execution operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn emit_subagent_task_result_for_execution(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let success = execution.terminal_state == AgentTurnState::Completed;
+        let summary = if success {
+            "subagent task completed"
+        } else {
+            "subagent task failed"
+        };
+        let output = subagent_task_output_for_execution(execution);
+        self.emit_subagent_task_result(turn, success, summary, &output)
+    }
+
+    /// Runs the emit cancelled subagent task result operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn emit_cancelled_subagent_task_result(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        self.emit_subagent_task_result(
+            turn,
+            false,
+            "subagent task cancelled",
+            "cancelled by runtime request",
+        )
+    }
+
+    /// Runs the emit subagent task result for state operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn emit_subagent_task_result_for_state(
+        &mut self,
+        turn: &AgentTurnRecord,
+        state: AgentTurnState,
+    ) -> Result<()> {
+        match state {
+            AgentTurnState::Completed => self.emit_subagent_task_result(
+                turn,
+                true,
+                "subagent task completed",
+                "completed without provider output",
+            ),
+            AgentTurnState::Failed => self.emit_subagent_task_result(
+                turn,
+                false,
+                "subagent task failed",
+                "failed without provider output",
+            ),
+            AgentTurnState::Interrupted => self.emit_subagent_task_result(
+                turn,
+                false,
+                "subagent task interrupted",
+                "interrupted by snapshot resume",
+            ),
+            _ => Ok(()),
+        }
+    }
+
+    /// Emits an intermediate MMP task-status update for a spawned subagent
+    /// without closing its task route or releasing its active scope.
+    ///
+    /// Status delivery is best-effort after spawn setup: an offline parent is
+    /// recorded as an undelivered runtime event, but the child turn keeps its
+    /// normal lifecycle so approval or provider work can continue.
+    pub(in crate::runtime) fn emit_subagent_task_status(
+        &mut self,
+        turn: &AgentTurnRecord,
+        state: TaskState,
+        progress_percent: Option<u8>,
+        summary: &str,
+    ) -> Result<()> {
+        let Some(parent_agent_id) = self.subagent_task_routes.get(&turn.turn_id).cloned() else {
+            return Ok(());
+        };
+        let now_ms = current_unix_seconds().saturating_mul(1000);
+        let parent_identity = self.message_service.ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque(parent_agent_id.clone()).ok_or_else(|| {
+                    MezError::invalid_args("subagent parent agent id is invalid for MMP")
+                })?,
+                pane_id: None,
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+            },
+            now_ms,
+        )?;
+        if self
+            .message_service
+            .subscription(&parent_identity.agent_id)
+            .is_none()
+        {
+            self.message_service.subscribe(&parent_identity.agent_id)?;
+        }
+        let child_identity = self.runtime_message_sender_identity(turn)?;
+        let payload = TaskStatusPayload {
+            task_id: turn.turn_id.clone(),
+            state,
+            progress_percent,
+            summary: summary.to_string(),
+        };
+        let child_display_name = self
+            .subagent_lineage
+            .get(&turn.agent_id)
+            .map(|lineage| lineage.display_name.clone());
+        let envelope = Envelope {
+            protocol: "mmp/1",
+            id: format!(
+                "{}:task_status:{}",
+                turn.turn_id,
+                runtime_task_state_suffix(state)
+            ),
+            message_type: "task_status".to_string(),
+            time: format!("runtime:{now_ms}"),
+            sender: child_identity.clone(),
+            recipient: Recipient::Agent(parent_identity.agent_id),
+            correlation_id: Some(turn.turn_id.clone()),
+            ttl_ms: None,
+            content_type: "application/json".to_string(),
+            payload: payload.to_json(),
+            extension_fields: child_display_name
+                .as_deref()
+                .map(|name| {
+                    vec![(
+                        "subagent_display_name".to_string(),
+                        format!(r#""{}""#, json_escape(name)),
+                    )]
+                })
+                .unwrap_or_default(),
+        };
+        let delivery = self
+            .message_service
+            .accept_at(&child_identity.agent_id, envelope, now_ms);
+        let child_label =
+            runtime_subagent_display_label(&turn.agent_id, child_display_name.as_deref());
+        self.append_subagent_parent_status_line(
+            &parent_agent_id,
+            &format!(
+                "subagent {} {}: {}",
+                child_label,
+                runtime_task_state_suffix(state),
+                summary
+            ),
+        )?;
+        if let Err(error) = delivery {
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","subagent_task_status":"undelivered","error_code":"{}","error":"{}"}}"#,
+                    json_escape(&turn.pane_id),
+                    json_escape(&turn.turn_id),
+                    runtime_agent_turn_state_name(turn.state),
+                    runtime_mezzanine_error_code(error.kind()),
+                    json_escape(error.message())
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Runs the emit subagent task result operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    fn emit_subagent_task_result(
+        &mut self,
+        turn: &AgentTurnRecord,
+        success: bool,
+        summary: &str,
+        output: &str,
+    ) -> Result<()> {
+        let parent_agent_id = self.subagent_task_result_parent_agent_id(turn);
+        let has_subagent_runtime_state = parent_agent_id.is_some()
+            || self
+                .subagent_scope_declarations
+                .contains_key(&turn.agent_id)
+            || self.subagent_lineage.contains_key(&turn.agent_id)
+            || !self
+                .subagent_scopes
+                .active_write_scopes_for(&turn.agent_id)
+                .is_empty();
+        if !has_subagent_runtime_state {
+            return Ok(());
+        }
+
+        let now_ms = current_unix_seconds().saturating_mul(1000);
+        let child_display_name = self
+            .subagent_lineage
+            .get(&turn.agent_id)
+            .map(|lineage| lineage.display_name.clone());
+        let child_label =
+            runtime_subagent_display_label(&turn.agent_id, child_display_name.as_deref());
+        let delivery = match parent_agent_id.clone() {
+            Some(parent_agent_id) => self.deliver_subagent_task_result_message(
+                turn,
+                &parent_agent_id,
+                success,
+                summary,
+                output,
+                now_ms,
+            ),
+            None => {
+                self.append_lifecycle_event(
+                    EventKind::AgentStatus,
+                    format!(
+                        r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","subagent_task_result":"undelivered","error_code":"not_found","error":"subagent parent route not found"}}"#,
+                        json_escape(&turn.pane_id),
+                        json_escape(&turn.turn_id),
+                        runtime_agent_turn_state_name(turn.state),
+                    ),
+                )?;
+                Ok(())
+            }
+        };
+        if let Some(parent_agent_id) = parent_agent_id.as_deref() {
+            self.append_subagent_parent_status_line(
+                parent_agent_id,
+                &format!(
+                    "subagent {} {}: {}",
+                    child_label,
+                    runtime_subagent_result_status_label(success, summary),
+                    summary
+                ),
+            )?;
+        }
+        self.subagent_task_routes.remove(&turn.turn_id);
+        self.subagent_scopes.unregister(&turn.agent_id);
+        self.subagent_scope_declarations.remove(&turn.agent_id);
+        self.subagent_lineage.remove(&turn.agent_id);
+        self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
+        self.pending_terminal_subagent_pane_closes
+            .insert(turn.pane_id.clone());
+        if let Err(error) = delivery {
+            self.append_lifecycle_event(
+                EventKind::AgentStatus,
+                format!(
+                    r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","subagent_task_result":"undelivered","error_code":"{}","error":"{}"}}"#,
+                    json_escape(&turn.pane_id),
+                    json_escape(&turn.turn_id),
+                    runtime_agent_turn_state_name(turn.state),
+                    runtime_mezzanine_error_code(error.kind()),
+                    json_escape(error.message())
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Returns the parent agent that should receive a terminal child task result.
+    ///
+    /// Normal subagent delivery uses `subagent_task_routes`, but joined parent
+    /// continuations must still be resolved if that route was already cleaned up.
+    /// In that case the parent turn recorded in the join dependency is the
+    /// fallback source of truth.
+    fn subagent_task_result_parent_agent_id(&self, turn: &AgentTurnRecord) -> Option<String> {
+        self.subagent_task_routes
+            .get(&turn.turn_id)
+            .cloned()
+            .or_else(|| {
+                let dependency = self.joined_subagent_dependencies.get(&turn.turn_id)?;
+                self.agent_turn_ledger
+                    .turns()
+                    .iter()
+                    .find(|turn| turn.turn_id == dependency.parent_turn_id)
+                    .map(|turn| turn.agent_id.clone())
+            })
+            .or_else(|| {
+                self.subagent_lineage
+                    .get(&turn.agent_id)
+                    .map(|lineage| lineage.parent_agent_id.clone())
+                    .filter(|parent_agent_id| !parent_agent_id.is_empty())
+            })
+    }
+
+    /// Delivers the terminal `task_result` envelope for a spawned subagent.
+    ///
+    /// Delivery is best-effort from the caller's perspective: the caller records
+    /// and resolves terminal child state even when this function returns an MMP
+    /// identity, subscription, or accept error.
+    fn deliver_subagent_task_result_message(
+        &mut self,
+        turn: &AgentTurnRecord,
+        parent_agent_id: &str,
+        success: bool,
+        summary: &str,
+        output: &str,
+        now_ms: u64,
+    ) -> Result<()> {
+        let parent_identity = self.message_service.ensure_agent_identity(
+            SenderIdentity {
+                agent_id: AgentId::opaque(parent_agent_id.to_string()).ok_or_else(|| {
+                    MezError::invalid_args("subagent parent agent id is invalid for MMP")
+                })?,
+                pane_id: None,
+                window_id: None,
+                role: Some("agent".to_string()),
+                capabilities: Vec::new(),
+            },
+            now_ms,
+        )?;
+        if self
+            .message_service
+            .subscription(&parent_identity.agent_id)
+            .is_none()
+        {
+            self.message_service.subscribe(&parent_identity.agent_id)?;
+        }
+        let child_identity = self.runtime_message_sender_identity(turn)?;
+        let child_display_name = self
+            .subagent_lineage
+            .get(&turn.agent_id)
+            .map(|lineage| lineage.display_name.clone());
+        let payload = TaskResultPayload {
+            task_id: turn.turn_id.clone(),
+            success,
+            summary: summary.to_string(),
+            output: output.to_string(),
+        };
+        let envelope = Envelope {
+            protocol: "mmp/1",
+            id: format!("{}:task_result:final", turn.turn_id),
+            message_type: "task_result".to_string(),
+            time: format!("runtime:{now_ms}"),
+            sender: child_identity.clone(),
+            recipient: Recipient::Agent(parent_identity.agent_id),
+            correlation_id: Some(turn.turn_id.clone()),
+            ttl_ms: None,
+            content_type: "application/json".to_string(),
+            payload: payload.to_json(),
+            extension_fields: child_display_name
+                .as_deref()
+                .map(|name| {
+                    vec![(
+                        "subagent_display_name".to_string(),
+                        format!(r#""{}""#, json_escape(name)),
+                    )]
+                })
+                .unwrap_or_default(),
+        };
+        self.message_service
+            .accept_at(&child_identity.agent_id, envelope, now_ms)
+            .map(|_| ())
+    }
+
+    /// Resolves a parent `spawn_agent` action that joined a child task result.
+    ///
+    /// Joined child task results are delivered through MMP for observability and
+    /// also converted into the parent turn's MAAP action result so the next
+    /// provider request receives the child output as tool context. The parent
+    /// stays blocked until every joined child action in its current execution
+    /// has settled, then it is resumed and queued for provider continuation.
+    fn resolve_joined_subagent_dependency(
+        &mut self,
+        turn: &AgentTurnRecord,
+        success: bool,
+        summary: &str,
+        output: &str,
+    ) -> Result<()> {
+        let Some(dependency) = self.joined_subagent_dependencies.remove(&turn.turn_id) else {
+            return Ok(());
+        };
+        let Some(parent_turn) = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|candidate| candidate.turn_id == dependency.parent_turn_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let parent_previous_state = parent_turn.state;
+        let (observed_result, ready_for_continuation) = {
+            let Some(execution) = self
+                .agent_turn_executions
+                .get_mut(&dependency.parent_turn_id)
+            else {
+                return Ok(());
+            };
+            let Some(batch) = execution.response.action_batch.as_ref() else {
+                return Ok(());
+            };
+            let Some(action) = batch
+                .actions
+                .iter()
+                .find(|action| action.id == dependency.parent_action_id)
+                .cloned()
+            else {
+                return Ok(());
+            };
+            let Some(result_index) = execution
+                .action_results
+                .iter()
+                .position(|result| result.action_id == dependency.parent_action_id)
+            else {
+                return Ok(());
+            };
+            let child_label = runtime_subagent_display_label(
+                &dependency.child_agent_id,
+                dependency.child_display_name.as_deref(),
+            );
+            let result_summary = if success {
+                format!("subagent {child_label} completed: {summary}")
+            } else {
+                format!("subagent {child_label} failed: {summary}")
+            };
+            let observed_result = ActionResult::succeeded(
+                &parent_turn,
+                &action,
+                vec![result_summary],
+                Some(format!(
+                    r#"{{"join_policy":"join","join_state":"completed","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","task_result":{{"success":{},"summary":"{}","output":"{}"}}}}"#,
+                    json_escape(&dependency.child_agent_id),
+                    dependency
+                        .child_display_name
+                        .as_deref()
+                        .map(|name| format!(r#""{}""#, json_escape(name)))
+                        .unwrap_or_else(|| "null".to_string()),
+                    json_escape(&dependency.child_turn_id),
+                    success,
+                    json_escape(summary),
+                    json_escape(output)
+                )),
+            );
+            execution.action_results[result_index] = observed_result.clone();
+            execution.final_turn = false;
+            execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            );
+            let ready_for_continuation =
+                runtime_execution_ready_for_provider_continuation(execution);
+            (observed_result, ready_for_continuation)
+        };
+        if let Some(context) = self.agent_turn_contexts.get_mut(&dependency.parent_turn_id) {
+            context.blocks.push(ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: format!("action result {}", observed_result.action_id),
+                content: action_result_context_content(&observed_result),
+            });
+        }
+        self.append_agent_trace_turn_event(
+            &parent_turn.pane_id,
+            &parent_turn.turn_id,
+            &format!(
+                "joined_subagent_result child_turn={} child_agent={} success={}",
+                dependency.child_turn_id, dependency.child_agent_id, success
+            ),
+        )?;
+        if ready_for_continuation {
+            let _ = self.agent_scheduler.resume_blocked(&parent_turn.turn_id);
+            self.append_agent_trace_turn_event(
+                &parent_turn.pane_id,
+                &parent_turn.turn_id,
+                "scheduler blocked -> running reason=joined_subagent_result_ready",
+            )?;
+            if parent_previous_state == AgentTurnState::Blocked {
+                self.agent_turn_ledger
+                    .resume_blocked_turn(&parent_turn.turn_id)?;
+                self.append_agent_trace_turn_transition(
+                    &parent_turn,
+                    AgentTurnState::Blocked,
+                    AgentTurnState::Running,
+                    "joined_subagent_result_ready",
+                )?;
+            }
+            self.pending_agent_provider_tasks
+                .insert(parent_turn.turn_id.clone());
+            self.append_agent_trace_turn_event(
+                &parent_turn.pane_id,
+                &parent_turn.turn_id,
+                "provider_task queued reason=joined_subagent_result_ready",
+            )?;
+            self.append_agent_status_text_to_terminal_buffer(
+                &parent_turn.pane_id,
+                "agent: subagent results received; continuing",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Appends a subagent status update into the controlling pane buffer.
+    ///
+    /// MMP remains the structured delivery mechanism; this visible line gives
+    /// the user a copyable, in-context event stream in the parent window.
+    pub(in crate::runtime) fn append_subagent_parent_status_line(
+        &mut self,
+        parent_agent_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        let Some(parent_pane_id) = runtime_agent_pane_id(parent_agent_id) else {
+            return Ok(());
+        };
+        if runtime_pane_by_id(&self.session, parent_pane_id.as_str()).is_err() {
+            return Ok(());
+        }
+        self.append_agent_status_text_to_terminal_buffer(parent_pane_id.as_str(), text)
+    }
+
+    /// Closes a terminal subagent pane after final turn cleanup has run.
+    pub(in crate::runtime) fn close_terminal_subagent_pane_if_pending(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        if !self
+            .pending_terminal_subagent_pane_closes
+            .remove(&turn.pane_id)
+        {
+            return Ok(());
+        }
+        if self.pane_closing.contains(&turn.pane_id) {
+            return Ok(());
+        }
+        if self.find_pane_descriptor(&turn.pane_id).is_none() {
+            return Ok(());
+        }
+        let Some(primary) = self.session.primary_client_id().cloned() else {
+            return Ok(());
+        };
+        self.dispatch_runtime_pane_close(
+            &primary,
+            &format!(
+                r#"{{"pane_id":"{}","force":true}}"#,
+                json_escape(&turn.pane_id)
+            ),
+        )?;
+        let live_windows = self
+            .session
+            .windows()
+            .iter()
+            .map(|window| window.id.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.subagent_window_ids
+            .retain(|window_id| live_windows.contains(window_id));
+        self.refresh_subagent_window_names(&primary)?;
+        Ok(())
+    }
+}
+
+/// Derives the pane identity encoded by runtime-created agent ids.
+pub(in crate::runtime) fn runtime_agent_pane_id(agent_id: &str) -> Option<PaneId> {
+    agent_id
+        .strip_prefix("agent-")
+        .and_then(|pane_id| PaneId::parse('%', pane_id.to_string()))
+}
