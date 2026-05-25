@@ -3898,6 +3898,7 @@ pub(super) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.compaction_raw_retention_percent"
                 | "agents.routing"
                 | "agents.action_failure_retry_limit"
+                | "agents.implementation_pressure_after_shell_actions"
                 | "agents.shell_only"
                 | "agents.subagent_placement"
                 | "agents.subagent_wait_policy"

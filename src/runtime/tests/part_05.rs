@@ -3344,6 +3344,188 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert!(!service.agent_turn_contexts.contains_key("turn-1"));
 }
 
+/// Verifies successive shell commands add a soft implementation-pressure hint.
+///
+/// Repeated successful shell inspection can keep a long turn localizing the
+/// same owner instead of implementing the next phase. The runtime should nudge
+/// the next provider continuation after the configured threshold while keeping
+/// the hint volatile and advisory rather than failing the shell action.
+#[test]
+fn runtime_implementation_pressure_context_reaches_provider_continuation() {
+    let mut service = test_runtime_service();
+    service.agent_implementation_pressure_after_shell_actions = 2;
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-implementation-pressure","input":"finish the backlog fixes"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let shell_action = crate::agent::AgentAction {
+        id: "inspect".to_string(),
+        rationale: "read current owner".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect owner".to_string(),
+            command: "sed -n '1,80p' src/runtime/mod.rs".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.record_shell_dispatch_success(
+        "turn-1",
+        "sed -n '1,80p' src/runtime/mod.rs",
+        &shell_action,
+    );
+    assert!(
+        !service
+            .agent_turn_contexts
+            .get("turn-1")
+            .unwrap()
+            .blocks
+            .iter()
+            .any(|block| block.label == "implementation pressure")
+    );
+
+    service.record_shell_dispatch_success(
+        "turn-1",
+        "sed -n '80,160p' src/runtime/mod.rs",
+        &shell_action,
+    );
+    let pressure_block = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.label == "implementation pressure")
+        .expect("implementation pressure should be active turn context");
+    assert_eq!(
+        pressure_block.cache_policy(),
+        crate::agent::ContextCachePolicy::Ineligible
+    );
+    assert!(
+        pressure_block
+            .content
+            .contains("2 consecutive successful shell_command actions"),
+        "{}",
+        pressure_block.content
+    );
+    assert!(
+        pressure_block
+            .content
+            .contains("Prefer the next implementation, validation, or final-report action now"),
+        "{}",
+        pressure_block.content
+    );
+
+    let second_provider = RuntimeRecordingProvider {
+        provider: "runtime-batch",
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            quota_usage: Default::default(),
+            action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
+        },
+        last_request: RefCell::new(None),
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &second_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let request = second_provider.last_request.borrow().clone().unwrap();
+    assert!(request.messages.iter().any(|message| {
+        message.source == ContextSourceKind::LocalMessage
+            && message.content.contains("[implementation pressure]")
+            && message
+                .content
+                .contains("Use another shell_command only for one named missing fact")
+    }));
+}
+
+/// Verifies implementation-pressure hints clear after a successful patch.
+///
+/// The pressure hint is meant to move read-only shell inspection toward
+/// implementation. Once the model actually emits a semantic patch action, the
+/// shell streak should reset so future continuation context does not keep
+/// pressuring a turn that has already moved into implementation.
+#[test]
+fn runtime_implementation_pressure_resets_after_apply_patch_success() {
+    let mut service = test_runtime_service();
+    service.agent_implementation_pressure_after_shell_actions = 1;
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-implementation-pressure-reset","input":"patch the file"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let shell_action = crate::agent::AgentAction {
+        id: "inspect".to_string(),
+        rationale: "read current owner".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect owner".to_string(),
+            command: "git diff -- src/runtime/mod.rs".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.record_shell_dispatch_success("turn-1", "git diff -- src/runtime/mod.rs", &shell_action);
+    assert!(
+        service
+            .agent_turn_contexts
+            .get("turn-1")
+            .unwrap()
+            .blocks
+            .iter()
+            .any(|block| block.label == "implementation pressure")
+    );
+
+    let patch_action = crate::agent::AgentAction {
+        id: "patch".to_string(),
+        rationale: "apply implementation".to_string(),
+        payload: crate::agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: src/runtime/mod.rs\n@@\n context\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    service.record_shell_dispatch_success("turn-1", "mez apply-patch write", &patch_action);
+
+    assert!(
+        !service
+            .agent_turn_contexts
+            .get("turn-1")
+            .unwrap()
+            .blocks
+            .iter()
+            .any(|block| block.label == "implementation pressure")
+    );
+}
+
 /// Verifies runtime suppresses repeated progress `say` updates during a turn.
 ///
 /// Progress messages are user-visible sequence points. When a later provider

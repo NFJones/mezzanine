@@ -1398,7 +1398,7 @@ impl RuntimeSessionService {
             exit_code,
         );
         if exit_code == 0 {
-            self.record_shell_dispatch_success(turn_id, &transaction_ref.command);
+            self.record_shell_dispatch_success(turn_id, &transaction_ref.command, &observed_action);
         }
         if exit_code == 0
             && matches!(

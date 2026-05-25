@@ -8,6 +8,10 @@
 
 use super::*;
 
+/// Label for the turn-volatile context block that nudges implementation after
+/// repeated successful shell inspection.
+const RUNTIME_IMPLEMENTATION_PRESSURE_LABEL: &str = "implementation pressure";
+
 impl RuntimeSessionService {
     /// Runs the execution has pending shell dispatch operation for this subsystem.
     ///
@@ -128,16 +132,78 @@ impl RuntimeSessionService {
             .record(command.to_string());
     }
 
-    /// Records a shell command that exited successfully for loop detection.
+    /// Records a shell command that exited successfully for loop detection and
+    /// implementation-pressure context.
     pub(in crate::runtime) fn record_shell_dispatch_success(
         &mut self,
         turn_id: &str,
         command: &str,
+        action: &AgentAction,
     ) {
         self.agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
             .or_default()
-            .record_success(command.to_string());
+            .record_success(command.to_string(), action);
+        self.refresh_agent_implementation_pressure_context(turn_id);
+    }
+
+    /// Resets the shell-command streak when a provider batch takes a different
+    /// runtime-visible action.
+    pub(super) fn reset_implementation_pressure_after_non_shell_effects(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) {
+        let has_non_shell_effect = execution
+            .response
+            .action_batch
+            .as_ref()
+            .is_some_and(|batch| {
+                batch.actions.iter().any(|action| {
+                    runtime_agent_action_has_runtime_visible_effect(action)
+                        && !matches!(action.payload, AgentActionPayload::ShellCommand { .. })
+                })
+            });
+        if !has_non_shell_effect {
+            return;
+        }
+        if let Some(history) = self
+            .agent_turn_shell_dispatch_history
+            .get_mut(&turn.turn_id)
+        {
+            history.reset_successive_shell_commands();
+        }
+        self.refresh_agent_implementation_pressure_context(&turn.turn_id);
+    }
+
+    /// Updates the active-turn implementation-pressure context block.
+    fn refresh_agent_implementation_pressure_context(&mut self, turn_id: &str) {
+        let threshold = self
+            .agent_implementation_pressure_after_shell_actions
+            .max(1);
+        let consecutive_shell_actions = self
+            .agent_turn_shell_dispatch_history
+            .get(turn_id)
+            .map(|history| history.consecutive_successful_shell_commands)
+            .unwrap_or_default();
+        let Some(context) = self.agent_turn_contexts.get_mut(turn_id) else {
+            return;
+        };
+        context.blocks.retain(|block| {
+            block.source != ContextSourceKind::LocalMessage
+                || block.label != RUNTIME_IMPLEMENTATION_PRESSURE_LABEL
+        });
+        if consecutive_shell_actions < threshold {
+            return;
+        }
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::LocalMessage,
+            label: RUNTIME_IMPLEMENTATION_PRESSURE_LABEL.to_string(),
+            content: runtime_implementation_pressure_context_content(
+                consecutive_shell_actions,
+                threshold,
+            ),
+        });
     }
 
     /// Keeps the network action dispatch boundary symmetrical with shell
@@ -908,4 +974,18 @@ impl RuntimeSessionService {
         let _ = self.append_agent_shell_command_audit(turn, action, command, "failed");
         Ok(result)
     }
+}
+
+/// Builds the model-facing implementation-pressure hint for one active turn.
+fn runtime_implementation_pressure_context_content(
+    consecutive_shell_actions: usize,
+    threshold: usize,
+) -> String {
+    format!(
+        "[implementation pressure]\n\
+         This turn has already run {consecutive_shell_actions} consecutive successful shell_command actions; the configured advisory threshold is {threshold}. \
+         Prefer the next implementation, validation, or final-report action now. \
+         Use another shell_command only for one named missing fact that would make the next edit, validation, or report wrong. \
+         This is advisory context, not a failed action result."
+    )
 }

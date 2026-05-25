@@ -10,13 +10,14 @@ use super::{
     CommandRuleScope, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigScope,
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_AUTO_COMPACT,
     DEFAULT_AGENT_AUTO_COMPACT_THRESHOLD, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
-    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
-    DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
-    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM,
-    DEFAULT_SUBAGENT_WAIT_POLICY, DEFAULT_UI_THEME_NAME, EffectiveConfig, HookDefinition,
-    HookEvent, HookInvocation, HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate,
-    HostClipboard, HostClipboardCommand, KeyBindings, KeyChord, MarkerToken, McpApprovalSetting,
+    DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_ROUTING,
+    DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MAX_CONCURRENT_AGENTS,
+    DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
+    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY,
+    DEFAULT_UI_THEME_NAME, EffectiveConfig, HookDefinition, HookEvent, HookInvocation,
+    HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate, HostClipboard,
+    HostClipboardCommand, KeyBindings, KeyChord, MarkerToken, McpApprovalSetting,
     McpExternalCapability, McpRegistry, McpServerConfig, McpServerKind, MezError, ModelProfile,
     PaneId, Path, PathBuf, PermissionPolicy, PermissionPreset, ProjectTrustRecord, Recipient,
     Result, RuleDecision, RuleMatch, RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig,
@@ -2101,6 +2102,17 @@ pub(super) fn runtime_agent_action_failure_retry_limit_from_config(root: &Value)
         root,
         "action_failure_retry_limit",
         DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
+    )
+}
+
+/// Parses the shell-command streak that triggers implementation-pressure hints.
+pub(super) fn runtime_agent_implementation_pressure_after_shell_actions_from_config(
+    root: &Value,
+) -> Result<usize> {
+    runtime_positive_agents_usize_from_config(
+        root,
+        "implementation_pressure_after_shell_actions",
+        DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS,
     )
 }
 

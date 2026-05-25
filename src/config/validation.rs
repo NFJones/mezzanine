@@ -249,6 +249,7 @@ pub fn validate_config_text(
             || path == "agents.max_subagent_panes_per_window"
             || path == "agents.max_depth"
             || path == "agents.action_failure_retry_limit"
+            || path == "agents.implementation_pressure_after_shell_actions"
         {
             if let Some(message) = validate_positive_usize_value(&value, &path) {
                 diagnostics.push(ConfigDiagnostic { path, message });

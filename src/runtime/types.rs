@@ -5,21 +5,22 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionStatus, AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentShellVisibility,
-    AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
-    AuditDeferredWrite, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
-    ConfigScope, ControlIdempotencyCache, CopyMode, DeepSeekChatCompletionsProvider,
-    DiscoveredInstructionFile, Duration, EnvironmentSignature, EventAudience, EventLog, File,
-    FocusedShellHookDispatch, FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan,
-    HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry,
-    McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse,
-    MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
-    ModelTokenUsageKey, OpenAiResponsesProvider, OpenOptions, OsString, PaneExitStatus,
-    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
-    PasteBuffers, Path, PathBuf, PathScopes, PermissionPolicy, ProjectTrustStore,
-    ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, ScopeRegistry, Session,
-    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size, SplitDirection,
-    Stdio, SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
+    ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentId, AgentScheduler,
+    AgentShellStore, AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution,
+    AgentTurnLedger, AgentTurnRecord, AgentTurnState, AuditDeferredWrite, AuditLog, AuthStore,
+    BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer, ConfigScope, ControlIdempotencyCache,
+    CopyMode, DeepSeekChatCompletionsProvider, DiscoveredInstructionFile, Duration,
+    EnvironmentSignature, EventAudience, EventLog, File, FocusedShellHookDispatch,
+    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
+    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
+    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
+    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
+    OpenAiResponsesProvider, OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId,
+    PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path,
+    PathBuf, PathScopes, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage,
+    ReqwestProviderHttpTransport, Result, ScopeRegistry, Session, SessionApprovalStore,
+    SessionMemoryStore, SessionRecord, SessionRegistry, Size, SplitDirection, Stdio,
+    SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
     TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent,
     WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid, encode_control_body,
     encode_event_notification, encode_mmp_body, execute_streamable_http_exchange,
@@ -67,6 +68,8 @@ pub const DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT: usize = 10;
 pub const DEFAULT_AGENT_ROUTING: bool = false;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
+/// Default number of successive successful shell commands before nudging implementation.
+pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 8;
 /// Default router profile for automatic model and reasoning sizing.
 pub const DEFAULT_AUTO_SIZING_ROUTER_PROFILE: &str = "auto-size-router";
 /// Default small target profile for automatic model and reasoning sizing.
@@ -3907,6 +3910,12 @@ pub struct RuntimeSessionService {
     /// failures cannot loop forever while distinct failures in the same turn
     /// still receive bounded correction opportunities.
     pub(super) agent_action_failure_retry_limit: usize,
+    /// Stores the configured successful shell-command streak that triggers a
+    /// soft implementation-pressure hint during one active turn.
+    ///
+    /// The runtime uses this as advisory context only; it must not block shell
+    /// execution because legitimate audits can require long inspection runs.
+    pub(super) agent_implementation_pressure_after_shell_actions: usize,
     /// Stores the agent turn shell dispatch history value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -4646,6 +4655,8 @@ pub(super) struct RuntimeAgentShellDispatchHistory {
     pub(super) commands: Vec<String>,
     /// Shell commands that reached a successful transaction boundary.
     pub(super) succeeded_commands: Vec<String>,
+    /// Consecutive successful model-authored `shell_command` actions in this turn.
+    pub(super) consecutive_successful_shell_commands: usize,
 }
 
 impl RuntimeAgentShellDispatchHistory {
@@ -4668,8 +4679,23 @@ impl RuntimeAgentShellDispatchHistory {
     }
 
     /// Records a shell command that completed successfully.
-    pub(super) fn record_success(&mut self, command: impl Into<String>) {
+    pub(super) fn record_success(&mut self, command: impl Into<String>, action: &AgentAction) {
         self.succeeded_commands.push(command.into());
+        match action.payload {
+            AgentActionPayload::ShellCommand { .. } => {
+                self.consecutive_successful_shell_commands =
+                    self.consecutive_successful_shell_commands.saturating_add(1);
+            }
+            AgentActionPayload::ApplyPatch { .. } => {
+                self.consecutive_successful_shell_commands = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Resets the successful shell-command streak after a non-shell runtime effect.
+    pub(super) fn reset_successive_shell_commands(&mut self) {
+        self.consecutive_successful_shell_commands = 0;
     }
 }
 
