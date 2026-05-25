@@ -3962,7 +3962,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         &ModelProfile {
             provider: "deepseek".to_string(),
             model: "deepseek-v4-pro".to_string(),
-            reasoning_profile: None,
+            reasoning_profile: Some("xhigh".to_string()),
             latency_preference: None,
             multimodal_required: false,
             provider_options: std::collections::BTreeMap::new(),
@@ -4010,6 +4010,21 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(action_types.contains(&"say".to_string()));
     assert!(action_types.contains(&"request_capability".to_string()));
     assert!(!action_types.contains(&"spawn_agent".to_string()));
+    let description = tool["function"]["description"].as_str().unwrap();
+    assert!(description.contains("capability routing batch"));
+    assert!(description.contains("Do not emit blocked say"));
+    let parameters = &tool["function"]["parameters"];
+    assert!(parameters["properties"].get("thought").is_none());
+    assert!(
+        !parameters["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field.as_str() == Some("thought"))
+    );
+    let parameters_text = serde_json::to_string(parameters).unwrap();
+    assert!(!parameters_text.contains("minLength"));
+    assert!(!parameters_text.contains("minItems"));
 }
 
 /// Verifies DeepSeek subagent execution requests disable thinking before
@@ -4310,6 +4325,7 @@ fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking
         })
     );
     assert_eq!(value["reasoning_effort"], "max");
+    assert_eq!(value["response_format"]["type"], "json_object");
     assert!(value.get("tool_choice").is_none());
     assert!(value.get("tools").is_none());
 }

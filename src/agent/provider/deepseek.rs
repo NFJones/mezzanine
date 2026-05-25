@@ -8,9 +8,9 @@
 use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
-    AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MaapBatch, MezError,
-    ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
-    OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
+    AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MaapBatch,
+    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse,
+    ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
     ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
@@ -122,6 +122,9 @@ fn deepseek_chat_completions_request_body_with_strategy(
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
+    if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        body["response_format"] = serde_json::json!({"type": "json_object"});
+    }
     if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking
         || request.thinking_enabled == Some(false)
     {
@@ -145,8 +148,8 @@ fn deepseek_chat_completions_request_body_with_strategy(
             "type": "function",
             "function": {
                 "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-                "description": deepseek_maap_tool_description(&request.allowed_actions),
-                "parameters": maap_action_batch_schema(
+                "description": deepseek_maap_tool_description(request),
+                "parameters": deepseek_maap_action_batch_schema(
                     &request.allowed_actions,
                     &request.available_mcp_tools
                 ),
@@ -209,7 +212,10 @@ pub(super) fn deepseek_maap_request_strategy(
     {
         return DeepSeekMaapRequestStrategy::NoTool;
     }
-    if request.interaction_kind == ModelInteractionKind::Repair {
+    if request.interaction_kind == ModelInteractionKind::CapabilityDecision
+        || request.interaction_kind == ModelInteractionKind::Repair
+        || request.allowed_actions == AllowedActionSet::say_only()
+    {
         return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
     }
     if request.thinking_enabled == Some(false) {
@@ -275,10 +281,13 @@ fn deepseek_maap_tool_choice() -> serde_json::Value {
 }
 
 /// Builds concise provider-facing guidance for DeepSeek's single MAAP tool.
-fn deepseek_maap_tool_description(allowed_actions: &AllowedActionSet) -> String {
+fn deepseek_maap_tool_description(request: &ModelRequest) -> String {
+    if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
+        return "Submit exactly one MAAP/1 capability routing batch through this function. Current allowed action types: say,request_capability. If the task needs shell, patch, web search, URL fetch, MCP, messaging, subagent, or config work, emit request_capability for that capability immediately. Do not emit blocked say merely because the executable action is not yet available. Use final say only when no external action capability is needed.".to_string();
+    }
     format!(
         "Submit exactly one MAAP/1 action batch through this function. Current allowed action types: {}. Use only the action objects in this function schema. Do not answer this Mezzanine agent turn in prose outside the function call. If the needed action is absent and request_capability is available, request that capability instead of answering in prose.",
-        allowed_actions.action_type_names().join(",")
+        request.allowed_actions.action_type_names().join(",")
     )
 }
 
@@ -288,6 +297,59 @@ fn deepseek_reasoning_effort(effort: &str) -> &'static str {
         "low" | "medium" | "high" => "high",
         "xhigh" | "max" => "max",
         _ => "high",
+    }
+}
+
+/// Builds the DeepSeek MAAP argument schema.
+///
+/// DeepSeek strict tool schema enforcement is beta-only, and the default
+/// endpoint treats function parameters as guidance that the model may still
+/// violate. The shared OpenAI schema advertises the optional `thought` field
+/// as required for strict-schema compliance, but that extra nullable field
+/// makes DeepSeek more likely to spend output budget on non-action prose or
+/// emit a partially cut JSON object. DeepSeek still accepts `thought` if it is
+/// returned, but the provider-specific schema keeps the advertised surface to
+/// the fields needed to execute the next action batch.
+fn deepseek_maap_action_batch_schema(
+    allowed_actions: &AllowedActionSet,
+    available_mcp_tools: &[McpPromptTool],
+) -> serde_json::Value {
+    let mut schema = maap_action_batch_schema(allowed_actions, available_mcp_tools);
+    if let Some(properties) = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.remove("thought");
+    }
+    if let Some(required) = schema
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.retain(|field| field.as_str() != Some("thought"));
+    }
+    deepseek_prune_unsupported_schema_keywords(&mut schema);
+    schema
+}
+
+/// Removes JSON Schema hints that DeepSeek documents as unsupported by strict
+/// function calling and that add noise even on the default non-strict endpoint.
+fn deepseek_prune_unsupported_schema_keywords(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.remove("minLength");
+            object.remove("maxLength");
+            object.remove("minItems");
+            object.remove("maxItems");
+            for child in object.values_mut() {
+                deepseek_prune_unsupported_schema_keywords(child);
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for child in array {
+                deepseek_prune_unsupported_schema_keywords(child);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -341,6 +403,9 @@ fn parse_deepseek_chat_completions_response_body(
     let first_choice = choices.first().ok_or_else(|| {
         MezError::invalid_state("DeepSeek Chat Completions response has empty choices array")
     })?;
+    let finish_reason = first_choice
+        .get("finish_reason")
+        .and_then(serde_json::Value::as_str);
     let message = first_choice.get("message").ok_or_else(|| {
         MezError::invalid_state("DeepSeek Chat Completions choice has no message")
     })?;
@@ -367,7 +432,28 @@ fn parse_deepseek_chat_completions_response_body(
     };
     let provider_transcript_events =
         deepseek_provider_transcript_events_for_message(message, reasoning_content);
-    let action_batch = parse_deepseek_maap_action_batch(message, &raw_text, request)?;
+    let action_batch = if deepseek_request_requires_maap(request) {
+        match parse_deepseek_maap_action_batch(message, &raw_text, request) {
+            Ok(action_batch) => action_batch,
+            Err(error) => {
+                return Err(deepseek_completion_finish_reason_error(
+                    finish_reason,
+                    &raw_text,
+                    Some(&error),
+                    request,
+                )
+                .unwrap_or(error));
+            }
+        }
+    } else {
+        None
+    };
+    if action_batch.is_none()
+        && let Some(error) =
+            deepseek_completion_finish_reason_error(finish_reason, &raw_text, None, request)
+    {
+        return Err(error);
+    }
     let usage = root
         .get("usage")
         .map(parse_deepseek_usage)
@@ -447,6 +533,51 @@ fn parse_deepseek_content_maap_action_batch(
     }
     parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
         .map_err(|error| provider_maap_parse_error(error, raw_text))
+}
+
+/// Returns whether this DeepSeek request must produce a provider action batch.
+fn deepseek_request_requires_maap(request: &ModelRequest) -> bool {
+    request.interaction_kind != ModelInteractionKind::AutoSizing
+        && !request.allowed_actions.actions.is_empty()
+}
+
+/// Converts terminal DeepSeek finish reasons into runtime-recoverable errors.
+fn deepseek_completion_finish_reason_error(
+    finish_reason: Option<&str>,
+    raw_text: &str,
+    parse_error: Option<&MezError>,
+    request: &ModelRequest,
+) -> Option<MezError> {
+    if !deepseek_request_requires_maap(request) {
+        return None;
+    }
+    if finish_reason != Some("length") {
+        return None;
+    }
+    let detail = parse_error
+        .map(|error| format!(": {}", error.message()))
+        .unwrap_or_default();
+    let provider_raw_text = parse_error
+        .and_then(MezError::provider_raw_text)
+        .unwrap_or(raw_text)
+        .to_string();
+    Some(
+        MezError::invalid_state(format!(
+            "DeepSeek Chat Completions response hit max_output_tokens before completing MAAP output{detail}"
+        ))
+        .with_provider_failure_json(
+            serde_json::json!({
+                "provider": "deepseek",
+                "finish_reason": "length",
+                "incomplete_details": {
+                    "reason": "max_output_tokens"
+                },
+                "raw_text_bytes": provider_raw_text.len()
+            })
+            .to_string(),
+        )
+        .with_provider_raw_text(provider_raw_text),
+    )
 }
 
 /// Captures DeepSeek-native assistant tool-call metadata for transcript replay.
@@ -708,6 +839,86 @@ mod tests {
             "content fallback still produced structured output"
         );
         assert!(batch.final_turn);
+    }
+
+    /// Verifies DeepSeek auto-sizing responses preserve raw JSON instead of
+    /// entering MAAP fallback parsing.
+    ///
+    /// Auto-sizing requests deliberately have no MAAP tool surface; DeepSeek is
+    /// asked for one JSON router decision in assistant content. A leading `{`
+    /// in that response must not be treated as malformed MAAP because the
+    /// runtime auto-sizing router parses the raw provider text itself.
+    #[test]
+    fn deepseek_auto_sizing_response_preserves_json_content_without_maap_parse() {
+        let mut request = deepseek_test_request(Vec::new());
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+        let router_json = serde_json::json!({
+            "version": 1,
+            "size": "medium",
+            "reasoning_effort": "high",
+            "confidence": 0.82,
+            "rationale": "coding task needs a medium model"
+        })
+        .to_string();
+        let body = serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": router_json
+                }
+            }]
+        })
+        .to_string();
+
+        let response = parse_deepseek_chat_completions_response_body(&body, &request).unwrap();
+
+        assert_eq!(response.raw_text, router_json);
+        assert!(response.action_batch.is_none());
+    }
+
+    /// Verifies DeepSeek `finish_reason=length` uses output-limit recovery
+    /// instead of malformed-MAAP repair.
+    ///
+    /// DeepSeek can cut assistant content in the middle of JSON when the
+    /// completion hits `max_tokens`. Retrying with the MAAP repair prompt just
+    /// asks the model to reinterpret a truncated object; the runtime already
+    /// has a better output-limit recovery path that raises `max_output_tokens`
+    /// and asks for one compact complete batch.
+    #[test]
+    fn deepseek_length_finish_reason_is_output_limit_error_for_partial_maap() {
+        let request = deepseek_test_request(Vec::new());
+        let partial_json = r#"{"actions":[{"type":"say","status":"blocked","text":"Need shell"}],"rationale":"need capability","thought":"partial"#;
+        let body = serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "content": partial_json
+                }
+            }]
+        })
+        .to_string();
+
+        let error = parse_deepseek_chat_completions_response_body(&body, &request).unwrap_err();
+
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+        assert!(crate::agent::provider_error_is_output_limit_exceeded(
+            error.message(),
+            error.provider_failure_json()
+        ));
+        assert_eq!(error.provider_raw_text(), Some(partial_json));
+        let failure_json: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure_json["provider"], "deepseek");
+        assert_eq!(failure_json["finish_reason"], "length");
+        assert_eq!(
+            failure_json["incomplete_details"]["reason"],
+            "max_output_tokens"
+        );
     }
 
     /// Verifies malformed DeepSeek MAAP tool arguments are rejected as
