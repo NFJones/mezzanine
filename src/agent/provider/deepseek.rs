@@ -148,7 +148,7 @@ fn deepseek_chat_completions_request_body_with_strategy(
             "type": "function",
             "function": {
                 "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-                "description": deepseek_maap_tool_description(request),
+                "description": chat_completions_maap_tool_description(request),
                 "parameters": deepseek_maap_action_batch_schema(
                     &request.allowed_actions,
                     &request.available_mcp_tools
@@ -280,8 +280,14 @@ fn deepseek_maap_tool_choice() -> serde_json::Value {
     })
 }
 
-/// Builds concise provider-facing guidance for DeepSeek's single MAAP tool.
-fn deepseek_maap_tool_description(request: &ModelRequest) -> String {
+/// Builds concise provider-facing guidance for chat-completions MAAP tools.
+///
+/// DeepSeek and named OpenAI-compatible chat-completions backends share the
+/// same local action protocol surface, so they should receive the same
+/// function-call discipline, capability-routing guidance, and anti-pattern
+/// corrections. Provider-specific behavior such as thinking-mode tool-choice
+/// strategy still lives outside this shared prompt text.
+fn chat_completions_maap_tool_description(request: &ModelRequest) -> String {
     let capability_map = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; respond_only=final text only.";
     let anti_examples = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
     if request.interaction_kind == ModelInteractionKind::CapabilityDecision {

@@ -1415,6 +1415,9 @@ async fn wait_for_shell_transaction_timer_settlement(
                 RuntimeSideEffect::CancelTimer { key }
                     if key.kind == RuntimeTimerKind::ShellTransaction =>
                 {
+                    if scheduled_key.is_none() {
+                        return Ok(());
+                    }
                     if scheduled_key
                         .as_ref()
                         .is_some_and(|scheduled| scheduled == &key)

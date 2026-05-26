@@ -199,6 +199,15 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
 
     assert_eq!(provider.provider_id(), "deepseek_compatible");
     assert_eq!(provider.transport.requests.borrow().len(), 1);
+    let request_body: serde_json::Value =
+        serde_json::from_str(&provider.transport.requests.borrow()[0].body).unwrap();
+    let description = request_body["tools"][0]["function"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(description.contains("Return a function call, not prose"));
+    assert!(description.contains("Capability map: shell=local files"));
+    assert!(description.contains("Wrong: say(blocked"));
+    assert!(description.contains("Right: request_capability(capability=\"shell\""));
     let batch = response.action_batch.unwrap();
     assert_eq!(
         batch.rationale,
