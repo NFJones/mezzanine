@@ -3437,6 +3437,7 @@ fn turn_execution_can_be_converted_to_transcript_entries() {
             model: "default".to_string(),
             raw_text: "I will inspect the directory.".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
@@ -3509,6 +3510,7 @@ fn turn_execution_transcript_stores_hidden_provider_native_tool_call_events() {
             model: "deepseek-v4-pro".to_string(),
             raw_text: "executing".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: vec![ProviderTranscriptEvent::DeepSeekAssistantToolCall {
@@ -3673,6 +3675,7 @@ fn turn_execution_transcript_omits_recursive_request_context() {
             model: "default".to_string(),
             raw_text: "Working on it.".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
@@ -3756,6 +3759,7 @@ fn turn_execution_transcript_omits_expanded_skill_request_context() {
             model: "default".to_string(),
             raw_text: "Working on it.".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
@@ -3917,6 +3921,7 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
                 serde_json::to_string(&patch).unwrap()
             ),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -4026,6 +4031,7 @@ fn turn_execution_transcript_preserves_visible_say_text() {
             model: "default".to_string(),
             raw_text: r#"{"rationale":"test action batch rationale","actions":[{"type":"say","status":"final","text":"Suggested changes..."}]}"#.to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -4100,6 +4106,7 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
             model: "default".to_string(),
             raw_text: "I will inspect the directory.".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),

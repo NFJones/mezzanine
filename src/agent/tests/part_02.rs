@@ -3654,6 +3654,7 @@ impl ModelProvider for EchoProvider {
             model: request.model.clone(),
             raw_text: "ok".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
@@ -3738,6 +3739,7 @@ impl ModelProvider for CapabilityBatchProvider {
                 model: request.model.clone(),
                 raw_text: format!("request {}", self.capability.as_str()),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(MaapBatch {
                     protocol: "maap/1".to_string(),

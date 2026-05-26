@@ -8,6 +8,7 @@ use super::{
     CHATGPT_RESPONSES_ENDPOINT, MezError, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
     ProviderQuotaUsage, Result, validate_non_empty,
 };
+use crate::agent::known_model_context_window_tokens;
 
 /// Carries Provider Model Info state for this subsystem.
 ///
@@ -30,6 +31,8 @@ pub struct ProviderModelInfo {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub reasoning_levels: Vec<String>,
+    /// Provider-reported or locally documented context-window size in tokens.
+    pub context_window_tokens: Option<usize>,
 }
 
 /// Carries Provider Model Catalog state for this subsystem.
@@ -182,10 +185,57 @@ fn openai_model_info_from_value(value: &serde_json::Value) -> Option<ProviderMod
         reasoning_levels = openai_default_reasoning_levels_for_model(&id);
     }
     Some(ProviderModelInfo {
-        id,
+        id: id.clone(),
         display_name,
         reasoning_levels,
+        context_window_tokens: provider_context_window_tokens_from_value(value)
+            .or_else(|| known_model_context_window_tokens(&id)),
     })
+}
+
+/// Returns provider-advertised model context-window metadata when present.
+fn provider_context_window_tokens_from_value(value: &serde_json::Value) -> Option<usize> {
+    let object = value.as_object()?;
+    for field in [
+        "context_window_tokens",
+        "context_limit_tokens",
+        "context_window",
+        "context_length",
+        "max_context_length",
+        "input_token_limit",
+        "max_input_tokens",
+    ] {
+        if let Some(tokens) = object
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    for pointer in [
+        "/limits/context_window_tokens",
+        "/limits/context_limit_tokens",
+        "/limits/context_window",
+        "/limits/context_length",
+        "/limits/max_context_length",
+        "/capabilities/context_window_tokens",
+        "/capabilities/context_limit_tokens",
+        "/capabilities/context_window",
+        "/capabilities/context_length",
+        "/capabilities/max_context_length",
+    ] {
+        if let Some(tokens) = value
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    None
 }
 
 /// Runs the provider reasoning levels from value operation for this subsystem.

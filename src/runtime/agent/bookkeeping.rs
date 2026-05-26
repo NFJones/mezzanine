@@ -324,11 +324,22 @@ impl RuntimeSessionService {
             .entry(token_usage_key)
             .or_default()
             .add_assign(usage);
-        if let Some(display) = profile.and_then(|profile| {
-            runtime_agent_provider_context_usage_display(profile, latest_context_usage)
-        }) {
-            self.agent_context_usage_by_conversation
-                .insert(conversation_id, display);
+        if let Some(profile) = profile {
+            if let Some(snapshot) =
+                runtime_agent_provider_context_usage_snapshot(profile, latest_context_usage)
+            {
+                if let Some(display) = runtime_agent_provider_context_usage_display(snapshot) {
+                    self.agent_context_usage_by_conversation
+                        .insert(conversation_id.clone(), display);
+                }
+                self.agent_context_usage_snapshot_by_conversation
+                    .insert(conversation_id, snapshot);
+            } else {
+                self.agent_context_usage_by_conversation
+                    .remove(&conversation_id);
+                self.agent_context_usage_snapshot_by_conversation
+                    .remove(&conversation_id);
+            }
         }
         let _ = self.checkpoint_agent_session_metadata();
     }

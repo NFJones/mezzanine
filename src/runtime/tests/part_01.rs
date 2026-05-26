@@ -330,6 +330,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
                 "provider_error: InvalidState: upstream failure\ncontroller_failure_summary:\nsummary"
                     .to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -404,6 +405,7 @@ fn runtime_provider_completion_accepts_terminal_capability_failure_state() {
             model: "test".to_string(),
             raw_text: "request shell capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -470,6 +472,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             model: "test".to_string(),
             raw_text: "bad maap action\nmaap_validation_error: unavailable server".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -526,6 +529,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
             model: "test".to_string(),
             raw_text: "plain text without MAAP".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
@@ -581,6 +585,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             model: "test".to_string(),
             raw_text: "empty batch".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -636,6 +641,7 @@ impl ModelProvider for RuntimeEchoProvider {
             model: request.model.clone(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
             provider_transcript_events: Vec::new(),
@@ -807,6 +813,7 @@ fn runtime_capability_response(
         model: request.model.clone(),
         raw_text: format!("request {}", capability.as_str()),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(crate::agent::MaapBatch {
             protocol: "maap/1".to_string(),
@@ -898,6 +905,7 @@ fn runtime_say_response_for_agent(
         model: "test".to_string(),
         raw_text: text.to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(crate::agent::MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1057,6 +1065,7 @@ impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
             model: request.model.clone(),
             raw_text: "done after compaction".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
             provider_transcript_events: Vec::new(),
@@ -1094,6 +1103,7 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
             model: request.model.clone(),
             raw_text: "done after compaction".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
             provider_transcript_events: Vec::new(),
@@ -1134,6 +1144,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
             model: request.model.clone(),
             raw_text: "done after compact retry".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
             provider_transcript_events: Vec::new(),
@@ -1172,6 +1183,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
                     reasoning_tokens: 3,
                     cached_input_tokens: Some(30),
                 },
+                latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: None,
                 provider_transcript_events: Vec::new(),
@@ -2487,6 +2499,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2648,6 +2661,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -3132,6 +3146,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
             model: "test".to_string(),
             raw_text: "maap config response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -3240,6 +3255,7 @@ fn runtime_config_change_resumes_after_full_access_change() {
             model: "test".to_string(),
             raw_text: "maap config response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),

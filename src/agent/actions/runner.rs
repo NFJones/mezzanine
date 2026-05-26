@@ -128,7 +128,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            latest_response_usage = response.usage;
+            latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
             cumulative_usage.add_assign(latest_response_usage);
             if !response.quota_usage.is_empty() {
                 latest_quota_usage = response.quota_usage.clone();
@@ -468,7 +468,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            latest_response_usage = response.usage;
+            latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
             cumulative_usage.add_assign(latest_response_usage);
             if !response.quota_usage.is_empty() {
                 latest_quota_usage = response.quota_usage.clone();

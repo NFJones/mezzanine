@@ -1638,6 +1638,7 @@ mod tests {
                         reasoning_tokens: 3,
                         cached_input_tokens: Some(11),
                     },
+                    latest_request_usage: None,
                     quota_usage: Vec::new(),
                     action_batch: None,
                     provider_transcript_events: Vec::new(),

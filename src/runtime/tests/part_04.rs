@@ -126,6 +126,7 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
             model: "test".to_string(),
             raw_text: "diff say response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -687,6 +688,7 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
             model: "test".to_string(),
             raw_text: "maap complete response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -760,6 +762,7 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
             model: "test".to_string(),
             raw_text: "maap say and complete response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -846,6 +849,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -988,6 +992,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 model: "test".to_string(),
                 raw_text: "run shell".to_string(),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
@@ -1177,6 +1182,7 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1266,6 +1272,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
             model: "test".to_string(),
             raw_text: "maap say response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1356,6 +1363,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
             model: "test".to_string(),
             raw_text: "maap say response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1445,6 +1453,7 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
             model: "test".to_string(),
             raw_text: "trace-maap-raw-response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1545,6 +1554,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
             model: "test".to_string(),
             raw_text: "trace raw sentinel".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1779,6 +1789,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
             model: "test".to_string(),
             raw_text: "maap patch response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1914,6 +1925,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                 model: "test".to_string(),
                 raw_text: format!("patch attempt for {}", result.action_id),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
@@ -2052,6 +2064,7 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
             model: "test".to_string(),
             raw_text: "debug-maap-raw-response with debug-secret-command".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2149,6 +2162,7 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2238,6 +2252,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2364,6 +2379,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2482,6 +2498,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2535,6 +2552,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
                 model: "test".to_string(),
                 raw_text: "done".to_string(),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(runtime_complete_batch("turn-1")),
                 provider_transcript_events: Vec::new(),
@@ -2605,6 +2623,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2936,6 +2955,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                 model: "test".to_string(),
                 raw_text: "run shell action".to_string(),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
@@ -3093,6 +3113,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             id: "gpt-provider-only".to_string(),
             display_name: Some("Provider Only".to_string()),
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
+            context_window_tokens: Some(777_777),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -3143,6 +3164,10 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         .unwrap();
     assert_eq!(model_profile.model, "gpt-provider-only");
     assert_eq!(model_profile.reasoning_profile.as_deref(), Some("low"));
+    assert_eq!(
+        model_profile.provider_options.get("context_window_tokens"),
+        Some(&"777777".to_string())
+    );
 
     let open_reasoning = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::HandleMouse(
@@ -3284,6 +3309,7 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string()],
+            context_window_tokens: Some(1_050_000),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -3394,6 +3420,7 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
+            context_window_tokens: Some(1_050_000),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -3826,6 +3853,7 @@ fn runtime_slash_command_latency_displays_and_applies_override() {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["high".to_string()],
+            context_window_tokens: Some(1_050_000),
         }],
         vec!["high".to_string()],
     );
@@ -3994,6 +4022,7 @@ fn runtime_generated_profile_identity_differs_by_latency_preference() {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["high".to_string()],
+            context_window_tokens: Some(1_050_000),
         }],
         vec!["high".to_string()],
     );

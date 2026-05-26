@@ -4076,6 +4076,7 @@ mod tests {
             model: "gpt-test".to_string(),
             raw_text: "raw envelope".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),

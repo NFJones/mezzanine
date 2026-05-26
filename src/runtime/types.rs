@@ -4021,8 +4021,12 @@ pub struct RuntimeSessionService {
     pub(super) agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
     /// Latest provider-response input context usage percentage keyed by
-    /// conversation id.
+    /// conversation id for terminal rendering and legacy persistence.
     pub(super) agent_context_usage_by_conversation: BTreeMap<String, String>,
+    /// Latest provider-response request-context snapshots keyed by
+    /// conversation id.
+    pub(super) agent_context_usage_snapshot_by_conversation:
+        BTreeMap<String, crate::agent::AgentContextUsageSnapshot>,
     /// Latest provider quota usage percentages keyed by agent conversation id.
     pub(super) agent_quota_usage_by_conversation: BTreeMap<String, Vec<ProviderQuotaUsage>>,
     /// Latest live provider model catalogs keyed by provider id.

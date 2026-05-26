@@ -65,7 +65,7 @@ fn openai_provider_from_auth_store_expands_configured_base_url() {
 #[test]
 fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
     let models = parse_openai_models_http_body(
-        r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]}}]}"#,
+        r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144}]}"#,
     )
     .unwrap();
 
@@ -76,11 +76,13 @@ fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
         .unwrap();
     assert_eq!(custom.display_name.as_deref(), Some("Custom"));
     assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
+    assert_eq!(custom.context_window_tokens, Some(262_144));
     let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
     assert_eq!(
         defaulted.reasoning_levels,
         vec!["low", "medium", "high", "xhigh"]
     );
+    assert_eq!(defaulted.context_window_tokens, Some(1_050_000));
 }
 
 /// Verifies that model listing uses the sibling model-catalog endpoint for the
@@ -596,6 +598,7 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -679,6 +682,7 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -765,6 +769,7 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -846,6 +851,7 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -930,6 +936,7 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1016,6 +1023,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1106,6 +1114,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1195,6 +1204,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1287,6 +1297,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1374,6 +1385,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1471,6 +1483,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         model: "test".to_string(),
         raw_text: "request mcp capability".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1488,6 +1501,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         model: "test".to_string(),
         raw_text: "invalid unavailable mcp action".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1513,6 +1527,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         model: "test".to_string(),
         raw_text: "corrected say response".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1630,6 +1645,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         model: "test".to_string(),
         raw_text: "request shell capability".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1655,6 +1671,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         model: "test".to_string(),
         raw_text: "invalid heredoc shell response".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1672,6 +1689,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         model: "test".to_string(),
         raw_text: "corrected file action response".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1770,6 +1788,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
         model: "test".to_string(),
         raw_text: "corrected malformed response".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1858,6 +1877,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         model: "test".to_string(),
         raw_text: "request mcp capability".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1875,6 +1895,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         model: "test".to_string(),
         raw_text: "invalid unavailable mcp action".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -1900,6 +1921,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         model: "test".to_string(),
         raw_text: "corrected async response".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -2044,6 +2066,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2130,6 +2153,7 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2205,6 +2229,7 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2292,6 +2317,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
             model: "test".to_string(),
             raw_text: "script action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2384,6 +2410,7 @@ fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
             model: "test".to_string(),
             raw_text: "read action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2491,6 +2518,7 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2575,6 +2603,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2656,6 +2685,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2724,6 +2754,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
             model: "test".to_string(),
             raw_text: "action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),

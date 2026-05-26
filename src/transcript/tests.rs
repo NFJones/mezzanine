@@ -397,6 +397,11 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         working_directory: Some("/workspace/live".to_string()),
         project_root: Some("/workspace".to_string()),
         context_usage: Some("10%".to_string()),
+        context_usage_snapshot: Some(crate::agent::AgentContextUsageSnapshot {
+            input_tokens: 100,
+            context_window_tokens: 1000,
+            cached_input_tokens: Some(80),
+        }),
         token_usage: owned_token_usage,
         token_usage_by_model: BTreeMap::from([(owned_token_usage_key, owned_token_usage)]),
     };
@@ -416,6 +421,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         working_directory: None,
         project_root: None,
         context_usage: None,
+        context_usage_snapshot: None,
         token_usage: Default::default(),
         token_usage_by_model: Default::default(),
     };

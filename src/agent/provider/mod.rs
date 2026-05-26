@@ -212,6 +212,21 @@ impl ModelTokenUsage {
     }
 }
 
+/// Last known provider request context usage for one selected model.
+///
+/// This snapshot is intentionally narrower than cumulative token accounting.
+/// It captures the input-token size of the most recent model request together
+/// with the exact context-window denominator used to render pane status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentContextUsageSnapshot {
+    /// Provider-reported input tokens for the most recent request.
+    pub input_tokens: u64,
+    /// Total model context window used as the denominator for status display.
+    pub context_window_tokens: u64,
+    /// Provider-reported cached input tokens for the same request, if known.
+    pub cached_input_tokens: Option<u64>,
+}
+
 /// Carries Model Response state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -235,6 +250,9 @@ pub struct ModelResponse {
     pub raw_text: String,
     /// Provider-reported token usage for the request or accumulated exchange.
     pub usage: ModelTokenUsage,
+    /// Provider-reported usage for the last concrete request that produced this
+    /// response when `usage` carries an accumulated total.
+    pub latest_request_usage: Option<ModelTokenUsage>,
     /// Provider-reported quota usage percentages for the request.
     pub quota_usage: Vec<ProviderQuotaUsage>,
     /// Stores the action batch value for this data structure.
@@ -771,6 +789,7 @@ impl<T: ProviderHttpTransport> ModelProvider for ChatCompletionsProvider<T> {
                 ModelProvider::provider_id(self),
                 false,
             )?;
+            fallback.latest_request_usage = Some(fallback.usage);
             fallback.usage.add_assign(parsed.usage);
             if fallback.quota_usage.is_empty() {
                 fallback.quota_usage = parsed.quota_usage;
@@ -884,6 +903,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
                     AsyncModelProvider::provider_id(self),
                     false,
                 )?;
+                fallback.latest_request_usage = Some(fallback.usage);
                 fallback.usage.add_assign(parsed.usage);
                 if fallback.quota_usage.is_empty() {
                     fallback.quota_usage = parsed.quota_usage;
@@ -1148,6 +1168,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
             model,
             raw_text,
             usage,
+            latest_request_usage: None,
             quota_usage,
             action_batch,
             provider_transcript_events: Vec::new(),
@@ -1261,6 +1282,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 model,
                 raw_text,
                 usage,
+                latest_request_usage: None,
                 quota_usage,
                 action_batch,
                 provider_transcript_events: Vec::new(),

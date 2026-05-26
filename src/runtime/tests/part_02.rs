@@ -982,6 +982,70 @@ fn runtime_frame_context_uses_known_openai_model_context_window() {
     assert_eq!(pane_context.agent_context_usage.as_deref(), Some("1%"));
 }
 
+/// Verifies pane context usage percentages for named OpenAI-compatible
+/// providers use live provider-catalog context windows instead of the generic
+/// fallback denominator.
+#[test]
+fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible_provider() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"compat\"\ndefault_model_profile = \"work\"\n[providers.compat]\nkind = \"openai-compatible\"\nmodels = [\"baseline-model\"]\ndefault_model = \"baseline-model\"\n[model_profiles.work]\nprovider = \"compat\"\nmodel = \"baseline-model\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "compat",
+        vec![crate::agent::ProviderModelInfo {
+            id: "catalog-only-model".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["low".to_string()],
+            context_window_tokens: Some(2_000_000),
+        }],
+        vec!["low".to_string()],
+    );
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let model_response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compatible-model","method":"agent/shell/command","params":{"idempotency_key":"compatible-model","input":"/model catalog-only-model"}}"#,
+        &primary,
+    );
+    assert!(model_response.contains("catalog-only-model"), "{model_response}");
+
+    service.record_agent_provider_token_usage(
+        &pane_id,
+        crate::agent::ModelTokenUsage {
+            input_tokens: 500_000,
+            output_tokens: 34,
+            reasoning_tokens: 9,
+            cached_input_tokens: Some(80),
+        },
+    );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get(&pane_id).unwrap();
+
+    assert_eq!(pane_context.agent_context_usage.as_deref(), Some("25%"));
+}
+
 /// Verifies that runtime config application fails closed when a layer attempts
 /// to enter approval bypass directly. Bypass activation must stay tied to the
 /// explicit primary-authorized command path rather than a passive config load

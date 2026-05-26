@@ -1303,6 +1303,12 @@ impl RuntimeSessionService {
         if let Some(reasoning) = reasoning_profile {
             provider_options.insert("reasoning_effort".to_string(), reasoning.to_string());
         }
+        if let Some(context_window_tokens) = model.context_window_tokens {
+            provider_options.insert(
+                "context_window_tokens".to_string(),
+                context_window_tokens.to_string(),
+            );
+        }
         let latency_preference = latency_preference
             .map(runtime_validate_latency_preference)
             .transpose()?
@@ -1658,6 +1664,7 @@ fn runtime_insert_catalog_model(
             id: model.to_string(),
             display_name: None,
             reasoning_levels: Vec::new(),
+            context_window_tokens: crate::agent::known_model_context_window_tokens(model),
         });
     entry.reasoning_levels.extend(
         reasoning_levels
@@ -1665,6 +1672,9 @@ fn runtime_insert_catalog_model(
             .filter(|level| !level.is_empty()),
     );
     entry.reasoning_levels = dedupe_runtime_strings(std::mem::take(&mut entry.reasoning_levels));
+    if entry.context_window_tokens.is_none() {
+        entry.context_window_tokens = crate::agent::known_model_context_window_tokens(model);
+    }
 }
 
 /// Runs the runtime configured reasoning levels for model operation for this subsystem.

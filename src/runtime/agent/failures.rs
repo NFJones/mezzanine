@@ -142,6 +142,7 @@ impl RuntimeSessionService {
                 model: model_profile.model.clone(),
                 raw_text,
                 usage: Default::default(),
+                latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: None,
                 provider_transcript_events: Vec::new(),
@@ -381,6 +382,7 @@ impl RuntimeSessionService {
                     block.message
                 ),
                 usage: Default::default(),
+                latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: None,
                 provider_transcript_events: Vec::new(),

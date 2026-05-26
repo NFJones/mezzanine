@@ -67,6 +67,7 @@ async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_mo
             id: "provider-only".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
+            context_window_tokens: None,
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -561,6 +562,7 @@ fn runtime_test_compaction_response(summary: &str) -> crate::agent::ModelRespons
         model: "gpt-compact-test".to_string(),
         raw_text: summary.to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Vec::new(),
         action_batch: None,
         provider_transcript_events: Vec::new(),
@@ -933,6 +935,7 @@ context_window_tokens = 64000
             model: "test".to_string(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
             provider_transcript_events: Vec::new(),
@@ -1829,6 +1832,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
             model: "test".to_string(),
             raw_text: "load create skill again".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1927,6 +1931,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
             model: "test".to_string(),
             raw_text: "request skills again".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -2862,6 +2867,11 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 working_directory: None,
                 project_root: None,
                 context_usage: Some("42%".to_string()),
+                context_usage_snapshot: Some(crate::agent::AgentContextUsageSnapshot {
+                    input_tokens: 420,
+                    context_window_tokens: 1000,
+                    cached_input_tokens: Some(450),
+                }),
                 token_usage: saved_token_usage,
                 token_usage_by_model: std::collections::BTreeMap::from([(
                     saved_token_usage_key.clone(),
@@ -3024,6 +3034,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 working_directory: None,
                 project_root: None,
                 context_usage: None,
+                context_usage_snapshot: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
             }],
@@ -3071,6 +3082,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 working_directory: None,
                 project_root: None,
                 context_usage: None,
+                context_usage_snapshot: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
             }],
@@ -3339,6 +3351,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
             model: "test".to_string(),
             raw_text: "progress".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -3406,6 +3419,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
             model: "test".to_string(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
             provider_transcript_events: Vec::new(),
@@ -3536,6 +3550,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
             model: "test".to_string(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(runtime_complete_batch("turn-1")),
             provider_transcript_events: Vec::new(),
@@ -3712,6 +3727,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
             model: "test".to_string(),
             raw_text: "progress".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -3751,6 +3767,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
             model: "test".to_string(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -3849,6 +3866,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
                 model: "test".to_string(),
                 raw_text: "done".to_string(),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
@@ -4165,6 +4183,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                 model: "test".to_string(),
                 raw_text: "spawn children".to_string(),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),
@@ -4327,6 +4346,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                 model: "test".to_string(),
                 raw_text: "spawn child".to_string(),
                 usage: Default::default(),
+            latest_request_usage: None,
                 quota_usage: Default::default(),
                 action_batch: Some(crate::agent::MaapBatch {
                     protocol: "maap/1".to_string(),

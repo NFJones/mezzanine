@@ -141,6 +141,13 @@ impl ModelProfile {
             .unwrap_or(MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS)
     }
 
+    /// Returns the exact model context-window denominator known for status and
+    /// diagnostics without falling back to the conservative local default.
+    pub fn known_context_window_tokens(&self) -> Option<usize> {
+        self.configured_context_window_tokens()
+            .or_else(|| known_provider_model_context_window_tokens(&self.provider, &self.model))
+    }
+
     /// Returns the configured provider output-token cap, if present.
     ///
     /// OpenAI-compatible providers use `max_output_tokens`; compatible
@@ -243,8 +250,14 @@ fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Op
     match provider.trim().to_ascii_lowercase().as_str() {
         "openai" => openai_known_model_context_window_tokens(model),
         "deepseek" => deepseek_known_model_context_window_tokens(model),
-        _ => None,
+        _ => known_model_context_window_tokens(model),
     }
+}
+
+/// Returns documented context-window metadata based on model-family naming.
+pub fn known_model_context_window_tokens(model: &str) -> Option<usize> {
+    openai_known_model_context_window_tokens(model)
+        .or_else(|| deepseek_known_model_context_window_tokens(model))
 }
 
 /// Returns documented context windows for OpenAI model families Mezzanine ships.

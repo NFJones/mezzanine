@@ -115,6 +115,15 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
     assert_eq!(response.usage.input_tokens, 22);
     assert_eq!(response.usage.output_tokens, 10);
     assert_eq!(response.usage.reasoning_tokens, 3);
+    assert_eq!(
+        response.latest_request_usage,
+        Some(crate::agent::ModelTokenUsage {
+            input_tokens: 12,
+            output_tokens: 6,
+            reasoning_tokens: 0,
+            cached_input_tokens: None,
+        })
+    );
     let batch = response.action_batch.unwrap();
     assert_eq!(batch.rationale, "fallback produced structured output");
     assert!(batch.final_turn);
@@ -378,6 +387,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
             model: "test".to_string(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -464,6 +474,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 reasoning_tokens: 5,
                 cached_input_tokens: Some(300),
             },
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -486,6 +497,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 reasoning_tokens: 7,
                 cached_input_tokens: Some(80),
             },
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -589,6 +601,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             model: "test".to_string(),
             raw_text: "request shell capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -606,6 +619,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             model: "test".to_string(),
             raw_text: "done".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -703,6 +717,7 @@ fn turn_runner_capability_limit_execution_matches_terminal_batch() {
         model: "test".to_string(),
         raw_text: "request shell capability".to_string(),
         usage: Default::default(),
+            latest_request_usage: None,
         quota_usage: Default::default(),
         action_batch: Some(MaapBatch {
             protocol: "maap/1".to_string(),
@@ -791,6 +806,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             raw_text: r#"{"rationale":"test action batch rationale","actions":[{"reason":"need more repository context","type":"abort"}]}"#
                 .to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -808,6 +824,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             model: "test".to_string(),
             raw_text: "request workspace-read capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -825,6 +842,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             model: "test".to_string(),
             raw_text: "ready".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -919,6 +937,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             model: "test".to_string(),
             raw_text: "request workspace-write capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -937,6 +956,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             raw_text: r#"{"rationale":"test action batch rationale","actions":[{"type":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"}]}"#
                 .to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1020,6 +1040,7 @@ fn turn_runner_accepts_say_with_capability_request() {
             model: "test".to_string(),
             raw_text: "say and request shell capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1040,6 +1061,7 @@ fn turn_runner_accepts_say_with_capability_request() {
             model: "test".to_string(),
             raw_text: "shell action".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1121,6 +1143,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             model: "test".to_string(),
             raw_text: "request read and subagent capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1142,6 +1165,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             model: "test".to_string(),
             raw_text: "ready".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1231,6 +1255,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
             model: "test".to_string(),
             raw_text: "summary".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1341,6 +1366,7 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
             model: "test".to_string(),
             raw_text: "summary that should not be requested".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1422,6 +1448,7 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
             model: "test".to_string(),
             raw_text: "summary that should not be requested".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1503,6 +1530,7 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
             model: "test".to_string(),
             raw_text: "summary that should not be requested".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1572,6 +1600,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             model: "test".to_string(),
             raw_text: "request fetch capability".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1592,6 +1621,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             model: "test".to_string(),
             raw_text: "fallback say".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -1671,6 +1701,7 @@ fn turn_runner_fails_response_without_action_batch() {
             model: "test".to_string(),
             raw_text: "plain text without maap".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),

@@ -4,7 +4,7 @@
 //! filesystem-backed store handle. Encoding and I/O behavior live in sibling
 //! modules.
 
-use crate::agent::{ModelTokenUsage, ModelTokenUsageKey};
+use crate::agent::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -127,6 +127,8 @@ pub struct AgentSessionMetadata {
     pub token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Last provider-reported context usage label shown in pane status.
     pub context_usage: Option<String>,
+    /// Last provider request-context snapshot shown in pane status.
+    pub context_usage_snapshot: Option<AgentContextUsageSnapshot>,
 }
 
 /// Filesystem-backed transcript store.

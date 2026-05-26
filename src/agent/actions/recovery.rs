@@ -361,6 +361,7 @@ fn failed_provider_error_execution(
             model: model.to_string(),
             raw_text: provider_error_raw_text(error),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: None,
             provider_transcript_events: Vec::new(),
@@ -538,7 +539,7 @@ fn failure_summary_execution_from_response(
         failed_response_raw_text, response.raw_text
     );
     response.action_batch = Some(terminal_batch);
-    let latest_response_usage = response.usage;
+    let latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
     Ok(AgentTurnExecution {
         request,
         response,

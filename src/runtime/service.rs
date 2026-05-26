@@ -325,6 +325,7 @@ impl RuntimeSessionService {
             agent_auto_sizing_overrides: BTreeMap::new(),
             agent_token_usage_by_conversation: BTreeMap::new(),
             agent_context_usage_by_conversation: BTreeMap::new(),
+            agent_context_usage_snapshot_by_conversation: BTreeMap::new(),
             agent_quota_usage_by_conversation: BTreeMap::new(),
             provider_model_catalog_cache: BTreeMap::new(),
             pending_agent_provider_tasks: BTreeSet::new(),
@@ -1961,6 +1962,10 @@ impl RuntimeSessionService {
                         .agent_context_usage_by_conversation
                         .get(&session.session_id)
                         .cloned(),
+                    context_usage_snapshot: self
+                        .agent_context_usage_snapshot_by_conversation
+                        .get(&session.session_id)
+                        .copied(),
                 }
             })
             .collect::<Vec<_>>();
@@ -2028,6 +2033,19 @@ impl RuntimeSessionService {
                     .insert(conversation_id.to_string(), context_usage);
             } else {
                 self.agent_context_usage_by_conversation
+                    .remove(conversation_id);
+            }
+            if let Some(snapshot) = metadata.context_usage_snapshot {
+                self.agent_context_usage_snapshot_by_conversation
+                    .insert(conversation_id.to_string(), snapshot);
+                if let Some(display) =
+                    crate::runtime::agent::runtime_agent_provider_context_usage_display(snapshot)
+                {
+                    self.agent_context_usage_by_conversation
+                        .insert(conversation_id.to_string(), display);
+                }
+            } else {
+                self.agent_context_usage_snapshot_by_conversation
                     .remove(conversation_id);
             }
             let _ = self.checkpoint_agent_session_metadata();

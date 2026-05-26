@@ -260,6 +260,18 @@ impl AgentSessionMetadata {
         if let Some(context_usage) = self.context_usage.as_deref() {
             validate_non_empty("context usage", context_usage)?;
         }
+        if let Some(snapshot) = self.context_usage_snapshot {
+            if snapshot.input_tokens == 0 {
+                return Err(MezError::invalid_args(
+                    "context usage snapshot input_tokens must be greater than zero",
+                ));
+            }
+            if snapshot.context_window_tokens == 0 {
+                return Err(MezError::invalid_args(
+                    "context usage snapshot context_window_tokens must be greater than zero",
+                ));
+            }
+        }
         for key in self.token_usage_by_model.keys() {
             validate_non_empty("token usage provider", &key.provider)?;
             validate_non_empty("token usage model", &key.model)?;
@@ -271,6 +283,8 @@ impl AgentSessionMetadata {
     pub(super) fn encode(&self) -> Result<String> {
         self.validate()?;
         let token_usage_by_model = encode_token_usage_by_model(&self.token_usage_by_model)?;
+        let context_usage_snapshot =
+            encode_context_usage_snapshot(self.context_usage_snapshot.as_ref())?;
         Ok([
             AGENT_SESSION_METADATA_VERSION.to_string(),
             self.mezzanine_session_id.clone(),
@@ -298,6 +312,7 @@ impl AgentSessionMetadata {
             self.approval_policy.clone().unwrap_or_default(),
             self.context_usage.clone().unwrap_or_default(),
             token_usage_by_model,
+            context_usage_snapshot,
         ]
         .into_iter()
         .map(|field| escape_field(&field))
@@ -314,7 +329,8 @@ impl AgentSessionMetadata {
             || fields.len() == 18
             || fields.len() == 19
             || fields.len() == 20
-            || fields.len() == 21)
+            || fields.len() == 21
+            || fields.len() == 22)
             || fields[0] != AGENT_SESSION_METADATA_VERSION
         {
             return Err(MezError::invalid_args(
@@ -360,6 +376,11 @@ impl AgentSessionMetadata {
                 .map(|value| decode_token_usage_by_model(value))
                 .transpose()?
                 .unwrap_or_default(),
+            context_usage_snapshot: fields
+                .get(21)
+                .filter(|value| !value.is_empty())
+                .map(|value| decode_context_usage_snapshot(value))
+                .transpose()?,
             approval_policy: fields.get(18).filter(|value| !value.is_empty()).cloned(),
             context_usage: fields.get(19).filter(|value| !value.is_empty()).cloned(),
         };
@@ -428,6 +449,42 @@ fn decode_token_usage_by_model(
             .add_assign(usage);
     }
     Ok(usage_by_model)
+}
+
+/// Encodes the last request-context snapshot into one stable TSV field.
+fn encode_context_usage_snapshot(
+    snapshot: Option<&crate::agent::AgentContextUsageSnapshot>,
+) -> Result<String> {
+    let Some(snapshot) = snapshot else {
+        return Ok(String::new());
+    };
+    serde_json::to_string(&serde_json::json!({
+        "input_tokens": snapshot.input_tokens,
+        "context_window_tokens": snapshot.context_window_tokens,
+        "cached_input_tokens": snapshot.cached_input_tokens,
+    }))
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "agent session context usage snapshot encoding failed: {error}"
+        ))
+    })
+}
+
+/// Decodes the last request-context snapshot from one stable TSV field.
+fn decode_context_usage_snapshot(value: &str) -> Result<crate::agent::AgentContextUsageSnapshot> {
+    let object = serde_json::from_str::<serde_json::Value>(value).map_err(|error| {
+        MezError::invalid_args(format!(
+            "agent session context usage snapshot JSON is invalid: {error}"
+        ))
+    })?;
+    let object = object.as_object().ok_or_else(|| {
+        MezError::invalid_args("agent session context usage snapshot must be an object")
+    })?;
+    Ok(crate::agent::AgentContextUsageSnapshot {
+        input_tokens: json_u64_field(object, "input_tokens")?,
+        context_window_tokens: json_u64_field(object, "context_window_tokens")?,
+        cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,
+    })
 }
 
 /// Returns a required string field from a JSON object.

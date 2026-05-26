@@ -138,20 +138,38 @@ fn runtime_shell_action_timeout_ms(turn: &AgentTurnRecord, timeout_ms: Option<u6
         .max(1)
 }
 
-/// Formats last observed provider input-token usage for one model profile.
+/// Returns a last-request context snapshot when the denominator is known.
+fn runtime_agent_provider_context_usage_snapshot(
+    profile: &ModelProfile,
+    usage: ModelTokenUsage,
+) -> Option<crate::agent::AgentContextUsageSnapshot> {
+    let context_window_tokens = profile
+        .known_context_window_tokens()
+        .and_then(|tokens| u64::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)?;
+    if usage.input_tokens == 0 {
+        return None;
+    }
+    Some(crate::agent::AgentContextUsageSnapshot {
+        input_tokens: usage.input_tokens,
+        context_window_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+    })
+}
+
+/// Formats one last-request context snapshot for pane status.
 ///
 /// The display is a bounded status indicator, so accepted provider responses
 /// whose token count exceeds the configured profile window saturate at `100%`
 /// instead of rendering impossible percentages above the full window.
-fn runtime_agent_provider_context_usage_display(
-    profile: &ModelProfile,
-    usage: ModelTokenUsage,
+pub(crate) fn runtime_agent_provider_context_usage_display(
+    snapshot: crate::agent::AgentContextUsageSnapshot,
 ) -> Option<String> {
-    if usage.input_tokens == 0 {
+    if snapshot.input_tokens == 0 || snapshot.context_window_tokens == 0 {
         return None;
     }
-    let budget_tokens = u64::try_from(profile.context_window_tokens().max(1)).unwrap_or(u64::MAX);
-    let percentage = usage
+    let budget_tokens = snapshot.context_window_tokens;
+    let percentage = snapshot
         .input_tokens
         .saturating_mul(100)
         .saturating_add(budget_tokens / 2)
@@ -301,6 +319,7 @@ mod tests {
                 model: "deepseek-v4-pro".to_string(),
                 raw_text: "executing".to_string(),
                 usage: Default::default(),
+                latest_request_usage: None,
                 quota_usage: Vec::new(),
                 action_batch: Some(MaapBatch {
                     protocol: "maap/1".to_string(),

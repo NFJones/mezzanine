@@ -25,7 +25,8 @@ pub use compaction::{
 };
 pub use model::{
     ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
-    ModelProfileOverrides, ModelRequest, SelectedModelProfile, select_model_profile,
+    ModelProfileOverrides, ModelRequest, SelectedModelProfile, known_model_context_window_tokens,
+    select_model_profile,
 };
 pub use skills::constrain_skill_actions_for_loaded_context;
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};

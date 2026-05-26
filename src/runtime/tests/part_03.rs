@@ -3502,6 +3502,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             model: "test".to_string(),
             raw_text: "raw transport envelope should not be copied".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -4057,6 +4058,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
             model: "test".to_string(),
             raw_text: "maap say response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -4246,6 +4248,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
             model: "test".to_string(),
             raw_text: "markdown say response".to_string(),
             usage: Default::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(crate::agent::MaapBatch {
                 protocol: "maap/1".to_string(),
