@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `2`. On launch, Mezzanine migrates an
+The current config schema version is `7`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -60,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `4` | Config schema version. Do not change this. |
+| `version` | integer | `7` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -397,6 +397,12 @@ Default `providers.openai.models`:
 ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"]
 ```
 
+Default `providers.deepseek.models`:
+
+```toml
+["deepseek-v4-pro", "deepseek-v4-flash"]
+```
+
 ### `model_profiles.<name>`
 
 | Field | Type | Default declaration | Description |
@@ -484,6 +490,32 @@ Default model profiles:
 | `auto-size-large` | `approval_policy` | `"ask"` |
 | `auto-size-large` | `fallback_profiles` | `[]` |
 | `auto-size-large.provider_options` | `reasoning_effort` | `"high"` |
+| `deepseek-default` | `provider` | `"deepseek"` |
+| `deepseek-default` | `model` | `"deepseek-v4-pro"` |
+| `deepseek-default` | `reasoning_profile` | `"high"` |
+| `deepseek-default` | `latency_preference` | `"default"` |
+| `deepseek-default` | `multimodal_required` | `false` |
+| `deepseek-default` | `context_window_tokens` | `1000000` |
+| `deepseek-default` | `safety_tier` | `"high"` |
+| `deepseek-default` | `privacy_tier` | `"standard"` |
+| `deepseek-default` | `residency` | `"global"` |
+| `deepseek-default` | `approval_policy` | `"ask"` |
+| `deepseek-default` | `fallback_profiles` | `[]` |
+| `deepseek-default.provider_options` | `thinking` | `"enabled"` |
+| `deepseek-default.provider_options` | `reasoning_effort` | `"high"` |
+| `deepseek-fast` | `provider` | `"deepseek"` |
+| `deepseek-fast` | `model` | `"deepseek-v4-flash"` |
+| `deepseek-fast` | `reasoning_profile` | `"high"` |
+| `deepseek-fast` | `latency_preference` | `"fast"` |
+| `deepseek-fast` | `multimodal_required` | `false` |
+| `deepseek-fast` | `context_window_tokens` | `1000000` |
+| `deepseek-fast` | `safety_tier` | `"high"` |
+| `deepseek-fast` | `privacy_tier` | `"standard"` |
+| `deepseek-fast` | `residency` | `"global"` |
+| `deepseek-fast` | `approval_policy` | `"ask"` |
+| `deepseek-fast` | `fallback_profiles` | `[]` |
+| `deepseek-fast.provider_options` | `thinking` | `"enabled"` |
+| `deepseek-fast.provider_options` | `reasoning_effort` | `"high"` |
 
 Provider options under a model profile:
 

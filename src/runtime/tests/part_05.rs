@@ -412,6 +412,13 @@ reasoning_profile = "high"
         .get("%1")
         .expect("routing pane context should exist");
     assert_eq!(pane_context.agent_status.as_deref(), Some("routing"));
+    assert!(
+        pane_context
+            .agent_display_lines
+            .iter()
+            .any(|line| line.starts_with("routing (") && line.contains(" • esc to interrupt")),
+        "{pane_context:?}"
+    );
     service
         .agent_turn_contexts
         .get_mut("turn-1")

@@ -735,11 +735,12 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 6"));
+    assert!(plan.text.contains("version = 7"));
     assert!(
         plan.text
             .contains("implementation_pressure_after_shell_actions = 5")
     );
+    assert!(plan.text.contains("context_window_tokens = 1000000"));
     assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
     assert!(!plan.text.contains("nested_muxxer"));
     assert!(plan.text.contains("routing = true"));
@@ -783,7 +784,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"6".to_string()));
+    assert_eq!(values.get("version"), Some(&"7".to_string()));
     assert_eq!(
         values.get("agents.implementation_pressure_after_shell_actions"),
         Some(&"5".to_string())
@@ -799,6 +800,10 @@ fn migrates_json_primary_config_to_current_schema() {
     assert_eq!(
         values.get("model_presets.deepseek.default_model_profile"),
         Some(&"deepseek-fast".to_string())
+    );
+    assert_eq!(
+        values.get("model_profiles.deepseek-fast.context_window_tokens"),
+        Some(&"1000000".to_string())
     );
     let migrated_json: serde_json::Value = serde_json::from_str(&plan.text).unwrap();
     let pane_fields = migrated_json["frames"]["pane"]["visible_fields"]
@@ -816,6 +821,87 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let validation = validate_config_text(ConfigFormat::Json, &plan.text, ConfigScope::Primary);
     assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies that schema v7 repairs only the stale built-in DeepSeek V4 context
+/// defaults. Generated v6 configs carried an older half-megatoken estimate, but
+/// user-defined profiles and explicitly customized built-in profiles must keep
+/// their own context budgets.
+#[test]
+fn migrates_deepseek_v4_context_defaults_to_current_schema() {
+    let legacy = r#"
+version = 6
+
+[model_profiles.deepseek-default]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+context_window_tokens = 524288
+
+[model_profiles.deepseek-fast]
+provider = "deepseek"
+model = "deepseek-v4-flash"
+context_window_tokens = 640000
+
+[model_profiles.custom-deepseek]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+context_window_tokens = 524288
+"#;
+
+    let plan = migrate_config_text(ConfigFormat::Toml, legacy).unwrap();
+    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
+
+    assert_eq!(plan.from_version, 6);
+    assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+    assert_eq!(values.get("version"), Some(&"7".to_string()));
+    assert_eq!(
+        values.get("model_profiles.deepseek-default.context_window_tokens"),
+        Some(&"1000000".to_string())
+    );
+    assert_eq!(
+        values.get("model_profiles.deepseek-fast.context_window_tokens"),
+        Some(&"640000".to_string())
+    );
+    assert_eq!(
+        values.get("model_profiles.custom-deepseek.context_window_tokens"),
+        Some(&"524288".to_string())
+    );
+}
+
+/// Verifies the DeepSeek context-window migration also applies to
+/// JSON-compatible primary config formats. This keeps TOML and non-TOML
+/// generated v6 configs from diverging when they are upgraded.
+#[test]
+fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
+    let legacy = r#"{
+  "version": 6,
+  "model_profiles": {
+    "deepseek-default": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "context_window_tokens": 524288
+    },
+    "deepseek-fast": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash"
+    }
+  }
+}"#;
+
+    let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
+    let values = extract_config_values(ConfigFormat::Json, &plan.text);
+
+    assert_eq!(plan.from_version, 6);
+    assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+    assert_eq!(values.get("version"), Some(&"7".to_string()));
+    assert_eq!(
+        values.get("model_profiles.deepseek-default.context_window_tokens"),
+        Some(&"1000000".to_string())
+    );
+    assert_eq!(
+        values.get("model_profiles.deepseek-fast.context_window_tokens"),
+        Some(&"1000000".to_string())
+    );
 }
 
 /// Verifies that config validation refuses documents written for a newer

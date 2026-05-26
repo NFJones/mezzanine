@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 6;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 7;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +76,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             5 => {
                 current_text = migrate_v5_to_v6(format, &current_text)?;
                 current_version = 6;
+            }
+            6 => {
+                current_text = migrate_v6_to_v7(format, &current_text)?;
+                current_version = 7;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -176,6 +180,18 @@ fn migrate_v5_to_v6(format: ConfigFormat, text: &str) -> Result<String> {
     match format {
         ConfigFormat::Toml => migrate_toml_v5_to_v6(text),
         ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v5_to_v6(format, text),
+    }
+}
+
+/// Applies the version 6 to version 7 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v6_to_v7(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v6_to_v7(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v6_to_v7(format, text),
     }
 }
 
@@ -493,6 +509,76 @@ fn migrate_json_compatible_v5_to_v6(format: ConfigFormat, text: &str) -> Result<
     }
 }
 
+/// Applies the version 6 to version 7 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v6_to_v7(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    update_toml_model_profile_context_window_default(
+        &mut document,
+        "deepseek-default",
+        "deepseek",
+        "deepseek-v4-pro",
+        524_288,
+        1_000_000,
+    )?;
+    update_toml_model_profile_context_window_default(
+        &mut document,
+        "deepseek-fast",
+        "deepseek",
+        "deepseek-v4-flash",
+        524_288,
+        1_000_000,
+    )?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(7))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 6 to version 7 migration to JSON and YAML config files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v6_to_v7(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    update_json_model_profile_context_window_default(
+        &mut document,
+        "deepseek-default",
+        "deepseek",
+        "deepseek-v4-pro",
+        524_288,
+        1_000_000,
+    )?;
+    update_json_model_profile_context_window_default(
+        &mut document,
+        "deepseek-fast",
+        "deepseek",
+        "deepseek-v4-flash",
+        524_288,
+        1_000_000,
+    )?;
+    set_json_path_value(&mut document, "version", serde_json::json!(7))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
 /// Parses a JSON or YAML config file into a JSON value tree.
 ///
 /// # Parameters
@@ -630,6 +716,83 @@ fn set_json_default_usize_if_absent_or_old_default(
     };
     if should_set {
         set_json_path_value(document, path, serde_json::json!(new_default))?;
+    }
+    Ok(())
+}
+
+/// Updates a built-in TOML model profile context default without overriding a
+/// custom profile or custom context value.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+/// - `profile_name`: The built-in model profile name to inspect.
+/// - `provider`: The provider id expected for the built-in profile.
+/// - `model`: The model id expected for the built-in profile.
+/// - `old_default`: The previous schema default value.
+/// - `new_default`: The replacement schema default value.
+fn update_toml_model_profile_context_window_default(
+    document: &mut toml_edit::DocumentMut,
+    profile_name: &str,
+    provider: &str,
+    model: &str,
+    old_default: i64,
+    new_default: i64,
+) -> Result<()> {
+    let profile_path = format!("model_profiles.{profile_name}");
+    let provider_path = format!("{profile_path}.provider");
+    let model_path = format!("{profile_path}.model");
+    if toml_string_at(document.as_table(), &provider_path).as_deref() != Some(provider)
+        || toml_string_at(document.as_table(), &model_path).as_deref() != Some(model)
+    {
+        return Ok(());
+    }
+
+    let context_path = format!("{profile_path}.context_window_tokens");
+    let should_set = match toml_item_at(document.as_table(), &context_path) {
+        None => true,
+        Some(toml_edit::Item::Value(value)) => value.as_integer() == Some(old_default),
+        Some(_) => false,
+    };
+    if should_set {
+        set_toml_path_item(document, &context_path, toml_edit::value(new_default))?;
+    }
+    Ok(())
+}
+
+/// Updates a built-in JSON-compatible model profile context default without
+/// overriding a custom profile or custom context value.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+/// - `profile_name`: The built-in model profile name to inspect.
+/// - `provider`: The provider id expected for the built-in profile.
+/// - `model`: The model id expected for the built-in profile.
+/// - `old_default`: The previous schema default value.
+/// - `new_default`: The replacement schema default value.
+fn update_json_model_profile_context_window_default(
+    document: &mut serde_json::Value,
+    profile_name: &str,
+    provider: &str,
+    model: &str,
+    old_default: u64,
+    new_default: u64,
+) -> Result<()> {
+    let profile_path = format!("model_profiles.{profile_name}");
+    let provider_path = format!("{profile_path}.provider");
+    let model_path = format!("{profile_path}.model");
+    if json_string_at(document, &provider_path).as_deref() != Some(provider)
+        || json_string_at(document, &model_path).as_deref() != Some(model)
+    {
+        return Ok(());
+    }
+
+    let context_path = format!("{profile_path}.context_window_tokens");
+    let should_set = match json_value_at(document, &context_path) {
+        None => true,
+        Some(value) => value.as_u64() == Some(old_default),
+    };
+    if should_set {
+        set_json_path_value(document, &context_path, serde_json::json!(new_default))?;
     }
     Ok(())
 }

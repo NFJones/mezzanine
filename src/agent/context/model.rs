@@ -24,6 +24,10 @@ const MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_DENOMINATOR: usize = 4;
 const OPENAI_FRONTIER_CONTEXT_WINDOW_TOKENS: usize = 1_050_000;
 /// Documented context window for OpenAI GPT-5 family 400K-token model families.
 const OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS: usize = 400_000;
+/// Documented context window for OpenAI GPT-5.3-Codex-Spark.
+const OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+/// Documented context window for DeepSeek V4 model families.
+const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: usize = 1_000_000;
 
 /// Carries Model Message Role state for this subsystem.
 ///
@@ -238,6 +242,7 @@ impl ModelProfile {
 fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Option<usize> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "openai" => openai_known_model_context_window_tokens(model),
+        "deepseek" => deepseek_known_model_context_window_tokens(model),
         _ => None,
     }
 }
@@ -245,6 +250,9 @@ fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Op
 /// Returns documented context windows for OpenAI model families Mezzanine ships.
 fn openai_known_model_context_window_tokens(model: &str) -> Option<usize> {
     let model = model.trim().to_ascii_lowercase();
+    if openai_model_matches_snapshot_family(&model, "gpt-5.3-codex-spark") {
+        return Some(OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS);
+    }
     if openai_model_matches_snapshot_family(&model, "gpt-5.5")
         || openai_model_matches_snapshot_family(&model, "gpt-5.5-pro")
         || openai_model_matches_snapshot_family(&model, "gpt-5.4")
@@ -264,6 +272,14 @@ fn openai_known_model_context_window_tokens(model: &str) -> Option<usize> {
         return Some(OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS);
     }
     None
+}
+
+/// Returns documented context windows for DeepSeek model families Mezzanine ships.
+fn deepseek_known_model_context_window_tokens(model: &str) -> Option<usize> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "deepseek-v4-pro" | "deepseek-v4-flash" => Some(DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS),
+        _ => None,
+    }
 }
 
 /// Matches an exact model family or a dated model snapshot for that family.

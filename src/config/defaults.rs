@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 6
+version = 7
 
 [session]
 detach_behavior = "keep-running"
@@ -335,7 +335,7 @@ model = "deepseek-v4-pro"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 524288
+context_window_tokens = 1000000
 # max_output_tokens = 32768
 safety_tier = "high"
 privacy_tier = "standard"
@@ -353,7 +353,7 @@ model = "deepseek-v4-flash"
 reasoning_profile = "high"
 latency_preference = "fast"
 multimodal_required = false
-context_window_tokens = 524288
+context_window_tokens = 1000000
 # max_output_tokens = 32768
 safety_tier = "high"
 privacy_tier = "standard"

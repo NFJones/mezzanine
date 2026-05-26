@@ -466,6 +466,7 @@ impl RuntimeSessionService {
             "executing" => "executing",
             "waiting" => "waiting",
             "compacting" => "compacting",
+            "routing" => "routing",
             "running" => "running",
             "waiting_approval" => "waiting approval",
             "completed" => "completed",
@@ -474,7 +475,13 @@ impl RuntimeSessionService {
             "stopped" => "stopped",
             _ => match turn.state {
                 AgentTurnState::Queued => "queued",
-                AgentTurnState::Running => "running",
+                AgentTurnState::Running => {
+                    if self.runtime_agent_turn_is_auto_sizing_routing(turn) {
+                        "routing"
+                    } else {
+                        "running"
+                    }
+                }
                 AgentTurnState::Blocked => "waiting approval",
                 AgentTurnState::Completed => "completed",
                 AgentTurnState::Failed => "failed",

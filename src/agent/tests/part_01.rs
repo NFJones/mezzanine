@@ -2635,6 +2635,8 @@ fn model_profile_context_window_uses_known_openai_metadata_when_unconfigured() {
         ("gpt-5.4", 1_050_000),
         ("gpt-5.4-mini", 400_000),
         ("gpt-5.3-codex", 400_000),
+        ("gpt-5.3-codex-spark", 128_000),
+        ("gpt-5.3-codex-spark-2026-02-12", 128_000),
         ("gpt-5.2", 400_000),
         ("gpt-5-codex", 400_000),
     ] {
@@ -2652,6 +2654,31 @@ fn model_profile_context_window_uses_known_openai_metadata_when_unconfigured() {
             profile.context_window_tokens(),
             expected_tokens,
             "{model} should use documented OpenAI metadata"
+        );
+    }
+}
+
+/// Verifies that known DeepSeek V4 models use their documented 1M-token
+/// context windows when a profile omits an explicit context override. This
+/// protects custom DeepSeek profiles from falling back to the conservative
+/// generic 128Ki-token display denominator.
+#[test]
+fn model_profile_context_window_uses_known_deepseek_metadata_when_unconfigured() {
+    for model in ["deepseek-v4-pro", "deepseek-v4-flash"] {
+        let profile = ModelProfile {
+            provider: "deepseek".to_string(),
+            model: model.to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        };
+
+        assert_eq!(
+            profile.context_window_tokens(),
+            1_000_000,
+            "{model} should use documented DeepSeek metadata"
         );
     }
 }

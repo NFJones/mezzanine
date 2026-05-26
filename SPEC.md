@@ -2308,7 +2308,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 2 is the current configuration schema version for this
+schema version 7 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2510,10 +2510,10 @@ provider as the default profile unless the user overrides them. The router
 profile SHOULD use a low or medium reasoning effort by default because it is
 used only for bounded classification, while target profiles MAY define their
 own default reasoning efforts that the auto-sizing decision can override for a
-single turn. Generated OpenAI default profiles SHOULD carry documented
-context-window token counts for their selected model families so frame context
-usage, `/model list`, and explicit or provider-limit compaction use the same
-denominator.
+single turn. Generated OpenAI and DeepSeek default profiles SHOULD carry
+documented context-window token counts for their selected model families so
+frame context usage, `/model list`, and explicit or provider-limit compaction
+use the same denominator.
 
 The `subagents` table MUST be a map keyed by subagent profile identity. Each
 profile MAY define `name`, `description`, `developer_instructions`,
@@ -2594,6 +2594,11 @@ OpenAI provider model list SHOULD include only coding-agent harness models:
 `gpt-5.3-codex-spark`, and `gpt-5.2`. When a provider configuration leaves
 `models` empty, Mezzanine MUST load the provider's built-in code-defined model
 list instead of treating the provider as having no selectable models.
+The built-in DeepSeek provider default model MUST be `deepseek-v4-pro` unless
+the user overrides it through provider or model-profile configuration. The
+built-in DeepSeek provider model list SHOULD include `deepseek-v4-pro` and
+`deepseek-v4-flash`, and generated DeepSeek model profiles SHOULD use a
+`1000000` token context window for those V4 model families.
 Mezzanine SHOULD attempt live provider model-catalog refresh once during daemon
 startup after configuration and authentication stores are available. After
 startup, live provider catalog refresh MUST be explicit through a user or
