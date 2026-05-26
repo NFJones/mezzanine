@@ -3972,11 +3972,11 @@ async fn runtime_terminal_refresh_provider_info_populates_model_catalog_cache() 
     );
     assert!(service.provider_model_catalog_cache.contains_key("openai"));
 }
-/// Verifies that the synchronous terminal command path forwards async-only
-/// provider refresh work into the runtime async dispatcher instead of
-/// rejecting the command as unavailable on live pane input.
+/// Verifies that the async terminal command path refreshes provider metadata
+/// through the live-pane runtime entrypoint instead of relying on a nested
+/// sync-to-async bridge inside command dispatch.
 #[tokio::test(flavor = "multi_thread")]
-async fn runtime_terminal_refresh_provider_info_sync_command_uses_async_dispatch() {
+async fn runtime_terminal_refresh_provider_info_async_command_refreshes_provider_metadata() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -3993,7 +3993,8 @@ async fn runtime_terminal_refresh_provider_info_sync_command_uses_async_dispatch
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
         .unwrap();
     let output = service
-        .execute_terminal_command(&primary, "refresh-provider-info")
+        .execute_terminal_command_async(&primary, "refresh-provider-info")
+        .await
         .unwrap();
     assert!(
         output.contains(r#""command":"refresh-provider-info""#),

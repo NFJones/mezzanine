@@ -59,16 +59,6 @@ pub(super) fn execute_runtime_command_sequence(
             outcomes.push(outcome);
             continue;
         }
-        if runtime_live_terminal_command_requires_async(invocation)
-            && let Some(outcome) = execute_runtime_live_terminal_command_from_sync_context(
-                service,
-                primary_client_id,
-                invocation,
-            )?
-        {
-            outcomes.push(outcome);
-            continue;
-        }
         if let Some(outcome) =
             execute_runtime_layout_terminal_command(service, primary_client_id, invocation)?
         {
@@ -82,38 +72,6 @@ pub(super) fn execute_runtime_command_sequence(
         outcomes.push(outcome);
     }
     Ok(outcomes)
-}
-/// Returns whether a live terminal command is implemented only in the async dispatcher.
-fn runtime_live_terminal_command_requires_async(invocation: &CommandInvocation) -> bool {
-    matches!(
-        invocation.name.as_str(),
-        "mcp-add" | "mcp-remove" | "mcp-retry" | "refresh-provider-info"
-    )
-}
-/// Runs an async-only live terminal command from the sync command dispatcher.
-fn execute_runtime_live_terminal_command_from_sync_context(
-    service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
-    invocation: &CommandInvocation,
-) -> Result<Option<CommandOutcome>> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| {
-            handle.block_on(execute_runtime_live_terminal_command_async(
-                service,
-                primary_client_id,
-                invocation,
-            ))
-        })
-    } else {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?
-            .block_on(execute_runtime_live_terminal_command_async(
-                service,
-                primary_client_id,
-                invocation,
-            ))
-    }
 }
 
 /// Runs the execute runtime command sequence async operation for this subsystem.
