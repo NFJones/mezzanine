@@ -605,6 +605,7 @@ pub type OpenAiCompatibleChatCompletionsProvider<T> = DeepSeekChatCompletionsPro
 #[derive(Debug, Clone)]
 pub struct DeepSeekChatCompletionsProvider<T> {
     pub(super) api_key: SecretString,
+    pub(super) provider_id: String,
     pub(super) endpoint: String,
     pub(super) stream: bool,
     pub(super) timeout_ms: u64,
@@ -618,11 +619,19 @@ impl<T> DeepSeekChatCompletionsProvider<T> {
         validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
         Ok(Self {
             api_key,
+            provider_id: "deepseek".to_string(),
             endpoint: DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT.to_string(),
             stream: false,
             timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
             transport,
         })
+    }
+    /// Overrides the runtime provider identity accepted by request guards.
+    pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Result<Self> {
+        let provider_id = provider_id.into();
+        validate_non_empty("provider id", &provider_id)?;
+        self.provider_id = provider_id;
+        Ok(self)
     }
 
     /// Enables or disables streaming for this provider.
@@ -670,7 +679,7 @@ fn deepseek_required_maap_response(
 #[cfg(test)]
 impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider<T> {
     fn provider_id(&self) -> &str {
-        "deepseek"
+        &self.provider_id
     }
 
     fn list_models(&self) -> Result<ProviderModelCatalog> {
@@ -775,7 +784,7 @@ impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider
 
 impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletionsProvider<T> {
     fn provider_id(&self) -> &str {
-        "deepseek"
+        &self.provider_id
     }
 
     fn list_models_async<'a>(
@@ -986,7 +995,8 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
             ))
         })?;
     let credential = auth_store.provider_secret(provider_name)?;
-    let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
+    let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?
+        .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =
             provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);

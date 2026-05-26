@@ -119,6 +119,94 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
     assert!(batch.final_turn);
 }
 
+/// Verifies named OpenAI-compatible DeepSeek providers keep their configured
+/// runtime identity when sending a Chat Completions request.
+///
+/// The openai-compatible dispatch path reuses the DeepSeek Chat Completions
+/// adapter, so the adapter must accept the configured provider name instead of
+/// rejecting the request as if every compatible endpoint were the built-in
+/// `deepseek` provider. This locks the regression that surfaced as
+/// `DeepSeek provider received a request for a different provider` before any
+/// HTTP request was sent.
+#[test]
+fn deepseek_provider_accepts_openai_compatible_provider_identity() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek_compatible".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let arguments = serde_json::json!({
+        "rationale": "compatible provider returned structured output",
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = SequencedFakeProviderHttpTransport::new(vec![ProviderHttpResponse {
+        status_code: 200,
+        headers: Default::default(),
+        body: serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                    "arguments": arguments
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 4
+            }
+        })
+        .to_string(),
+    }]);
+    let provider = DeepSeekChatCompletionsProvider::new("compatible-key", transport)
+        .unwrap()
+        .with_provider_id("deepseek_compatible")
+        .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(provider.provider_id(), "deepseek_compatible");
+    assert_eq!(provider.transport.requests.borrow().len(), 1);
+    let batch = response.action_batch.unwrap();
+    assert_eq!(
+        batch.rationale,
+        "compatible provider returned structured output"
+    );
+    assert!(batch.final_turn);
+}
+
+
 /// Verifies DeepSeek does not return a successful provider response when the
 /// strict fallback still omits the required MAAP batch.
 ///
