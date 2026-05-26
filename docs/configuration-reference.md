@@ -382,7 +382,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider implementation kind. |
+| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider implementation kind: `openai`, `deepseek`, or `openai-compatible`. |
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
@@ -402,6 +402,12 @@ Default `providers.deepseek.models`:
 ```toml
 ["deepseek-v4-pro", "deepseek-v4-flash"]
 ```
+
+Named `openai-compatible` providers use the Chat Completions compatibility
+adapter. Configure one provider entry per backend, set `base_url` to the
+backend API base such as `https://api.example.com/v1`, and provide `models` plus
+`default_model` unless the backend's `/models` endpoint is sufficient for live
+catalog refresh.
 
 ### `model_profiles.<name>`
 

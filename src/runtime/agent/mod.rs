@@ -52,6 +52,7 @@ use crate::agent::{
     ApplyPatchTransactionPhase, MaapBatch, apply_patch_error_plan, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output,
     deepseek_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options,
     openai_provider_from_auth_store_with_provider_options,
 };
 use crate::agent::{SayStatus, assistant_context_content_for_execution};

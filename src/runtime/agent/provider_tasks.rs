@@ -178,6 +178,51 @@ impl RuntimeSessionService {
                     }
                 }
             }
+            "openai-compatible" => {
+                self.append_credential_access_audit(
+                    &model_profile.provider,
+                    &provider_config.auth_profile,
+                    "provider_request",
+                    "requested",
+                )?;
+                let auth_store = self.auth_store.as_ref().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "OpenAI-compatible provider execution requires an attached auth store",
+                    )
+                })?;
+                let endpoint_override = provider_config
+                    .base_url
+                    .as_deref()
+                    .filter(|endpoint| !endpoint.is_empty());
+                let provider_result =
+                    openai_compatible_provider_from_auth_store_with_provider_options(
+                        auth_store,
+                        &model_profile.provider,
+                        endpoint_override,
+                        DEFAULT_PROVIDER_TIMEOUT_MS,
+                        ReqwestProviderHttpTransport,
+                    );
+                match provider_result {
+                    Ok(provider) => {
+                        self.append_credential_access_audit(
+                            &model_profile.provider,
+                            &provider_config.auth_profile,
+                            "provider_request",
+                            "granted",
+                        )?;
+                        RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider)
+                    }
+                    Err(error) => {
+                        self.append_credential_access_audit(
+                            &model_profile.provider,
+                            &provider_config.auth_profile,
+                            "provider_request",
+                            "denied",
+                        )?;
+                        return Err(error);
+                    }
+                }
+            }
             other => {
                 return Err(MezError::config(format!(
                     "provider kind `{other}` is not supported for runtime execution"
@@ -254,6 +299,16 @@ impl RuntimeSessionService {
                     ReqwestProviderHttpTransport,
                 )
                 .map(RuntimeAgentProviderDispatchProvider::DeepSeek),
+                "openai-compatible" => {
+                    openai_compatible_provider_from_auth_store_with_provider_options(
+                        router_auth_store,
+                        &auto_sizing.router_profile.provider,
+                        endpoint_override,
+                        DEFAULT_PROVIDER_TIMEOUT_MS,
+                        ReqwestProviderHttpTransport,
+                    )
+                    .map(RuntimeAgentProviderDispatchProvider::OpenAiCompatible)
+                }
                 _ => Err(MezError::config(format!(
                     "auto-sizing router provider `{}` has unsupported kind `{}`",
                     auto_sizing.router_profile.provider, router_provider_config.kind

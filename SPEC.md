@@ -2552,6 +2552,15 @@ entry MUST support `kind`, `auth_profile`, `base_url` when applicable,
 For the built-in OpenAI provider, `base_url` MUST be interpreted as an API base
 URL such as `https://api.openai.com/v1`; Mezzanine MUST derive the documented
 `/responses` request endpoint and `/models` catalog endpoint from that base.
+For named providers whose `kind` is `openai-compatible`, `base_url` MUST be
+interpreted as an OpenAI-compatible API base URL; Mezzanine MUST derive the
+documented `/chat/completions` request endpoint and `/models` catalog endpoint
+from that base. OpenAI-compatible providers MUST use the named provider entry as
+the configuration boundary so each backend can declare its own base URL, auth
+profile, model list, and default model. The compatibility adapter is limited to
+non-streaming Chat Completions behavior and MUST NOT inherit OpenAI Responses
+prompt-cache or reasoning-control semantics unless a later provider-specific
+capability explicitly enables them.
 When `providers.openai.options.organization_id` or
 `providers.openai.options.project_id` is configured, Mezzanine MUST send the
 documented `OpenAI-Organization` and `OpenAI-Project` headers on direct OpenAI
@@ -2599,6 +2608,10 @@ the user overrides it through provider or model-profile configuration. The
 built-in DeepSeek provider model list SHOULD include `deepseek-v4-pro` and
 `deepseek-v4-flash`, and generated DeepSeek model profiles SHOULD use a
 `1000000` token context window for those V4 model families.
+Named `openai-compatible` providers do not have built-in models. Users SHOULD
+configure `models` and `default_model` for each compatible backend, and a live
+catalog refresh MAY replace or augment those configured model ids when the
+backend supports the OpenAI-compatible `/models` endpoint.
 Mezzanine SHOULD attempt live provider model-catalog refresh once during daemon
 startup after configuration and authentication stores are available. After
 startup, live provider catalog refresh MUST be explicit through a user or

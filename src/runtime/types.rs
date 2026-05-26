@@ -3276,6 +3276,12 @@ pub enum RuntimeAgentProviderDispatchProvider {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     DeepSeek(DeepSeekChatCompletionsProvider<ReqwestProviderHttpTransport>),
+    /// Represents a named OpenAI-compatible Chat Completions provider.
+    ///
+    /// Callers use this variant for configured provider instances that share
+    /// the Chat Completions wire contract without inheriting native OpenAI
+    /// Responses semantics.
+    OpenAiCompatible(DeepSeekChatCompletionsProvider<ReqwestProviderHttpTransport>),
 }
 
 impl RuntimeAgentProviderDispatchProvider {
@@ -3288,6 +3294,7 @@ impl RuntimeAgentProviderDispatchProvider {
         match self {
             Self::OpenAi(_) => "openai",
             Self::DeepSeek(_) => "deepseek",
+            Self::OpenAiCompatible(_) => "openai-compatible",
         }
     }
 }

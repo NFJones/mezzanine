@@ -372,6 +372,17 @@ impl ProviderCapabilities {
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: false,
             },
+            "openai-compatible" => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: false,
+                supports_thinking_toggle: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: false,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
             _ => Self {
                 supports_responses_api: false,
                 supports_max_output_tokens: false,
@@ -582,6 +593,13 @@ pub fn openai_provider_from_auth_store_with_options<T>(
         transport,
     )
 }
+
+/// Carries generic OpenAI-compatible Chat Completions Provider state.
+///
+/// The generic compatibility adapter intentionally reuses the established Chat
+/// Completions transport state while provider dispatch keeps it distinct from
+/// vendor-specific DeepSeek handling.
+pub type OpenAiCompatibleChatCompletionsProvider<T> = DeepSeekChatCompletionsProvider<T>;
 
 /// Carries Deep Seek Chat Completions Provider state.
 #[derive(Debug, Clone)]
@@ -938,6 +956,36 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
         .read_metadata_for_provider("deepseek")?
         .ok_or_else(|| MezError::invalid_state("DeepSeek provider is not authenticated"))?;
     let credential = auth_store.provider_secret("deepseek")?;
+    let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
+    if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
+        provider =
+            provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
+    }
+    provider = provider.with_timeout(timeout_ms);
+    Ok(provider)
+}
+
+/// Builds an OpenAI-compatible Chat Completions provider from auth metadata.
+///
+/// The provider is scoped by its configured provider name so multiple named
+/// compatible backends can coexist while sharing the Chat Completions wire
+/// contract. Endpoint overrides are expanded to `/chat/completions` using the
+/// same compatibility rules as the DeepSeek adapter.
+pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
+    auth_store: &AuthStore,
+    provider_name: &str,
+    base_url_override: Option<&str>,
+    timeout_ms: u64,
+    transport: T,
+) -> Result<DeepSeekChatCompletionsProvider<T>> {
+    let _metadata = auth_store
+        .read_metadata_for_provider(provider_name)?
+        .ok_or_else(|| {
+            MezError::invalid_state(format!(
+                "OpenAI-compatible provider `{provider_name}` is not authenticated"
+            ))
+        })?;
+    let credential = auth_store.provider_secret(provider_name)?;
     let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =

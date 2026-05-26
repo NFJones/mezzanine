@@ -286,8 +286,8 @@ Abstract feature labels in the table mean:
 
 | Provider / family   | Status      | API shape                                                                    | Streaming | Tools | Structured output | Reasoning controls | Catalog refresh |
 | ------------------- | ----------- | ---------------------------------------------------------------------------- | --------- | ----- | ----------------- | ------------------ | --------------- |
-| OpenAI              | Supported   | Native Responses API plus the future generic OpenAI-compatible adapter class | Yes       | Yes   | Yes               | Partial            | Yes             |
-| Generic OpenAI API  | Unsupported | OpenAI-compatible API                                                        |           |       |                   |                    |                 |
+| OpenAI              | Supported   | Native Responses API                                                         | Yes       | Yes   | Yes               | Partial            | Yes             |
+| Generic OpenAI API  | Supported   | OpenAI-compatible Chat Completions API                                        | No        | Yes   | Partial           | No                 | Partial         |
 | DeepSeek            | Supported   | Native Chat Completions API                                                  | Partial   | Yes   | Partial           | Yes                | Partial         |
 | Anthropic           | Unsupported | Native Messages API                                                          |           |       |                   |                    |                 |
 | Gemini direct API   | Unsupported | OpenAI-compatible first, native later if needed                              |           |       |                   |                    |                 |
