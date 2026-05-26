@@ -3141,40 +3141,35 @@ async fn network_fetch_url_executor_default_bounds_response_body() {
     );
 }
 
-/// Verifies model-facing action-result context is independently bounded even
-/// when an explicit `fetch_url.max_bytes` allows a larger body to be retained
-/// in the action result. The transcript can keep the result while the next
-/// model request receives a compact, marked preview.
-#[tokio::test]
-async fn network_fetch_url_context_truncates_large_explicit_body() {
-    let turn = turn();
-    let action = AgentAction {
-        id: "fetch-large-explicit".to_string(),
-        rationale: String::new(),
-        payload: AgentActionPayload::FetchUrl {
-            url: "https://example.test/large.txt".to_string(),
-            format: None,
-            max_bytes: Some(40_000),
-        },
-    };
-    let transport = AsyncFakeProviderHttpTransport {
-        requests: std::sync::Mutex::new(Vec::new()),
-        response: ProviderHttpResponse {
-            status_code: 200,
-            headers: Default::default(),
-            body: format!("{}tail-marker", "b".repeat(20 * 1024)),
-        },
-    };
+/// Verifies model-facing action-result context remains independently bounded at
+/// the configured byte ceiling even when the underlying action result retains a
+/// larger body. The durable result can keep the full payload while the next
+/// provider request receives a compact, marked preview.
+#[test]
+fn action_result_context_truncates_large_result_body_at_256k() {
+    use crate::agent::ActionContentBlock;
 
-    let result = execute_network_action_with_transport_async(&turn, &action, &transport)
-        .await
-        .unwrap();
+    let result = ActionResult {
+        protocol: "maap/1".to_string(),
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        action_id: "fetch-large-explicit".to_string(),
+        action_type: "fetch_url",
+        status: ActionStatus::Succeeded,
+        content: vec![ActionContentBlock::text(format!(
+            "{}tail-marker",
+            "b".repeat(300 * 1024)
+        ))],
+        structured_content_json: None,
+        is_error: false,
+        error: None,
+    };
 
     assert!(result.content_text().contains("tail-marker"));
     let context = action_result_context_content(&result);
-    assert!(context.contains("[mez: action result content truncated after 16384 bytes]"));
+    assert!(context.contains("[mez: action result content truncated after 262144 bytes]"));
     assert!(!context.contains("tail-marker"), "{context}");
-    assert!(context.len() < 18 * 1024, "context bytes={}", context.len());
+    assert!(context.len() < 264 * 1024, "context bytes={}", context.len());
 }
 
 /// Verifies the runtime network executor rejects non-HTTP(S) fetch URLs before

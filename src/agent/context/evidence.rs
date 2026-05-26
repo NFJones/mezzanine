@@ -9,6 +9,13 @@ use super::compaction::{model_context_single_line, model_context_source_kind_nam
 use super::{ContextBlock, ContextSourceKind};
 use std::collections::HashSet;
 
+/// Maximum action/tool entries retained in the generated evidence ledger.
+///
+/// The ledger is intentionally bounded so long sessions can keep a broad,
+/// model-visible inventory of prior reads, validation commands, and patches
+/// without letting the ledger itself dominate the provider request.
+const EVIDENCE_LEDGER_ENTRY_LIMIT: usize = 512;
+
 /// Prepares context blocks for provider requests and compaction.
 pub(super) fn prepare_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
     let deduped = dedupe_historical_context_blocks(blocks);
@@ -132,7 +139,7 @@ fn build_evidence_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> 
             continue;
         };
         entries.push(entry);
-        if entries.len() >= 24 {
+        if entries.len() >= EVIDENCE_LEDGER_ENTRY_LIMIT {
             break;
         }
     }

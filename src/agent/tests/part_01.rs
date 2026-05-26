@@ -2521,6 +2521,58 @@ fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result
     );
 }
 
+/// Verifies provider request assembly keeps the evidence ledger bounded at the
+/// configured entry limit while still preserving a wide span of long-session
+/// evidence. This prevents the generated ledger from growing without bound
+/// while allowing substantially more reuse context than the previous cap.
+#[test]
+fn model_request_caps_evidence_ledger_at_512_entries() {
+    let mut blocks = vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "Continue from the existing command history.".to_string(),
+    }];
+    for index in 0..520 {
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: format!("action result {index}"),
+            content: format!(
+                "[action_result action-{index} shell_command succeeded]\ncommand: rg evidence-{index}\noutput:\nledger evidence {index}"
+            ),
+        });
+    }
+
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "default".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(blocks).unwrap(),
+    )
+    .unwrap();
+
+    let ledger = request
+        .messages
+        .iter()
+        .find(|message| message.source == ContextSourceKind::EvidenceLedger)
+        .expect("evidence ledger should be present");
+    let entry_count = ledger
+        .content
+        .lines()
+        .filter(|line| line.starts_with("- category="))
+        .count();
+
+    assert_eq!(entry_count, 512);
+    assert!(ledger.content.contains("command=rg evidence-511"));
+    assert!(!ledger.content.contains("command=rg evidence-512"));
+}
+
 /// Verifies request assembly does not compact older context merely because a
 /// local estimate crosses a threshold.
 ///

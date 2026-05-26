@@ -9,7 +9,7 @@ use super::super::{ActionResult, ActionStatus};
 
 /// Maximum action-result content bytes included in one model-facing context
 /// block before native truncation metadata is appended.
-const MODEL_ACTION_RESULT_CONTENT_LIMIT_BYTES: u64 = 16 * 1024;
+const MODEL_ACTION_RESULT_CONTENT_LIMIT_BYTES: u64 = 256 * 1024;
 
 /// Executes the `action_result_transcript_content` operation for the owning subsystem.
 ///
