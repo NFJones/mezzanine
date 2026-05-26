@@ -1081,7 +1081,7 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             line.as_str() != previous_line || spans != previous_spans
         })
         .count();
-    let use_single_span_updates = changed_row_count <= 1;
+    let allow_segment_updates = changed_row_count <= 3;
     let mut changed_rows = 0usize;
     let mut cursor_hidden_for_row_updates = false;
     for (index, line) in lines.iter().enumerate() {
@@ -1103,7 +1103,7 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             cursor_hidden_for_row_updates = true;
         }
         let row = index.saturating_add(1);
-        if use_single_span_updates
+        if allow_segment_updates
             && let Some(span_update) =
                 encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
         {
@@ -1150,7 +1150,8 @@ fn output_row_count_changed(previous: &AttachedTerminalOutputFrameState, lines: 
     previous.lines.len() != lines.len()
 }
 
-/// Encodes a bounded row update for a single changed ASCII span when safe.
+/// Encodes a bounded row-segment update when the changed text occupies a stable
+/// display-column range.
 fn encode_safe_changed_row_span_update(
     row: usize,
     previous_line: &str,
@@ -1158,36 +1159,40 @@ fn encode_safe_changed_row_span_update(
     previous_spans: &[TerminalStyleSpan],
     spans: &[TerminalStyleSpan],
 ) -> Option<Vec<u8>> {
-    if previous_spans != spans
-        || previous_line.len() != line.len()
-        || !line_is_printable_ascii(previous_line)
-        || !line_is_printable_ascii(line)
-        || terminal_line_width(previous_line) != previous_line.len()
-        || terminal_line_width(line) != line.len()
-    {
+    if terminal_line_width(previous_line) != terminal_line_width(line) {
         return None;
     }
 
-    let previous = previous_line.as_bytes();
-    let current = line.as_bytes();
-    let start = previous
+    let previous_cells = terminal_row_cells(previous_line, previous_spans);
+    let current_cells = terminal_row_cells(line, spans);
+    if previous_cells.len() != current_cells.len() {
+        return None;
+    }
+    let start = previous_cells
         .iter()
-        .zip(current.iter())
-        .position(|(previous, current)| previous != current)?;
-    let mut previous_end = previous.len();
-    let mut current_end = current.len();
+        .zip(current_cells.iter())
+        .position(|(previous, current)| !terminal_row_cells_match(previous, current))?;
+    let mut previous_end = previous_cells.len();
+    let mut current_end = current_cells.len();
     while previous_end > start
         && current_end > start
-        && previous[previous_end.saturating_sub(1)] == current[current_end.saturating_sub(1)]
+        && terminal_row_cells_match(
+            &previous_cells[previous_end.saturating_sub(1)],
+            &current_cells[current_end.saturating_sub(1)],
+        )
     {
         previous_end = previous_end.saturating_sub(1);
         current_end = current_end.saturating_sub(1);
     }
 
-    let segment = &line[start..current_end];
-    let segment_spans = clip_style_spans_to_column_range(spans, start, current_end);
+    let start_column = current_cells[start].column_start;
+    let current_end_cell = &current_cells[current_end.saturating_sub(1)];
+    let end_column = current_end_cell.column_end;
+    let segment = &line[current_cells[start].byte_start..current_end_cell.byte_end];
+
+    let segment_spans = clip_style_spans_to_column_range(spans, start_column, end_column);
     let encoded_segment = encode_styled_terminal_line(segment, &segment_spans);
-    let mut span_update = format!("\x1b[{row};{}H", start.saturating_add(1)).into_bytes();
+    let mut span_update = format!("\x1b[{row};{}H", start_column.saturating_add(1)).into_bytes();
     span_update.extend_from_slice(encoded_segment.as_bytes());
 
     let mut row_update = format!("\x1b[{row};1H").into_bytes();
@@ -1195,12 +1200,58 @@ fn encode_safe_changed_row_span_update(
     (span_update.len() < row_update.len()).then_some(span_update)
 }
 
-/// Returns whether a terminal row contains only printable ASCII bytes.
-fn line_is_printable_ascii(line: &str) -> bool {
-    line.bytes().all(|byte| matches!(byte, b' '..=b'~'))
+/// Carries one rendered grapheme cell plus the rendition active across it.
+#[derive(Debug, Clone, Copy)]
+struct TerminalRowCell<'a> {
+    /// Source slice for the grapheme occupying this display-cell span.
+    text: &'a str,
+    /// Inclusive byte offset at which the grapheme begins.
+    byte_start: usize,
+    /// Exclusive byte offset at which the grapheme ends.
+    byte_end: usize,
+    /// Inclusive display column at which the grapheme begins.
+    column_start: usize,
+    /// Exclusive display column at which the grapheme ends.
+    column_end: usize,
+    /// Active terminal rendition for this grapheme span.
+    rendition: super::GraphicRendition,
 }
 
-/// Clips row style spans to a changed ASCII column range.
+/// Collects rendered graphemes into display-cell spans with their active style.
+fn terminal_row_cells<'a>(line: &'a str, spans: &[TerminalStyleSpan]) -> Vec<TerminalRowCell<'a>> {
+    let mut cells = Vec::new();
+    let mut search_offset = 0usize;
+    let mut column = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let Some(relative_start) = line[search_offset..].find(grapheme) else {
+            return Vec::new();
+        };
+        let byte_start = search_offset.saturating_add(relative_start);
+        let byte_end = byte_start.saturating_add(grapheme.len());
+        let width = terminal_grapheme_width(grapheme);
+        cells.push(TerminalRowCell {
+            text: grapheme,
+            byte_start,
+            byte_end,
+            column_start: column,
+            column_end: column.saturating_add(width),
+            rendition: rendition_at_column(spans, column),
+        });
+        search_offset = byte_end;
+        column = column.saturating_add(width);
+    }
+    cells
+}
+
+/// Returns whether two rendered grapheme cells are visually identical.
+fn terminal_row_cells_match(previous: &TerminalRowCell<'_>, current: &TerminalRowCell<'_>) -> bool {
+    previous.text == current.text
+        && previous.column_start == current.column_start
+        && previous.column_end == current.column_end
+        && previous.rendition == current.rendition
+}
+
+/// Clips row style spans to a changed column range.
 fn clip_style_spans_to_column_range(
     spans: &[TerminalStyleSpan],
     start: usize,
