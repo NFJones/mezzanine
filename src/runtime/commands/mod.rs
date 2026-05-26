@@ -3066,13 +3066,11 @@ impl RuntimeSessionService {
                 &[
                     "Provider",
                     "Model",
-                    "Input",
-                    "Raw input",
+                    "Billed input",
+                    "Cached input",
                     "Output",
                     "Reasoning",
-                    "Cached input",
-                    "Cache hit",
-                    "Total",
+                    "Cache Hit %",
                 ],
                 &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
             ));
@@ -3131,12 +3129,10 @@ impl RuntimeSessionService {
                     key.provider.clone(),
                     key.model.clone(),
                     usage.billed_input_tokens().to_string(),
-                    usage.input_tokens.to_string(),
+                    usage.cached_input_tokens_display(),
                     usage.output_tokens.to_string(),
                     usage.reasoning_tokens.to_string(),
-                    usage.cached_input_tokens_display(),
                     usage.cached_input_hit_ratio_display(),
-                    usage.total_tokens().to_string(),
                 ]
             })
             .collect()

@@ -2148,12 +2148,11 @@ fn runtime_metrics_histogram_lines(
 /// Formats provider token usage for the runtime metrics command.
 fn runtime_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
     format!(
-        "input={} raw_input={} output={} reasoning={} cached_input={} cache_hit={} total={}",
+        "input={} cached_input={} output={} reasoning={} cache_hit={} total={}",
         usage.billed_input_tokens(),
-        usage.input_tokens,
+        usage.cached_input_tokens_display(),
         usage.output_tokens,
         usage.reasoning_tokens,
-        usage.cached_input_tokens_display(),
         usage.cached_input_hit_ratio_display(),
         usage.total_tokens()
     )

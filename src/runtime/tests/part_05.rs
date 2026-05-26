@@ -530,11 +530,11 @@ reasoning_profile = "high"
         "{status}"
     );
     assert!(
-        status.contains("| runtime-batch | gpt-router | 60 | 90 | 10 | 3 | 30 | 33.33% | 100 |"),
+        status.contains("| runtime-batch | gpt-router | 60 | 30 | 10 | 3 | 33.33% |"),
         "{status}"
     );
     assert!(
-        status.contains("| runtime-batch | gpt-5.5 | 100 | 150 | 40 | 12 | 50 | 33.33% | 190 |"),
+        status.contains("| runtime-batch | gpt-5.5 | 100 | 50 | 40 | 12 | 33.33% |"),
         "{status}"
     );
     let normal_request_context = requests[1]
@@ -2907,7 +2907,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         "{status}"
     );
     assert!(
-        status.contains("| openai | gpt-saved | 450 | 900 | 80 | 33 | 450 | 50.00% | 980 |"),
+        status.contains("| openai | gpt-saved | 450 | 450 | 80 | 33 | 50.00% |"),
         "{status}"
     );
 }

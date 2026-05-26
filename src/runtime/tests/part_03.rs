@@ -3228,11 +3228,11 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| openai | gpt-fast | 20 | 120 | 34 | 9 | 100 | 83.33% | 154 |"),
+        response.contains("| openai | gpt-fast | 20 | 100 | 34 | 9 | 83.33% |"),
         "{response}"
     );
     assert!(
-        response.contains("| deepseek | deepseek-chat | 100 | 200 | 50 | 20 | 100 | 50.00% | 250 |"),
+        response.contains("| deepseek | deepseek-chat | 100 | 100 | 50 | 20 | 50.00% |"),
         "{response}"
     );
     assert!(!response.contains("Provider rate limits"), "{response}");
@@ -3301,13 +3301,13 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     );
     assert!(
         response.contains(
-            "provider_model_tokens[gpt-fast via openai] = provider=openai model=gpt-fast input=40 raw_input=120 output=34 reasoning=9 cached_input=80 cache_hit=66.67% total=154"
+            "provider_model_tokens[gpt-fast via openai] = provider=openai model=gpt-fast input=40 cached_input=80 output=34 reasoning=9 cache_hit=66.67% total=154"
         ),
         "{response}"
     );
     assert!(
         response.contains(
-            "provider_model_tokens[deepseek-chat via deepseek] = provider=deepseek model=deepseek-chat input=100 raw_input=200 output=50 reasoning=20 cached_input=100 cache_hit=50.00% total=250"
+            "provider_model_tokens[deepseek-chat via deepseek] = provider=deepseek model=deepseek-chat input=100 cached_input=100 output=50 reasoning=20 cache_hit=50.00% total=250"
         ),
         "{response}"
     );
