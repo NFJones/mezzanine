@@ -2030,6 +2030,7 @@ impl RuntimeSessionService {
                 self.agent_context_usage_by_conversation
                     .remove(conversation_id);
             }
+            let _ = self.checkpoint_agent_session_metadata();
             break;
         }
         Ok(())

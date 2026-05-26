@@ -1404,10 +1404,17 @@ pub fn build_async_pane_process_supervisor_service(
 ) -> Result<AsyncRuntimeService> {
     config.validate()?;
     Ok(AsyncRuntimeService::new_auxiliary(name, async move {
-        let report = run_async_pane_process_supervisor_service(handle, config, |_, state| {
+        let report = match run_async_pane_process_supervisor_service(handle, config, |_, state| {
             is_terminal_runtime_lifecycle_state(state)
         })
-        .await?;
+        .await
+        {
+            Ok(report) => report,
+            Err(error) if is_terminal_pane_supervisor_error(&error) => {
+                return Ok(AsyncRuntimeServiceExit::shutdown(0));
+            }
+            Err(error) => return Err(error),
+        };
         let work_units = report
             .spawned_workers
             .saturating_add(report.completed_workers);

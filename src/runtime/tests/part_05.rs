@@ -2857,13 +2857,13 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 context_usage: Some("42%".to_string()),
                 token_usage: saved_token_usage,
                 token_usage_by_model: std::collections::BTreeMap::from([(
-                    saved_token_usage_key,
+                    saved_token_usage_key.clone(),
                     saved_token_usage,
                 )]),
             }],
         )
         .unwrap();
-    service.set_agent_transcript_store(transcript_store);
+    service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -2909,6 +2909,71 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     assert!(
         status.contains("| openai | gpt-saved | 450 | 450 | 80 | 33 | 50.00% |"),
         "{status}"
+    );
+    let restored_metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    assert_eq!(restored_metadata.len(), 1, "{restored_metadata:#?}");
+    let restored_metadata = &restored_metadata[0];
+    assert_eq!(
+        restored_metadata.conversation_id,
+        "saved-tokens",
+        "{restored_metadata:#?}"
+    );
+    assert_eq!(
+        restored_metadata.token_usage_by_model,
+        std::collections::BTreeMap::from([(
+            saved_token_usage_key.clone(),
+            saved_token_usage,
+        )]),
+        "{restored_metadata:#?}"
+    );
+
+    let (_, mut profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    profile.provider = "openai".to_string();
+    profile.model = "gpt-saved".to_string();
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        crate::agent::ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cached_input_tokens: Some(25),
+        },
+        crate::agent::ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cached_input_tokens: Some(25),
+        },
+        Some(&profile),
+    );
+    let resumed_status = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"resume-token-status-after-usage","method":"agent/shell/command","params":{"idempotency_key":"resume-token-status-after-usage","input":"/status"}}"#,
+        &primary,
+    );
+    assert!(
+        resumed_status.contains("| openai | gpt-saved | 525 | 475 | 100 | 38 | 47.50% |"),
+        "{resumed_status}"
+    );
+    let resumed_metadata = transcript_store
+        .load_agent_session_metadata(&mezzanine_session_id)
+        .unwrap();
+    assert_eq!(resumed_metadata.len(), 1, "{resumed_metadata:#?}");
+    assert_eq!(
+        resumed_metadata[0].token_usage_by_model,
+        std::collections::BTreeMap::from([(
+            saved_token_usage_key,
+            crate::agent::ModelTokenUsage {
+                input_tokens: 1000,
+                output_tokens: 100,
+                reasoning_tokens: 38,
+                cached_input_tokens: Some(475),
+            },
+        )]),
+        "{resumed_metadata:#?}"
     );
 }
 
