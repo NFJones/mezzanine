@@ -596,14 +596,14 @@ pub fn openai_provider_from_auth_store_with_options<T>(
 
 /// Carries generic OpenAI-compatible Chat Completions Provider state.
 ///
-/// The generic compatibility adapter intentionally reuses the established Chat
-/// Completions transport state while provider dispatch keeps it distinct from
-/// vendor-specific DeepSeek handling.
-pub type OpenAiCompatibleChatCompletionsProvider<T> = DeepSeekChatCompletionsProvider<T>;
-
-/// Carries Deep Seek Chat Completions Provider state.
+/// Alias for the shared Chat Completions provider when used for DeepSeek.
+pub type DeepSeekChatCompletionsProvider<T> = ChatCompletionsProvider<T>;
+/// Alias for the shared Chat Completions provider when used for named
+/// OpenAI-compatible backends.
+pub type OpenAiCompatibleChatCompletionsProvider<T> = ChatCompletionsProvider<T>;
+/// Carries shared Chat Completions provider state.
 #[derive(Debug, Clone)]
-pub struct DeepSeekChatCompletionsProvider<T> {
+pub struct ChatCompletionsProvider<T> {
     pub(super) api_key: SecretString,
     pub(super) provider_id: String,
     pub(super) endpoint: String,
@@ -611,9 +611,8 @@ pub struct DeepSeekChatCompletionsProvider<T> {
     pub(super) timeout_ms: u64,
     pub(super) transport: T,
 }
-
-impl<T> DeepSeekChatCompletionsProvider<T> {
-    /// Creates a new DeepSeek Chat Completions provider with the given API key.
+impl<T> ChatCompletionsProvider<T> {
+    /// Creates a new Chat Completions provider with the given API key.
     pub fn new(api_key: impl Into<SecretString>, transport: T) -> Result<Self> {
         let api_key = api_key.into();
         validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
@@ -677,7 +676,7 @@ fn deepseek_required_maap_response(
 }
 
 #[cfg(test)]
-impl<T: ProviderHttpTransport> ModelProvider for DeepSeekChatCompletionsProvider<T> {
+impl<T: ProviderHttpTransport> ModelProvider for ChatCompletionsProvider<T> {
     fn provider_id(&self) -> &str {
         &self.provider_id
     }
@@ -965,7 +964,7 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
         .read_metadata_for_provider("deepseek")?
         .ok_or_else(|| MezError::invalid_state("DeepSeek provider is not authenticated"))?;
     let credential = auth_store.provider_secret("deepseek")?;
-    let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?;
+    let mut provider = ChatCompletionsProvider::new(credential, transport)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =
             provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
@@ -986,7 +985,7 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     base_url_override: Option<&str>,
     timeout_ms: u64,
     transport: T,
-) -> Result<DeepSeekChatCompletionsProvider<T>> {
+) -> Result<OpenAiCompatibleChatCompletionsProvider<T>> {
     let _metadata = auth_store
         .read_metadata_for_provider(provider_name)?
         .ok_or_else(|| {
@@ -995,8 +994,8 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
             ))
         })?;
     let credential = auth_store.provider_secret(provider_name)?;
-    let mut provider = DeepSeekChatCompletionsProvider::new(credential, transport)?
-        .with_provider_id(provider_name)?;
+    let mut provider =
+        ChatCompletionsProvider::new(credential, transport)?.with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =
             provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);

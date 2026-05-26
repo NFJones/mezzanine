@@ -8,23 +8,22 @@ use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentId, AgentScheduler,
     AgentShellStore, AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution,
     AgentTurnLedger, AgentTurnRecord, AgentTurnState, AuditDeferredWrite, AuditLog, AuthStore,
-    BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer, ConfigScope, ControlIdempotencyCache,
-    CopyMode, DeepSeekChatCompletionsProvider, DiscoveredInstructionFile, Duration,
-    EnvironmentSignature, EventAudience, EventLog, File, FocusedShellHookDispatch,
-    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
-    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
-    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    OpenAiResponsesProvider, OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId,
-    PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path,
-    PathBuf, PathScopes, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage,
-    ReqwestProviderHttpTransport, Result, ScopeRegistry, Session, SessionApprovalStore,
-    SessionMemoryStore, SessionRecord, SessionRegistry, Size, SplitDirection, Stdio,
-    SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
-    TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent,
-    WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid, encode_control_body,
-    encode_event_notification, encode_mmp_body, execute_streamable_http_exchange,
-    parse_mcp_tools_call_response,
+    BTreeMap, BTreeSet, BlockedApprovalQueue, ChatCompletionsProvider, ConfigLayer, ConfigScope,
+    ControlIdempotencyCache, CopyMode, DiscoveredInstructionFile, Duration, EnvironmentSignature,
+    EventAudience, EventLog, File, FocusedShellHookDispatch, FocusedShellHookQueue, HookDefinition,
+    HookEvent, HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings,
+    KeyChord, McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
+    McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, OpenAiResponsesProvider, OpenOptions, OsString,
+    PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore,
+    PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes, PermissionPolicy,
+    ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, ScopeRegistry,
+    Session, SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
+    SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle,
+    TerminalFramePosition, TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry,
+    UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid,
+    encode_control_body, encode_event_notification, encode_mmp_body,
+    execute_streamable_http_exchange, parse_mcp_tools_call_response,
 };
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
@@ -3275,13 +3274,13 @@ pub enum RuntimeAgentProviderDispatchProvider {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    DeepSeek(DeepSeekChatCompletionsProvider<ReqwestProviderHttpTransport>),
+    DeepSeek(ChatCompletionsProvider<ReqwestProviderHttpTransport>),
     /// Represents a named OpenAI-compatible Chat Completions provider.
     ///
     /// Callers use this variant for configured provider instances that share
     /// the Chat Completions wire contract without inheriting native OpenAI
     /// Responses semantics.
-    OpenAiCompatible(DeepSeekChatCompletionsProvider<ReqwestProviderHttpTransport>),
+    OpenAiCompatible(ChatCompletionsProvider<ReqwestProviderHttpTransport>),
 }
 
 impl RuntimeAgentProviderDispatchProvider {

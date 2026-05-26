@@ -17,7 +17,7 @@ use super::{
     AgentTurnState, AgentTurnTrigger, AsyncModelProvider, AsyncProviderHttpTransport, BTreeSet,
     CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextCachePolicy,
     ContextSourceKind, ContextStability, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS,
-    DeepSeekChatCompletionsProvider, EnvironmentSignature, MaapBatch, MarkerToken,
+    EnvironmentSignature, MaapBatch, MarkerToken,
     McpActionExecutor, MezError, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
     ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
