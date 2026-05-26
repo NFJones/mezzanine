@@ -6051,6 +6051,12 @@ coverage. Deep or exhaustive exploration SHOULD be reserved for explicit user
 requests, such as exhaustive audits, conformance reviews, security reviews,
 architecture discovery, or deep research, or for tasks whose correctness
 clearly depends on that breadth.
+Runtime implementation-pressure hints MAY encourage the agent to proceed after
+repeated successful shell commands, but they MUST remain advisory only. They
+MUST NOT relax repository guidance, validation, documentation, handoff,
+permission, or capability-request requirements. They MUST NOT encourage editing
+repository instruction or guidance files unless the user requested instruction
+changes or the task directly requires those edits.
 
 The prompt MUST include editing constraints. Those constraints MUST require
 precise patch-style edits when suitable, ASCII text by default unless the file

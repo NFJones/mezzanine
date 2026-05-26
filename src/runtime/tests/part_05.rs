@@ -3514,6 +3514,20 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
         "{}",
         pressure_block.content
     );
+    assert!(
+        pressure_block
+            .content
+            .contains("while still following active repository guidance"),
+        "{}",
+        pressure_block.content
+    );
+    assert!(
+        pressure_block
+            .content
+            .contains("Do not edit repository instruction or guidance files merely"),
+        "{}",
+        pressure_block.content
+    );
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
@@ -3543,6 +3557,9 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
             && message
                 .content
                 .contains("Use another shell_command only for one named missing fact")
+            && message
+                .content
+                .contains("does not relax repository rules or permission/capability requirements")
     }));
 }
 

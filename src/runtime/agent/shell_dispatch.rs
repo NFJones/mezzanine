@@ -984,8 +984,9 @@ fn runtime_implementation_pressure_context_content(
     format!(
         "[implementation pressure]\n\
          This turn has already run {consecutive_shell_actions} consecutive successful shell_command actions; the configured advisory threshold is {threshold}. \
-         Prefer the next implementation, validation, or final-report action now. \
+         Prefer the next implementation, validation, or final-report action now while still following active repository guidance, validation, documentation, and handoff requirements. \
+         Do not edit repository instruction or guidance files merely to satisfy this acceleration hint; change them only when the user explicitly requested guidance changes or they are part of the task. \
          Use another shell_command only for one named missing fact that would make the next edit, validation, or report wrong. \
-         This is advisory context, not a failed action result."
+         This is advisory context, not a failed action result, and it does not relax repository rules or permission/capability requirements."
     )
 }
