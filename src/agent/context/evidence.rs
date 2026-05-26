@@ -9,12 +9,20 @@ use super::compaction::{model_context_single_line, model_context_source_kind_nam
 use super::{ContextBlock, ContextSourceKind};
 use std::collections::HashSet;
 
-/// Maximum action/tool entries retained in the generated evidence ledger.
+/// Maximum total size retained in the generated evidence ledger.
 ///
-/// The ledger is intentionally bounded so long sessions can keep a broad,
-/// model-visible inventory of prior reads, validation commands, and patches
-/// without letting the ledger itself dominate the provider request.
-const EVIDENCE_LEDGER_ENTRY_LIMIT: usize = 512;
+/// The ledger is intentionally bounded by aggregate payload size instead of
+/// entry count so long sessions can preserve as much prior action/tool evidence
+/// as fits in the provider-visible block without discarding later entries just
+/// because a fixed number of earlier entries already exist.
+const EVIDENCE_LEDGER_MAX_BYTES: usize = 1024 * 1024;
+
+/// Maximum summary size used for one committed evidence block entry.
+///
+/// Committed evidence stays intentionally compact because it lands in the
+/// session-stable prefix one block at a time. The wider evidence ledger uses
+/// aggregate-size retention instead of this per-entry bound.
+const COMMITTED_EVIDENCE_SUMMARY_MAX_BYTES: usize = 220;
 
 /// Prepares context blocks for provider requests and compaction.
 pub(super) fn prepare_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
@@ -107,7 +115,7 @@ fn with_generated_committed_evidence(blocks: Vec<ContextBlock>) -> Vec<ContextBl
 
 /// Builds a compact stable-prefix block for one settled action result.
 fn committed_evidence_block_for_action_result(block: &ContextBlock) -> Option<ContextBlock> {
-    let entry = evidence_ledger_entry_for_block(block)?;
+    let entry = evidence_entry_for_block(block, Some(COMMITTED_EVIDENCE_SUMMARY_MAX_BYTES))?;
     let action_id = action_result_marker_id(block.content.lines().next().unwrap_or_default())
         .unwrap_or("unknown");
     Some(ContextBlock {
@@ -124,10 +132,9 @@ fn committed_evidence_block_for_action_result(block: &ContextBlock) -> Option<Co
 
 /// Builds a compact provider-visible evidence ledger from action/tool blocks.
 fn build_evidence_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> {
-    let mut lines = vec![
-        "Use this ledger before repeating reads, tests, validation, or patch recovery.".to_string(),
-    ];
-    let mut entries = Vec::new();
+    let mut content =
+        "Use this ledger before repeating reads, tests, validation, or patch recovery.".to_string();
+    let mut retained_entries = 0usize;
     for block in blocks {
         if !matches!(
             block.source,
@@ -135,27 +142,31 @@ fn build_evidence_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> 
         ) {
             continue;
         }
-        let Some(entry) = evidence_ledger_entry_for_block(block) else {
+        let Some(entry) = evidence_entry_for_block(block, None) else {
             continue;
         };
-        entries.push(entry);
-        if entries.len() >= EVIDENCE_LEDGER_ENTRY_LIMIT {
+        let appended = format!("\n{entry}");
+        if content.len() + appended.len() > EVIDENCE_LEDGER_MAX_BYTES {
             break;
         }
+        content.push_str(&appended);
+        retained_entries += 1;
     }
-    if entries.is_empty() {
+    if retained_entries == 0 {
         return None;
     }
-    lines.extend(entries);
     Some(ContextBlock {
         source: ContextSourceKind::EvidenceLedger,
         label: "evidence ledger".to_string(),
-        content: lines.join("\n"),
+        content,
     })
 }
 
 /// Returns one compact ledger line for a raw action or historical tool block.
-fn evidence_ledger_entry_for_block(block: &ContextBlock) -> Option<String> {
+fn evidence_entry_for_block(
+    block: &ContextBlock,
+    summary_max_bytes: Option<usize>,
+) -> Option<String> {
     let marker_line = block.content.lines().next().unwrap_or_default().trim();
     let command = model_context_field_value(&block.content, "command")
         .or_else(|| historical_tool_command_hint(&block.content));
@@ -168,7 +179,7 @@ fn evidence_ledger_entry_for_block(block: &ContextBlock) -> Option<String> {
             "tool"
         }
     });
-    let summary = evidence_summary_for_block(block);
+    let summary = evidence_summary_for_block(block, summary_max_bytes);
     let category = evidence_category(action_type, command.as_deref(), &block.content);
     let mut line = format!(
         "- category={} source={} status={}",
@@ -270,8 +281,8 @@ fn action_result_marker_status(marker: &str) -> Option<&str> {
     fields.next()
 }
 
-/// Builds a short action-output summary for the evidence ledger.
-fn evidence_summary_for_block(block: &ContextBlock) -> String {
+/// Builds model-visible summary text with an optional byte ceiling.
+fn evidence_summary_for_block(block: &ContextBlock, max_bytes: Option<usize>) -> String {
     let summary_source = block
         .content
         .split_once("output:")
@@ -283,7 +294,16 @@ fn evidence_summary_for_block(block: &ContextBlock) -> String {
                 .map(|(_, output)| output)
         })
         .unwrap_or(&block.content);
-    model_context_single_line(&truncate_model_context_summary(summary_source, 220))
+    evidence_summary_text(summary_source, max_bytes)
+}
+
+/// Builds single-line summary text with an optional byte ceiling.
+fn evidence_summary_text(value: &str, max_bytes: Option<usize>) -> String {
+    let text = match max_bytes {
+        Some(max_bytes) => truncate_model_context_summary(value, max_bytes),
+        None => value.trim().to_string(),
+    };
+    model_context_single_line(&text)
 }
 
 /// Truncates a summary to a byte ceiling without splitting UTF-8.

@@ -2521,23 +2521,26 @@ fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result
     );
 }
 
-/// Verifies provider request assembly keeps the evidence ledger bounded at the
-/// configured entry limit while still preserving a wide span of long-session
-/// evidence. This prevents the generated ledger from growing without bound
-/// while allowing substantially more reuse context than the previous cap.
+/// Verifies provider request assembly does not drop ledger entries just because
+/// a fixed count threshold was reached, and does not truncate sub-mebibyte
+/// entry summaries before the aggregate ledger budget is exhausted.
 #[test]
-fn model_request_caps_evidence_ledger_at_512_entries() {
+fn model_request_keeps_evidence_ledger_entries_until_aggregate_size_limit() {
     let mut blocks = vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
         content: "Continue from the existing command history.".to_string(),
     }];
+    let long_summary = format!(
+        "ledger summary head {} tail-marker",
+        "detail ".repeat(40)
+    );
     for index in 0..520 {
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
             label: format!("action result {index}"),
             content: format!(
-                "[action_result action-{index} shell_command succeeded]\ncommand: rg evidence-{index}\noutput:\nledger evidence {index}"
+                "[action_result action-{index} shell_command succeeded]\ncommand: rg evidence-{index}\noutput:\nledger evidence {index} {long_summary}"
             ),
         });
     }
@@ -2568,9 +2571,56 @@ fn model_request_caps_evidence_ledger_at_512_entries() {
         .filter(|line| line.starts_with("- category="))
         .count();
 
-    assert_eq!(entry_count, 512);
-    assert!(ledger.content.contains("command=rg evidence-511"));
-    assert!(!ledger.content.contains("command=rg evidence-512"));
+    assert_eq!(entry_count, 520);
+    assert!(ledger.content.contains("command=rg evidence-519"));
+    assert!(ledger.content.contains("tail-marker"));
+}
+
+/// Verifies provider request assembly bounds the generated evidence ledger by
+/// aggregate payload size rather than entry count.
+#[test]
+fn model_request_caps_evidence_ledger_at_one_mebibyte() {
+    let mut blocks = vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "Continue from the existing command history.".to_string(),
+    }];
+    for index in 0..6 {
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: format!("action result {index}"),
+            content: format!(
+                "[action_result action-{index} shell_command succeeded]\ncommand: rg aggregate-evidence-{index}\noutput:\naggregate evidence {index} {}",
+                "detail".repeat(45_000)
+            ),
+        });
+    }
+
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "default".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(blocks).unwrap(),
+    )
+    .unwrap();
+
+    let ledger = request
+        .messages
+        .iter()
+        .find(|message| message.source == ContextSourceKind::EvidenceLedger)
+        .expect("evidence ledger should be present");
+
+    assert!(ledger.content.len() <= 1024 * 1024);
+    assert!(ledger.content.contains("aggregate evidence 0"));
+    assert!(ledger.content.contains("aggregate evidence 1"));
+    assert!(!ledger.content.contains("aggregate evidence 3"));
 }
 
 /// Verifies request assembly does not compact older context merely because a

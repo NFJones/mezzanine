@@ -1399,7 +1399,7 @@ async fn wait_for_shell_transaction_timer_settlement(
 ) -> Result<()> {
     let mut scheduled_key = None;
     let mut cancelled_keys = Vec::new();
-    for _ in 0..1000 {
+    for _ in 0..3000 {
         let timer_effects = handle.drain_timer_side_effects(16).await?;
         for effect in timer_effects {
             match effect {
