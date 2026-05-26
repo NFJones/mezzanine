@@ -383,6 +383,48 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     );
 }
 
+/// Verifies list items keep their marker and first content words on the same
+/// rendered row instead of flushing a marker-only line before the paragraph
+/// text arrives. CommonMark emits `Paragraph` inside list items, so the
+/// renderer must not treat the freshly written list prefix as a completed
+/// block.
+#[test]
+fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(64, 20).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(64, 20).unwrap(), 120).unwrap(),
+    );
+    let markdown = "1. first numbered item\n2. second numbered item\n\n- bullet item";
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            markdown,
+            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    let pane_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let pane_text = pane_lines.join("\n");
+
+    assert!(pane_text.contains("▐ agent> 1. first numbered item"), "{pane_text}");
+    assert!(pane_text.contains("▐        2. second numbered item"), "{pane_text}");
+    assert!(pane_text.contains("▐        • bullet item"), "{pane_text}");
+    assert!(
+        !pane_lines
+            .iter()
+            .any(|line| line.trim_end() == "▐ agent> 1." || line.trim_end() == "▐        2." || line.trim_end() == "▐        •"),
+        "{pane_text}"
+    );
+}
+
 /// Verifies markdown neutral accents switch to dark greys on light themes.
 ///
 /// Inline code and table alternation are foreground-only presentation accents,

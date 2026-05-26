@@ -952,6 +952,7 @@ pub(super) struct AgentMarkdownRenderer {
     table_alternate_row_foreground: TerminalColor,
     diff_addition_foreground: TerminalColor,
     diff_deletion_foreground: TerminalColor,
+    current_prefix_only: bool,
 }
 
 impl AgentMarkdownRenderer {
@@ -1009,7 +1010,11 @@ impl AgentMarkdownRenderer {
     /// Handles the start of one markdown tag.
     fn handle_start_tag(&mut self, tag: Tag<'_>) {
         match tag {
-            Tag::Paragraph => self.start_block(),
+            Tag::Paragraph => {
+                if !self.current_prefix_only {
+                    self.start_block();
+                }
+            }
             Tag::Heading { level, .. } => {
                 self.start_block();
                 self.line_copy_prefix = Some(format!("{} ", "#".repeat(level as usize)));
@@ -1233,6 +1238,7 @@ impl AgentMarkdownRenderer {
             }
             if !part.is_empty() {
                 self.ensure_line_prefix();
+                self.current_prefix_only = false;
                 self.append_styled_text(&sanitized_agent_terminal_line(part), self.active);
             }
         }
@@ -1241,6 +1247,7 @@ impl AgentMarkdownRenderer {
     /// Appends inline code with a terminal-native code style.
     fn append_code(&mut self, code: &str) {
         self.ensure_line_prefix();
+        self.current_prefix_only = false;
         let mut style = self.active;
         style.inverse = false;
         style.foreground = Some(if self.link_stack.is_empty() {
@@ -1255,6 +1262,7 @@ impl AgentMarkdownRenderer {
     /// Appends inline math with a lightweight math marker and italic style.
     fn append_inline_math(&mut self, math: &str) {
         self.ensure_line_prefix();
+        self.current_prefix_only = false;
         let mut style = self.active;
         style.italic = true;
         self.append_styled_text(&format!("${}$", sanitized_agent_terminal_line(math)), style);
@@ -1319,6 +1327,7 @@ impl AgentMarkdownRenderer {
     /// Appends lower-emphasis terminal text without changing the current style.
     fn append_dim_text(&mut self, text: &str) {
         self.ensure_line_prefix();
+        self.current_prefix_only = false;
         let mut style = self.active;
         style.dim = true;
         self.append_styled_text(text, style);
@@ -1348,6 +1357,7 @@ impl AgentMarkdownRenderer {
     /// Appends an unstyled structural prefix.
     fn append_prefix(&mut self, prefix: &str) {
         self.append_styled_text(prefix, GraphicRendition::default());
+        self.current_prefix_only = true;
     }
 
     /// Returns the visible prefix for the current blockquote depth.
@@ -1392,6 +1402,7 @@ impl AgentMarkdownRenderer {
     fn finish_current_line(&mut self) {
         if self.current.display.is_empty() {
             self.line_copy_prefix = None;
+            self.current_prefix_only = false;
             return;
         }
         if let Some(prefix) = self.line_copy_prefix.take() {
@@ -1405,6 +1416,7 @@ impl AgentMarkdownRenderer {
                 copy_text: None,
             },
         );
+        self.current_prefix_only = false;
         self.lines.push(line);
     }
 
@@ -1444,6 +1456,7 @@ impl AgentMarkdownRenderer {
             table_alternate_row_foreground: markdown_table_alternate_row_foreground(ui_theme),
             diff_addition_foreground: ui_theme.colors.agent_transcript_user.foreground,
             diff_deletion_foreground: ui_theme.colors.agent_transcript_error.foreground,
+            current_prefix_only: false,
         }
     }
 }
