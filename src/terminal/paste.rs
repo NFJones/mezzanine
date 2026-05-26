@@ -8,6 +8,8 @@ use super::{BTreeMap, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, MezError, Result, System
 use std::fmt;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 
 // Paste buffer storage and validation.
 
@@ -545,23 +547,40 @@ pub(super) fn read_host_clipboard_with_commands(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn run_clipboard_copy_command(command: &HostClipboardCommand, content: &str) -> bool {
-    let Ok(mut child) = Command::new(&command.program)
-        .args(&command.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return false;
-    };
-    if let Some(stdin) = child.stdin.as_mut()
-        && stdin.write_all(content.as_bytes()).is_err()
-    {
-        let _ = child.kill();
-        let _ = child.wait();
+    let (started_tx, started_rx) = mpsc::sync_channel(1);
+    let command = command.clone();
+    let content = content.to_string();
+    let spawned = thread::Builder::new()
+        .name("mez-host-clipboard-copy".to_string())
+        .spawn(move || {
+            let Ok(mut child) = Command::new(&command.program)
+                .args(&command.args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                let _ = started_tx.send(false);
+                return;
+            };
+            let Some(mut stdin) = child.stdin.take() else {
+                let _ = started_tx.send(false);
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            };
+            let _ = started_tx.send(true);
+            let write_ok = stdin.write_all(content.as_bytes()).is_ok();
+            drop(stdin);
+            if !write_ok {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+        });
+    if spawned.is_err() {
         return false;
     }
-    child.wait().is_ok_and(|status| status.success())
+    started_rx.recv().unwrap_or(false)
 }
 
 /// Runs the host clipboard copy commands operation for this subsystem.

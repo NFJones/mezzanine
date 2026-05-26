@@ -125,7 +125,8 @@ fn runtime_applies_permission_and_mcp_state_from_config_layers() {
 /// Verifies runtime applies explicit host clipboard pipe commands from
 /// configuration. Users on systems where the default auto-detection order is
 /// wrong need deterministic copy and paste commands without replacing the
-/// internal paste-buffer behavior.
+/// internal paste-buffer behavior. Clipboard copy must not block the runtime
+/// thread while a long-lived host clipboard helper keeps selection ownership.
 #[test]
 fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
     let root = std::env::temp_dir().join(format!(
@@ -145,13 +146,23 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
             scope: ConfigScope::Primary,
             trusted: true,
             text: format!(
-                "[terminal]\nclipboard_copy_command = [\"sh\", \"-c\", \"cat > '{}'\"]\nclipboard_paste_command = [\"sh\", \"-c\", \"printf configured-paste\"]\n",
+                "[terminal]\nclipboard_copy_command = [\"sh\", \"-c\", \"sleep 1; cat > '{}'\"]\nclipboard_paste_command = [\"sh\", \"-c\", \"printf configured-paste\"]\n",
                 copy_path.display()
             ),
         }])
         .unwrap();
 
+    let started = Instant::now();
     assert!(service.host_clipboard.copy("configured-copy"));
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "clipboard copy blocked for {:?}",
+        started.elapsed()
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !copy_path.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(fs::read_to_string(&copy_path).unwrap(), "configured-copy");
     assert_eq!(
         service.host_clipboard.read(),
