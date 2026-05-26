@@ -4215,6 +4215,11 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     );
     assert!(prompt.contains("over reading more for confidence"));
     assert!(prompt.contains("Never stop at a plan when an executable action can make progress"));
+    assert!(prompt.contains("Recoverable action failures are part of the work loop"));
+    assert!(prompt.contains(
+        "If `apply_patch` fails and local inspection or patch actions remain available"
+    ));
+    assert!(prompt.contains("do not ask the user to make manual edits instead"));
     assert!(prompt.contains("Personality, response-style, and custom system prompt blocks"));
     assert!(prompt.contains("They do not change the execution loop"));
     assert!(prompt.contains("Do not flatter, praise, validate, or agree with the user by default"));
@@ -4370,6 +4375,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("For ordinary file-content mutations, use apply_patch"));
     assert!(prompt.contains("directory creation, path moves, path deletion"));
     assert!(prompt.contains("do not replay substantially the same patch"));
+    assert!(prompt.contains("A failed `apply_patch` is evidence to investigate"));
+    assert!(prompt.contains("not a user-facing request for manual editing"));
     assert!(prompt.contains("Detailed compatibility rules live in the active schema"));
     assert!(!prompt.contains("Canonical apply_patch grammar"));
     assert!(prompt.contains("Emit the patch string directly"));
@@ -4378,6 +4385,10 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("never infer, normalize, simplify, or reconstruct likely code"));
     assert!(prompt.contains("If you have not read the exact line"));
     assert!(prompt.contains("several small anchored hunks"));
+    assert!(prompt.contains("Treat most `apply_patch` failures as recoverable"));
+    assert!(prompt.contains(
+        "Do not stop at the first patch failure when a bounded inspection or corrected patch can still make progress"
+    ));
     assert!(prompt.contains("without Markdown fences, heredocs"));
     assert!(!prompt.contains("For recovery compatibility"));
     assert!(!prompt.contains("uniformly indented patch blocks"));

@@ -6024,7 +6024,14 @@ state that after an
 fresh current context when available, otherwise re-read only missing or stale
 candidate/owner ranges, and retry with a smaller fresh Mezzanine patch using a
 distinctive `@@` header anchor instead of replaying substantially the same
-patch. It MUST tell the model to skip or adapt stale hunks when equivalent
+patch. It MUST instruct the model that recoverable `apply_patch` failures are
+not terminal. When `apply_patch` fails due to invalid structure, stale hunk
+context, ambiguous ownership, or equivalent already-applied behavior, the
+model MUST investigate the implicated current file region and retry with a
+corrected or smaller patch when local actions remain available. It MUST
+forbid asking the user to perform manual file edits until the model is
+concretely blocked by missing permissions, missing external input, or an
+exhausted bounded retry policy. It MUST tell the model to skip or adapt stale hunks when equivalent
 behavior or the intended replacement is already present. It MUST state that raw
 unified diffs belong in an explicit shell command such as `git apply`.
 It MUST state that `apply_patch` path headers are relative to the pane current
