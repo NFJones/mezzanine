@@ -388,5 +388,6 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| format!("pane:{pane_id}"));
         self.agent_quota_usage_by_conversation
             .insert(conversation_id, quota_usage.to_vec());
+        let _ = self.checkpoint_agent_session_metadata();
     }
 }
