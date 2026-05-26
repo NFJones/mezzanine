@@ -1009,7 +1009,7 @@ pub(crate) fn encode_attached_terminal_output_frame_with_styles(
     frame.extend_from_slice(b"\x1b[2J\x1b[H");
     for (index, line) in lines.iter().enumerate() {
         if index > 0 {
-            frame.extend_from_slice(b"\r\n");
+            frame.extend_from_slice(b"\r\n\x1b[0m");
         }
         let spans = line_style_spans
             .get(index)
@@ -1017,7 +1017,6 @@ pub(crate) fn encode_attached_terminal_output_frame_with_styles(
             .unwrap_or(&[]);
         frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
     }
-    frame.extend_from_slice(b"\x1b[0m");
     frame.extend_from_slice(cursor_presentation_sequence(lines, modes).as_bytes());
     frame
 }
@@ -1110,15 +1109,13 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             frame.extend_from_slice(&span_update);
         } else {
             frame.extend_from_slice(format!("\x1b[{row};1H").as_bytes());
+            frame.extend_from_slice(b"\x1b[0m");
             if terminal_line_width(line) < terminal_line_width(previous_line) {
                 frame.extend_from_slice(b"\x1b[2K");
             }
             frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
         }
         changed_rows = changed_rows.saturating_add(1);
-    }
-    if changed_rows > 0 {
-        frame.extend_from_slice(b"\x1b[0m");
     }
     let cursor_presentation = cursor_presentation_sequence(lines, modes);
     if changed_rows > 0 || cursor_presentation != previous.cursor_presentation {
@@ -1192,10 +1189,11 @@ fn encode_safe_changed_row_span_update(
 
     let segment_spans = clip_style_spans_to_column_range(spans, start_column, end_column);
     let encoded_segment = encode_styled_terminal_line(segment, &segment_spans);
-    let mut span_update = format!("\x1b[{row};{}H", start_column.saturating_add(1)).into_bytes();
+    let mut span_update =
+        format!("\x1b[{row};{}H\x1b[0m", start_column.saturating_add(1)).into_bytes();
     span_update.extend_from_slice(encoded_segment.as_bytes());
 
-    let mut row_update = format!("\x1b[{row};1H").into_bytes();
+    let mut row_update = format!("\x1b[{row};1H\x1b[0m").into_bytes();
     row_update.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
     (span_update.len() < row_update.len()).then_some(span_update)
 }
@@ -1377,9 +1375,6 @@ fn encode_styled_terminal_line(line: &str, style_spans: &[TerminalStyleSpan]) ->
         }
         encoded.push_str(grapheme);
         column = column.saturating_add(terminal_grapheme_width(grapheme));
-    }
-    if active != super::GraphicRendition::default() {
-        encoded.push_str("\x1b[0m");
     }
     encoded
 }

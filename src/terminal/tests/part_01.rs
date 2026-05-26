@@ -2449,7 +2449,7 @@ fn attached_terminal_output_update_redraws_only_changed_rows() {
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
     assert!(rendered.starts_with("\x1b[?25l"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[2;1Hchanged"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[2;1H\x1b[0mchanged"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[K"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
 }
@@ -2477,7 +2477,7 @@ fn attached_terminal_output_update_uses_changed_ascii_span_when_safe() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;5Hb"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;5H\x1b[0mb"), "{rendered:?}");
     assert!(!rendered.contains("aaaabaaaaa"), "{rendered:?}");
 }
 
@@ -2514,9 +2514,9 @@ fn attached_terminal_output_update_uses_segment_updates_for_small_multi_row_titl
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;3Hbuild"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[2;3Hstaging"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[3;4Hbuild"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;3H\x1b[0mbuild"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[2;3H\x1b[0mstaging"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[3;4H\x1b[0mbuild"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1H0 build"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[2;1H1 staging"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[3;1H#1 build"), "{rendered:?}");
@@ -2555,10 +2555,10 @@ fn attached_terminal_output_update_rewrites_full_rows_for_many_row_changes() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;1Hrow 101"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[2;1Hrow 102"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[3;1Hrow 103"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[4;1Hrow 104"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H\x1b[0mrow 101"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[2;1H\x1b[0mrow 102"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[3;1H\x1b[0mrow 103"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[4;1H\x1b[0mrow 104"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;5H1"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[2;5H1"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[3;5H1"), "{rendered:?}");
@@ -2587,7 +2587,7 @@ fn attached_terminal_output_update_rewrites_rows_when_glyph_width_changes() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;1H"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H\x1b[0m"), "{rendered:?}");
     assert!(rendered.contains("aaXaa "), "{rendered:?}");
 }
 
@@ -2614,7 +2614,7 @@ fn attached_terminal_output_update_clears_shrinking_rows_without_full_redraw() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;1H\x1b[2Kshort"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H\x1b[0m\x1b[2Kshort"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[2;1Hsteady"), "{rendered:?}");
 }
 
@@ -3095,6 +3095,112 @@ fn client_view_preserves_terminal_style_spans() {
             },
         }]
     );
+}
+
+/// Verifies that a terminal style run covering the full visible word keeps the
+/// final character inside the same span. The user-visible report here was that
+/// a fully colored word rendered with its trailing character unstyled, so this
+/// exercises the screen-to-client-view path with a span that reaches the end of
+/// the visible text.
+#[test]
+fn client_view_keeps_full_word_style_span_through_final_character() {
+    let mut ids = crate::ids::IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
+    screen.feed(b"\x1b[34mblue\x1b[0m");
+    let mut screens = BTreeMap::new();
+    screens.insert(window.active_pane().id.to_string(), screen);
+    let config = TerminalClientLoopConfig {
+        window_frames_enabled: false,
+        pane_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &screens,
+        &config,
+        Size::new(8, 2).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(view.lines[0], "blue    ");
+    assert_eq!(
+        view.line_style_spans[0],
+        vec![TerminalStyleSpan {
+            start: 0,
+            length: 4,
+            rendition: GraphicRendition {
+                foreground: Some(TerminalColor::Indexed(4)),
+                ..GraphicRendition::default()
+            },
+        }]
+    );
+}
+
+/// Verifies that attached-terminal row-diff updates keep styling on the final
+/// changed cell when a full-word style span reaches the row end. Segment-only
+/// updates are the most likely place for an off-by-one to leave the trailing
+/// glyph plain even though the line-level span length is correct.
+#[test]
+fn attached_terminal_output_update_keeps_style_on_final_changed_character() {
+    let previous_lines = vec!["gone".to_string()];
+    let previous_spans = vec![Vec::new()];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &previous_spans);
+    let spans = vec![vec![TerminalStyleSpan {
+        start: 0,
+        length: 4,
+        rendition: GraphicRendition {
+            foreground: Some(TerminalColor::Indexed(4)),
+            ..GraphicRendition::default()
+        },
+    }]];
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &["blue".to_string()],
+        &spans,
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(rendered.contains("\x1b[1;1H\x1b[0m\x1b[0;34mblue"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[1;1H\x1b[0m\x1b[0;34mblue\x1b[0m"), "{rendered:?}");
+}
+
+/// Verifies that a full redraw does not append a style reset immediately after
+/// a line whose final visible cell is still styled. Some host terminals keep
+/// the last-column glyph pending until a following control arrives, so a
+/// trailing SGR reset can make the final styled character render plain.
+#[test]
+fn attached_terminal_output_frame_avoids_trailing_reset_after_fully_styled_line() {
+    let lines = vec!["blue".to_string()];
+    let spans = vec![vec![TerminalStyleSpan {
+        start: 0,
+        length: 4,
+        rendition: GraphicRendition {
+            foreground: Some(TerminalColor::Indexed(4)),
+            ..GraphicRendition::default()
+        },
+    }]];
+
+    let frame = encode_attached_terminal_output_frame_with_styles(
+        &lines,
+        &spans,
+        None,
+        AttachedTerminalOutputModes::default(),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(rendered.contains("\x1b[0;34mblue\x1b[?25l"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[0;34mblue\x1b[0m\x1b[?25l"), "{rendered:?}");
 }
 
 /// Verifies that side-by-side rendering offsets style spans by each pane's

@@ -440,7 +440,7 @@ fn attached_output_frame_encodes_sgr_style_spans() {
 
     assert_eq!(
         rendered,
-        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H\x1b[0;1;38;5;120mAB\x1b[0;4;7;38;2;1;2;3;44mC\x1b[0mD\x1b[0m\x1b[?25l"
+        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H\x1b[0;1;38;5;120mAB\x1b[0;4;7;38;2;1;2;3;44mC\x1b[0mD\x1b[?25l"
     );
 }
 
