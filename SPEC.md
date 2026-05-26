@@ -5870,6 +5870,12 @@ implementation, test, validation, or report action over additional exploration
 for confidence. Additional inspection SHOULD be driven by a concrete missing
 fact, validation failure, changed file, or ambiguity that would make the next
 action wrong.
+After a successful file mutation, the prompt MUST prefer execution-based
+validation over additional source reading. It SHOULD direct the agent to run
+focused or required format, build, lint, and test commands when available, and
+to read source again only when a validation failure, unclear diff or status
+result, stale-context diagnostic, or named missing fact would make the next
+validation, repair, commit, or report wrong.
 For design tasks, the prompt MUST instruct the agent to inspect the current
 architecture and constraints, identify affected invariants and contracts,
 choose the smallest coherent design or implementation change, and update
@@ -6051,12 +6057,14 @@ coverage. Deep or exhaustive exploration SHOULD be reserved for explicit user
 requests, such as exhaustive audits, conformance reviews, security reviews,
 architecture discovery, or deep research, or for tasks whose correctness
 clearly depends on that breadth.
-Runtime implementation-pressure hints MAY encourage the agent to proceed after
-repeated successful shell commands, but they MUST remain advisory only. They
-MUST NOT relax repository guidance, validation, documentation, handoff,
-permission, or capability-request requirements. They MUST NOT encourage editing
-repository instruction or guidance files unless the user requested instruction
-changes or the task directly requires those edits.
+Runtime action-pressure hints MAY encourage the agent to proceed after repeated
+successful shell commands or successful file mutation, but they MUST be a
+single advisory context block rather than competing phase-specific hints. They
+MUST prefer execution-based validation after file mutation and MUST NOT relax
+repository guidance, validation, documentation, handoff, permission, or
+capability-request requirements. They MUST NOT encourage editing repository
+instruction or guidance files unless the user requested instruction changes or
+the task directly requires those edits.
 
 The prompt MUST include editing constraints. Those constraints MUST require
 precise patch-style edits when suitable, ASCII text by default unless the file
@@ -6065,8 +6073,11 @@ related test, documentation, or example updates when behavior changes.
 
 The prompt MUST require validation proportional to the risk of the change.
 It SHOULD instruct the agent to run focused validation first and broaden
-validation when shared behavior or user-facing workflows are affected. If
-validation cannot be run, the prompt MUST require the agent to say why.
+validation when shared behavior or user-facing workflows are affected. After
+successful file mutation, it MUST prefer command-backed validation evidence over
+additional source reading unless a concrete missing fact, validation failure, or
+unclear diff/status result requires inspection. If validation cannot be run, the
+prompt MUST require the agent to say why.
 
 The prompt MUST require the agent to distinguish user instructions from
 terminal output, project files, web content, and other untrusted data.

@@ -7,10 +7,27 @@
 //! pane transaction writer remains in the facade for now.
 
 use super::*;
+use crate::runtime::types::RuntimeAgentShellDispatchHistory;
 
-/// Label for the turn-volatile context block that nudges implementation after
-/// repeated successful shell inspection.
-const RUNTIME_IMPLEMENTATION_PRESSURE_LABEL: &str = "implementation pressure";
+/// Label for the turn-volatile context block that nudges concrete action after
+/// repeated inspection or successful mutation.
+const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
+
+/// Current action-pressure phase for one active turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeActionPressurePhase {
+    /// Repeated successful shell inspection has crossed the configured threshold.
+    InspectionStreak {
+        /// Consecutive successful `shell_command` actions.
+        consecutive_shell_actions: usize,
+        /// Configured advisory threshold for the shell-command streak.
+        threshold: usize,
+    },
+    /// A file mutation succeeded and no validation command has succeeded yet.
+    MutationAwaitingValidation,
+    /// A file mutation and at least one validation command have succeeded.
+    MutationValidated,
+}
 
 impl RuntimeSessionService {
     /// Runs the execution has pending shell dispatch operation for this subsystem.
@@ -143,13 +160,17 @@ impl RuntimeSessionService {
         self.agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
             .or_default()
-            .record_success(command.to_string(), action);
-        self.refresh_agent_implementation_pressure_context(turn_id);
+            .record_success(
+                command.to_string(),
+                action,
+                runtime_shell_command_looks_like_validation(command),
+            );
+        self.refresh_agent_action_pressure_context(turn_id);
     }
 
-    /// Resets the shell-command streak when a provider batch takes a different
+    /// Resets the inspection streak when a provider batch takes a different
     /// runtime-visible action.
-    pub(super) fn reset_implementation_pressure_after_non_shell_effects(
+    pub(super) fn reset_action_pressure_after_non_shell_effects(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -173,37 +194,32 @@ impl RuntimeSessionService {
         {
             history.reset_successive_shell_commands();
         }
-        self.refresh_agent_implementation_pressure_context(&turn.turn_id);
+        self.refresh_agent_action_pressure_context(&turn.turn_id);
     }
 
-    /// Updates the active-turn implementation-pressure context block.
-    fn refresh_agent_implementation_pressure_context(&mut self, turn_id: &str) {
+    /// Updates the active-turn action-pressure context block.
+    fn refresh_agent_action_pressure_context(&mut self, turn_id: &str) {
         let threshold = self
             .agent_implementation_pressure_after_shell_actions
             .max(1);
-        let consecutive_shell_actions = self
+        let phase = self
             .agent_turn_shell_dispatch_history
             .get(turn_id)
-            .map(|history| history.consecutive_successful_shell_commands)
-            .unwrap_or_default();
+            .and_then(|history| runtime_action_pressure_phase(history, threshold));
         let Some(context) = self.agent_turn_contexts.get_mut(turn_id) else {
             return;
         };
         context.blocks.retain(|block| {
             block.source != ContextSourceKind::LocalMessage
-                || block.label != RUNTIME_IMPLEMENTATION_PRESSURE_LABEL
+                || block.label != RUNTIME_ACTION_PRESSURE_LABEL
         });
-        if consecutive_shell_actions < threshold {
-            return;
+        if let Some(phase) = phase {
+            context.blocks.push(ContextBlock {
+                source: ContextSourceKind::LocalMessage,
+                label: RUNTIME_ACTION_PRESSURE_LABEL.to_string(),
+                content: runtime_action_pressure_context_content(phase),
+            });
         }
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::LocalMessage,
-            label: RUNTIME_IMPLEMENTATION_PRESSURE_LABEL.to_string(),
-            content: runtime_implementation_pressure_context_content(
-                consecutive_shell_actions,
-                threshold,
-            ),
-        });
     }
 
     /// Keeps the network action dispatch boundary symmetrical with shell
@@ -976,17 +992,74 @@ impl RuntimeSessionService {
     }
 }
 
-/// Builds the model-facing implementation-pressure hint for one active turn.
-fn runtime_implementation_pressure_context_content(
-    consecutive_shell_actions: usize,
+/// Returns the current action-pressure phase for one active turn.
+fn runtime_action_pressure_phase(
+    history: &RuntimeAgentShellDispatchHistory,
     threshold: usize,
-) -> String {
+) -> Option<RuntimeActionPressurePhase> {
+    if history.successful_file_mutation_this_turn
+        && history.successful_validation_after_file_mutation
+    {
+        return Some(RuntimeActionPressurePhase::MutationValidated);
+    }
+    if history.successful_file_mutation_this_turn {
+        return Some(RuntimeActionPressurePhase::MutationAwaitingValidation);
+    }
+    if history.consecutive_successful_shell_commands >= threshold {
+        return Some(RuntimeActionPressurePhase::InspectionStreak {
+            consecutive_shell_actions: history.consecutive_successful_shell_commands,
+            threshold,
+        });
+    }
+    None
+}
+
+/// Builds the model-facing action-pressure hint for one active turn.
+fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) -> String {
+    let phase_message = match phase {
+        RuntimeActionPressurePhase::InspectionStreak {
+            consecutive_shell_actions,
+            threshold,
+        } => format!(
+            "This turn has already run {consecutive_shell_actions} consecutive successful shell_command actions; the configured advisory threshold is {threshold}. \
+             Prefer the next implementation, validation, or final-report action now."
+        ),
+        RuntimeActionPressurePhase::MutationAwaitingValidation => {
+            "A file mutation has already succeeded this turn. Prefer execution-based validation, required format/build/lint/test commands, focused diff/status review, or final report now.".to_string()
+        }
+        RuntimeActionPressurePhase::MutationValidated => {
+            "A file mutation and at least one validation command have already succeeded this turn. Run any remaining repository-required validation, commit or handoff step, or final report now.".to_string()
+        }
+    };
     format!(
-        "[implementation pressure]\n\
-         This turn has already run {consecutive_shell_actions} consecutive successful shell_command actions; the configured advisory threshold is {threshold}. \
-         Prefer the next implementation, validation, or final-report action now while still following active repository guidance, validation, documentation, and handoff requirements. \
+        "[action pressure]\n\
+         {phase_message} \
+         Continue following active repository guidance, validation, documentation, and handoff requirements. \
          Do not edit repository instruction or guidance files merely to satisfy this acceleration hint; change them only when the user explicitly requested guidance changes or they are part of the task. \
-         Use another shell_command only for one named missing fact that would make the next edit, validation, or report wrong. \
+         Use another shell_command only for one named missing fact that would make the next edit, execution-based validation, repair, commit, or report wrong. \
          This is advisory context, not a failed action result, and it does not relax repository rules or permission/capability requirements."
     )
+}
+
+/// Returns whether a shell command appears to be execution-based validation.
+fn runtime_shell_command_looks_like_validation(command: &str) -> bool {
+    let command = command.to_ascii_lowercase();
+    [
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "cargo fmt",
+        "just test",
+        "just check",
+        "just clippy",
+        "just fmt",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "pytest",
+        "go test",
+        "git diff --check",
+    ]
+    .iter()
+    .any(|needle| command.contains(needle))
 }

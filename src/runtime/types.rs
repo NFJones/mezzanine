@@ -3907,7 +3907,7 @@ pub struct RuntimeSessionService {
     /// still receive bounded correction opportunities.
     pub(super) agent_action_failure_retry_limit: usize,
     /// Stores the configured successful shell-command streak that triggers a
-    /// soft implementation-pressure hint during one active turn.
+    /// soft action-pressure hint during one active turn.
     ///
     /// The runtime uses this as advisory context only; it must not block shell
     /// execution because legitimate audits can require long inspection runs.
@@ -4649,6 +4649,10 @@ pub(super) struct RuntimeAgentShellDispatchHistory {
     pub(super) succeeded_commands: Vec<String>,
     /// Consecutive successful model-authored `shell_command` actions in this turn.
     pub(super) consecutive_successful_shell_commands: usize,
+    /// Whether a file mutation succeeded during this active turn.
+    pub(super) successful_file_mutation_this_turn: bool,
+    /// Whether a validation command succeeded after the latest file mutation.
+    pub(super) successful_validation_after_file_mutation: bool,
 }
 
 impl RuntimeAgentShellDispatchHistory {
@@ -4671,21 +4675,33 @@ impl RuntimeAgentShellDispatchHistory {
     }
 
     /// Records a shell command that completed successfully.
-    pub(super) fn record_success(&mut self, command: impl Into<String>, action: &AgentAction) {
+    pub(super) fn record_success(
+        &mut self,
+        command: impl Into<String>,
+        action: &AgentAction,
+        command_is_validation: bool,
+    ) {
         self.succeeded_commands.push(command.into());
         match action.payload {
             AgentActionPayload::ShellCommand { .. } => {
-                self.consecutive_successful_shell_commands =
-                    self.consecutive_successful_shell_commands.saturating_add(1);
+                if command_is_validation && self.successful_file_mutation_this_turn {
+                    self.consecutive_successful_shell_commands = 0;
+                    self.successful_validation_after_file_mutation = true;
+                } else {
+                    self.consecutive_successful_shell_commands =
+                        self.consecutive_successful_shell_commands.saturating_add(1);
+                }
             }
             AgentActionPayload::ApplyPatch { .. } => {
                 self.consecutive_successful_shell_commands = 0;
+                self.successful_file_mutation_this_turn = true;
+                self.successful_validation_after_file_mutation = false;
             }
             _ => {}
         }
     }
 
-    /// Resets the successful shell-command streak after a non-shell runtime effect.
+    /// Resets the successful inspection streak after a non-shell runtime effect.
     pub(super) fn reset_successive_shell_commands(&mut self) {
         self.consecutive_successful_shell_commands = 0;
     }

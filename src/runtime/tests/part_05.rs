@@ -3431,14 +3431,14 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert!(!service.agent_turn_contexts.contains_key("turn-1"));
 }
 
-/// Verifies successive shell commands add a soft implementation-pressure hint.
+/// Verifies successive shell commands add a soft action-pressure hint.
 ///
 /// Repeated successful shell inspection can keep a long turn localizing the
 /// same owner instead of implementing the next phase. The runtime should nudge
 /// the next provider continuation after the configured threshold while keeping
 /// the hint volatile and advisory rather than failing the shell action.
 #[test]
-fn runtime_implementation_pressure_context_reaches_provider_continuation() {
+fn runtime_action_pressure_context_reaches_provider_continuation() {
     let mut service = test_runtime_service();
     service.agent_implementation_pressure_after_shell_actions = 2;
     let primary = service
@@ -3480,7 +3480,7 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
             .unwrap()
             .blocks
             .iter()
-            .any(|block| block.label == "implementation pressure")
+            .any(|block| block.label == "action pressure")
     );
 
     service.record_shell_dispatch_success(
@@ -3494,8 +3494,8 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
         .unwrap()
         .blocks
         .iter()
-        .find(|block| block.label == "implementation pressure")
-        .expect("implementation pressure should be active turn context");
+        .find(|block| block.label == "action pressure")
+        .expect("action pressure should be active turn context");
     assert_eq!(
         pressure_block.cache_policy(),
         crate::agent::ContextCachePolicy::Ineligible
@@ -3517,7 +3517,7 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
     assert!(
         pressure_block
             .content
-            .contains("while still following active repository guidance"),
+            .contains("Continue following active repository guidance"),
         "{}",
         pressure_block.content
     );
@@ -3553,7 +3553,7 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert!(request.messages.iter().any(|message| {
         message.source == ContextSourceKind::LocalMessage
-            && message.content.contains("[implementation pressure]")
+            && message.content.contains("[action pressure]")
             && message
                 .content
                 .contains("Use another shell_command only for one named missing fact")
@@ -3563,14 +3563,14 @@ fn runtime_implementation_pressure_context_reaches_provider_continuation() {
     }));
 }
 
-/// Verifies implementation-pressure hints clear after a successful patch.
+/// Verifies action-pressure hints move from inspection to validation after a patch.
 ///
 /// The pressure hint is meant to move read-only shell inspection toward
 /// implementation. Once the model actually emits a semantic patch action, the
-/// shell streak should reset so future continuation context does not keep
-/// pressuring a turn that has already moved into implementation.
+/// same single hint should stop asking for implementation and instead steer
+/// the next continuation toward execution-based validation and handoff work.
 #[test]
-fn runtime_implementation_pressure_resets_after_apply_patch_success() {
+fn runtime_action_pressure_shifts_after_apply_patch_success() {
     let mut service = test_runtime_service();
     service.agent_implementation_pressure_after_shell_actions = 1;
     let primary = service
@@ -3605,7 +3605,7 @@ fn runtime_implementation_pressure_resets_after_apply_patch_success() {
             .unwrap()
             .blocks
             .iter()
-            .any(|block| block.label == "implementation pressure")
+            .any(|block| block.label == "action pressure")
     );
 
     let patch_action = crate::agent::AgentAction {
@@ -3619,14 +3619,63 @@ fn runtime_implementation_pressure_resets_after_apply_patch_success() {
     };
     service.record_shell_dispatch_success("turn-1", "mez apply-patch write", &patch_action);
 
+    let pressure_block = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.label == "action pressure")
+        .expect("action pressure should remain after mutation");
     assert!(
-        !service
-            .agent_turn_contexts
-            .get("turn-1")
-            .unwrap()
-            .blocks
-            .iter()
-            .any(|block| block.label == "implementation pressure")
+        pressure_block
+            .content
+            .contains("A file mutation has already succeeded this turn"),
+        "{}",
+        pressure_block.content
+    );
+    assert!(
+        pressure_block
+            .content
+            .contains("Prefer execution-based validation"),
+        "{}",
+        pressure_block.content
+    );
+
+    let validation_action = crate::agent::AgentAction {
+        id: "validate".to_string(),
+        rationale: "run validation".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Run tests".to_string(),
+            command: "just test".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.record_shell_dispatch_success("turn-1", "just test", &validation_action);
+
+    let pressure_block = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.label == "action pressure")
+        .expect("action pressure should remain after validation");
+    assert!(
+        pressure_block
+            .content
+            .contains("at least one validation command"),
+        "{}",
+        pressure_block.content
+    );
+    assert!(
+        pressure_block
+            .content
+            .contains("remaining repository-required validation"),
+        "{}",
+        pressure_block.content
     );
 }
 

@@ -4250,7 +4250,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("treat recent action_result output as an evidence cache"));
     assert!(prompt.contains("implicit path -> line ranges read map"));
     assert!(prompt.contains("subtract already observed ranges"));
-    assert!(prompt.contains("prefer acting on existing evidence over rereading for confidence"));
+    assert!(prompt.contains("after mutation prefer execution-based validation over rereading"));
+    assert!(prompt.contains("reread only for a validation failure"));
     assert!(prompt.contains("avoid printf/echo explanations"));
     assert!(prompt.contains("Bound CPU, memory, disk, output, loops, and input size"));
     assert!(prompt.contains("generate exact sizes"));
@@ -4284,6 +4285,10 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
     assert!(prompt.contains("use absolute paths above/outside that root"));
     assert!(prompt.contains("Validate proportional to risk"));
+    assert!(prompt.contains("After a successful file mutation"));
+    assert!(prompt.contains("prefer execution-based validation over additional source reading"));
+    assert!(prompt.contains("focused or required format, build, lint, and test commands"));
+    assert!(prompt.contains("would make the next validation, repair, commit, or report wrong"));
     assert!(prompt.contains("Active repository instructions"));
     assert!(prompt.contains("not optional reference material"));
     assert!(prompt.contains("contents are embedded directly in this section"));

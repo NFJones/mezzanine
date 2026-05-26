@@ -851,7 +851,7 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
-        self.reset_implementation_pressure_after_non_shell_effects(turn, &execution);
+        self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
@@ -1097,7 +1097,7 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
-        self.reset_implementation_pressure_after_non_shell_effects(turn, &execution);
+        self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
