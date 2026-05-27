@@ -323,9 +323,9 @@ fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
 
     let mut screen = TerminalScreen::new(Size::new(13, 4).unwrap(), 10).unwrap();
 
-    screen.feed("\x1b[31m▐ agent> \x1b[0mabc✔️d".as_bytes());
+    screen.feed("\x1b[31m▐ mez> \x1b[0mabc✔️d".as_bytes());
 
-    assert_eq!(screen.visible_lines()[0], "▐ agent> abc");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abc");
     assert_eq!(screen.visible_lines()[1], "▐ ✔ d");
     assert!(
         screen

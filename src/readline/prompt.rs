@@ -411,7 +411,7 @@ impl ReadlinePrompt {
     fn prefix(&self) -> &'static str {
         match self.kind {
             ReadlinePromptKind::Command => ":",
-            ReadlinePromptKind::Agent => "agent> ",
+            ReadlinePromptKind::Agent => "mez> ",
         }
     }
 }

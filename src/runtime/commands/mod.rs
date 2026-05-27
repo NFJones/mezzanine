@@ -2190,7 +2190,7 @@ impl RuntimeSessionService {
             }
             let prefix = match entry.role {
                 TranscriptRole::User => "user> ",
-                TranscriptRole::Assistant => "agent> ",
+                TranscriptRole::Assistant => "mez> ",
                 TranscriptRole::Tool => "agent: ",
                 TranscriptRole::System => "system> ",
             };

@@ -89,7 +89,7 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("▐ agent> alpha beta gamma"),
+        pane_text.contains("▐ mez> alpha beta gamma"),
         "{pane_text}"
     );
     assert!(pane_text.contains("▐        delta epsilon"), "{pane_text}");
@@ -218,7 +218,7 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("agent> *** Begin Patch"), "{pane_text}");
+    assert!(pane_text.contains("mez> *** Begin Patch"), "{pane_text}");
     assert!(
         pane_text.contains("       *** Update File: docs/example.md"),
         "{pane_text}"
@@ -275,7 +275,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     );
     assert!(!heading.text.contains('#'), "{heading:?}");
     assert!(heading.style_spans.iter().any(|span| {
-        span.rendition.bold && span.rendition.underline && span.start >= "▐ agent> ".chars().count()
+        span.rendition.bold && span.rendition.underline && span.start >= "▐ mez> ".chars().count()
     }));
 
     let quote = styled_lines
@@ -416,13 +416,13 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
         .normal_content_lines();
     let pane_text = pane_lines.join("\n");
 
-    assert!(pane_text.contains("▐ agent> 1. first numbered item"), "{pane_text}");
+    assert!(pane_text.contains("▐ mez> 1. first numbered item"), "{pane_text}");
     assert!(pane_text.contains("▐        2. second numbered item"), "{pane_text}");
     assert!(pane_text.contains("▐        • bullet item"), "{pane_text}");
     assert!(
         !pane_lines
             .iter()
-            .any(|line| line.trim_end() == "▐ agent> 1." || line.trim_end() == "▐        2." || line.trim_end() == "▐        •"),
+            .any(|line| line.trim_end() == "▐ mez> 1." || line.trim_end() == "▐        2." || line.trim_end() == "▐        •"),
         "{pane_text}"
     );
 }
@@ -520,11 +520,11 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
             .all(|line| line.text != expected_markdown_block_divider_line(120)),
         "{styled_lines:?}"
     );
-    let continuation_prefix = format!("▐ {}", " ".repeat("agent> • ".chars().count()));
+    let continuation_prefix = format!("▐ {}", " ".repeat("mez> • ".chars().count()));
     let wrapped_lines = styled_lines
         .iter()
         .filter(|line| {
-            line.text.contains("agent> • alphabet") || line.text.starts_with(&continuation_prefix)
+            line.text.contains("mez> • alphabet") || line.text.starts_with(&continuation_prefix)
         })
         .collect::<Vec<_>>();
 
@@ -812,7 +812,7 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
         .join("\n");
     assert_eq!(pane_text.matches(visible).count(), 1, "{pane_text}");
     assert!(
-        pane_text.contains(&format!("agent> {visible}")),
+        pane_text.contains(&format!("mez> {visible}")),
         "{pane_text}"
     );
     service.pane_processes_mut().terminate_all().unwrap();
@@ -894,7 +894,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
         .normal_content_lines()
         .join("\n");
     assert!(
-        !pane_text.contains("agent> Check shell access"),
+        !pane_text.contains("mez> Check shell access"),
         "{pane_text}"
     );
     assert!(
@@ -1328,7 +1328,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
         "{pane_text}"
     );
     assert!(
-        !pane_text.contains("agent> answer in the pane"),
+        !pane_text.contains("mez> answer in the pane"),
         "{pane_text}"
     );
     assert!(
@@ -1420,11 +1420,11 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
         "{pane_text}"
     );
     assert!(
-        !pane_text.contains("agent> answer in the pane"),
+        !pane_text.contains("mez> answer in the pane"),
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("agent> The pane is ready."),
+        pane_text.contains("mez> The pane is ready."),
         "{pane_text}"
     );
     service.pane_processes_mut().terminate_all().unwrap();
@@ -2328,7 +2328,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
         .normal_content_lines()
         .join("\n");
     assert!(
-        !pane_text.contains("agent> Print a hidden marker"),
+        !pane_text.contains("mez> Print a hidden marker"),
         "{pane_text}"
     );
     assert!(

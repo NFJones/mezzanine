@@ -349,18 +349,18 @@ fn readline_large_paste_blocks_delete_as_single_character() {
     prompt.buffer.insert_text("a");
     prompt.buffer.insert_text(&large);
     prompt.buffer.insert_text("c");
-    assert_eq!(prompt.render(), "agent> a[Pasted 1.2 KiB]c");
+    assert_eq!(prompt.render(), "mez> a[Pasted 1.2 KiB]c");
 
     assert!(prompt.buffer.move_left());
     assert!(prompt.buffer.backspace());
-    assert_eq!(prompt.render(), "agent> ac");
+    assert_eq!(prompt.render(), "mez> ac");
     assert_eq!(prompt.buffer.expanded_line(), "ac");
 
     prompt.buffer.insert_text(&large);
-    assert_eq!(prompt.render(), "agent> a[Pasted 1.2 KiB]c");
+    assert_eq!(prompt.render(), "mez> a[Pasted 1.2 KiB]c");
     assert!(prompt.buffer.move_left());
     assert!(prompt.buffer.delete_forward());
-    assert_eq!(prompt.render(), "agent> ac");
+    assert_eq!(prompt.render(), "mez> ac");
     assert_eq!(prompt.buffer.expanded_line(), "ac");
 }
 
@@ -407,12 +407,12 @@ fn readline_prompt_cursor_columns_use_display_width() {
         ReadlineOutcome::Edited
     );
 
-    assert_eq!(prompt.rendered_cursor_column(), "agent> ".len() + 3);
+    assert_eq!(prompt.rendered_cursor_column(), "mez> ".len() + 3);
     assert_eq!(
         prompt_outcome(&mut prompt, b"\x1b[D"),
         ReadlineOutcome::Edited
     );
-    assert_eq!(prompt.rendered_cursor_column(), "agent> ".len() + 1);
+    assert_eq!(prompt.rendered_cursor_column(), "mez> ".len() + 1);
 }
 
 /// Verifies readline terminal input maps word navigation and word deletion
@@ -680,7 +680,7 @@ fn readline_agent_prompt_renders_slash_command_shadow_hint() {
     );
 
     assert_eq!(prompt.buffer.line(), "/log");
-    assert_eq!(prompt.render_with_shadow_hint(), "agent> /log-level");
+    assert_eq!(prompt.render_with_shadow_hint(), "mez> /log-level");
     assert_eq!(prompt.rendered_shadow_hint_columns(), Some((11, 6)));
 }
 
@@ -1100,7 +1100,7 @@ fn readline_decoder_collapses_split_bracketed_paste_payloads() {
             .unwrap(),
         vec![ReadlineOutcome::Edited]
     );
-    assert_eq!(prompt.render(), "agent> pre ");
+    assert_eq!(prompt.render(), "mez> pre ");
 
     let second = format!("{}\x1b[201~ post\r", &large[600..]);
     let outcomes = decoder
@@ -1170,9 +1170,9 @@ fn readline_prompt_loop_renders_and_collects_submissions() {
     assert_eq!(
         io.rendered_prompts,
         vec![
-            String::from("agent> "),
-            String::from("agent> "),
-            String::from("agent> ")
+            String::from("mez> "),
+            String::from("mez> "),
+            String::from("mez> ")
         ]
     );
     assert_eq!(report.prompts_rendered, 3);

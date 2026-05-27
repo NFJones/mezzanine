@@ -154,7 +154,7 @@ impl AgentTerminalPresentationStyle {
     fn speaker_indicator(self) -> Option<&'static str> {
         match self {
             Self::UserPrompt => Some("user> "),
-            Self::Assistant => Some("agent> "),
+            Self::Assistant => Some("mez> "),
             Self::Status
             | Self::Error
             | Self::Command
@@ -285,7 +285,7 @@ pub(super) fn push_agent_terminal_sgr_color_codes(
 /// boundary and avoids relying on call-site inference.
 pub(super) const AGENT_TERMINAL_MESSAGE_PREFIX: &str = "▐ ";
 /// Editable prompt marker rendered after the agent terminal gutter.
-pub(super) const AGENT_PROMPT_TEXT_PREFIX: &str = "agent> ";
+pub(super) const AGENT_PROMPT_TEXT_PREFIX: &str = "mez> ";
 /// Maximum action-result lines rendered directly into the pane buffer.
 pub(super) const AGENT_ACTION_RESULT_DISPLAY_MAX_LINES: usize = 200;
 /// Maximum action-result bytes rendered directly into the pane buffer.
@@ -379,7 +379,7 @@ pub(super) fn render_agent_markdown_body_lines(
     let trimmed = markdown.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
         return vec![AgentRenderedLine {
-            display: "agent> ".to_string(),
+            display: "mez> ".to_string(),
             style_spans: Vec::new(),
             copy_text: None,
         }];
@@ -628,7 +628,7 @@ pub(super) fn rendered_line_continuation_indent(display: &str, display_width: us
     if rendered_line_is_numbered_diff_row(display) {
         return " ".repeat(10.min(display_width.saturating_sub(1)));
     }
-    let prompt = "agent> ";
+    let prompt = "mez> ";
     let indent_width = if let Some(rest) = display.strip_prefix(prompt) {
         agent_terminal_text_width(prompt) + markdown_local_continuation_indent_width(rest)
     } else {
@@ -700,7 +700,7 @@ pub(super) fn markdown_local_continuation_indent_width(display: &str) -> usize {
 /// # Parameters
 /// - `display`: Rendered markdown display text, optionally with an agent label.
 pub(super) fn markdown_rendered_line_is_table_row(display: &str) -> bool {
-    let rest = display.strip_prefix("agent> ").unwrap_or(display);
+    let rest = display.strip_prefix("mez> ").unwrap_or(display);
     let rest = rest.trim_start();
     rest.starts_with('┌')
         || rest.starts_with('┬')
@@ -898,7 +898,7 @@ pub(super) fn prefix_agent_rendered_markdown_lines(
     } else {
         lines
     };
-    let continuation = " ".repeat("agent> ".chars().count());
+    let continuation = " ".repeat("mez> ".chars().count());
     let mut first_nonblank = true;
     body_lines
         .into_iter()
@@ -911,7 +911,7 @@ pub(super) fn prefix_agent_rendered_markdown_lines(
             }
             let prefix = if first_nonblank {
                 first_nonblank = false;
-                "agent> ".to_string()
+                "mez> ".to_string()
             } else {
                 continuation.clone()
             };

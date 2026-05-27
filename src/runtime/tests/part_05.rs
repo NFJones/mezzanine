@@ -2446,15 +2446,15 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             terminal_width: 80,
             style_names: vec!["assistant".to_string(), "status".to_string()],
             display_lines: vec![
-                "agent> rendered saved response".to_string(),
+                "mez> rendered saved response".to_string(),
                 "agent: rendered saved status".to_string(),
             ],
             copy_lines: vec![
-                "agent> copy saved response".to_string(),
+                "mez> copy saved response".to_string(),
                 "agent: copy saved status".to_string(),
             ],
             ansi_text: Some(
-                "\r▐ agent> rendered saved response\r\n▐ agent: rendered saved status\r\n▐ ansi-only replay marker\r\n"
+                "\r▐ mez> rendered saved response\r\n▐ agent: rendered saved status\r\n▐ ansi-only replay marker\r\n"
                     .to_string(),
             ),
         })
@@ -2564,7 +2564,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     assert_eq!(transcript_store.inspect("saved-fork").unwrap().len(), 2);
     assert_eq!(
         transcript_store.inspect_presentation("saved-fork").unwrap()[0].display_lines[0],
-        "agent> rendered saved response"
+        "mez> rendered saved response"
     );
     let forked_pane = service
         .agent_shell_store()
@@ -2644,7 +2644,7 @@ fn runtime_agent_presentation_persistence_stays_out_of_model_context() {
     assert_eq!(presentation[0].style_names, vec!["assistant"]);
     assert_eq!(
         presentation[0].display_lines,
-        vec![String::from("agent> visual-only pane replay")]
+        vec![String::from("mez> visual-only pane replay")]
     );
     assert!(
         presentation[0]

@@ -2807,7 +2807,7 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
         assert!(
             io.written_batches[1]
                 .iter()
-                .any(|line| line.trim_end() == "▐ agent>")
+                .any(|line| line.trim_end() == "▐ mez>")
         );
         let status_output = io.written_batches[2].join("\n");
         assert!(
@@ -2914,13 +2914,13 @@ async fn async_attached_terminal_loop_clears_agent_prompt_on_submit() {
         assert!(
             refreshed
                 .iter()
-                .any(|line| line.trim_end().starts_with("▐ agent> thinking")),
+                .any(|line| line.trim_end().starts_with("▐ mez> thinking")),
             "{refreshed:?}"
         );
         assert!(
             !refreshed
                 .iter()
-                .any(|line| line.trim_end() == "▐ agent> list files"),
+                .any(|line| line.trim_end() == "▐ mez> list files"),
             "{refreshed:?}"
         );
         assert_eq!(

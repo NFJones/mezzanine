@@ -35,19 +35,16 @@ fn presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry 
         turn_id: Some(format!("turn-{sequence}")),
         terminal_width: 80,
         style_names: vec!["assistant".to_string(), "status".to_string()],
-        display_lines: vec!["agent> hello".to_string(), "agent: done".to_string()],
-        copy_lines: vec![
-            "agent> raw hello".to_string(),
-            "agent: raw done".to_string(),
-        ],
-        ansi_text: Some("\r\n\u{1b}[1m▐ agent> hello\u{1b}[0m\r\n".to_string()),
+        display_lines: vec!["mez> hello".to_string(), "agent: done".to_string()],
+        copy_lines: vec!["mez> raw hello".to_string(), "agent: raw done".to_string()],
+        ansi_text: Some("\r\n\u{1b}[1m▐ mez> hello\u{1b}[0m\r\n".to_string()),
     }
 }
 
 /// Builds one presentation entry large enough to force cleartext tail compaction.
 fn large_presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry {
     let mut entry = presentation(conversation_id, sequence);
-    entry.display_lines = vec![format!("agent> {}", "x".repeat(300 * 1024))];
+    entry.display_lines = vec![format!("mez> {}", "x".repeat(300 * 1024))];
     entry.style_names = vec!["assistant".to_string()];
     entry.copy_lines = entry.display_lines.clone();
     entry.ansi_text = None;
@@ -252,7 +249,7 @@ fn transcript_store_forks_conversation_to_fresh_identity() {
     assert_eq!(forked[0].content, "content 1");
     assert_eq!(forked_presentation[0].conversation_id, "conv2");
     assert_eq!(forked_presentation[0].created_at_unix_seconds, 99);
-    assert_eq!(forked_presentation[0].display_lines[0], "agent> hello");
+    assert_eq!(forked_presentation[0].display_lines[0], "mez> hello");
 
     let _ = fs::remove_dir_all(root);
 }

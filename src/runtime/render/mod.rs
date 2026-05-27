@@ -1825,7 +1825,7 @@ impl RuntimeSessionService {
             return self.append_agent_diff_text_to_terminal_buffer(pane_id, text);
         }
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let rendered_lines = wrapped_prefixed_agent_terminal_lines("agent> ", text, display_width);
+        let rendered_lines = wrapped_prefixed_agent_terminal_lines("mez> ", text, display_width);
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::Assistant,
@@ -2062,7 +2062,7 @@ impl RuntimeSessionService {
         );
         let body_rendered_count = body_rendered_lines.len();
         let rendered_lines = frame_agent_markdown_lines(body_rendered_lines, frame_width);
-        let raw_copy_lines = prefixed_agent_terminal_lines("agent> ", markdown)
+        let raw_copy_lines = prefixed_agent_terminal_lines("mez> ", markdown)
             .into_iter()
             .map(|line| format!("{AGENT_TERMINAL_MESSAGE_PREFIX}{line}"))
             .collect::<Vec<_>>();
@@ -4585,7 +4585,7 @@ mod tests {
     fn markdown_presentation_wraps_at_space_with_continuation_indent() {
         let wrapped = wrap_agent_rendered_line_to_width(
             AgentRenderedLine {
-                display: "agent> alpha beta gamma".to_string(),
+                display: "mez> alpha beta gamma".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
             },
@@ -4597,7 +4597,7 @@ mod tests {
 
         assert_eq!(
             wrapped,
-            vec!["agent> alpha beta".to_string(), "       gamma".to_string()]
+            vec!["mez> alpha beta".to_string(), "       gamma".to_string()]
         );
     }
 
@@ -4607,7 +4607,7 @@ mod tests {
     fn markdown_presentation_wraps_unbroken_token_after_prompt() {
         let wrapped = wrap_agent_rendered_line_to_width(
             AgentRenderedLine {
-                display: "agent> aaaaaaaaaaaaaaaa".to_string(),
+                display: "mez> aaaaaaaaaaaaaaaa".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
             },
@@ -4620,7 +4620,7 @@ mod tests {
         assert_eq!(
             wrapped,
             vec![
-                "agent> aaaaa".to_string(),
+                "mez> aaaaa".to_string(),
                 "       aaaaa".to_string(),
                 "       aaaaa".to_string(),
                 "       a".to_string()
@@ -4654,16 +4654,15 @@ mod tests {
     /// indentation as markdown output.
     #[test]
     fn plain_agent_output_wraps_under_agent_indicator() {
-        let wrapped =
-            wrapped_prefixed_agent_terminal_lines("agent> ", "alpha beta gamma delta", 18)
-                .into_iter()
-                .map(|line| line.display)
-                .collect::<Vec<_>>();
+        let wrapped = wrapped_prefixed_agent_terminal_lines("mez> ", "alpha beta gamma delta", 18)
+            .into_iter()
+            .map(|line| line.display)
+            .collect::<Vec<_>>();
 
         assert_eq!(
             wrapped,
             vec![
-                "agent> alpha beta".to_string(),
+                "mez> alpha beta".to_string(),
                 "       gamma delta".to_string()
             ]
         );

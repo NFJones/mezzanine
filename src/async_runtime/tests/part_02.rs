@@ -283,7 +283,7 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
         let prompt_row = view
             .lines
             .iter()
-            .rposition(|line| line.contains("agent>"))
+            .rposition(|line| line.contains("mez>"))
             .unwrap();
         assert!(
             prompt_row >= 38,

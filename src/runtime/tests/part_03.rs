@@ -2647,7 +2647,7 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
     assert!(pane_text.contains("Resumed:\n▐ yes"), "{pane_text}");
     assert!(pane_text.contains("user> hello"), "{pane_text}");
     assert!(
-        pane_text.contains("agent> I inspected the repo and started the change"),
+        pane_text.contains("mez> I inspected the repo and started the change"),
         "{pane_text}"
     );
     assert!(
@@ -4106,15 +4106,15 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("agent> The pane is ready."),
+        pane_text.contains("mez> The pane is ready."),
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("▐ agent> The pane is ready."),
+        pane_text.contains("▐ mez> The pane is ready."),
         "{pane_text}"
     );
     assert!(
-        !pane_text.contains("agent> answer in the pane"),
+        !pane_text.contains("mez> answer in the pane"),
         "{pane_text}"
     );
     assert!(!pane_text.contains("agent: turn turn-1"), "{pane_text}");
@@ -4127,11 +4127,11 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         .unwrap()
         .normal_styled_content_lines()
         .into_iter()
-        .find(|line| line.text.contains("agent> The pane is ready."))
+        .find(|line| line.text.contains("mez> The pane is ready."))
         .unwrap();
     assert!(assistant_line.text.starts_with("▐ "));
     assert!(!assistant_line.style_spans.is_empty());
-    let assistant_body_start = "▐ agent> ".chars().count();
+    let assistant_body_start = "▐ mez> ".chars().count();
     assert!(
         assistant_line
             .style_spans
@@ -4289,7 +4289,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         .normal_styled_content_lines();
     let assistant_line = styled_lines
         .iter()
-        .find(|line| line.text.contains("agent> Important and underlined"))
+        .find(|line| line.text.contains("mez> Important and underlined"))
         .unwrap();
     let assistant_index = styled_lines
         .iter()
@@ -4308,14 +4308,14 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         assistant_line
             .style_spans
             .iter()
-            .any(|span| span.rendition.bold && span.start >= "▐ agent> ".chars().count()),
+            .any(|span| span.rendition.bold && span.start >= "▐ mez> ".chars().count()),
         "{assistant_line:?}"
     );
     assert!(
         assistant_line
             .style_spans
             .iter()
-            .any(|span| span.rendition.underline && span.start >= "▐ agent> ".chars().count()),
+            .any(|span| span.rendition.underline && span.start >= "▐ mez> ".chars().count()),
         "{assistant_line:?}"
     );
     assert!(
@@ -4336,7 +4336,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
     let visible_lines = copy_mode.visible_lines();
     let first_line = visible_lines
         .iter()
-        .position(|line| line.contains("agent> Important and underlined"))
+        .position(|line| line.contains("mez> Important and underlined"))
         .map(|line| line + scroll_top)
         .unwrap();
     let second_line = visible_lines

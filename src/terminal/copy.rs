@@ -14,7 +14,7 @@ use super::{
 /// Display prefix used by pane-local agent transcript lines.
 const AGENT_COPY_INDICATOR_PREFIX: &str = "▐ ";
 /// Speaker label used by assistant response lines.
-const AGENT_COPY_ASSISTANT_LABEL: &str = "agent> ";
+const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
 /// Copy-text marker for presentation-only continuation rows.
 pub(crate) const AGENT_COPY_SKIP_LINE: &str = "\u{1e}mez-copy-skip-line";
 

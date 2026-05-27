@@ -3732,7 +3732,7 @@ fn readline_prompt_status_row_renders_prompt_and_cursor_column() {
         row.status,
         ClientStatusLine {
             kind: ClientStatusKind::Plain,
-            text: "▐ agent> run".to_string(),
+            text: "▐ mez> run".to_string(),
         }
     );
     assert_eq!(row.cursor_column, 11);
@@ -3899,7 +3899,7 @@ fn prompt_region_presentation_places_agent_prompt_inside_pane() {
     );
 
     assert_eq!(presentation.lines[0], "top line            ");
-    assert_eq!(presentation.lines[2], "ol▐ agent> go       ");
+    assert_eq!(presentation.lines[2], "ol▐ mez> go       ");
     assert_eq!(presentation.cursor_row, 2);
     assert_eq!(presentation.cursor_column, 13);
     assert!(presentation.cursor_visible);
@@ -3942,7 +3942,7 @@ fn prompt_region_presentation_wraps_prompt_at_word_boundary() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ agent> alpha          ");
+    assert_eq!(presentation.lines[1], "▐ mez> alpha          ");
     assert_eq!(presentation.lines[2], "         beta           ");
     assert_eq!(presentation.lines[3], "         gamma          ");
 }
@@ -3973,7 +3973,7 @@ fn prompt_region_presentation_hard_wrap_keeps_first_row_stable() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ agent> abcdefg        ");
+    assert_eq!(presentation.lines[1], "▐ mez> abcdefg        ");
     assert_eq!(presentation.lines[2], "         hijkl          ");
     assert_eq!(presentation.lines[3], "footer                  ");
 }
@@ -4004,7 +4004,7 @@ fn prompt_region_presentation_styles_agent_shadow_hint() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[2], "o▐ agent> /model    ");
+    assert_eq!(presentation.lines[2], "o▐ mez> /model    ");
     assert!(
         presentation.line_style_spans[2]
             .iter()
@@ -4117,7 +4117,7 @@ fn prompt_region_presentation_styles_agent_skill_shadow_hint() {
         &theme,
     );
 
-    assert_eq!(presentation.lines[2], "o▐ agent> $review   ");
+    assert_eq!(presentation.lines[2], "o▐ mez> $review   ");
     let prompt_span = presentation.line_style_spans[2]
         .iter()
         .find(|span| span.start == 1 && span.length == 18)
@@ -4217,7 +4217,7 @@ fn prompt_region_presentation_expands_agent_prompt_for_long_input() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[0], "▐ agent> [200 chars ");
+    assert_eq!(presentation.lines[0], "▐ mez> [200 chars ");
     assert_eq!(presentation.cursor_row, 3);
     assert_eq!(presentation.cursor_column, 19);
     assert!(presentation.cursor_visible);

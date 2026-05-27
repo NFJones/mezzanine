@@ -1099,7 +1099,7 @@ fn copy_mode_copies_multiline_selection() {
 #[test]
 fn copy_mode_formats_agent_assistant_output_for_clipboard() {
     let lines = [
-        "▐ agent> ## Heading",
+        "▐ mez> ## Heading",
         "▐        - item",
         "▐            code",
     ];
@@ -2876,7 +2876,7 @@ fn render_attached_client_view_reserves_agent_prompt_row() {
     .unwrap()
     .unwrap();
 
-    assert_eq!(view.lines[3], format!("{:<30}", "▐ agent> "));
+    assert_eq!(view.lines[3], format!("{:<30}", "▐ mez> "));
     assert_eq!(
         view.agent_prompt_region,
         Some(ReadlinePromptRegion {
@@ -2991,7 +2991,7 @@ fn render_attached_client_view_draws_agent_prompt_state_in_pane() {
     assert!(
         view.lines
             .iter()
-            .any(|line| line.contains("▐ agent> first"))
+            .any(|line| line.contains("▐ mez> first"))
     );
     assert!(view.lines.iter().any(|line| line.contains("second")));
     assert!(view.cursor_visible);
@@ -3047,7 +3047,7 @@ fn render_attached_client_view_draws_one_agent_live_footer_at_prompt_edge() {
     let prompt_row = view
         .lines
         .iter()
-        .position(|line| line.contains("agent> running"))
+        .position(|line| line.contains("mez> running"))
         .unwrap();
     let footer_rows = view
         .lines
@@ -3173,7 +3173,7 @@ fn render_attached_client_view_hides_agent_live_footer_while_prompt_has_input() 
     assert!(
         view.lines
             .iter()
-            .any(|line| line.contains("agent> write tests")),
+            .any(|line| line.contains("mez> write tests")),
         "{view:?}"
     );
     assert!(
@@ -4149,9 +4149,9 @@ fn terminal_screen_resize_reflows_and_restores_soft_wrapped_content() {
 fn terminal_screen_soft_wraps_agent_transcript_rows_with_gutter() {
     let mut screen = TerminalScreen::new(Size::new(12, 4).unwrap(), 10).unwrap();
 
-    screen.feed("\x1b[31m▐ agent> \x1b[0mabcdefghi".as_bytes());
+    screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
-    assert_eq!(screen.visible_lines()[0], "▐ agent> abc");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abc");
     assert_eq!(screen.visible_lines()[1], "▐ defghi");
 }
 
@@ -4177,14 +4177,14 @@ fn terminal_screen_does_not_agent_gutter_wrap_unstyled_pane_output() {
 #[test]
 fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     let mut screen = TerminalScreen::new(Size::new(12, 5).unwrap(), 10).unwrap();
-    screen.feed("\x1b[31m▐ agent> \x1b[0mabcdefghi".as_bytes());
+    screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
     screen.resize(Size::new(16, 5).unwrap());
-    assert_eq!(screen.visible_lines()[0], "▐ agent> abcdefg");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abcdefg");
     assert_eq!(screen.visible_lines()[1], "▐ hi");
 
     screen.resize(Size::new(10, 5).unwrap());
-    assert_eq!(screen.visible_lines()[0], "▐ agent> a");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> a");
     assert_eq!(screen.visible_lines()[1], "▐ bcdefghi");
 }
 /// Verifies that row-only pane resizes preserve scrollback and visible content
@@ -4287,7 +4287,7 @@ fn terminal_screen_width_resize_reflows_only_live_viewport() {
 #[test]
 fn terminal_screen_resize_counts_agent_gutters_when_restoring_cursor() {
     let mut screen = TerminalScreen::new(Size::new(12, 6).unwrap(), 10).unwrap();
-    screen.feed("\x1b[31m▐ agent> \x1b[0mabcdefghijklmnopqrst\r\nnext".as_bytes());
+    screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghijklmnopqrst\r\nnext".as_bytes());
 
     screen.resize(Size::new(10, 6).unwrap());
 
