@@ -3445,12 +3445,13 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert!(!service.agent_turn_contexts.contains_key("turn-1"));
 }
 
-/// Verifies successive shell commands add a soft action-pressure hint.
+/// Verifies successive shell dispatches add a soft action-pressure hint.
 ///
-/// Repeated successful shell inspection can keep a long turn localizing the
-/// same owner instead of implementing the next phase. The runtime should nudge
-/// the next provider continuation after the configured threshold while keeping
-/// the hint volatile and advisory rather than failing the shell action.
+/// Repeated shell inspection attempts can keep a long turn localizing the same
+/// owner instead of implementing the next phase, even when those attempts do
+/// not settle successfully. The runtime should nudge the next provider
+/// continuation after the configured threshold while keeping the hint volatile
+/// and advisory rather than failing the shell action.
 #[test]
 fn runtime_action_pressure_context_reaches_provider_continuation() {
     let mut service = test_runtime_service();
@@ -3471,21 +3472,9 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
 
-    let shell_action = crate::agent::AgentAction {
-        id: "inspect".to_string(),
-        rationale: "read current owner".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
-            summary: "Inspect owner".to_string(),
-            command: "sed -n '1,80p' src/runtime/mod.rs".to_string(),
-            interactive: false,
-            stateful: false,
-            timeout_ms: None,
-        },
-    };
-    service.record_shell_dispatch_success(
+    service.record_shell_dispatch_history(
         "turn-1",
         "sed -n '1,80p' src/runtime/mod.rs",
-        &shell_action,
     );
     assert!(
         !service
@@ -3497,10 +3486,9 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
             .any(|block| block.label == "action pressure")
     );
 
-    service.record_shell_dispatch_success(
+    service.record_shell_dispatch_history(
         "turn-1",
         "sed -n '80,160p' src/runtime/mod.rs",
-        &shell_action,
     );
     let pressure_block = service
         .agent_turn_contexts
@@ -3517,7 +3505,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
     assert!(
         pressure_block
             .content
-            .contains("2 consecutive successful shell_command actions"),
+            .contains("2 consecutive shell_command actions"),
         "{}",
         pressure_block.content
     );
@@ -3612,6 +3600,7 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
             timeout_ms: None,
         },
     };
+    service.record_shell_dispatch_history("turn-1", "git diff -- src/runtime/mod.rs");
     service.record_shell_dispatch_success("turn-1", "git diff -- src/runtime/mod.rs", &shell_action);
     assert!(
         service

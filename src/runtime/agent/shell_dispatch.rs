@@ -10,16 +10,16 @@ use super::*;
 use crate::runtime::types::RuntimeAgentShellDispatchHistory;
 
 /// Label for the turn-volatile context block that nudges concrete action after
-/// repeated inspection or successful mutation.
+/// repeated shell dispatch or successful mutation.
 const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
 
 /// Current action-pressure phase for one active turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeActionPressurePhase {
-    /// Repeated successful shell inspection has crossed the configured threshold.
+    /// Repeated shell dispatch has crossed the configured threshold.
     InspectionStreak {
-        /// Consecutive successful `shell_command` actions.
-        consecutive_shell_actions: usize,
+        /// Consecutive `shell_command` dispatches in the current phase.
+        consecutive_shell_dispatches: usize,
         /// Configured advisory threshold for the shell-command streak.
         threshold: usize,
     },
@@ -142,15 +142,20 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn record_shell_dispatch_history(&mut self, turn_id: &str, command: &str) {
+    pub(in crate::runtime) fn record_shell_dispatch_history(
+        &mut self,
+        turn_id: &str,
+        command: &str,
+    ) {
         self.agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
             .or_default()
             .record(command.to_string());
+        self.refresh_agent_action_pressure_context(turn_id);
     }
 
     /// Records a shell command that exited successfully for loop detection and
-    /// implementation-pressure context.
+    /// mutation/validation phase tracking.
     pub(in crate::runtime) fn record_shell_dispatch_success(
         &mut self,
         turn_id: &str,
@@ -1005,9 +1010,9 @@ fn runtime_action_pressure_phase(
     if history.successful_file_mutation_this_turn {
         return Some(RuntimeActionPressurePhase::MutationAwaitingValidation);
     }
-    if history.consecutive_successful_shell_commands >= threshold {
+    if history.consecutive_shell_dispatches >= threshold {
         return Some(RuntimeActionPressurePhase::InspectionStreak {
-            consecutive_shell_actions: history.consecutive_successful_shell_commands,
+            consecutive_shell_dispatches: history.consecutive_shell_dispatches,
             threshold,
         });
     }
@@ -1018,10 +1023,10 @@ fn runtime_action_pressure_phase(
 fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) -> String {
     let phase_message = match phase {
         RuntimeActionPressurePhase::InspectionStreak {
-            consecutive_shell_actions,
+            consecutive_shell_dispatches,
             threshold,
         } => format!(
-            "This turn has already run {consecutive_shell_actions} consecutive successful shell_command actions; the configured advisory threshold is {threshold}. \
+            "This turn has already dispatched {consecutive_shell_dispatches} consecutive shell_command actions; the configured advisory threshold is {threshold}. \
              Prefer the next implementation, validation, or final-report action now."
         ),
         RuntimeActionPressurePhase::MutationAwaitingValidation => {

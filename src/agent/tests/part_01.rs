@@ -4343,6 +4343,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("one focused batched discovery pass"));
     assert!(prompt.contains("then make the first small edit, validation, or report move"));
     assert!(prompt.contains("A second broad discovery pass is wrong"));
+    assert!(prompt.contains("For small local edits, after one search pass choose one likely owner range"));
+    assert!(prompt.contains("read it once, then attempt the patch"));
+    assert!(prompt.contains("do not keep broadening anchor-localization"));
     assert!(prompt.contains("Before reading more, ask what concrete fact"));
     assert!(prompt.contains("prior evidence raises a specific unanswered question"));
     assert!(prompt.contains("remember them for the work cycle"));
@@ -4409,6 +4412,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("prefer execution-based validation over additional source reading"));
     assert!(prompt.contains("focused or required format, build, lint, and test commands"));
     assert!(prompt.contains("would make the next validation, repair, commit, or report wrong"));
+    assert!(prompt.contains("choose one likely owner range and read it once before patching"));
     assert!(prompt.contains("Active repository instructions"));
     assert!(prompt.contains("not optional reference material"));
     assert!(prompt.contains("contents are embedded directly in this section"));

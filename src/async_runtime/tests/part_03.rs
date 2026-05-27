@@ -638,7 +638,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         assert!(ready.contains("override=applied"), "{ready}");
 
         let start = client_handle
-            .execute_agent_shell_command(primary, "print a marker".to_string())
+            .execute_agent_shell_command(primary.clone(), "print a marker".to_string())
             .await
             .unwrap();
         assert!(start.contains(r#""state":"running""#), "{start}");
@@ -778,6 +778,15 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         }
         let next_task =
             next_task.expect("first shell transaction should queue provider continuation");
+        let ready_again = client_handle
+            .execute_terminal_command(
+                primary.clone(),
+                "mark-pane-ready --acknowledge-risk --reason async-agent-test-second-command"
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        assert!(ready_again.contains("override=applied"), "{ready_again}");
         let second_turn = crate::agent::AgentTurnRecord {
             turn_id: next_task.turn_id.clone(),
             agent_id: next_task.agent_id.clone(),

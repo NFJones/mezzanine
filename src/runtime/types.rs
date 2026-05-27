@@ -63,7 +63,7 @@ pub const DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT: usize = 10;
 pub const DEFAULT_AGENT_ROUTING: bool = false;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
-/// Default number of successive successful shell commands before nudging implementation.
+/// Default number of successive shell commands before nudging implementation.
 pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 5;
 /// Default router profile for automatic model and reasoning sizing.
 pub const DEFAULT_AUTO_SIZING_ROUTER_PROFILE: &str = "auto-size-router";
@@ -4657,6 +4657,8 @@ pub(super) struct RuntimeAgentShellDispatchHistory {
     pub(super) commands: Vec<String>,
     /// Shell commands that reached a successful transaction boundary.
     pub(super) succeeded_commands: Vec<String>,
+    /// Consecutive model-authored `shell_command` dispatches in the current phase.
+    pub(super) consecutive_shell_dispatches: usize,
     /// Consecutive successful model-authored `shell_command` actions in this turn.
     pub(super) consecutive_successful_shell_commands: usize,
     /// Whether a file mutation succeeded during this active turn.
@@ -4679,9 +4681,10 @@ impl RuntimeAgentShellDispatchHistory {
             .count()
     }
 
-    /// Records a successfully dispatched shell command.
+    /// Records a dispatched shell command.
     pub(super) fn record(&mut self, command: impl Into<String>) {
         self.commands.push(command.into());
+        self.consecutive_shell_dispatches = self.consecutive_shell_dispatches.saturating_add(1);
     }
 
     /// Records a shell command that completed successfully.
@@ -4695,6 +4698,7 @@ impl RuntimeAgentShellDispatchHistory {
         match action.payload {
             AgentActionPayload::ShellCommand { .. } => {
                 if command_is_validation && self.successful_file_mutation_this_turn {
+                    self.consecutive_shell_dispatches = 0;
                     self.consecutive_successful_shell_commands = 0;
                     self.successful_validation_after_file_mutation = true;
                 } else {
@@ -4703,6 +4707,7 @@ impl RuntimeAgentShellDispatchHistory {
                 }
             }
             AgentActionPayload::ApplyPatch { .. } => {
+                self.consecutive_shell_dispatches = 0;
                 self.consecutive_successful_shell_commands = 0;
                 self.successful_file_mutation_this_turn = true;
                 self.successful_validation_after_file_mutation = false;
@@ -4713,6 +4718,7 @@ impl RuntimeAgentShellDispatchHistory {
 
     /// Resets the successful inspection streak after a non-shell runtime effect.
     pub(super) fn reset_successive_shell_commands(&mut self) {
+        self.consecutive_shell_dispatches = 0;
         self.consecutive_successful_shell_commands = 0;
     }
 }

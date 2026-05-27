@@ -5883,6 +5883,11 @@ implementation, test, validation, or report action over additional exploration
 for confidence. Additional inspection SHOULD be driven by a concrete missing
 fact, validation failure, changed file, or ambiguity that would make the next
 action wrong.
+For small local edits, the prompt SHOULD direct the agent to choose one likely
+owner range after the first search pass, read that owner range once, and then
+attempt the patch. It SHOULD discourage continued anchor-localization unless a
+patch failure, ambiguity, or named missing fact shows that the chosen owner
+range was insufficient.
 After a successful file mutation, the prompt MUST prefer execution-based
 validation over additional source reading. It SHOULD direct the agent to run
 focused or required format, build, lint, and test commands when available, and
@@ -6078,7 +6083,7 @@ requests, such as exhaustive audits, conformance reviews, security reviews,
 architecture discovery, or deep research, or for tasks whose correctness
 clearly depends on that breadth.
 Runtime action-pressure hints MAY encourage the agent to proceed after repeated
-successful shell commands or successful file mutation, but they MUST be a
+shell commands or successful file mutation, but they MUST be a
 single advisory context block rather than competing phase-specific hints. They
 MUST prefer execution-based validation after file mutation and MUST NOT relax
 repository guidance, validation, documentation, handoff, permission, or
