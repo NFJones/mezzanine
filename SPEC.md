@@ -3796,11 +3796,11 @@ A `shell_command` action MAY include:
 - `intent`: Optional coarse classification such as `read`, `search`, `build`,
   `test`, `format`, `git`, or `other`.
 - `missing_fact`: Optional concrete missing fact that justifies an additional
-  discovery read/search command after the turn has already declared
-  `next_phase=edit_ready`.
+  discovery read/search command after an earlier batch in the turn already
+  declared `next_phase=edit_ready`.
 
-After a turn declares `next_phase=edit_ready` and before a successful file
-mutation settles that turn, Mezzanine MUST reject discovery-style
+After an earlier batch in a turn declares `next_phase=edit_ready` and before a
+successful file mutation settles that turn, Mezzanine MUST reject discovery-style
 `shell_command` actions that omit `missing_fact`. It SHOULD also reject a
 repeated discovery-style `shell_command` when the same `missing_fact` was
 already satisfied by a successful earlier discovery action in the same turn.
@@ -6033,7 +6033,7 @@ available.
 The prompt MUST explain that once the current turn has enough evidence to start
 implementation, the model should declare `next_phase=edit_ready` on the MAAP
 batch instead of merely narrating readiness in prose. It MUST explain that
-after `next_phase=edit_ready`, further discovery shell work should use
+after an earlier batch declared `next_phase=edit_ready`, further discovery shell work should use
 `intent=read` or `intent=search` plus one concrete `missing_fact`, otherwise
 the model should prefer implementation, validation, repair, or reporting.
 

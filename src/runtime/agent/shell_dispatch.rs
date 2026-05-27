@@ -158,7 +158,7 @@ impl RuntimeSessionService {
                     action,
                     ActionStatus::Failed,
                     "edit_ready_requires_missing_fact",
-                    "after declaring next_phase=edit_ready, additional read/search shell_command actions must include one concrete missing_fact",
+                    "after an earlier batch declared next_phase=edit_ready, additional read/search shell_command actions must include one concrete missing_fact",
                 )?));
             };
             if history
