@@ -8,6 +8,7 @@
 
 use super::client_loop::{
     AttachedTerminalOutputFrameState, AttachedTerminalOutputModes,
+    compose_terminal_output_style_spans,
     encode_attached_terminal_output_frame_with_keypad_transition,
     encode_attached_terminal_output_frame_with_styles,
     encode_attached_terminal_output_update_frame_with_styles,
@@ -3660,6 +3661,57 @@ fn client_presentation_highlights_current_pager_search_match() {
     assert_eq!(line_style_spans[1].len(), 1);
     assert_eq!(line_style_spans[1][0].start, 5);
     assert_eq!(line_style_spans[1][0].length, 5);
+}
+/// Verifies terminal diff styling preserves pager search highlights for matching
+/// rendered row slices.
+///
+/// The pager can emit a bounded row update instead of the full rendered view.
+/// This regression ensures the terminal writer keeps the highlight span when the
+/// outgoing rows match a contiguous slice of the rendered presentation.
+#[test]
+fn terminal_output_style_spans_preserve_pager_search_highlights_for_matching_row_slice() {
+    let rendered_view = RenderedClientView {
+        role: ClientViewRole::Primary,
+        authoritative_size: Size::new(16, 3).unwrap(),
+        client_size: Size::new(16, 3).unwrap(),
+        lines: vec![
+            "alpha".to_string(),
+            "beta match".to_string(),
+            "gamma".to_string(),
+        ],
+        line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: Some((
+            CopyPosition { line: 1, column: 5 },
+            CopyPosition {
+                line: 1,
+                column: 10,
+            },
+        )),
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: 0,
+        cursor_column: 0,
+        cursor_visible: false,
+        cursor_style: TerminalCursorStyle::Block,
+        cursor_blink: true,
+        cursor_blink_interval_ms: 500,
+        application_keypad: false,
+        bracketed_paste: false,
+        animation_refresh_interval_ms: 0,
+        ui_theme: UiTheme::default(),
+        agent_prompt_region: None,
+        primary_prompt_active: false,
+    };
+    let output_lines = vec!["beta match".to_string()];
+    let style_spans = compose_terminal_output_style_spans(
+        &output_lines,
+        Some(&(rendered_view, None)),
+    );
+    assert_eq!(style_spans.len(), 1);
+    assert_eq!(style_spans[0].len(), 1);
+    assert_eq!(style_spans[0][0].start, 5);
+    assert_eq!(style_spans[0][0].length, 5);
 }
 
 /// Verifies readline prompt status row renders prompt and cursor column.

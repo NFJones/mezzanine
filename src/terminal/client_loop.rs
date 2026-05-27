@@ -1158,7 +1158,16 @@ pub(crate) fn compose_terminal_output_style_spans(
     if styled_lines == output_lines {
         normalized_style_span_rows(&line_style_spans, output_lines.len())
     } else {
-        Vec::new()
+        styled_lines
+            .windows(output_lines.len())
+            .position(|window| window == output_lines)
+            .map(|start| {
+                normalized_style_span_rows(
+                    &line_style_spans[start..start + output_lines.len()],
+                    output_lines.len(),
+                )
+            })
+            .unwrap_or_default()
     }
 }
 /// Verifies focused render-only style rows are not reused for changed diff text.
