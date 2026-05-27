@@ -331,6 +331,10 @@ impl RuntimeSessionService {
                 lines,
                 line_style_spans,
                 scroll_offset: 0,
+                search_input: None,
+                search_query: None,
+                search_match_line: None,
+                search_status: None,
                 selections,
                 active_selection_index,
                 dismiss_on_any_input,
@@ -761,6 +765,9 @@ impl RuntimeSessionService {
                 matches!(
                     runtime_display_overlay_input_action(input),
                     RuntimeDisplayOverlayInputAction::Exit
+                        | RuntimeDisplayOverlayInputAction::StartSearch
+                        | RuntimeDisplayOverlayInputAction::EditSearchText
+                        | RuntimeDisplayOverlayInputAction::EditSearchBackspace
                         | RuntimeDisplayOverlayInputAction::SelectActive
                 )
             }
@@ -836,6 +843,27 @@ fn runtime_display_overlay_selection_index_at_position(
         .map(|(index, _)| index)
 }
 
+/// Returns the next forward pager-search match, wrapping once to the start.
+fn runtime_display_overlay_next_search_match(
+    overlay: &RuntimeDisplayOverlay,
+    query: &str,
+    current_line: usize,
+) -> Option<usize> {
+    if query.is_empty() || overlay.lines.is_empty() {
+        return None;
+    }
+    let start = current_line.saturating_add(1).min(overlay.lines.len());
+    overlay.lines[start..]
+        .iter()
+        .position(|line| line.contains(query))
+        .map(|index| start.saturating_add(index))
+        .or_else(|| {
+            overlay.lines[..start]
+                .iter()
+                .position(|line| line.contains(query))
+        })
+}
+
 impl RuntimeSessionService {
     /// Executes one command selected from the primary display overlay.
     fn execute_primary_display_overlay_selection_command(
@@ -902,11 +930,24 @@ impl RuntimeSessionService {
             self.primary_display_overlay = None;
             return Ok(true);
         }
+        if overlay.search_input.is_some() {
+            return self.apply_primary_display_overlay_search_input(input);
+        }
         match runtime_display_overlay_input_action(input) {
             RuntimeDisplayOverlayInputAction::Exit => {
                 self.primary_display_overlay = None;
                 Ok(true)
             }
+            RuntimeDisplayOverlayInputAction::StartSearch => {
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                overlay.search_input = Some(String::new());
+                overlay.search_status = None;
+                Ok(true)
+            }
+            RuntimeDisplayOverlayInputAction::EditSearchText
+            | RuntimeDisplayOverlayInputAction::EditSearchBackspace => Ok(false),
             RuntimeDisplayOverlayInputAction::SelectActive => {
                 let command = self
                     .primary_display_overlay
@@ -967,6 +1008,86 @@ impl RuntimeSessionService {
             }
             RuntimeDisplayOverlayInputAction::Ignore => Ok(false),
         }
+    }
+
+    /// Applies one input chunk while the command-output pager search prompt is active.
+    fn apply_primary_display_overlay_search_input(&mut self, input: &[u8]) -> Result<bool> {
+        match runtime_display_overlay_input_action(input) {
+            RuntimeDisplayOverlayInputAction::Exit => {
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                overlay.search_input = None;
+                overlay.search_status = None;
+                Ok(true)
+            }
+            RuntimeDisplayOverlayInputAction::SelectActive => {
+                self.submit_primary_display_overlay_search()
+            }
+            RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                let Some(search_input) = overlay.search_input.as_mut() else {
+                    return Ok(false);
+                };
+                let changed = search_input.pop().is_some();
+                Ok(changed)
+            }
+            RuntimeDisplayOverlayInputAction::EditSearchText => {
+                let Ok(text) = std::str::from_utf8(input) else {
+                    return Ok(false);
+                };
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                let Some(search_input) = overlay.search_input.as_mut() else {
+                    return Ok(false);
+                };
+                search_input.push_str(text);
+                Ok(!text.is_empty())
+            }
+            RuntimeDisplayOverlayInputAction::StartSearch
+            | RuntimeDisplayOverlayInputAction::SelectPrevious
+            | RuntimeDisplayOverlayInputAction::SelectNext
+            | RuntimeDisplayOverlayInputAction::SelectFirst
+            | RuntimeDisplayOverlayInputAction::SelectLast
+            | RuntimeDisplayOverlayInputAction::ScrollBy(_)
+            | RuntimeDisplayOverlayInputAction::Ignore => Ok(false),
+        }
+    }
+
+    /// Submits the active command-output pager search query.
+    fn submit_primary_display_overlay_search(&mut self) -> Result<bool> {
+        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+            return Ok(false);
+        };
+        let submitted = overlay.search_input.take().unwrap_or_default();
+        let query = if submitted.is_empty() {
+            let Some(query) = overlay.search_query.clone() else {
+                overlay.search_status = Some("search: enter a query".to_string());
+                return Ok(true);
+            };
+            query
+        } else {
+            overlay.search_query = Some(submitted.clone());
+            submitted
+        };
+        let start_line = overlay
+            .search_match_line
+            .or_else(|| overlay.scroll_offset.checked_sub(1))
+            .unwrap_or(overlay.scroll_offset);
+        let Some(match_line) =
+            runtime_display_overlay_next_search_match(overlay, &query, start_line)
+        else {
+            overlay.search_status = Some(format!("pattern not found: {query}"));
+            return Ok(true);
+        };
+        overlay.search_match_line = Some(match_line);
+        overlay.scroll_offset = match_line;
+        runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
+        overlay.search_status = None;
+        Ok(true)
     }
 
     /// Moves the active command overlay selection and keeps it visible.
@@ -4671,6 +4792,10 @@ mod tests {
                 selections: content.selections.clone(),
                 active_selection_index: Some(0),
                 dismiss_on_any_input: false,
+                search_input: None,
+                search_query: None,
+                search_match_line: None,
+                search_status: None,
             },
             selection,
         );
@@ -4712,6 +4837,10 @@ mod tests {
             selections: content.selections.clone(),
             active_selection_index: Some(0),
             dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match_line: None,
+            search_status: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -4764,6 +4893,10 @@ mod tests {
             selections: content.selections.clone(),
             active_selection_index: Some(0),
             dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match_line: None,
+            search_status: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);

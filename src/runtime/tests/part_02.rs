@@ -3804,6 +3804,148 @@ fn runtime_primary_display_overlay_mouse_scroll_requests_diff_refresh() {
     );
 }
 
+/// Verifies forward text search inside a primary command-output pager, including
+/// empty-query repeat and wraparound back to the first matching line.
+#[test]
+fn runtime_primary_display_overlay_search_repeats_and_wraps() {
+    let mut service = test_runtime_service_with_size(Size::new(80, 10).unwrap());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 10).unwrap(), 120)
+        .unwrap();
+    service
+        .show_primary_display_overlay(vec![
+            "alpha opening".to_string(),
+            "needle first".to_string(),
+            "middle text".to_string(),
+            "needle second".to_string(),
+            "closing text".to_string(),
+        ])
+        .unwrap();
+
+    let initial_search = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::ForwardToPane(b"/".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"needle".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"\r".to_vec()),
+                ],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(initial_search.forwarded_bytes, 0);
+    assert!(initial_search.view_refresh_required);
+    assert!(initial_search.full_redraw_required);
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.search_query.as_deref()),
+        Some("needle")
+    );
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.search_match_line),
+        Some(1)
+    );
+
+    let next_match = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::ForwardToPane(b"/".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"\r".to_vec()),
+                ],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(next_match.forwarded_bytes, 0);
+    assert!(next_match.view_refresh_required);
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.search_match_line),
+        Some(3)
+    );
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.search_status.as_deref()),
+        None
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::ForwardToPane(b"/".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"\r".to_vec()),
+                ],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.search_match_line),
+        Some(1)
+    );
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.search_status.as_deref()),
+        None
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::ForwardToPane(b"/".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"absent".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"\r".to_vec()),
+                ],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let overlay = service.primary_display_overlay.as_ref().unwrap();
+    assert_eq!(overlay.search_match_line, Some(1));
+    assert_eq!(
+        overlay.search_status.as_deref(),
+        Some("pattern not found: absent")
+    );
+}
+
 /// Verifies that command chooser output rendered in the primary overlay is not
 /// inert text. Rows that advertise an `action=` command must retain selectable
 /// metadata so a mouse click can execute the command through the normal

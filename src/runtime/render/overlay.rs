@@ -1063,11 +1063,15 @@ pub(super) fn runtime_display_overlay_rendered_selection_start(
 }
 
 /// Returns the modal overlay footer text for the active overlay.
-pub(super) fn runtime_display_overlay_footer(overlay: &RuntimeDisplayOverlay) -> &'static str {
-    if overlay.selections.is_empty() {
-        "esc: return | up/down pgup/pgdn home/end"
+pub(super) fn runtime_display_overlay_footer(overlay: &RuntimeDisplayOverlay) -> String {
+    if let Some(input) = overlay.search_input.as_deref() {
+        format!("/{input}")
+    } else if let Some(status) = overlay.search_status.as_deref() {
+        status.to_string()
+    } else if overlay.selections.is_empty() {
+        "esc: return | /: search | up/down pgup/pgdn home/end".to_string()
     } else {
-        "esc: return | enter: select | arrows: choose | pgup/pgdn: scroll"
+        "esc: return | /: search | enter: select | arrows: choose | pgup/pgdn: scroll".to_string()
     }
 }
 
@@ -1181,6 +1185,19 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
 ) -> Vec<TerminalStyleSpan> {
     let body_spans = runtime_display_overlay_body_style_spans(overlay, line_index, max_columns);
     let mut spans = Vec::new();
+    if overlay.search_match_line == Some(line_index) && max_columns > 0 {
+        append_uncovered_overlay_selection_span(
+            &mut spans,
+            0,
+            max_columns,
+            runtime_display_overlay_selection_rendition(
+                ui_theme,
+                RuntimeDisplayOverlaySelectionKind::Primary,
+                true,
+            ),
+            &body_spans,
+        );
+    }
     for (selection_index, selection) in overlay.selections.iter().enumerate() {
         if selection.line_index != line_index {
             continue;
