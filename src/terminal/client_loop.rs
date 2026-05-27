@@ -12,15 +12,15 @@ use super::keys::classify_prefix_binding;
 use super::mouse::mouse_copy_position;
 #[cfg(test)]
 use super::{
-    AttachedTerminalFd, Errno, TerminalFdInterest, compose_client_presentation_with_styles,
-    poll_attached_terminal_fd_readiness, read_attached_terminal_size, rustix_read, rustix_write,
+    AttachedTerminalFd, Errno, TerminalFdInterest, UiTheme, poll_attached_terminal_fd_readiness,
+    read_attached_terminal_size, rustix_read, rustix_write,
 };
 use super::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, KeyChord,
     KeyCode, MezError, MouseAction, MouseEvent, MousePolicy, MuxAction, RawFd, Result, Size,
     TerminalClientLoopConfig, TerminalColor, TerminalCursorStyle, TerminalInputClassification,
     TerminalStyleSpan, WindowFocusTarget, classify_mouse_event,
-    classify_terminal_input_with_command_bindings, compose_client_presentation,
+    classify_terminal_input_with_command_bindings, compose_client_presentation_with_styles,
     key_chord_input_bytes, parse_key_chord_bytes, parse_sgr_mouse, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width,
 };
@@ -1136,6 +1136,78 @@ fn normalized_style_span_rows(
     (0..line_count)
         .map(|index| line_style_spans.get(index).cloned().unwrap_or_default())
         .collect()
+}
+/// Builds style rows for terminal output lines from the same rendered view that
+/// produced the text rows.
+///
+/// The function intentionally drops style rows unless the rendered text still
+/// matches the caller-provided output lines. That keeps focused prompt-overlay
+/// spans paired with their owning rows and prevents stale or mismatched spans
+/// from being applied to agent output such as apply-patch diff previews.
+pub(crate) fn compose_terminal_output_style_spans(
+    output_lines: &[String],
+    rendered: Option<&(RenderedClientView, Option<ClientStatusLine>)>,
+) -> Vec<Vec<TerminalStyleSpan>> {
+    let Some((view, status)) = rendered else {
+        return Vec::new();
+    };
+    let (styled_lines, line_style_spans) =
+        compose_client_presentation_with_styles(view, status.as_ref());
+    if styled_lines == output_lines {
+        normalized_style_span_rows(&line_style_spans, output_lines.len())
+    } else {
+        Vec::new()
+    }
+}
+/// Verifies focused render-only style rows are not reused for changed diff text.
+///
+/// This regression protects apply-patch previews containing Rust option text such
+/// as `Some` and `None`. A focused primary view can carry overlay style spans for
+/// the rendered rows; if the terminal writer receives a different set of output
+/// rows, those spans must be dropped instead of being applied to the new diff
+/// text where they can hide otherwise-present symbols.
+#[cfg(test)]
+#[test]
+fn terminal_output_style_spans_drop_focused_overlay_spans_for_mismatched_diff_rows() {
+    let hidden_some_span = TerminalStyleSpan {
+        start: 9,
+        length: 4,
+        rendition: super::GraphicRendition {
+            hidden: true,
+            ..super::GraphicRendition::default()
+        },
+    };
+    let rendered_view = RenderedClientView {
+        role: ClientViewRole::Primary,
+        authoritative_size: Size::new(40, 2).unwrap(),
+        client_size: Size::new(40, 2).unwrap(),
+        lines: vec![
+            "agent output".to_string(),
+            "- value: Some(None)".to_string(),
+        ],
+        line_style_spans: vec![Vec::new(), vec![hidden_some_span]],
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: 0,
+        cursor_column: 0,
+        cursor_visible: false,
+        cursor_style: TerminalCursorStyle::Block,
+        cursor_blink: true,
+        cursor_blink_interval_ms: 500,
+        application_keypad: false,
+        bracketed_paste: false,
+        animation_refresh_interval_ms: 0,
+        ui_theme: UiTheme::default(),
+        agent_prompt_region: None,
+        primary_prompt_active: true,
+    };
+    let output_lines = vec!["+ value: Some(None)".to_string()];
+
+    let style_spans =
+        compose_terminal_output_style_spans(&output_lines, Some(&(rendered_view, None)));
+
+    assert!(style_spans.is_empty(), "{style_spans:?}");
 }
 
 /// Runs the output row count changed operation for this subsystem.
@@ -2462,7 +2534,7 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
     }
 
     let output_lines = if output_writable {
-        view.map(|view| compose_client_presentation(view, status))
+        view.map(|view| compose_client_presentation_with_styles(view, status).0)
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -2570,18 +2642,12 @@ where
                 cursor_row: view.map(|view| view.cursor_row).unwrap_or(0),
                 cursor_column: view.map(|view| view.cursor_column).unwrap_or(0),
             };
-            let output_line_style_spans = rendered
-                .as_ref()
-                .map(|(view, status)| {
-                    compose_client_presentation_with_styles(view, status.as_ref()).1
-                })
-                .unwrap_or_default();
             report.bytes_written =
                 report
                     .bytes_written
                     .saturating_add(io.write_styled_output_with_modes(
                         &step.output_lines,
-                        &output_line_style_spans,
+                        &compose_terminal_output_style_spans(&step.output_lines, rendered.as_ref()),
                         output_modes,
                     )?);
             report.output_frames = report.output_frames.saturating_add(1);

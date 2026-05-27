@@ -93,7 +93,7 @@ pub use client_loop::{
 };
 pub(crate) use client_loop::{
     AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
-    attached_terminal_restore_presentation_frame,
+    attached_terminal_restore_presentation_frame, compose_terminal_output_style_spans,
     encode_attached_terminal_output_update_frame_with_styles,
 };
 pub(crate) use copy::AGENT_COPY_SKIP_LINE;

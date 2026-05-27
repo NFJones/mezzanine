@@ -9,11 +9,13 @@ use super::{
     AsyncRuntimeSideEffectServiceConfig, AttachedTerminalClientLoopConfig,
     AttachedTerminalClientLoopReport, AttachedTerminalFdRole, AttachedTerminalOutputModes,
     ClientId, ClientStatusLine, ClientViewRole, MezError, Result, RuntimeSideEffect, Size,
-    TerminalClientLoopConfig, compose_client_presentation_with_styles,
-    plan_attached_terminal_client_step_with_host_paste_buffer,
+    TerminalClientLoopConfig, plan_attached_terminal_client_step_with_host_paste_buffer,
     run_async_client_output_flush_service,
 };
-use crate::terminal::TerminalClientLoopAction;
+use crate::terminal::{
+    TerminalClientLoopAction, compose_client_presentation_with_styles,
+    compose_terminal_output_style_spans,
+};
 
 // Attached terminal loop handling.
 
@@ -385,11 +387,12 @@ where
                 .iter()
                 .any(|action| matches!(action, TerminalClientLoopAction::ForwardToPane(_)));
         if !step.output_lines.is_empty() && !agent_prompt_input_action {
-            let output_line_style_spans = frame
+            let rendered = frame
                 .view
                 .as_ref()
-                .map(|view| compose_client_presentation_with_styles(view, status.as_ref()).1)
-                .unwrap_or_default();
+                .map(|view| (view.clone(), status.clone()));
+            let output_line_style_spans =
+                compose_terminal_output_style_spans(&step.output_lines, rendered.as_ref());
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
                 bracketed_paste: frame.config.pane_bracketed_paste_mode,
