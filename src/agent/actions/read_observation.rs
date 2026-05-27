@@ -44,18 +44,40 @@ pub struct ShellReadObservation {
 pub fn shell_read_observations_for_command(command: &str) -> Vec<ShellReadObservation> {
     let tokens = shell_like_tokens(command);
     let mut observations = Vec::new();
-    if let Some(observation) = sed_read_observation(&tokens) {
-        observations.push(observation);
-    }
-    if let Some(observation) = rg_search_observation(&tokens) {
-        observations.push(observation);
-    }
-    if observations.is_empty()
-        && let Some(observation) = plain_read_observation(&tokens)
-    {
-        observations.push(observation);
+    for segment in shell_command_segments(&tokens) {
+        let mut segment_observations = Vec::new();
+        if let Some(observation) = sed_read_observation(segment) {
+            segment_observations.push(observation);
+        }
+        if let Some(observation) = rg_search_observation(segment) {
+            segment_observations.push(observation);
+        }
+        if segment_observations.is_empty()
+            && let Some(observation) = plain_read_observation(segment)
+        {
+            segment_observations.push(observation);
+        }
+        observations.extend(segment_observations);
     }
     observations
+}
+
+/// Splits shell-like tokens into simple command segments.
+fn shell_command_segments(tokens: &[String]) -> Vec<&[String]> {
+    let mut segments = Vec::new();
+    let mut start = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        if matches!(token.as_str(), "&&" | "||" | "|" | ";") {
+            if start < index {
+                segments.push(&tokens[start..index]);
+            }
+            start = index.saturating_add(1);
+        }
+    }
+    if start < tokens.len() {
+        segments.push(&tokens[start..]);
+    }
+    segments
 }
 
 /// Returns a structured observation for a bounded `sed -n` read.
@@ -160,13 +182,10 @@ fn looks_like_read_target(token: &str) -> bool {
 
 /// Splits shell-like command text into coarse tokens for heuristic analysis.
 fn shell_like_tokens(command: &str) -> Vec<String> {
-    command
-        .split_whitespace()
-        .map(|token| {
-            token
-                .trim_matches(|character| matches!(character, '(' | ')' | ',' | ';'))
-                .to_string()
-        })
-        .filter(|token| !token.is_empty())
-        .collect()
+    shlex::split(command).unwrap_or_else(|| {
+        command
+            .split_whitespace()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    })
 }

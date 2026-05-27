@@ -2828,7 +2828,7 @@ fn openai_current_turn_read_ledger_summarizes_recent_read_coverage() {
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 label: "action result read-3".to_string(),
-                content: "[action_result read-3 shell_command succeeded]\ncommand: rg -n overlay_style src/runtime/render/overlay.rs\noutput:\n120: overlay_style".to_string(),
+                content: "[action_result read-3 shell_command succeeded]\ncommand: rg -n \"overlay style\" \"docs/reference/issue backlog.md\"\nread_observation_json: {\"kind\":\"search\",\"target\":\"docs/reference/issue backlog.md\",\"ranges\":[],\"query\":\"overlay style\"}\noutput:\n120: overlay style".to_string(),
             },
         ])
         .unwrap(),
@@ -2852,7 +2852,11 @@ fn openai_current_turn_read_ledger_summarizes_recent_read_coverage() {
         ),
         "{read_ledger}"
     );
-    assert!(read_ledger.contains("search target=src/runtime/render/overlay.rs query=overlay_style"));
+    assert!(
+        read_ledger
+            .contains("search target=docs/reference/issue backlog.md query=overlay style"),
+        "{read_ledger}"
+    );
 }
 
 /// Verifies a long OpenAI session promotes already-observed action results into

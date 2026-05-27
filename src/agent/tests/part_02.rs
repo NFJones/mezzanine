@@ -1261,6 +1261,52 @@ fn action_result_context_preserves_patch_relevant_shell_output() {
     assert!(!context.contains("MEZ_MARKER_TOKEN"), "{context}");
 }
 
+/// Verifies model-facing shell context serializes structured read observations
+/// as JSON so queries and targets with spaces survive later ledger parsing.
+#[test]
+fn action_result_context_preserves_structured_read_observations_with_spaces() {
+    let turn = turn();
+    let action = shell_action("a1");
+    let command = r#"rg -n "overlay style" "docs/reference/issue backlog.md""#;
+    let result = ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["shell command exited with status 0".to_string()],
+        Some(
+            serde_json::json!({
+                "summary": "Search an issue backlog",
+                "command": command,
+                "read_observations": [
+                    {
+                        "kind": "search",
+                        "target": "docs/reference/issue backlog.md",
+                        "query": "overlay style"
+                    }
+                ],
+                "terminal_observation": {
+                    "source": "pty",
+                    "stream": "pty_combined",
+                    "marker": "abc",
+                    "exit_code": 0,
+                    "signal": null,
+                    "timed_out": false,
+                    "combined_output_bytes": 16,
+                    "combined_output_preview": "12: overlay style\n",
+                    "boundary_state": "end-marker-observed",
+                    "output_truncated": false
+                }
+            })
+            .to_string(),
+        ),
+    );
+
+    let context = action_result_context_content(&result);
+
+    assert!(context.contains("read_observation_json:"), "{context}");
+    assert!(context.contains(r#""target":"docs/reference/issue backlog.md""#), "{context}");
+    assert!(context.contains(r#""query":"overlay style""#), "{context}");
+}
+
 /// Verifies non-shell action result context keeps useful content while pruning
 /// null and empty structured fields before feeding it back to the model.
 #[test]
@@ -1288,6 +1334,32 @@ fn action_result_context_prunes_empty_non_shell_data() {
     assert!(!context.contains("matched_rules"), "{context}");
     assert!(!context.contains("policy_command"), "{context}");
     assert!(!context.contains("sent_to_pane"), "{context}");
+}
+
+/// Verifies structured shell-read extraction scopes targets to each shell
+/// segment instead of stealing the last file-looking token from a later
+/// unrelated command.
+#[test]
+fn shell_read_observations_scope_targets_per_shell_segment() {
+    let observations = crate::agent::shell_read_observations_for_command(
+        "sed -n '300,420p' src/runtime/render/overlay.rs && cat README.md",
+    );
+
+    assert_eq!(observations.len(), 2, "{observations:?}");
+    assert_eq!(
+        observations[0].kind,
+        crate::agent::ShellReadObservationKind::Read
+    );
+    assert_eq!(observations[0].target, "src/runtime/render/overlay.rs");
+    assert_eq!(observations[0].ranges.len(), 1);
+    assert_eq!(observations[0].ranges[0].start_line, 300);
+    assert_eq!(observations[0].ranges[0].end_line, 420);
+    assert_eq!(
+        observations[1].kind,
+        crate::agent::ShellReadObservationKind::Read
+    );
+    assert_eq!(observations[1].target, "README.md");
+    assert!(observations[1].ranges.is_empty());
 }
 
 /// Verifies shell action executor receives transaction wrapper and succeeds.

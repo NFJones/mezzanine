@@ -38,6 +38,8 @@ struct EvidenceEntryRecord {
     status: String,
     /// Optional command text associated with the entry.
     command: Option<String>,
+    /// Optional structured signature for repeated read/search collapse.
+    repeated_read_signature: Option<String>,
 }
 
 /// Carries one retained ledger entry, optionally collapsing repeated reads.
@@ -245,7 +247,7 @@ fn collect_evidence_ledger_entries(blocks: &[ContextBlock]) -> Vec<EvidenceLedge
         let Some(record) = evidence_entry_record_for_block(block, None) else {
             continue;
         };
-        if let Some(signature) = repetitive_read_signature(&record) {
+        if let Some(signature) = record.repeated_read_signature.clone() {
             if let Some(index) = repeated_read_entries.get(&signature).copied() {
                 match &mut entries[index] {
                     EvidenceLedgerEntry::CollapsedRead { latest_line, count } => {
@@ -409,6 +411,7 @@ fn evidence_entry_record_for_block(
         category,
         status,
         command,
+        repeated_read_signature: repetitive_read_signature_for_block(block),
     })
 }
 
@@ -543,19 +546,25 @@ fn evidence_summary_text(value: &str, max_bytes: Option<usize>) -> String {
 }
 
 /// Returns a collapse signature for repeated successful read/search entries.
-fn repetitive_read_signature(record: &EvidenceEntryRecord) -> Option<String> {
-    if record.category != "read" || record.status != "succeeded" {
+fn repetitive_read_signature_for_block(block: &ContextBlock) -> Option<String> {
+    let marker_line = block.content.lines().next().unwrap_or_default().trim();
+    if action_result_marker_status(marker_line) != Some("succeeded") {
         return None;
     }
-    let observations = crate::agent::shell_read_observations_for_command(
-        record.command.as_deref().unwrap_or_default(),
-    );
-    observations
-        .first()
-        .map(|observation| match observation.kind {
-            ShellReadObservationKind::Read => format!("read:{}", observation.target),
-            ShellReadObservationKind::Search => format!("search:{}", observation.target),
-        })
+    if evidence_category(
+        action_result_marker_type(marker_line).unwrap_or_default(),
+        model_context_field_value(&block.content, "command").as_deref(),
+        &block.content,
+    ) != "read"
+    {
+        return None;
+    }
+    let observations = read_ledger_observations_for_block(block);
+    let observation = observations.first()?;
+    match observation.kind {
+        ShellReadObservationKind::Read => Some(format!("read:{}", observation.target)),
+        ShellReadObservationKind::Search => Some(format!("search:{}", observation.target)),
+    }
 }
 
 /// Builds a generated current-turn read ledger descriptor from one observation.
@@ -602,8 +611,15 @@ fn read_ledger_observations_from_content(
     crate::agent::shell_read_observations_for_command(command)
 }
 
-/// Parses one `read_observation:` line from model-facing action-result context.
+/// Parses one structured read-observation line from model-facing action-result context.
 fn parse_read_observation_line(line: &str) -> Option<ShellReadObservation> {
+    if let Some(payload) = line
+        .trim()
+        .strip_prefix("read_observation_json:")
+        .map(str::trim)
+    {
+        return serde_json::from_str(payload).ok();
+    }
     let payload = line.trim().strip_prefix("read_observation:")?.trim();
     let mut kind = None;
     let mut target = None;
