@@ -3437,17 +3437,17 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert!(!service.agent_turn_contexts.contains_key("turn-1"));
 }
 
-/// Verifies successive shell dispatches add a soft action-pressure hint.
+/// Verifies successive shell dispatches add a gentle action-pressure hint.
 ///
 /// Repeated shell inspection attempts can keep a long turn localizing the same
 /// owner instead of implementing the next phase, even when those attempts do
 /// not settle successfully. The runtime should nudge the next provider
-/// continuation after the configured threshold while keeping the hint volatile
-/// and advisory rather than failing the shell action.
+/// continuation after the configured gentle threshold while keeping the hint
+/// volatile and advisory rather than failing the shell action.
 #[test]
 fn runtime_action_pressure_context_reaches_provider_continuation() {
     let mut service = test_runtime_service();
-    service.agent_implementation_pressure_after_shell_actions = 2;
+    service.agent_implementation_pressure_after_shell_actions = 3;
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -3482,6 +3482,20 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
         "turn-1",
         "sed -n '80,160p' src/runtime/mod.rs",
     );
+    assert!(
+        !service
+            .agent_turn_contexts
+            .get("turn-1")
+            .unwrap()
+            .blocks
+            .iter()
+            .any(|block| block.label == "action pressure")
+    );
+
+    service.record_shell_dispatch_history(
+        "turn-1",
+        "sed -n '160,240p' src/runtime/mod.rs",
+    );
     let pressure_block = service
         .agent_turn_contexts
         .get("turn-1")
@@ -3497,14 +3511,14 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
     assert!(
         pressure_block
             .content
-            .contains("2 consecutive shell_command actions"),
+            .contains("3 consecutive shell_command actions"),
         "{}",
         pressure_block.content
     );
     assert!(
         pressure_block
             .content
-            .contains("Prefer the next implementation, validation, or final-report action now"),
+            .contains("Apply gentle pressure now"),
         "{}",
         pressure_block.content
     );
@@ -3556,6 +3570,81 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
                 .content
                 .contains("does not relax repository rules or permission/capability requirements")
     }));
+}
+
+/// Verifies inspection pressure escalates from gentle to medium to strong as
+/// repeated shell-command dispatches continue in one turn.
+///
+/// The runtime-owned hint should become more forceful after prolonged
+/// inspection streaks while staying advisory and turn-volatile.
+#[test]
+fn runtime_action_pressure_escalates_through_stages() {
+    let mut service = test_runtime_service();
+    service.agent_implementation_pressure_after_shell_actions = 3;
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-implementation-pressure-escalation","input":"fix the owner once you have enough evidence"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    for index in 0..6 {
+        service.record_shell_dispatch_history(
+            "turn-1",
+            &format!("sed -n '{}p' src/runtime/mod.rs", index + 1),
+        );
+    }
+    let medium_block = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.label == "action pressure")
+        .expect("medium action pressure should be active");
+    assert!(
+        medium_block.content.contains("Apply medium pressure now"),
+        "{}",
+        medium_block.content
+    );
+    assert!(
+        medium_block
+            .content
+            .contains("focused regression test, execution-based validation"),
+        "{}",
+        medium_block.content
+    );
+
+    for index in 6..10 {
+        service.record_shell_dispatch_history(
+            "turn-1",
+            &format!("sed -n '{}p' src/runtime/mod.rs", index + 1),
+        );
+    }
+    let strong_block = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.label == "action pressure")
+        .expect("strong action pressure should be active");
+    assert!(
+        strong_block.content.contains("Apply strong pressure now"),
+        "{}",
+        strong_block.content
+    );
+    assert!(
+        strong_block.content.contains("concrete justification from recent evidence"),
+        "{}",
+        strong_block.content
+    );
 }
 
 /// Verifies action-pressure hints move from inspection to validation after a patch.

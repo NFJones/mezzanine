@@ -1636,7 +1636,7 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
 #[test]
 fn runtime_config_reload_applies_implementation_pressure_threshold() {
     let mut service = test_runtime_service();
-    assert_eq!(service.agent_implementation_pressure_after_shell_actions, 5);
+    assert_eq!(service.agent_implementation_pressure_after_shell_actions, 3);
     let root = temp_root("runtime-implementation-pressure-threshold");
     let path = root.join("config.toml");
     fs::write(

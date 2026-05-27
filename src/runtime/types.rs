@@ -64,7 +64,7 @@ pub const DEFAULT_AGENT_ROUTING: bool = false;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 /// Default number of successive shell commands before nudging implementation.
-pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 5;
+pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 3;
 /// Default router profile for automatic model and reasoning sizing.
 pub const DEFAULT_AUTO_SIZING_ROUTER_PROFILE: &str = "auto-size-router";
 /// Default small target profile for automatic model and reasoning sizing.

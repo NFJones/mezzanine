@@ -738,7 +738,7 @@ auto_reasoning_enabled = true
     assert!(plan.text.contains("version = 7"));
     assert!(
         plan.text
-            .contains("implementation_pressure_after_shell_actions = 5")
+            .contains("implementation_pressure_after_shell_actions = 3")
     );
     assert!(plan.text.contains("context_window_tokens = 1000000"));
     assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
@@ -787,7 +787,7 @@ fn migrates_json_primary_config_to_current_schema() {
     assert_eq!(values.get("version"), Some(&"7".to_string()));
     assert_eq!(
         values.get("agents.implementation_pressure_after_shell_actions"),
-        Some(&"5".to_string())
+        Some(&"3".to_string())
     );
     assert!(!values.contains_key("agents.auto_compact"));
     assert!(!values.contains_key("agents.auto_compact_threshold"));

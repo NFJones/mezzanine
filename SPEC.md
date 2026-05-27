@@ -2444,7 +2444,10 @@ model-correctable failed-action signature rather than per action batch, so one
 bad action in a batch cannot consume the recovery budget for a different
 failed action.
 `agents.implementation_pressure_after_shell_actions` MUST be a positive integer
-and MUST default to `5`.
+and MUST default to `3`. It defines the gentle shell-command inspection
+pressure threshold; runtime-owned inspection pressure MUST escalate to medium at
+the greater of `6` or twice the configured threshold, and to strong at the
+greater of `10` or three times the configured threshold.
 
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,

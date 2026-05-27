@@ -20,13 +20,24 @@ enum RuntimeActionPressurePhase {
     InspectionStreak {
         /// Consecutive `shell_command` dispatches in the current phase.
         consecutive_shell_dispatches: usize,
-        /// Configured advisory threshold for the shell-command streak.
-        threshold: usize,
+        /// Current staged severity for the shell-command streak.
+        severity: RuntimeActionPressureSeverity,
     },
     /// A file mutation succeeded and no validation command has succeeded yet.
     MutationAwaitingValidation,
     /// A file mutation and at least one validation command have succeeded.
     MutationValidated,
+}
+
+/// Current inspection-streak severity for shell-command pressure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeActionPressureSeverity {
+    /// Early nudge after a short shell-command streak.
+    Gentle,
+    /// Stronger nudge after a longer shell-command streak.
+    Medium,
+    /// Highest pressure once the turn has stayed in shell inspection too long.
+    Strong,
 }
 
 impl RuntimeSessionService {
@@ -1010,13 +1021,31 @@ fn runtime_action_pressure_phase(
     if history.successful_file_mutation_this_turn {
         return Some(RuntimeActionPressurePhase::MutationAwaitingValidation);
     }
-    if history.consecutive_shell_dispatches >= threshold {
+    let consecutive_shell_dispatches = history.consecutive_shell_dispatches;
+    if consecutive_shell_dispatches >= threshold {
+        let severity = runtime_action_pressure_severity(consecutive_shell_dispatches, threshold);
         return Some(RuntimeActionPressurePhase::InspectionStreak {
-            consecutive_shell_dispatches: history.consecutive_shell_dispatches,
-            threshold,
+            consecutive_shell_dispatches,
+            severity,
         });
     }
     None
+}
+
+/// Returns the current shell-command inspection severity.
+fn runtime_action_pressure_severity(
+    consecutive_shell_dispatches: usize,
+    threshold: usize,
+) -> RuntimeActionPressureSeverity {
+    let medium_threshold = threshold.saturating_mul(2).max(6);
+    let strong_threshold = threshold.saturating_mul(3).max(10);
+    if consecutive_shell_dispatches >= strong_threshold {
+        RuntimeActionPressureSeverity::Strong
+    } else if consecutive_shell_dispatches >= medium_threshold {
+        RuntimeActionPressureSeverity::Medium
+    } else {
+        RuntimeActionPressureSeverity::Gentle
+    }
 }
 
 /// Builds the model-facing action-pressure hint for one active turn.
@@ -1024,11 +1053,23 @@ fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) ->
     let phase_message = match phase {
         RuntimeActionPressurePhase::InspectionStreak {
             consecutive_shell_dispatches,
-            threshold,
-        } => format!(
-            "This turn has already dispatched {consecutive_shell_dispatches} consecutive shell_command actions; the configured advisory threshold is {threshold}. \
-             Prefer the next implementation, validation, or final-report action now."
-        ),
+            severity,
+        } => {
+            let severity_message = match severity {
+                RuntimeActionPressureSeverity::Gentle => {
+                    "Apply gentle pressure now: stop broadening discovery unless one named missing fact still blocks the next implementation, validation, or report action."
+                }
+                RuntimeActionPressureSeverity::Medium => {
+                    "Apply medium pressure now: prefer the next implementation, focused regression test, execution-based validation, or final-report action instead of further shell discovery."
+                }
+                RuntimeActionPressureSeverity::Strong => {
+                    "Apply strong pressure now: do not continue shell discovery without a concrete justification from recent evidence for why another shell_command is required before acting."
+                }
+            };
+            format!(
+                "This turn has already dispatched {consecutive_shell_dispatches} consecutive shell_command actions. {severity_message}"
+            )
+        }
         RuntimeActionPressurePhase::MutationAwaitingValidation => {
             "A file mutation has already succeeded this turn. Prefer execution-based validation, required format/build/lint/test commands, focused diff/status review, or final report now.".to_string()
         }

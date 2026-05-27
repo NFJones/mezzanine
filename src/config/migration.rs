@@ -519,6 +519,12 @@ fn migrate_toml_v6_to_v7(text: &str) -> Result<String> {
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
 
+    set_toml_default_usize_if_absent_or_old_default(
+        &mut document,
+        "agents.implementation_pressure_after_shell_actions",
+        5,
+        3,
+    )?;
     update_toml_model_profile_context_window_default(
         &mut document,
         "deepseek-default",
@@ -548,6 +554,12 @@ fn migrate_toml_v6_to_v7(text: &str) -> Result<String> {
 fn migrate_json_compatible_v6_to_v7(format: ConfigFormat, text: &str) -> Result<String> {
     let mut document = parse_json_compatible_config(format, text)?;
 
+    set_json_default_usize_if_absent_or_old_default(
+        &mut document,
+        "agents.implementation_pressure_after_shell_actions",
+        5,
+        3,
+    )?;
     update_json_model_profile_context_window_default(
         &mut document,
         "deepseek-default",

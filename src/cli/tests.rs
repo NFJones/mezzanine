@@ -692,10 +692,10 @@ fn startup_config_layers_migrate_existing_primary_config() {
     );
     assert_eq!(
         effective.get("agents.implementation_pressure_after_shell_actions"),
-        Some("5")
+        Some("3")
     );
     assert!(migrated.contains("version = 7"));
-    assert!(migrated.contains("implementation_pressure_after_shell_actions = 5"));
+    assert!(migrated.contains("implementation_pressure_after_shell_actions = 3"));
     assert!(migrated.contains("[model_presets.deepseek]"));
     assert!(!migrated.contains("nested_muxxer"));
     assert!(!migrated.contains("default_command"));
