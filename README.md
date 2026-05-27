@@ -26,6 +26,18 @@
 
 ***
 
+<div align="center">
+<picture>
+    <img
+      src="./resources/mez-demo-0.webp"
+      width="500"
+      alt="Mezzanine demo"
+    />
+</picture>
+</div>
+
+***
+
 Mezzanine is a terminal multiplexer with a built-in pane-local agent. Use it
 when you want to keep a shell, logs, editor, and agent conversation in one
 recoverable session while you inspect, edit, and validate work.
@@ -37,6 +49,8 @@ Look up common tasks: [Everyday Use](#everyday-use),
 [Configuration Quick Reference](#configuration-quick-reference).
 Go deeper: [Documentation Guide](#documentation-guide).
 Contributing in this repository? See [Contributor Notes](#contributor-notes).
+
+***
 
 - [Why Mezzanine?](#why-mezzanine)
 - [Prerequisites](#prerequisites)
