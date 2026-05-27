@@ -15,6 +15,7 @@ use super::client_loop::{
     route_client_input_actions_with_host_paste_state,
 };
 use super::fd::duration_to_timespec;
+use super::render::compose_client_presentation_with_styles;
 use super::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use super::{
     AlternateScreenState, AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo,
@@ -1841,6 +1842,7 @@ fn attached_terminal_client_step_routes_input_and_composes_output() {
             "three       ".to_string(),
         ],
         line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,
@@ -1919,6 +1921,7 @@ fn attached_terminal_client_step_forwards_raw_input_when_primary_prompt_is_activ
             "▐ :         ".to_string(),
         ],
         line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,
@@ -2138,6 +2141,7 @@ fn attached_terminal_client_loop_pumps_input_output_and_stops_on_hangup() {
         client_size: Size::new(10, 2).unwrap(),
         lines: vec!["pane      ".to_string(), "old       ".to_string()],
         line_style_spans: vec![Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,
@@ -2242,6 +2246,7 @@ fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
         client_size: Size::new(8, 2).unwrap(),
         lines: vec!["pane    ".to_string(), "        ".to_string()],
         line_style_spans: vec![Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,
@@ -3331,6 +3336,7 @@ fn observer_client_presentation_uses_local_viewport_offset() {
             "mnop3456".to_string(),
         ],
         line_style_spans: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: true,
         viewport_row: 0,
         viewport_column: 0,
@@ -3576,6 +3582,7 @@ fn client_presentation_renders_status_line_inside_authoritative_size() {
         client_size: Size::new(12, 3).unwrap(),
         lines: vec!["one".to_string(), "two".to_string(), "three".to_string()],
         line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,
@@ -3604,6 +3611,55 @@ fn client_presentation_renders_status_line_inside_authoritative_size() {
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0], "one");
     assert_eq!(lines[2], "copy: select");
+}
+
+/// Verifies client presentation highlights the submitted pager search match.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn client_presentation_highlights_current_pager_search_match() {
+    let view = RenderedClientView {
+        role: ClientViewRole::Primary,
+        authoritative_size: Size::new(16, 3).unwrap(),
+        client_size: Size::new(16, 3).unwrap(),
+        lines: vec![
+            "alpha".to_string(),
+            "beta match".to_string(),
+            "gamma".to_string(),
+        ],
+        line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: Some((
+            CopyPosition { line: 1, column: 5 },
+            CopyPosition {
+                line: 1,
+                column: 10,
+            },
+        )),
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: 0,
+        cursor_column: 0,
+        cursor_visible: false,
+        cursor_style: TerminalCursorStyle::Block,
+        cursor_blink: true,
+        cursor_blink_interval_ms: 500,
+        application_keypad: false,
+        bracketed_paste: false,
+        animation_refresh_interval_ms: 0,
+        ui_theme: UiTheme::default(),
+        agent_prompt_region: None,
+        primary_prompt_active: false,
+    };
+
+    let (lines, line_style_spans) = compose_client_presentation_with_styles(&view, None);
+
+    assert_eq!(lines[1], "beta match");
+    assert_eq!(line_style_spans[1].len(), 1);
+    assert_eq!(line_style_spans[1][0].start, 5);
+    assert_eq!(line_style_spans[1][0].length, 5);
 }
 
 /// Verifies readline prompt status row renders prompt and cursor column.
@@ -3662,6 +3718,7 @@ fn readline_prompt_client_presentation_places_prompt_on_status_row() {
         client_size: Size::new(14, 3).unwrap(),
         lines: vec!["pane".to_string(), "body".to_string(), "old".to_string()],
         line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,

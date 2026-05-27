@@ -143,6 +143,8 @@ pub struct RenderedClientView {
     pub lines: Vec<String>,
     /// Per-line non-default SGR style spans aligned to `lines`.
     pub line_style_spans: Vec<Vec<super::TerminalStyleSpan>>,
+    /// Active copy-mode selection range, including submitted pager search matches.
+    pub selection: Option<(super::CopyPosition, super::CopyPosition)>,
     /// Stores the requires client scroll value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1186,6 +1188,7 @@ fn terminal_output_style_spans_drop_focused_overlay_spans_for_mismatched_diff_ro
             "- value: Some(None)".to_string(),
         ],
         line_style_spans: vec![Vec::new(), vec![hidden_some_span]],
+        selection: None,
         requires_client_scroll: false,
         viewport_row: 0,
         viewport_column: 0,

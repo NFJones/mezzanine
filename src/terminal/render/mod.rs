@@ -6,7 +6,7 @@
 
 use super::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, ClientStatusKind, ClientStatusLine,
-    ClientViewRole, GraphicRendition, MezError, MousePaneAgentStatusCell,
+    ClientViewRole, CopyPosition, GraphicRendition, MezError, MousePaneAgentStatusCell,
     MouseWindowActionFrameCell, MouseWindowFrameCell, MouseWindowGroupFrameCell,
     PaneAgentStatusField, PaneGeometry, PaneRenderInput, ReadlinePromptRegion, RenderedClientView,
     Result, Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFramePosition,
@@ -244,6 +244,7 @@ pub fn render_attached_client_view(
         client_size,
         lines,
         line_style_spans,
+        selection: None,
         requires_client_scroll,
         viewport_row: 0,
         viewport_column: 0,
@@ -808,6 +809,16 @@ pub fn compose_client_presentation_with_styles(
         lines.push(" ".repeat(target_columns));
         line_style_spans.push(Vec::new());
     }
+    if view.selection.is_some() {
+        push_client_selection_style_spans(
+            &mut line_style_spans,
+            view.selection,
+            row_offset,
+            column_offset,
+            target_columns,
+            status_line_rendition(ClientStatusKind::CopyMode, &view.ui_theme),
+        );
+    }
     if let Some(status) = status
         && target_rows > 0
     {
@@ -828,6 +839,62 @@ pub fn compose_client_presentation_with_styles(
         }
     }
     (lines, line_style_spans)
+}
+
+/// Adds a visible style run for the active copy-mode selection in client space.
+///
+/// The function keeps pager search matches render-only: copy-mode owns the
+/// selected range, while the client presentation clips that range to the current
+/// viewport and appends a highlight span without changing the underlying text.
+fn push_client_selection_style_spans(
+    line_style_spans: &mut [Vec<TerminalStyleSpan>],
+    selection: Option<(CopyPosition, CopyPosition)>,
+    row_offset: usize,
+    column_offset: usize,
+    target_columns: usize,
+    rendition: GraphicRendition,
+) {
+    if target_columns == 0 {
+        return;
+    }
+    let Some((selection_start, selection_end)) = selection else {
+        return;
+    };
+    let (selection_start, selection_end) = if selection_start <= selection_end {
+        (selection_start, selection_end)
+    } else {
+        (selection_end, selection_start)
+    };
+    let visible_column_end = column_offset.saturating_add(target_columns);
+    for (visible_row, spans) in line_style_spans.iter_mut().enumerate() {
+        let source_row = row_offset.saturating_add(visible_row);
+        if source_row < selection_start.line || source_row > selection_end.line {
+            continue;
+        }
+        let source_start = if source_row == selection_start.line {
+            selection_start.column
+        } else {
+            0
+        };
+        let source_end = if source_row == selection_end.line {
+            selection_end.column
+        } else {
+            visible_column_end
+        };
+        let clipped_start = source_start.max(column_offset);
+        let clipped_end = source_end.min(visible_column_end);
+        if clipped_end <= clipped_start {
+            continue;
+        }
+        push_or_extend_style_span(
+            spans,
+            TerminalStyleSpan {
+                start: clipped_start.saturating_sub(column_offset),
+                length: clipped_end.saturating_sub(clipped_start),
+                rendition,
+            },
+        );
+    }
 }
 
 /// Runs the apply client view offset operation for this subsystem.
