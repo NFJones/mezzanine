@@ -1028,6 +1028,14 @@ pub(super) struct RuntimeDisplayOverlay {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) scroll_offset: usize,
+    /// Search query currently being edited in the command-output pager.
+    pub(super) search_input: Option<String>,
+    /// Last submitted pager search query, reused by empty `/` submissions.
+    pub(super) search_query: Option<String>,
+    /// Last line matched by pager search.
+    pub(super) search_match_line: Option<usize>,
+    /// Transient pager search feedback shown in the overlay footer.
+    pub(super) search_status: Option<String>,
     /// Selectable line-to-command mappings rendered inside this overlay.
     ///
     /// Lines without an entry remain inert. The line index is measured against

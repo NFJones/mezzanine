@@ -240,6 +240,10 @@ The Mezzanine command prompt accepts commands such as `new-window`,
 `refresh-provider-info`. Commands entered there are parsed by Mezzanine, not by
 the pane shell.
 
+Command output shown in the pager supports `/` text search. Submit a query to
+jump to the next match; submit `/` with an empty query to repeat the last search,
+wrapping to the top when no later match exists.
+
 ### Use the agent shell
 
 Press `Ctrl+A a` in a pane and type a request. The agent works from the focused

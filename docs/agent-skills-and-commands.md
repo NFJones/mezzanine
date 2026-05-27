@@ -102,7 +102,7 @@ Common slash commands:
 | Command | Use it for |
 | --- | --- |
 | `/help` | Show the live command list. |
-| `/status` | Inspect the current pane agent session. |
+| `/status` | Inspect the current pane agent session; pager output supports `/` search and empty `/` repeats. |
 | `/model` | Inspect or change the active model selection. |
 | `/thinking` | Toggle provider thinking mode when supported. |
 | `/approval` | Inspect or change the session approval mode. |

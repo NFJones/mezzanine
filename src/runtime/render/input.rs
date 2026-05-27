@@ -9,6 +9,12 @@
 pub(super) enum RuntimeDisplayOverlayInputAction {
     /// Exit the overlay.
     Exit,
+    /// Enter command-output pager search editing.
+    StartSearch,
+    /// Append printable text to the active pager search query.
+    EditSearchText,
+    /// Delete the previous character from the active pager search query.
+    EditSearchBackspace,
     /// Select the currently active row.
     SelectActive,
     /// Move selection to the previous selectable row.
@@ -31,6 +37,17 @@ pub(super) fn runtime_display_overlay_input_action(
 ) -> RuntimeDisplayOverlayInputAction {
     if input == b"q" {
         return RuntimeDisplayOverlayInputAction::Exit;
+    }
+    if input == b"/" {
+        return RuntimeDisplayOverlayInputAction::StartSearch;
+    }
+    if input == b"\x7f" || input == b"\x08" {
+        return RuntimeDisplayOverlayInputAction::EditSearchBackspace;
+    }
+    if std::str::from_utf8(input)
+        .is_ok_and(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
+    {
+        return RuntimeDisplayOverlayInputAction::EditSearchText;
     }
     match runtime_selector_input_action(input) {
         RuntimeSelectorInputAction::Exit => RuntimeDisplayOverlayInputAction::Exit,
