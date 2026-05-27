@@ -4167,7 +4167,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v19"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v20"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4214,6 +4214,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
             .contains("prefer the first small implementation, test, validation, or report action")
     );
     assert!(prompt.contains("over reading more for confidence"));
+    assert!(prompt.contains("When a likely behavior gap is small, localized, and safe to validate"));
+    assert!(prompt.contains("move directly to the smallest test or implementation"));
     assert!(prompt.contains("Never stop at a plan when an executable action can make progress"));
     assert!(prompt.contains("Recoverable action failures are part of the work loop"));
     assert!(prompt.contains(
@@ -4230,6 +4232,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("a say-only plan or status is insufficient"));
     assert!(prompt.contains("do not emit a visible plan in say"));
     assert!(prompt.contains("put immediate intent in the batch rationale"));
+    assert!(prompt.contains("If you already gave one evidence-based but non-executing answer about likely behavior"));
+    assert!(prompt.contains("default to inspect, edit, or validate"));
     assert!(!prompt.contains("pair any brief plan"));
     assert!(prompt.contains("For long-running tasks, keep one task-level goal"));
     assert!(prompt.contains("Break broad work into dependency-aware slices"));
@@ -4279,6 +4283,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Spend output tokens on complete executable actions"));
     assert!(prompt.contains("not repeated intent, praise, reassurance, command logs"));
     assert!(prompt.contains("Do not start with approval phrases"));
+    assert!(prompt.contains("On repeated followups about the same likely bug or missing behavior"));
+    assert!(prompt.contains("use the next turn to act"));
     assert!(prompt.contains("Great question"));
     assert!(prompt.contains("Good catch"));
     assert!(prompt.contains("You're right"));
@@ -4408,6 +4414,9 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
     assert!(prompt.contains("use absolute paths above/outside that root"));
     assert!(prompt.contains("Validate proportional to risk"));
+    assert!(prompt.contains("For behavior questions that are cheap to encode as regression coverage"));
+    assert!(prompt.contains("prefer the smallest focused test over extended architectural reasoning"));
+    assert!(prompt.contains("develop behavior fixes against a failing regression test"));
     assert!(prompt.contains("After a successful file mutation"));
     assert!(prompt.contains("prefer execution-based validation over additional source reading"));
     assert!(prompt.contains("focused or required format, build, lint, and test commands"));

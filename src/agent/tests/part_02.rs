@@ -26,12 +26,16 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("a say-only plan or status is insufficient"));
     assert!(prompt.contains("do not emit a visible plan in say"));
     assert!(prompt.contains("put immediate intent in the batch rationale"));
+    assert!(prompt.contains("If you already gave one evidence-based but non-executing answer about likely behavior"));
+    assert!(prompt.contains("default to inspect, edit, or validate"));
     assert!(prompt.contains("Unless the user explicitly asks for a plan"));
     assert!(prompt.contains(
         "implementation requests as permission to inspect, edit, validate, repair, and finish"
     ));
     assert!(prompt.contains("make the smallest coherent change"));
     assert!(prompt.contains("report evidence-backed results"));
+    assert!(prompt.contains("When a likely behavior gap is small, localized, and safe to validate"));
+    assert!(prompt.contains("move directly to the smallest test or implementation"));
     assert!(prompt.contains("If the user asks for a plan tied to repository state"));
     assert!(prompt.contains("produce an evidence-backed solution plan"));
     assert!(prompt.contains("instead of a plan to start investigating"));
@@ -169,6 +173,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
     assert!(prompt.contains("use absolute paths above/outside that root"));
     assert!(prompt.contains("Validate proportional to risk"));
+    assert!(prompt.contains("For behavior questions that are cheap to encode as regression coverage"));
+    assert!(prompt.contains("prefer the smallest focused test over extended architectural reasoning"));
+    assert!(prompt.contains("develop behavior fixes against a failing regression test"));
     assert!(prompt.contains("After a successful file mutation"));
     assert!(prompt.contains("prefer execution-based validation over additional source reading"));
     assert!(prompt.contains("choose one likely owner range and read it once before patching"));
@@ -197,6 +204,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Treat batch rationales as thinking-line deltas"));
     assert!(prompt.contains("add only the new reason for the next action batch"));
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
+    assert!(prompt.contains("On repeated followups about the same likely bug or missing behavior"));
+    assert!(prompt.contains("use the next turn to act"));
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
     assert!(prompt.contains("any other text in the same response"));

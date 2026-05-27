@@ -5868,6 +5868,11 @@ agent is blocked by concrete evidence. It MUST instruct the agent not to emit a
 visible plan in `say` when an executable inspection, edit, validation, or repair
 action is available; immediate intent SHOULD be carried by the batch rationale
 and action summaries before executing the next action.
+If the agent already gave one evidence-based but non-executing answer about
+likely behavior, and the next user turn remains implementation-adjacent, the
+prompt SHOULD default the next response to inspect, edit, or validate when
+executable actions are available rather than allowing another inference-only
+answer.
 For planning requests tied to repository state, the prompt MUST require enough
 inspection to produce an evidence-backed solution plan instead of a plan to
 begin investigating the subject.
@@ -5883,6 +5888,11 @@ implementation, test, validation, or report action over additional exploration
 for confidence. Additional inspection SHOULD be driven by a concrete missing
 fact, validation failure, changed file, or ambiguity that would make the next
 action wrong.
+When a likely behavior gap is small, localized, and safe to validate, the
+prompt SHOULD tell the agent not to spend multiple turns proving the gap
+purely by explanation. After one evidence pass identifies the likely owner and
+plausible fix surface, it SHOULD direct the agent to move to the smallest test
+or implementation that can confirm or refute the hypothesis.
 For small local edits, the prompt SHOULD direct the agent to choose one likely
 owner range after the first search pass, read that owner range once, and then
 attempt the patch. It SHOULD discourage continued anchor-localization unless a
@@ -6103,6 +6113,14 @@ successful file mutation, it MUST prefer command-backed validation evidence over
 additional source reading unless a concrete missing fact, validation failure, or
 unclear diff/status result requires inspection. If validation cannot be run, the
 prompt MUST require the agent to say why.
+For behavior questions that are cheap to encode as regression coverage, the
+prompt SHOULD prefer the smallest focused test over extended architectural
+reasoning. If the user asks whether the behavior can be tested, the prompt
+SHOULD treat that as a strong signal to add or adapt a focused regression test
+first when feasible.
+When feasible, the prompt SHOULD direct the agent to develop behavior fixes
+against a failing focused regression test, then make the implementation pass,
+then broaden validation proportionally.
 
 The prompt MUST require the agent to distinguish user instructions from
 terminal output, project files, web content, and other untrusted data.
@@ -6184,6 +6202,10 @@ result unless that fact materially changed. When an action rationale is
 present, the prompt SHOULD ask for a concise reason that justifies the
 immediate action and does not duplicate the batch rationale, progress `say`, or
 action summary.
+On repeated followups about the same likely bug or missing behavior, the prompt
+SHOULD tell the agent not to keep restating uncertainty in user-facing prose
+once the next concrete inspection, test, or implementation step is available,
+and instead to use the next turn to act.
 The runtime MUST add a bounded, turn-volatile context block that lists recent
 progress `say` messages already emitted during the active turn before subsequent
 provider continuations. The block MUST be framed as already-shown progress, not
