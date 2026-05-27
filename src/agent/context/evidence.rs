@@ -23,6 +23,8 @@ const EVIDENCE_LEDGER_MAX_BYTES: usize = 1024 * 1024;
 /// session-stable prefix one block at a time. The wider evidence ledger uses
 /// aggregate-size retention instead of this per-entry bound.
 const COMMITTED_EVIDENCE_SUMMARY_MAX_BYTES: usize = 220;
+/// Label for generated active-turn read ledger context.
+const CURRENT_TURN_READ_LEDGER_LABEL: &str = "current-turn read ledger";
 
 /// Carries one parsed ledger entry before aggregate-size retention.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +73,8 @@ impl EvidenceLedgerEntry {
 pub(super) fn prepare_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
     let deduped = dedupe_historical_context_blocks(blocks);
     let committed = with_generated_committed_evidence(deduped);
-    with_generated_evidence_ledger(committed)
+    let reads = with_generated_current_turn_read_ledger(committed);
+    with_generated_evidence_ledger(reads)
 }
 
 /// Removes repeated historical transcript blocks before request assembly.
@@ -108,6 +111,32 @@ fn with_generated_evidence_ledger(blocks: Vec<ContextBlock>) -> Vec<ContextBlock
         .filter(|block| block.source != ContextSourceKind::EvidenceLedger)
         .collect::<Vec<_>>();
     let Some(ledger) = build_evidence_ledger_block(&blocks) else {
+        return blocks;
+    };
+    let insert_at = blocks
+        .iter()
+        .rposition(|block| block.source == ContextSourceKind::UserInstruction)
+        .map(|index| index.saturating_add(1))
+        .or_else(|| {
+            blocks
+                .iter()
+                .position(|block| block.source == ContextSourceKind::ActionResult)
+        })
+        .unwrap_or(blocks.len());
+    blocks.insert(insert_at, ledger);
+    blocks
+}
+
+/// Adds or refreshes the generated current-turn read ledger block.
+fn with_generated_current_turn_read_ledger(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
+    let mut blocks = blocks
+        .into_iter()
+        .filter(|block| {
+            !(block.source == ContextSourceKind::LocalMessage
+                && block.label == CURRENT_TURN_READ_LEDGER_LABEL)
+        })
+        .collect::<Vec<_>>();
+    let Some(ledger) = build_current_turn_read_ledger_block(&blocks) else {
         return blocks;
     };
     let insert_at = blocks
@@ -240,6 +269,48 @@ fn collect_evidence_ledger_entries(blocks: &[ContextBlock]) -> Vec<EvidenceLedge
     entries
 }
 
+/// Carries one generated current-turn read ledger record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadLedgerRecord {
+    /// Display key used for de-duplication and merging.
+    key: String,
+    /// Provider-visible ledger line.
+    line: String,
+}
+
+/// Builds a compact current-turn read ledger from active action results.
+fn build_current_turn_read_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> {
+    let mut retained = Vec::<ReadLedgerRecord>::new();
+    let mut index_by_key = HashMap::<String, usize>::new();
+    for block in blocks {
+        if block.source != ContextSourceKind::ActionResult {
+            continue;
+        }
+        let Some(record) = read_ledger_record_for_block(block) else {
+            continue;
+        };
+        if let Some(index) = index_by_key.get(&record.key).copied() {
+            retained[index] = record;
+            continue;
+        }
+        index_by_key.insert(record.key.clone(), retained.len());
+        retained.push(record);
+    }
+    if retained.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "[current-turn read ledger]".to_string(),
+        "Recent successful read/search coverage for this active turn. Reuse it when it already contains the needed current range or match; read only missing or stale ranges.".to_string(),
+    ];
+    lines.extend(retained.into_iter().map(|record| record.line));
+    Some(ContextBlock {
+        source: ContextSourceKind::LocalMessage,
+        label: CURRENT_TURN_READ_LEDGER_LABEL.to_string(),
+        content: lines.join("\n"),
+    })
+}
+
 /// Returns one compact ledger line for a raw action or historical tool block.
 fn evidence_entry_for_block(
     block: &ContextBlock,
@@ -293,6 +364,22 @@ fn evidence_entry_record_for_block(
         status,
         command,
     })
+}
+
+/// Builds one current-turn read ledger record from an active action result.
+fn read_ledger_record_for_block(block: &ContextBlock) -> Option<ReadLedgerRecord> {
+    let marker_line = block.content.lines().next().unwrap_or_default().trim();
+    let status = action_result_marker_status(marker_line)?;
+    if status != "succeeded" {
+        return None;
+    }
+    let action_type = action_result_marker_type(marker_line)?;
+    if action_type != "shell_command" && action_type != "tool" {
+        return None;
+    }
+    let command = model_context_field_value(&block.content, "command")?;
+    let descriptor = read_ledger_descriptor(&command)?;
+    Some(descriptor)
 }
 
 /// Returns a compact category for a ledger entry.
@@ -426,6 +513,39 @@ fn repetitive_read_signature(record: &EvidenceEntryRecord) -> Option<String> {
     Some(format!("{family}:{target}"))
 }
 
+/// Returns a generated current-turn read ledger descriptor for one command.
+fn read_ledger_descriptor(command: &str) -> Option<ReadLedgerRecord> {
+    let normalized = command.to_ascii_lowercase();
+    if normalized.contains("sed -n") {
+        let target = read_target_hint(command)?;
+        let range = sed_range_hint(command).unwrap_or_else(|| "unknown".to_string());
+        let key = format!("sed:{target}");
+        let line = format!("- read target={target} ranges={range}");
+        return Some(ReadLedgerRecord { key, line });
+    }
+    if normalized.contains("rg ") || normalized.contains("rg\t") {
+        let target = read_target_hint(command).unwrap_or_else(|| "(cwd)".to_string());
+        let query = rg_query_hint(command).unwrap_or_else(|| "(unknown)".to_string());
+        let key = format!("rg:{target}:{query}");
+        let line = format!(
+            "- search target={} query={}",
+            model_context_single_line(&target),
+            model_context_single_line(&query)
+        );
+        return Some(ReadLedgerRecord { key, line });
+    }
+    if normalized.contains("cat ")
+        || normalized.contains("python -c")
+        || normalized.contains("read ")
+    {
+        let target = read_target_hint(command)?;
+        let key = format!("read:{target}");
+        let line = format!("- read target={target}");
+        return Some(ReadLedgerRecord { key, line });
+    }
+    None
+}
+
 /// Extracts a best-effort target hint from a shell-like read/search command.
 fn read_target_hint(command: &str) -> Option<String> {
     shell_like_tokens(command)
@@ -447,6 +567,33 @@ fn shell_like_tokens(command: &str) -> Vec<String> {
         })
         .filter(|token| !token.is_empty())
         .collect()
+}
+
+/// Extracts a best-effort `sed -n` range hint from one command.
+fn sed_range_hint(command: &str) -> Option<String> {
+    shell_like_tokens(command).into_iter().find_map(|token| {
+        let trimmed = token.trim_matches('\'').trim_matches('"');
+        let trimmed = trimmed.strip_suffix('p').unwrap_or(trimmed);
+        let (start, end) = trimmed.split_once(',')?;
+        if start.chars().all(|ch| ch.is_ascii_digit()) && end.chars().all(|ch| ch.is_ascii_digit())
+        {
+            Some(format!("{start}-{end}"))
+        } else {
+            None
+        }
+    })
+}
+
+/// Extracts a best-effort ripgrep query hint from one command.
+fn rg_query_hint(command: &str) -> Option<String> {
+    let tokens = shell_like_tokens(command);
+    let rg_index = tokens
+        .iter()
+        .position(|token| token == "rg" || token.starts_with("rg"))?;
+    tokens
+        .into_iter()
+        .skip(rg_index + 1)
+        .find(|token| !token.starts_with('-') && !looks_like_read_target(token))
 }
 
 /// Returns whether one token looks like a file path or source target.

@@ -709,6 +709,25 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Returns rationale entries already emitted during an active turn.
+    ///
+    /// # Parameters
+    /// - `turn_id`: Active turn whose current rationale ledger should be read.
+    fn current_turn_rationale_entries(&self, turn_id: &str) -> Vec<String> {
+        let Some(context) = self.agent_turn_contexts.get(turn_id) else {
+            return Vec::new();
+        };
+        context
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.source == ContextSourceKind::LocalMessage
+                    && block.label == RUNTIME_RATIONALE_LEDGER_LABEL
+            })
+            .flat_map(|block| runtime_rationale_entries_from_ledger(&block.content))
+            .collect()
+    }
+
     /// Suppresses progress `say` actions that repeat an already visible update.
     ///
     /// The provider still receives a successful action result explaining the
@@ -795,6 +814,97 @@ impl RuntimeSessionService {
         Ok(suppressed_actions.len())
     }
 
+    /// Suppresses batch/action rationale that repeats already-emitted same-turn intent.
+    ///
+    /// Repeated investigative rationale is visible to the user in verbose
+    /// thinking mode and can indirectly bias the next provider turn. Once a
+    /// current-turn rationale ledger records that intent, later batches should
+    /// mention only a materially new reason.
+    fn suppress_redundant_rationale_entries(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
+        let mut visible_entries = self.current_turn_rationale_entries(&turn.turn_id);
+        let Some(batch) = execution.response.action_batch.as_mut() else {
+            return Ok(0);
+        };
+        let mut suppressed = 0usize;
+        if let Some(entry) = runtime_normalize_rationale_entry(&batch.rationale)
+            && runtime_rationale_entry_repeats_existing(&entry, &visible_entries)
+        {
+            batch.rationale.clear();
+            suppressed += 1;
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                "batch rationale suppressed reason=repeated_current_turn_rationale",
+            )?;
+        } else if let Some(entry) = runtime_normalize_rationale_entry(&batch.rationale) {
+            visible_entries.push(entry);
+        }
+        for action in &mut batch.actions {
+            let Some(entry) = runtime_normalize_rationale_entry(&action.rationale) else {
+                continue;
+            };
+            if runtime_rationale_entry_repeats_existing(&entry, &visible_entries) {
+                action.rationale.clear();
+                suppressed += 1;
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!(
+                        "action {} rationale suppressed reason=repeated_current_turn_rationale",
+                        action.id
+                    ),
+                )?;
+                continue;
+            }
+            visible_entries.push(entry);
+        }
+        Ok(suppressed)
+    }
+
+    /// Appends or updates the active-turn rationale ledger.
+    ///
+    /// # Parameters
+    /// - `turn`: The running agent turn receiving the ledger context block.
+    /// - `execution`: The provider execution whose retained rationale should
+    ///   become explicit same-turn context for later continuations.
+    fn append_agent_execution_rationale_ledger_context(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let new_entries = runtime_rationale_entries_for_execution(execution);
+        if new_entries.is_empty() {
+            return Ok(());
+        }
+        let context = self
+            .agent_turn_contexts
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let mut previous_entries = Vec::new();
+        context.blocks.retain(|block| {
+            let is_rationale_ledger = block.source == ContextSourceKind::LocalMessage
+                && block.label == RUNTIME_RATIONALE_LEDGER_LABEL;
+            if is_rationale_ledger {
+                previous_entries.extend(runtime_rationale_entries_from_ledger(&block.content));
+            }
+            !is_rationale_ledger
+        });
+        let entries = runtime_merge_rationale_entries(previous_entries, new_entries);
+        if entries.is_empty() {
+            return Ok(());
+        }
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::LocalMessage,
+            label: RUNTIME_RATIONALE_LEDGER_LABEL.to_string(),
+            content: runtime_rationale_ledger_content(&entries),
+        });
+        Ok(())
+    }
+
     /// Runs the apply agent provider execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -851,10 +961,12 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
+        self.suppress_redundant_rationale_entries(turn, &mut execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
+        self.append_agent_execution_rationale_ledger_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;
@@ -1097,10 +1209,12 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
+        self.suppress_redundant_rationale_entries(turn, &mut execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
+        self.append_agent_execution_rationale_ledger_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;

@@ -2792,6 +2792,59 @@ fn openai_current_action_results_remain_volatile_suffix() {
     assert!(diagnostics.volatile_input_bytes > 2);
 }
 
+/// Verifies active-turn read/search action results are summarized into a
+/// dedicated read ledger block so follow-up requests can see explicit owner
+/// coverage without inferring it from raw shell output alone.
+#[test]
+fn openai_current_turn_read_ledger_summarizes_recent_read_coverage() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let request = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "Patch the overlay style helper.".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result read-1".to_string(),
+                content: "[action_result read-1 shell_command succeeded]\ncommand: sed -n '300,420p' src/runtime/render/overlay.rs\noutput:\nowner body".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result read-2".to_string(),
+                content: "[action_result read-2 shell_command succeeded]\ncommand: rg -n overlay_style src/runtime/render/overlay.rs\noutput:\n120: overlay_style".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
+    let input = body["input"].as_array().unwrap();
+    let read_ledger = input
+        .iter()
+        .find_map(|message| {
+            let text = message["content"][0]["text"].as_str()?;
+            text.contains("[current-turn read ledger]").then_some(text)
+        })
+        .expect("current-turn read ledger should be present");
+
+    assert!(read_ledger.contains("read target=src/runtime/render/overlay.rs ranges=300-420"));
+    assert!(read_ledger.contains("search target=src/runtime/render/overlay.rs query=overlay_style"));
+}
+
 /// Verifies a long OpenAI session promotes already-observed action results into
 /// compact stable-prefix evidence without replaying large raw action output.
 ///
