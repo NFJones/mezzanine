@@ -41,6 +41,14 @@ pub(super) enum OpenAiMaapToolSurface {
 }
 
 impl OpenAiMaapToolSurface {
+    /// Shared provider-local instruction that forbids prose responses when a
+    /// MAAP function tool is available.
+    const FUNCTION_CALL_DISCIPLINE: &str = "Return a function call, not prose.";
+    /// Shared capability map for provider-local MAAP tool descriptions.
+    const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; respond_only=final text only.";
+    /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
+    const ANTI_EXAMPLES: &str = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
+
     /// Returns cache-stable surfaces that are always advertised to OpenAI.
     pub(super) fn stable_surfaces() -> &'static [Self] {
         &[
@@ -71,35 +79,60 @@ impl OpenAiMaapToolSurface {
     }
 
     /// Returns provider-facing guidance for this function tool.
-    fn description(self) -> &'static str {
+    fn description(self) -> String {
         match self {
-            Self::CapabilityDecision => {
-                "Submit one MAAP batch for deciding the next coarse capability. Only say and request_capability are valid. Model-selected skill lookup/loading is disabled."
-            }
-            Self::RespondOnly => {
-                "Submit one MAAP batch for response-only progress or completion. Model-selected skill lookup/loading is disabled. Only non-executing say actions are valid."
-            }
-            Self::Shell => {
-                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. Shell and apply_patch are the only executable actions in this surface."
-            }
-            Self::NetworkSearch => {
-                "Submit one MAAP batch for external network search work. Web search is the only network action in this surface."
-            }
-            Self::NetworkFetch => {
-                "Submit one MAAP batch for external URL fetch work. Fetch URL is the only network action in this surface."
-            }
-            Self::Mcp => {
-                "Submit one MAAP batch for MCP tool work. MCP calls are limited to the tools listed in this function schema."
-            }
-            Self::Subagent => {
-                "Submit one MAAP batch for local agent messaging or spawning subagents."
-            }
-            Self::ConfigChange => {
-                "Submit one MAAP batch for proposing Mezzanine configuration changes."
-            }
-            Self::CurrentRequest => {
-                "Submit one MAAP batch for this request's current composite action surface."
-            }
+            Self::CapabilityDecision => format!(
+                "Submit one MAAP batch for deciding the next coarse capability. {} Only say and request_capability are valid. If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Model-selected skill lookup/loading is disabled. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::RespondOnly => format!(
+                "Submit one MAAP batch for response-only progress or completion. {} Model-selected skill lookup/loading is disabled. Only non-executing say actions are valid.",
+                Self::FUNCTION_CALL_DISCIPLINE
+            ),
+            Self::Shell => format!(
+                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::NetworkSearch => format!(
+                "Submit one MAAP batch for external network search work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Web search is the only network action in this surface. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::NetworkFetch => format!(
+                "Submit one MAAP batch for external URL fetch work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Fetch URL is the only network action in this surface. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::Mcp => format!(
+                "Submit one MAAP batch for MCP tool work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::Subagent => format!(
+                "Submit one MAAP batch for local agent messaging or spawning subagents. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::ConfigChange => format!(
+                "Submit one MAAP batch for proposing Mezzanine configuration changes. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
+            Self::CurrentRequest => format!(
+                "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
         }
     }
 

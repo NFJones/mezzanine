@@ -1815,6 +1815,12 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         capability_tool["parameters"]["required"],
         serde_json::json!(["rationale", "thought", "actions"])
     );
+    let capability_description = capability_tool["description"].as_str().unwrap();
+    assert!(capability_description.contains("Return a function call, not prose"));
+    assert!(capability_description.contains("emit request_capability only"));
+    assert!(capability_description.contains("Capability map: shell=local files"));
+    assert!(capability_description.contains("Wrong: say(blocked"));
+    assert!(capability_description.contains("Right: request_capability(capability=\"shell\""));
     assert!(schema_properties.contains_key("rationale"));
     assert!(schema_properties.contains_key("thought"));
     assert!(!schema_properties.contains_key("protocol"));
@@ -3384,6 +3390,12 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
         shell_tool["parameters"]["required"],
         serde_json::json!(["rationale", "thought", "actions"])
     );
+    let shell_description = shell_tool["description"].as_str().unwrap();
+    assert!(shell_description.contains("Return a function call, not prose"));
+    assert!(shell_description.contains("Use only the action objects in this function schema"));
+    assert!(shell_description.contains("emit request_capability for that capability"));
+    assert!(shell_description.contains("Wrong: *** Replace File"));
+    assert!(shell_description.contains("copy old/context lines verbatim"));
     assert_eq!(
         shell_tool["parameters"]["properties"]["rationale"]["minLength"],
         1
