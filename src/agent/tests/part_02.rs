@@ -154,7 +154,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("1-6 exact old/context lines"));
     assert!(prompt.contains("must be copied verbatim from current file content"));
     assert!(prompt.contains("do not infer, normalize, simplify, or reconstruct likely code"));
-    assert!(prompt.contains("If the exact target line has not been read"));
+    assert!(prompt.contains("Treat that owner read as sufficient anchor context"));
+    assert!(prompt.contains("Do not ask for another anchor read merely to increase confidence"));
     assert!(prompt.contains("several small anchored hunks"));
     assert!(prompt.contains("without Markdown fences, heredocs"));
     assert!(!prompt.contains("For recovery compatibility"));
@@ -165,7 +166,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(!prompt.contains("Unanchored pure-addition update hunks append by default"));
     assert!(prompt.contains("distinctive @@ header anchors"));
     assert!(prompt.contains("use recent action-result evidence"));
-    assert!(prompt.contains("read only the missing or stale candidate/owner ranges once"));
+    assert!(prompt.contains("In most cases, one bounded owner read is enough"));
+    assert!(prompt.contains("read only missing/stale candidate or owner ranges once"));
     assert!(prompt.contains("if replacement or equivalent behavior exists"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));

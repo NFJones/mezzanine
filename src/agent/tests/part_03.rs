@@ -3821,7 +3821,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
-        description.contains("If the exact target line was not read"),
+        description.contains("Usually one bounded owner read"),
         "{description}"
     );
     assert!(
@@ -3849,7 +3849,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
-        description.len() < 1200,
+        description.len() < 1350,
         "apply_patch schema guidance should stay compact: {description}"
     );
 }

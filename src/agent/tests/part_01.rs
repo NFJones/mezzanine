@@ -4461,7 +4461,10 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("1-6 exact old/context lines"));
     assert!(prompt.contains("must be copied verbatim from current file content"));
     assert!(prompt.contains("never infer, normalize, simplify, or reconstruct likely code"));
-    assert!(prompt.contains("If you have not read the exact line"));
+    assert!(prompt.contains("In most cases one bounded owner-range read is enough"));
+    assert!(
+        prompt.contains("Reuse recent action-result evidence when it already covers the intended hunk range")
+    );
     assert!(prompt.contains("several small anchored hunks"));
     assert!(prompt.contains("Treat most `apply_patch` failures as recoverable"));
     assert!(prompt.contains(
@@ -4476,7 +4479,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(!prompt.contains("Unanchored pure-addition update hunks append by default"));
     assert!(prompt.contains("distinctive @@ header anchors"));
     assert!(prompt.contains("use recent action-result evidence"));
-    assert!(prompt.contains("read only the missing or stale candidate/owner ranges once"));
+    assert!(prompt.contains("read only missing/stale candidate or owner ranges once"));
+    assert!(prompt.contains("A second owner-localization read is exceptional"));
     assert!(prompt.contains("if replacement or equivalent behavior exists"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains("relative to pane current working directory"));

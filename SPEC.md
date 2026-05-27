@@ -5944,9 +5944,11 @@ The prompt MUST instruct the agent to treat recent file-inspection action
 results as reusable evidence. Before issuing another `sed`, `rg`, or equivalent
 file-read command, the agent SHOULD reuse a recent read or search result when
 it already contains the needed current range or match and otherwise read only
-missing or stale ranges. It SHOULD reread an overlapping region only when a
-file changed, prior output was truncated, a diagnostic explicitly requires
-fresh context, or a named missing range or boundary is needed.
+missing or stale ranges. For small local edits, one bounded owner-range read
+SHOULD be treated as sufficient anchor context by default. It SHOULD reread an
+overlapping region only when a file changed, prior output was truncated, a
+diagnostic explicitly requires fresh context, the intended hunk falls outside
+the covered range, or a named missing range or boundary is needed.
 
 The prompt MUST require the agent to inspect relevant project context before
 making non-trivial changes. For code and configuration work, the prompt MUST
@@ -6056,11 +6058,14 @@ wrappers, or `apply_patch <<...` shell text. It MUST state that the most
 reliable update shape is a small file operation with a copied `@@` anchor and a
 small number of exact old/context lines, and MUST state that each old/context
 line comes from current file content or fresh action-result evidence rather
-than inferred, normalized, simplified, or reconstructed code. If the model has
-not read the exact target line it wants to use as old/context, the prompt MUST
-direct it to read that bounded region before patching. The prompt MUST
-recommend several small anchored hunks over one large brittle hunk. It MUST
-state that after an
+than inferred, normalized, simplified, or reconstructed code. The prompt MUST
+state that one bounded owner-range read is sufficient in most cases and that
+recent action-result evidence covering the intended hunk range SHOULD be reused
+instead of reread. It MUST state that rereads are exceptional and require a
+concrete reason such as stale or truncated evidence, an intended hunk outside
+the covered range, or a prior patch or validation result showing that the
+first owner read was insufficient. The prompt MUST recommend several small
+anchored hunks over one large brittle hunk. It MUST state that after an
 `apply_patch` hunk or context mismatch, the model should reuse already-read
 fresh current context when available, otherwise re-read only missing or stale
 candidate/owner ranges, and retry with a smaller fresh Mezzanine patch using a
