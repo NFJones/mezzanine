@@ -229,6 +229,7 @@ fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
         ContextSourceKind::Policy => !message.content.starts_with("[scheduler state]\n"),
         ContextSourceKind::UserInstruction
         | ContextSourceKind::LocalMessage
+        | ContextSourceKind::RuntimeHint
         | ContextSourceKind::TranscriptTool
         | ContextSourceKind::EvidenceLedger
         | ContextSourceKind::ActionResult => false,
@@ -245,7 +246,7 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
     let selected_tool = openai_maap_tool_surface_for_request(request).tool_name();
     Some(ModelMessage {
         role: ModelMessageRole::Developer,
-        source: ContextSourceKind::LocalMessage,
+        source: ContextSourceKind::RuntimeHint,
         content: format!(
             "[allowed action surface]\n\
              interaction_kind={}\n\

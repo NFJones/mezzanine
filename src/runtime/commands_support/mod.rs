@@ -1406,6 +1406,7 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::DeveloperInstruction => "developer-instruction",
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
+        ContextSourceKind::RuntimeHint => "runtime-hint",
         ContextSourceKind::LocalMessage => "local-message",
         ContextSourceKind::ProjectGuidance => "project-guidance",
         ContextSourceKind::Memory => "memory",

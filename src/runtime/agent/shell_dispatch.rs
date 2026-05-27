@@ -215,12 +215,12 @@ impl RuntimeSessionService {
             return;
         };
         context.blocks.retain(|block| {
-            block.source != ContextSourceKind::LocalMessage
+            block.source != ContextSourceKind::RuntimeHint
                 || block.label != RUNTIME_ACTION_PRESSURE_LABEL
         });
         if let Some(phase) = phase {
             context.blocks.push(ContextBlock {
-                source: ContextSourceKind::LocalMessage,
+                source: ContextSourceKind::RuntimeHint,
                 label: RUNTIME_ACTION_PRESSURE_LABEL.to_string(),
                 content: runtime_action_pressure_context_content(phase),
             });
@@ -1037,8 +1037,7 @@ fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) ->
         }
     };
     format!(
-        "[action pressure]\n\
-         {phase_message} \
+        "{phase_message} \
          Continue following active repository guidance, validation, documentation, and handoff requirements. \
          Do not edit repository instruction or guidance files merely to satisfy this acceleration hint; change them only when the user explicitly requested guidance changes or they are part of the task. \
          Use another shell_command only for one named missing fact that would make the next edit, execution-based validation, repair, commit, or report wrong. \

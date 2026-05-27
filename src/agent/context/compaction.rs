@@ -263,6 +263,7 @@ pub(super) fn model_context_source_kind_name(source: ContextSourceKind) -> &'sta
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
         ContextSourceKind::LocalMessage => "local_message",
+        ContextSourceKind::RuntimeHint => "runtime_hint",
         ContextSourceKind::ProjectGuidance => "project_guidance",
         ContextSourceKind::Memory => "memory",
         ContextSourceKind::Transcript => "transcript",

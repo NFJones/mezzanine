@@ -7,7 +7,8 @@
 
 use super::compaction::{model_context_single_line, model_context_source_kind_name};
 use super::{ContextBlock, ContextSourceKind};
-use std::collections::{HashMap, HashSet};
+use crate::agent::{ShellReadObservation, ShellReadObservationKind, ShellReadRange};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Maximum total size retained in the generated evidence ledger.
 ///
@@ -132,7 +133,7 @@ fn with_generated_current_turn_read_ledger(blocks: Vec<ContextBlock>) -> Vec<Con
     let mut blocks = blocks
         .into_iter()
         .filter(|block| {
-            !(block.source == ContextSourceKind::LocalMessage
+            !(block.source == ContextSourceKind::RuntimeHint
                 && block.label == CURRENT_TURN_READ_LEDGER_LABEL)
         })
         .collect::<Vec<_>>();
@@ -274,8 +275,55 @@ fn collect_evidence_ledger_entries(blocks: &[ContextBlock]) -> Vec<EvidenceLedge
 struct ReadLedgerRecord {
     /// Display key used for de-duplication and merging.
     key: String,
-    /// Provider-visible ledger line.
-    line: String,
+    /// Read or search classifier.
+    kind: ShellReadObservationKind,
+    /// Best-effort target path or scope.
+    target: String,
+    /// Best-effort line ranges covered for this target.
+    ranges: BTreeSet<(usize, usize)>,
+    /// Best-effort queries observed for this target.
+    queries: BTreeSet<String>,
+}
+
+impl ReadLedgerRecord {
+    /// Returns the provider-visible ledger line.
+    fn render(&self) -> String {
+        match self.kind {
+            ShellReadObservationKind::Read => {
+                if self.ranges.is_empty() {
+                    format!("- read target={}", model_context_single_line(&self.target))
+                } else {
+                    format!(
+                        "- read target={} ranges={}",
+                        model_context_single_line(&self.target),
+                        self.ranges
+                            .iter()
+                            .map(|(start, end)| format!("{start}-{end}"))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                }
+            }
+            ShellReadObservationKind::Search => {
+                let query = if self.queries.is_empty() {
+                    "(unknown)".to_string()
+                } else {
+                    self.queries.iter().cloned().collect::<Vec<_>>().join(",")
+                };
+                format!(
+                    "- search target={} query={}",
+                    model_context_single_line(&self.target),
+                    model_context_single_line(&query)
+                )
+            }
+        }
+    }
+
+    /// Merges another record for the same target into this one.
+    fn merge(&mut self, other: Self) {
+        self.ranges.extend(other.ranges);
+        self.queries.extend(other.queries);
+    }
 }
 
 /// Builds a compact current-turn read ledger from active action results.
@@ -286,26 +334,24 @@ fn build_current_turn_read_ledger_block(blocks: &[ContextBlock]) -> Option<Conte
         if block.source != ContextSourceKind::ActionResult {
             continue;
         }
-        let Some(record) = read_ledger_record_for_block(block) else {
-            continue;
-        };
-        if let Some(index) = index_by_key.get(&record.key).copied() {
-            retained[index] = record;
-            continue;
+        for record in read_ledger_records_for_block(block) {
+            if let Some(index) = index_by_key.get(&record.key).copied() {
+                retained[index].merge(record);
+                continue;
+            }
+            index_by_key.insert(record.key.clone(), retained.len());
+            retained.push(record);
         }
-        index_by_key.insert(record.key.clone(), retained.len());
-        retained.push(record);
     }
     if retained.is_empty() {
         return None;
     }
     let mut lines = vec![
-        "[current-turn read ledger]".to_string(),
         "Recent successful read/search coverage for this active turn. Reuse it when it already contains the needed current range or match; read only missing or stale ranges.".to_string(),
     ];
-    lines.extend(retained.into_iter().map(|record| record.line));
+    lines.extend(retained.into_iter().map(|record| record.render()));
     Some(ContextBlock {
-        source: ContextSourceKind::LocalMessage,
+        source: ContextSourceKind::RuntimeHint,
         label: CURRENT_TURN_READ_LEDGER_LABEL.to_string(),
         content: lines.join("\n"),
     })
@@ -366,20 +412,25 @@ fn evidence_entry_record_for_block(
     })
 }
 
-/// Builds one current-turn read ledger record from an active action result.
-fn read_ledger_record_for_block(block: &ContextBlock) -> Option<ReadLedgerRecord> {
+/// Builds current-turn read ledger records from an active action result.
+fn read_ledger_records_for_block(block: &ContextBlock) -> Vec<ReadLedgerRecord> {
     let marker_line = block.content.lines().next().unwrap_or_default().trim();
-    let status = action_result_marker_status(marker_line)?;
+    let Some(status) = action_result_marker_status(marker_line) else {
+        return Vec::new();
+    };
     if status != "succeeded" {
-        return None;
+        return Vec::new();
     }
-    let action_type = action_result_marker_type(marker_line)?;
+    let Some(action_type) = action_result_marker_type(marker_line) else {
+        return Vec::new();
+    };
     if action_type != "shell_command" && action_type != "tool" {
-        return None;
+        return Vec::new();
     }
-    let command = model_context_field_value(&block.content, "command")?;
-    let descriptor = read_ledger_descriptor(&command)?;
-    Some(descriptor)
+    read_ledger_observations_for_block(block)
+        .into_iter()
+        .map(read_ledger_descriptor)
+        .collect()
 }
 
 /// Returns a compact category for a ledger entry.
@@ -496,119 +547,98 @@ fn repetitive_read_signature(record: &EvidenceEntryRecord) -> Option<String> {
     if record.category != "read" || record.status != "succeeded" {
         return None;
     }
-    let command = record.command.as_deref()?;
-    let normalized = command.to_ascii_lowercase();
-    let family = if normalized.contains("sed -n") {
-        "sed"
-    } else if normalized.contains("rg ") || normalized.contains("rg\t") {
-        "rg"
-    } else if normalized.contains("cat ") {
-        "cat"
-    } else if normalized.contains("python -c") {
-        "python"
-    } else {
-        "read"
-    };
-    let target = read_target_hint(command).unwrap_or_else(|| model_context_single_line(command));
-    Some(format!("{family}:{target}"))
-}
-
-/// Returns a generated current-turn read ledger descriptor for one command.
-fn read_ledger_descriptor(command: &str) -> Option<ReadLedgerRecord> {
-    let normalized = command.to_ascii_lowercase();
-    if normalized.contains("sed -n") {
-        let target = read_target_hint(command)?;
-        let range = sed_range_hint(command).unwrap_or_else(|| "unknown".to_string());
-        let key = format!("sed:{target}");
-        let line = format!("- read target={target} ranges={range}");
-        return Some(ReadLedgerRecord { key, line });
-    }
-    if normalized.contains("rg ") || normalized.contains("rg\t") {
-        let target = read_target_hint(command).unwrap_or_else(|| "(cwd)".to_string());
-        let query = rg_query_hint(command).unwrap_or_else(|| "(unknown)".to_string());
-        let key = format!("rg:{target}:{query}");
-        let line = format!(
-            "- search target={} query={}",
-            model_context_single_line(&target),
-            model_context_single_line(&query)
-        );
-        return Some(ReadLedgerRecord { key, line });
-    }
-    if normalized.contains("cat ")
-        || normalized.contains("python -c")
-        || normalized.contains("read ")
-    {
-        let target = read_target_hint(command)?;
-        let key = format!("read:{target}");
-        let line = format!("- read target={target}");
-        return Some(ReadLedgerRecord { key, line });
-    }
-    None
-}
-
-/// Extracts a best-effort target hint from a shell-like read/search command.
-fn read_target_hint(command: &str) -> Option<String> {
-    shell_like_tokens(command)
-        .into_iter()
-        .rev()
-        .find(|token| looks_like_read_target(token))
-}
-
-/// Splits shell-like command text into coarse tokens for heuristic analysis.
-fn shell_like_tokens(command: &str) -> Vec<String> {
-    command
-        .split_whitespace()
-        .map(|token| {
-            token
-                .trim_matches(|ch: char| {
-                    matches!(ch, '\'' | '"' | ',' | ';' | '(' | ')' | '[' | ']')
-                })
-                .to_string()
+    let observations = crate::agent::shell_read_observations_for_command(
+        record.command.as_deref().unwrap_or_default(),
+    );
+    observations
+        .first()
+        .map(|observation| match observation.kind {
+            ShellReadObservationKind::Read => format!("read:{}", observation.target),
+            ShellReadObservationKind::Search => format!("search:{}", observation.target),
         })
-        .filter(|token| !token.is_empty())
-        .collect()
 }
 
-/// Extracts a best-effort `sed -n` range hint from one command.
-fn sed_range_hint(command: &str) -> Option<String> {
-    shell_like_tokens(command).into_iter().find_map(|token| {
-        let trimmed = token.trim_matches('\'').trim_matches('"');
-        let trimmed = trimmed.strip_suffix('p').unwrap_or(trimmed);
-        let (start, end) = trimmed.split_once(',')?;
-        if start.chars().all(|ch| ch.is_ascii_digit()) && end.chars().all(|ch| ch.is_ascii_digit())
-        {
-            Some(format!("{start}-{end}"))
-        } else {
-            None
-        }
-    })
-}
-
-/// Extracts a best-effort ripgrep query hint from one command.
-fn rg_query_hint(command: &str) -> Option<String> {
-    let tokens = shell_like_tokens(command);
-    let rg_index = tokens
-        .iter()
-        .position(|token| token == "rg" || token.starts_with("rg"))?;
-    tokens
-        .into_iter()
-        .skip(rg_index + 1)
-        .find(|token| !token.starts_with('-') && !looks_like_read_target(token))
-}
-
-/// Returns whether one token looks like a file path or source target.
-fn looks_like_read_target(token: &str) -> bool {
-    if token.starts_with('-') || token.contains('=') {
-        return false;
+/// Builds a generated current-turn read ledger descriptor from one observation.
+fn read_ledger_descriptor(observation: ShellReadObservation) -> ReadLedgerRecord {
+    let key = match observation.kind {
+        ShellReadObservationKind::Read => format!("read:{}", observation.target),
+        ShellReadObservationKind::Search => format!("search:{}", observation.target),
+    };
+    let mut ranges = BTreeSet::new();
+    for range in observation.ranges {
+        ranges.insert((range.start_line, range.end_line));
     }
-    token.contains('/')
-        || token.ends_with(".rs")
-        || token.ends_with(".toml")
-        || token.ends_with(".md")
-        || token.ends_with(".txt")
-        || token.ends_with(".json")
-        || token.ends_with(".yaml")
-        || token.ends_with(".yml")
+    let mut queries = BTreeSet::new();
+    if let Some(query) = observation.query {
+        queries.insert(query);
+    }
+    ReadLedgerRecord {
+        key,
+        kind: observation.kind,
+        target: observation.target,
+        ranges,
+        queries,
+    }
+}
+
+/// Returns structured read/search observations recorded in one block.
+fn read_ledger_observations_for_block(block: &ContextBlock) -> Vec<ShellReadObservation> {
+    let command = model_context_field_value(&block.content, "command").unwrap_or_default();
+    read_ledger_observations_from_content(&command, &block.content)
+}
+
+/// Returns structured read/search observations from block content or fallback command parsing.
+fn read_ledger_observations_from_content(
+    command: &str,
+    content: &str,
+) -> Vec<ShellReadObservation> {
+    let observations = content
+        .lines()
+        .filter_map(parse_read_observation_line)
+        .collect::<Vec<_>>();
+    if !observations.is_empty() {
+        return observations;
+    }
+    crate::agent::shell_read_observations_for_command(command)
+}
+
+/// Parses one `read_observation:` line from model-facing action-result context.
+fn parse_read_observation_line(line: &str) -> Option<ShellReadObservation> {
+    let payload = line.trim().strip_prefix("read_observation:")?.trim();
+    let mut kind = None;
+    let mut target = None;
+    let mut ranges = Vec::new();
+    let mut query = None;
+    for field in payload.split_whitespace() {
+        let (key, value) = field.split_once('=')?;
+        match key {
+            "kind" => {
+                kind = match value {
+                    "read" => Some(ShellReadObservationKind::Read),
+                    "search" => Some(ShellReadObservationKind::Search),
+                    _ => None,
+                };
+            }
+            "target" => target = Some(value.to_string()),
+            "ranges" => {
+                for range in value.split(',') {
+                    let (start, end) = range.split_once('-')?;
+                    ranges.push(ShellReadRange {
+                        start_line: start.parse().ok()?,
+                        end_line: end.parse().ok()?,
+                    });
+                }
+            }
+            "query" => query = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    Some(ShellReadObservation {
+        kind: kind?,
+        target: target?,
+        ranges,
+        query,
+    })
 }
 
 /// Truncates a summary to a byte ceiling without splitting UTF-8.

@@ -11,6 +11,7 @@ use super::{
 
 mod execution;
 mod planning;
+mod read_observation;
 mod recovery;
 mod result_context;
 mod runner;
@@ -22,6 +23,10 @@ pub use execution::{
     ShellExecutionRequest, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_shell_action_through_pane,
     postprocess_shell_action_success_output, shell_command_result_content,
+};
+pub use read_observation::{
+    ShellReadObservation, ShellReadObservationKind, ShellReadRange,
+    shell_read_observations_for_command,
 };
 pub use result_context::action_result_context_content;
 pub(super) use result_context::action_result_transcript_content;
@@ -117,10 +122,12 @@ pub fn shell_command_structured_content_json(
     } else {
         plan.command.clone()
     };
+    let read_observations = shell_read_observations_for_command(&command);
     let value = serde_json::json!({
         "kind": action.action_type(),
         "summary": plan.summary,
         "command": command,
+        "read_observations": read_observations,
         "generated_command_elided": generated_command_elided,
         "generated_command_bytes": if generated_command_elided { Some(plan.command.len()) } else { None },
         "sent_to_pane": sent_to_pane,
@@ -143,7 +150,8 @@ pub(super) fn role_for_source(source: ContextSourceKind) -> ModelMessageRole {
         ContextSourceKind::System => ModelMessageRole::System,
         ContextSourceKind::DeveloperInstruction
         | ContextSourceKind::Policy
-        | ContextSourceKind::Configuration => ModelMessageRole::Developer,
+        | ContextSourceKind::Configuration
+        | ContextSourceKind::RuntimeHint => ModelMessageRole::Developer,
         ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool => {
             ModelMessageRole::Tool
         }

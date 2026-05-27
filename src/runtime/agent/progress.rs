@@ -333,7 +333,6 @@ pub(super) fn runtime_push_progress_say_token(tokens: &mut BTreeSet<String>, tok
 /// Builds the provider-visible content for the active-turn rationale ledger.
 pub(super) fn runtime_rationale_ledger_content(entries: &[String]) -> String {
     let mut lines = vec![
-        "[current-turn rationale ledger]".to_string(),
         "Already-emitted same-turn investigative intent. Avoid repeating these rationale lines unless the next action batch materially changes the reason."
             .to_string(),
     ];

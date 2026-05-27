@@ -5,7 +5,7 @@
 //! observation cleanup, skill-result summarization, JSON audit pruning, and
 //! truncation notices separate from turn execution.
 
-use super::super::{ActionResult, ActionStatus};
+use super::{ActionResult, ActionStatus, ShellReadObservation, ShellReadObservationKind};
 
 /// Maximum action-result content bytes included in one model-facing context
 /// block before native truncation metadata is appended.
@@ -193,6 +193,12 @@ fn append_shell_action_result_context(result: &ActionResult, lines: &mut Vec<Str
     {
         lines.push(format!("command: {command}"));
     }
+    if let Some(observations) = structured_object
+        .and_then(|object| object.get("read_observations"))
+        .and_then(read_observations_for_context)
+    {
+        append_read_observation_lines(lines, &observations);
+    }
     let terminal_observation = structured_object
         .and_then(|object| object.get("terminal_observation"))
         .and_then(serde_json::Value::as_object);
@@ -220,6 +226,47 @@ fn append_shell_action_result_context(result: &ActionResult, lines: &mut Vec<Str
         return;
     }
     append_action_result_content_text(result, lines);
+}
+
+/// Parses structured read observations from one shell result payload.
+fn read_observations_for_context(value: &serde_json::Value) -> Option<Vec<ShellReadObservation>> {
+    let observations = serde_json::from_value::<Vec<ShellReadObservation>>(value.clone()).ok()?;
+    (!observations.is_empty()).then_some(observations)
+}
+
+/// Appends structured read observations in a provider-visible single-line form.
+fn append_read_observation_lines(lines: &mut Vec<String>, observations: &[ShellReadObservation]) {
+    for observation in observations {
+        let mut fields = vec![
+            format!("kind={}", serde_variant_name(observation)),
+            format!("target={}", observation.target),
+        ];
+        if !observation.ranges.is_empty() {
+            fields.push(format!(
+                "ranges={}",
+                observation
+                    .ranges
+                    .iter()
+                    .map(|range| format!("{}-{}", range.start_line, range.end_line))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if let Some(query) = &observation.query
+            && !query.trim().is_empty()
+        {
+            fields.push(format!("query={query}"));
+        }
+        lines.push(format!("read_observation: {}", fields.join(" ")));
+    }
+}
+
+/// Returns the stable classifier name for one read observation.
+fn serde_variant_name(observation: &ShellReadObservation) -> &'static str {
+    match observation.kind {
+        ShellReadObservationKind::Read => "read",
+        ShellReadObservationKind::Search => "search",
+    }
 }
 
 /// Removes Mezzanine-owned shell wrapper echo from model-facing output when the

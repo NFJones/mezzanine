@@ -100,7 +100,7 @@ impl RuntimeSessionService {
             .map(|guidance| format!("\n{guidance}"))
             .unwrap_or_default();
         context.blocks.push(ContextBlock {
-            source: ContextSourceKind::LocalMessage,
+            source: ContextSourceKind::RuntimeHint,
             label: "action failure feedback".to_string(),
             content: format!(
                 "[ephemeral action failure feedback]\n\

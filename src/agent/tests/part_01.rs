@@ -2101,6 +2101,11 @@ fn model_request_keeps_context_sources_distinct() {
                 content: "from=agent-%2".to_string(),
             },
             ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                label: "runtime hint".to_string(),
+                content: "[action pressure]\nPrefer validation now.".to_string(),
+            },
+            ContextBlock {
                 source: ContextSourceKind::Transcript,
                 label: "history".to_string(),
                 content: "previous output".to_string(),
@@ -2137,6 +2142,8 @@ fn model_request_keeps_context_sources_distinct() {
     assert_eq!(request.messages[1].role, ModelMessageRole::Developer);
     assert_eq!(request.messages[2].source, ContextSourceKind::Transcript);
     assert_eq!(request.messages[3].source, ContextSourceKind::LocalMessage);
+    assert_eq!(request.messages[4].source, ContextSourceKind::RuntimeHint);
+    assert_eq!(request.messages[4].role, ModelMessageRole::Developer);
 }
 
 /// Verifies loaded skill bodies narrow the model's concrete action surface.
@@ -2540,7 +2547,7 @@ fn model_request_keeps_evidence_ledger_entries_until_aggregate_size_limit() {
             source: ContextSourceKind::ActionResult,
             label: format!("action result {index}"),
             content: format!(
-                "[action_result action-{index} shell_command succeeded]\ncommand: rg evidence-{index}\noutput:\nledger evidence {index} {long_summary}"
+                "[action_result action-{index} shell_command succeeded]\ncommand: git status --short path-{index}\noutput:\nledger evidence {index} {long_summary}"
             ),
         });
     }
@@ -2572,7 +2579,7 @@ fn model_request_keeps_evidence_ledger_entries_until_aggregate_size_limit() {
         .count();
 
     assert_eq!(entry_count, 520);
-    assert!(ledger.content.contains("command=rg evidence-519"));
+    assert!(ledger.content.contains("command=git status --short path-519"));
     assert!(ledger.content.contains("tail-marker"));
 }
 
@@ -2590,7 +2597,7 @@ fn model_request_caps_evidence_ledger_at_one_mebibyte() {
             source: ContextSourceKind::ActionResult,
             label: format!("action result {index}"),
             content: format!(
-                "[action_result action-{index} shell_command succeeded]\ncommand: rg aggregate-evidence-{index}\noutput:\naggregate evidence {index} {}",
+                "[action_result action-{index} shell_command succeeded]\ncommand: make aggregate-evidence-{index}\noutput:\naggregate evidence {index} {}",
                 "detail".repeat(45_000)
             ),
         });
@@ -3784,11 +3791,11 @@ fn turn_execution_transcript_omits_expanded_skill_request_context() {
                 "# Skill: review\n\nSource: project\nPath: skills/review/SKILL.md\n\nReview workflow."
                     .to_string(),
         },
-        ContextBlock {
-            source: ContextSourceKind::LocalMessage,
-            label: "explicit skill invocation review".to_string(),
-            content: "[explicit skill invocation resolved]\nskill=review".to_string(),
-        },
+            ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                label: "explicit skill invocation review".to_string(),
+                content: "[explicit skill invocation resolved]\nskill=review".to_string(),
+            },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
             label: "user prompt".to_string(),

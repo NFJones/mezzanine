@@ -518,6 +518,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
         ContextSourceKind::LocalMessage => "local-message",
+        ContextSourceKind::RuntimeHint => "runtime-hint",
         ContextSourceKind::ProjectGuidance => "project-guidance",
         ContextSourceKind::Memory => "memory",
         ContextSourceKind::Transcript => "transcript",

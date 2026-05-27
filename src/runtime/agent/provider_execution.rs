@@ -671,7 +671,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mut previous_entries = Vec::new();
         context.blocks.retain(|block| {
-            let is_progress_say_ledger = block.source == ContextSourceKind::LocalMessage
+            let is_progress_say_ledger = block.source == ContextSourceKind::RuntimeHint
                 && block.label == RUNTIME_PROGRESS_SAY_LEDGER_LABEL;
             if is_progress_say_ledger {
                 previous_entries.extend(runtime_progress_say_entries_from_ledger(&block.content));
@@ -683,7 +683,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         context.blocks.push(ContextBlock {
-            source: ContextSourceKind::LocalMessage,
+            source: ContextSourceKind::RuntimeHint,
             label: RUNTIME_PROGRESS_SAY_LEDGER_LABEL.to_string(),
             content: runtime_progress_say_ledger_content(&entries),
         });
@@ -702,7 +702,7 @@ impl RuntimeSessionService {
             .blocks
             .iter()
             .filter(|block| {
-                block.source == ContextSourceKind::LocalMessage
+                block.source == ContextSourceKind::RuntimeHint
                     && block.label == RUNTIME_PROGRESS_SAY_LEDGER_LABEL
             })
             .flat_map(|block| runtime_progress_say_entries_from_ledger(&block.content))
@@ -721,7 +721,7 @@ impl RuntimeSessionService {
             .blocks
             .iter()
             .filter(|block| {
-                block.source == ContextSourceKind::LocalMessage
+                block.source == ContextSourceKind::RuntimeHint
                     && block.label == RUNTIME_RATIONALE_LEDGER_LABEL
             })
             .flat_map(|block| runtime_rationale_entries_from_ledger(&block.content))
@@ -886,7 +886,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mut previous_entries = Vec::new();
         context.blocks.retain(|block| {
-            let is_rationale_ledger = block.source == ContextSourceKind::LocalMessage
+            let is_rationale_ledger = block.source == ContextSourceKind::RuntimeHint
                 && block.label == RUNTIME_RATIONALE_LEDGER_LABEL;
             if is_rationale_ledger {
                 previous_entries.extend(runtime_rationale_entries_from_ledger(&block.content));
@@ -898,7 +898,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         context.blocks.push(ContextBlock {
-            source: ContextSourceKind::LocalMessage,
+            source: ContextSourceKind::RuntimeHint,
             label: RUNTIME_RATIONALE_LEDGER_LABEL.to_string(),
             content: runtime_rationale_ledger_content(&entries),
         });

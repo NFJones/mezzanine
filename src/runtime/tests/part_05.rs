@@ -1645,7 +1645,7 @@ fn runtime_agent_context_builtin_create_skill_prompt_loads_builtin_context() {
         .iter()
         .find(|block| block.label == "explicit skill invocation create-skill")
         .expect("missing explicit skill invocation block");
-    assert_eq!(invocation_block.source, ContextSourceKind::LocalMessage);
+    assert_eq!(invocation_block.source, ContextSourceKind::RuntimeHint);
     assert!(
         invocation_block
             .content
@@ -3381,7 +3381,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
         .blocks
         .iter()
         .find(|block| {
-            block.source == ContextSourceKind::LocalMessage
+            block.source == ContextSourceKind::RuntimeHint
                 && block.label == "current-turn progress say ledger"
         })
         .expect("progress say ledger should be active turn context");
@@ -3425,7 +3425,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert_eq!(executions.len(), 1);
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::LocalMessage
+        message.source == ContextSourceKind::RuntimeHint
             && message
                 .content
                 .contains("[current-turn progress say ledger]")
@@ -3547,7 +3547,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
     assert_eq!(execution.terminal_state, AgentTurnState::Completed);
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::LocalMessage
+        message.source == ContextSourceKind::RuntimeHint
             && message.content.contains("[action pressure]")
             && message
                 .content
@@ -3913,7 +3913,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
 
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::LocalMessage
+        message.source == ContextSourceKind::RuntimeHint
             && message.content.contains("[current-turn rationale ledger]")
             && message.content.contains("rationale: Check exact selector owner")
     }));

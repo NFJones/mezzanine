@@ -75,6 +75,12 @@ pub enum ContextSourceKind {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     LocalMessage,
+    /// Represents a runtime-generated guidance or controller-state message.
+    ///
+    /// These blocks are model-visible but are not user-authored or agent-peer
+    /// messages. They carry runtime control hints such as allowed action
+    /// surface, failure feedback, same-turn ledgers, and execution pressure.
+    RuntimeHint,
     /// Represents the Project Guidance case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -183,6 +189,7 @@ impl TrustDomain {
             ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage => {
                 TrustDomain::UserInput
             }
+            ContextSourceKind::RuntimeHint => TrustDomain::Configuration,
             ContextSourceKind::ProjectGuidance => TrustDomain::ProjectFile,
             ContextSourceKind::Memory => TrustDomain::UserInput,
             ContextSourceKind::Transcript
@@ -297,6 +304,7 @@ impl ContextBlock {
             ContextSourceKind::EvidenceLedger => ContextStability::TurnVolatile,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
+            | ContextSourceKind::RuntimeHint
             | ContextSourceKind::ActionResult => ContextStability::TurnVolatile,
         }
     }
@@ -325,6 +333,7 @@ impl ContextBlock {
             ContextSourceKind::TranscriptTool => ContextCachePolicy::Ineligible,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
+            | ContextSourceKind::RuntimeHint
             | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::ActionResult => ContextCachePolicy::Ineligible,
         }
@@ -347,6 +356,7 @@ impl ContextBlock {
                 | ContextSourceKind::TranscriptTool
                 | ContextSourceKind::EvidenceLedger
                 | ContextSourceKind::CommittedEvidence
+                | ContextSourceKind::RuntimeHint
                 | ContextSourceKind::ActionResult
                 | ContextSourceKind::LocalMessage
         )

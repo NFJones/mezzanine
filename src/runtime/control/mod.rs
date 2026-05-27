@@ -1042,7 +1042,7 @@ impl RuntimeSessionService {
                 )?,
             });
             blocks.push(ContextBlock {
-                source: ContextSourceKind::LocalMessage,
+                source: ContextSourceKind::RuntimeHint,
                 label: format!("explicit skill invocation {}", invocation.name),
                 content: format!(
                     "[explicit skill invocation resolved]\n\

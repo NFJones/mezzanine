@@ -86,13 +86,15 @@ mod turn;
 
 pub use actions::{
     AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, McpActionExecutor,
-    PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest, action_result_context_content,
+    PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest, ShellReadObservation,
+    ShellReadObservationKind, ShellReadRange, action_result_context_content,
     assistant_context_content_for_execution, decode_shell_output_transport,
     discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_shell_action_through_pane,
     next_transcript_sequence, persist_turn_execution_transcript,
     postprocess_shell_action_success_output, shell_command_result_content,
-    shell_command_structured_content_json, transcript_entries_for_execution,
+    shell_command_structured_content_json, shell_read_observations_for_command,
+    transcript_entries_for_execution,
 };
 pub use context::{
     AgentCapability, AgentContext, AllowedAction, AllowedActionSet, ContextBlock,

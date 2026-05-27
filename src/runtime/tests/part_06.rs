@@ -564,7 +564,7 @@ fn runtime_rejects_send_message_action_with_invalid_mmp_payload_metadata() {
                 && block.content.contains("invalid_message_payload")
         }));
         assert!(context.blocks.iter().any(|block| {
-            block.source == ContextSourceKind::LocalMessage
+            block.source == ContextSourceKind::RuntimeHint
                 && block.content.contains("Message recovery")
                 && block.content.contains("Next step:")
                 && block.content.contains("content_type and payload shape")
@@ -850,7 +850,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             && !block.content.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__")
     }));
     assert!(!context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::LocalMessage
+        block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("action failure feedback")
     }));
 
@@ -1889,7 +1889,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
             && block.content.contains("Mezzanine patch blocks starting")
     }));
     assert!(context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::LocalMessage
+        block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("action failure feedback")
     }));
     let pane_text = service
@@ -2108,7 +2108,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         .blocks
         .iter()
         .find(|block| {
-            block.source == ContextSourceKind::LocalMessage
+            block.source == ContextSourceKind::RuntimeHint
                 && block.label == "action failure feedback"
         })
         .expect("feedback block should be present");
@@ -2300,7 +2300,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
         .iter()
         .rev()
         .find(|block| {
-            block.source == ContextSourceKind::LocalMessage
+            block.source == ContextSourceKind::RuntimeHint
                 && block.label == "action failure feedback"
         })
         .expect("feedback block should be present");
@@ -2485,7 +2485,7 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
         .iter()
         .rev()
         .find(|block| {
-            block.source == ContextSourceKind::LocalMessage
+            block.source == ContextSourceKind::RuntimeHint
                 && block.label == "action failure feedback"
         })
         .expect("second feedback block should be present");
@@ -2610,7 +2610,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
         .blocks
         .iter()
         .find(|block| {
-            block.source == ContextSourceKind::LocalMessage
+            block.source == ContextSourceKind::RuntimeHint
                 && block.label == "action failure feedback"
         })
         .expect("feedback block should be present");
@@ -2939,10 +2939,10 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             && block.content.contains("network request returned HTTP 404")
     }));
     assert!(context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::LocalMessage && block.content.contains("attempt=1 max=5")
+        block.source == ContextSourceKind::RuntimeHint && block.content.contains("attempt=1 max=5")
     }));
     assert!(context.blocks.iter().all(|block| {
-        block.source != ContextSourceKind::LocalMessage
+        block.source != ContextSourceKind::RuntimeHint
             || !block.content.contains("Mutation-evidence rule")
     }));
     service.pane_processes_mut().terminate_all().unwrap();
