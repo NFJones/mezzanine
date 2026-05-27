@@ -85,8 +85,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
     assert!(prompt.contains("is model-facing evidence"));
     assert!(prompt.contains("treat recent action_result output as an evidence cache"));
-    assert!(prompt.contains("implicit path -> line ranges read map"));
-    assert!(prompt.contains("subtract already observed ranges"));
+    assert!(prompt.contains("reuse a recent read or search result"));
+    assert!(prompt.contains("read only missing or stale ranges"));
     assert!(prompt.contains("after mutation prefer execution-based validation over rereading"));
     assert!(prompt.contains("reread only for a validation failure"));
     assert!(prompt.contains("avoid printf/echo explanations"));
@@ -201,7 +201,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("plan-only turn when feasible implementation"));
     assert!(prompt.contains("top-level rationale plus at least one"));
     assert!(prompt.contains("Keep say actions and MAAP batch rationales terse but informative"));
-    assert!(prompt.contains("Treat batch rationales as thinking-line deltas"));
+    assert!(prompt.contains("Treat batch rationales as current-turn deltas"));
     assert!(prompt.contains("add only the new reason for the next action batch"));
     assert!(prompt.contains("not restate the user request, global goal, loaded context"));
     assert!(prompt.contains("On repeated followups about the same likely bug or missing behavior"));
@@ -231,7 +231,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     );
     assert!(prompt.contains("Make each rationale additive to recent thinking lines"));
     assert!(prompt.contains("say only what is newly decisive about this batch"));
-    assert!(prompt.contains("Batch rationale is persisted as a thinking line for future context"));
+    assert!(prompt.contains("Batch rationale is transient current-turn guidance, not durable memory"));
+    assert!(prompt.contains("Use the optional thought field, not rationale"));
     assert!(prompt.contains("decide whether the work has reached a sequence point"));
     assert!(prompt.contains("first evidence pass identified the owner or diagnosis"));
     assert!(prompt.contains("an implementation/report direction was chosen"));

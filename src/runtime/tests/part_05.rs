@@ -3278,17 +3278,9 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
         .iter()
         .find(|entry| entry.role == crate::transcript::TranscriptRole::Assistant)
         .expect("assistant transcript entry should be persisted");
-    assert!(
-        assistant_entry
-            .content
-            .contains("thinking: test action batch rationale")
-    );
-    assert!(
-        assistant_entry
-            .content
-            .contains("thinking: finish the turn")
-    );
-    assert!(assistant_entry.content.ends_with("done"));
+    assert_eq!(assistant_entry.content, "done");
+    assert!(!assistant_entry.content.contains("thinking: test action batch rationale"));
+    assert!(!assistant_entry.content.contains("thinking: finish the turn"));
     assert!(
         entries
             .iter()

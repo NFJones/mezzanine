@@ -7,7 +7,7 @@
 
 use super::compaction::{model_context_single_line, model_context_source_kind_name};
 use super::{ContextBlock, ContextSourceKind};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Maximum total size retained in the generated evidence ledger.
 ///
@@ -23,6 +23,49 @@ const EVIDENCE_LEDGER_MAX_BYTES: usize = 1024 * 1024;
 /// session-stable prefix one block at a time. The wider evidence ledger uses
 /// aggregate-size retention instead of this per-entry bound.
 const COMMITTED_EVIDENCE_SUMMARY_MAX_BYTES: usize = 220;
+
+/// Carries one parsed ledger entry before aggregate-size retention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvidenceEntryRecord {
+    /// Fully rendered ledger line for this entry.
+    line: String,
+    /// Compact category used for repetition control and display.
+    category: &'static str,
+    /// Outcome status from the action/tool record.
+    status: String,
+    /// Optional command text associated with the entry.
+    command: Option<String>,
+}
+
+/// Carries one retained ledger entry, optionally collapsing repeated reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EvidenceLedgerEntry {
+    /// A direct single ledger line.
+    Direct(String),
+    /// A collapsed set of related read/search entries.
+    CollapsedRead {
+        /// Newest representative entry line.
+        latest_line: String,
+        /// Number of related read/search entries represented.
+        count: usize,
+    },
+}
+
+impl EvidenceLedgerEntry {
+    /// Builds the final provider-visible ledger line.
+    fn render(&self) -> String {
+        match self {
+            Self::Direct(line) => line.clone(),
+            Self::CollapsedRead { latest_line, count } => {
+                if *count <= 1 {
+                    latest_line.clone()
+                } else {
+                    format!("{latest_line} repeated_reads={count}")
+                }
+            }
+        }
+    }
+}
 
 /// Prepares context blocks for provider requests and compaction.
 pub(super) fn prepare_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
@@ -132,19 +175,15 @@ fn committed_evidence_block_for_action_result(block: &ContextBlock) -> Option<Co
 
 /// Builds a compact provider-visible evidence ledger from action/tool blocks.
 fn build_evidence_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> {
+    let entries = collect_evidence_ledger_entries(blocks);
+    if entries.is_empty() {
+        return None;
+    }
     let mut content =
         "Use this ledger before repeating reads, tests, validation, or patch recovery.".to_string();
     let mut retained_entries = 0usize;
-    for block in blocks {
-        if !matches!(
-            block.source,
-            ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
-        ) {
-            continue;
-        }
-        let Some(entry) = evidence_entry_for_block(block, None) else {
-            continue;
-        };
+    for entry in entries {
+        let entry = entry.render();
         let appended = format!("\n{entry}");
         if content.len() + appended.len() > EVIDENCE_LEDGER_MAX_BYTES {
             break;
@@ -162,16 +201,65 @@ fn build_evidence_ledger_block(blocks: &[ContextBlock]) -> Option<ContextBlock> 
     })
 }
 
+/// Collects provider-visible evidence ledger entries with repeated-read collapse.
+fn collect_evidence_ledger_entries(blocks: &[ContextBlock]) -> Vec<EvidenceLedgerEntry> {
+    let mut entries = Vec::new();
+    let mut repeated_read_entries = HashMap::<String, usize>::new();
+    for block in blocks {
+        if !matches!(
+            block.source,
+            ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
+        ) {
+            continue;
+        }
+        let Some(record) = evidence_entry_record_for_block(block, None) else {
+            continue;
+        };
+        if let Some(signature) = repetitive_read_signature(&record) {
+            if let Some(index) = repeated_read_entries.get(&signature).copied() {
+                match &mut entries[index] {
+                    EvidenceLedgerEntry::CollapsedRead { latest_line, count } => {
+                        *latest_line = record.line;
+                        *count = count.saturating_add(1);
+                    }
+                    EvidenceLedgerEntry::Direct(_) => {
+                        unreachable!("repeated read signatures only point at collapsed entries")
+                    }
+                }
+                continue;
+            }
+            repeated_read_entries.insert(signature, entries.len());
+            entries.push(EvidenceLedgerEntry::CollapsedRead {
+                latest_line: record.line,
+                count: 1,
+            });
+            continue;
+        }
+        entries.push(EvidenceLedgerEntry::Direct(record.line));
+    }
+    entries
+}
+
 /// Returns one compact ledger line for a raw action or historical tool block.
 fn evidence_entry_for_block(
     block: &ContextBlock,
     summary_max_bytes: Option<usize>,
 ) -> Option<String> {
+    Some(evidence_entry_record_for_block(block, summary_max_bytes)?.line)
+}
+
+/// Builds one parsed ledger entry record for a raw action or historical tool block.
+fn evidence_entry_record_for_block(
+    block: &ContextBlock,
+    summary_max_bytes: Option<usize>,
+) -> Option<EvidenceEntryRecord> {
     let marker_line = block.content.lines().next().unwrap_or_default().trim();
     let command = model_context_field_value(&block.content, "command")
         .or_else(|| historical_tool_command_hint(&block.content));
     let exit_code = model_context_field_value(&block.content, "exit_code");
-    let status = action_result_marker_status(marker_line).unwrap_or("historical");
+    let status = action_result_marker_status(marker_line)
+        .unwrap_or("historical")
+        .to_string();
     let action_type = action_result_marker_type(marker_line).unwrap_or_else(|| {
         if command.is_some() {
             "shell_command"
@@ -187,8 +275,8 @@ fn evidence_entry_for_block(
         model_context_source_kind_name(block.source),
         status
     );
-    if let Some(command) = command {
-        line.push_str(&format!(" command={}", model_context_single_line(&command)));
+    if let Some(command) = &command {
+        line.push_str(&format!(" command={}", model_context_single_line(command)));
     }
     if let Some(exit_code) = exit_code {
         line.push_str(&format!(
@@ -199,7 +287,12 @@ fn evidence_entry_for_block(
     if !summary.is_empty() {
         line.push_str(&format!(" summary={summary}"));
     }
-    Some(line)
+    Some(EvidenceEntryRecord {
+        line,
+        category,
+        status,
+        command,
+    })
 }
 
 /// Returns a compact category for a ledger entry.
@@ -226,6 +319,11 @@ fn evidence_category(action_type: &str, command: Option<&str>, content: &str) ->
     } else if haystack.contains("sed -n")
         || haystack.contains("rg ")
         || haystack.contains("rg\t")
+        || haystack.contains("cat ")
+        || (haystack.contains("python -c")
+            && (haystack.contains("read_text")
+                || haystack.contains("splitlines")
+                || haystack.contains("path(")))
         || haystack.contains("read ")
     {
         "read"
@@ -304,6 +402,66 @@ fn evidence_summary_text(value: &str, max_bytes: Option<usize>) -> String {
         None => value.trim().to_string(),
     };
     model_context_single_line(&text)
+}
+
+/// Returns a collapse signature for repeated successful read/search entries.
+fn repetitive_read_signature(record: &EvidenceEntryRecord) -> Option<String> {
+    if record.category != "read" || record.status != "succeeded" {
+        return None;
+    }
+    let command = record.command.as_deref()?;
+    let normalized = command.to_ascii_lowercase();
+    let family = if normalized.contains("sed -n") {
+        "sed"
+    } else if normalized.contains("rg ") || normalized.contains("rg\t") {
+        "rg"
+    } else if normalized.contains("cat ") {
+        "cat"
+    } else if normalized.contains("python -c") {
+        "python"
+    } else {
+        "read"
+    };
+    let target = read_target_hint(command).unwrap_or_else(|| model_context_single_line(command));
+    Some(format!("{family}:{target}"))
+}
+
+/// Extracts a best-effort target hint from a shell-like read/search command.
+fn read_target_hint(command: &str) -> Option<String> {
+    shell_like_tokens(command)
+        .into_iter()
+        .rev()
+        .find(|token| looks_like_read_target(token))
+}
+
+/// Splits shell-like command text into coarse tokens for heuristic analysis.
+fn shell_like_tokens(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .map(|token| {
+            token
+                .trim_matches(|ch: char| {
+                    matches!(ch, '\'' | '"' | ',' | ';' | '(' | ')' | '[' | ']')
+                })
+                .to_string()
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+/// Returns whether one token looks like a file path or source target.
+fn looks_like_read_target(token: &str) -> bool {
+    if token.starts_with('-') || token.contains('=') {
+        return false;
+    }
+    token.contains('/')
+        || token.ends_with(".rs")
+        || token.ends_with(".toml")
+        || token.ends_with(".md")
+        || token.ends_with(".txt")
+        || token.ends_with(".json")
+        || token.ends_with(".yaml")
+        || token.ends_with(".yml")
 }
 
 /// Truncates a summary to a byte ceiling without splitting UTF-8.

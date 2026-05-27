@@ -5922,11 +5922,11 @@ recovery behavior MAY live in provider schemas and action-result diagnostics
 instead of the high-level prompt.
 The prompt MUST instruct the agent to treat recent file-inspection action
 results as reusable evidence. Before issuing another `sed`, `rg`, or equivalent
-file-read command, the agent SHOULD subtract already observed path/line ranges
-from the requested context and read only missing or stale ranges. It SHOULD
-reread an overlapping region only when a file changed, prior output was
-truncated, a diagnostic explicitly requires fresh context, or a named missing
-range or boundary is needed.
+file-read command, the agent SHOULD reuse a recent read or search result when
+it already contains the needed current range or match and otherwise read only
+missing or stale ranges. It SHOULD reread an overlapping region only when a
+file changed, prior output was truncated, a diagnostic explicitly requires
+fresh context, or a named missing range or boundary is needed.
 
 The prompt MUST require the agent to inspect relevant project context before
 making non-trivial changes. For code and configuration work, the prompt MUST
@@ -6163,15 +6163,16 @@ two short sentences by default and reserve bullets for cases where they improve
 scan value. It MUST prefer concrete progress, changed behavior, validation
 evidence, or blocker reports over long self-explanation, repeated intent
 statements, apologies that do not clarify a failure, or duplicated command
-output. Because batch rationales are rendered as thinking lines, the prompt
-MUST direct them to be additive deltas: each rationale should state only what is
-newly decisive about the next listed actions and should not restate prior
-rationales, the user request, global task goal, loaded context, or visible
-action summaries. The prompt MUST also instruct the model to compare a planned
-rationale, optional batch `thought`, or progress `say` against recent thinking
-lines, visible text, action results, and other text in the same response; if
-the text would only repeat existing context, optional action-level rationales,
-batch `thought`, and progress `say` output MUST be omitted. The prompt MUST
+output. Because batch rationale is transient current-turn guidance rather than
+durable memory, the prompt MUST direct it to be an additive delta: each
+rationale should state only what is newly decisive about the next listed
+actions and should not restate prior rationales, the user request, global task
+goal, loaded context, or visible action summaries. The prompt MUST also
+instruct the model to compare a planned rationale, optional batch `thought`, or
+progress `say` against recent thinking lines, visible text, action results, and
+other text in the same response; if the text would only repeat existing
+context, optional action-level rationales, batch `thought`, and progress `say`
+output MUST be omitted. The prompt MUST
 describe batch `thought` as a durable work note for longer future-useful
 learnings or decisions that is persisted to future context, hidden from
 normal-mode logs, and visible only in verbose-or-higher thinking logs. The

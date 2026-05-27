@@ -3207,7 +3207,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| Prompt profile | default v20 |"),
+        response.contains("| Prompt profile | default v21 |"),
         "{response}"
     );
     assert!(

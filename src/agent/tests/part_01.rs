@@ -2623,6 +2623,63 @@ fn model_request_caps_evidence_ledger_at_one_mebibyte() {
     assert!(!ledger.content.contains("aggregate evidence 3"));
 }
 
+/// Verifies repeated bounded reads of the same owner collapse into one ledger
+/// entry so continuations see the newest anchor-localization result without a
+/// reinforcing wall of nearly identical read history.
+#[test]
+fn model_request_collapses_repeated_read_entries_by_target() {
+    let mut blocks = vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "Patch the overlay style helper.".to_string(),
+    }];
+    for (index, range) in ["300,420p", "1150,1245p", "1148,1238p"]
+        .into_iter()
+        .enumerate()
+    {
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: format!("action result {index}"),
+            content: format!(
+                "[action_result read-{index} shell_command succeeded]\ncommand: rtk run -- sed -n '{range}' src/runtime/render/overlay.rs\noutput:\nowner anchor {index}"
+            ),
+        });
+    }
+
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "default".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(blocks).unwrap(),
+    )
+    .unwrap();
+
+    let ledger = request
+        .messages
+        .iter()
+        .find(|message| message.source == ContextSourceKind::EvidenceLedger)
+        .expect("evidence ledger should be present");
+
+    assert_eq!(
+        ledger
+            .content
+            .lines()
+            .filter(|line| line.contains("src/runtime/render/overlay.rs"))
+            .count(),
+        1
+    );
+    assert!(ledger.content.contains("repeated_reads=3"));
+    assert!(ledger.content.contains("owner anchor 2"));
+    assert!(!ledger.content.contains("owner anchor 0"));
+}
+
 /// Verifies request assembly does not compact older context merely because a
 /// local estimate crosses a threshold.
 ///
@@ -3958,7 +4015,7 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
         assistant.content
     );
     assert!(
-        assistant
+        !assistant
             .content
             .contains("thinking: test action batch rationale"),
         "{}",
@@ -3979,7 +4036,7 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
         assistant.content
     );
     assert!(
-        assistant.content.contains("thinking: write note file"),
+        !assistant.content.contains("thinking: write note file"),
         "{}",
         assistant.content
     );
@@ -3993,8 +4050,8 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
 /// Follow-up prompts often refer to numbered lists or suggested changes the
 /// assistant previously printed. Persisting only the compact MAAP action
 /// summary loses that referent, so user-visible say text must remain intact in
-/// the assistant transcript entry while the model's rationale remains available
-/// as thinking context for continuity.
+/// the assistant transcript entry while transient batch/action rationale stays
+/// out of durable assistant history.
 #[test]
 fn turn_execution_transcript_preserves_visible_say_text() {
     let turn = turn();
@@ -4057,15 +4114,13 @@ fn turn_execution_transcript_preserves_visible_say_text() {
         .find(|entry| entry.role == TranscriptRole::Assistant)
         .unwrap();
 
-    assert_eq!(
-        assistant.content,
-        format!("thinking: test action batch rationale\nthinking: reply to user\n{visible_text}")
-    );
+    assert_eq!(assistant.content, visible_text);
     assert!(
         assistant
             .content
             .contains("2. Preserve prior assistant lists")
     );
+    assert!(!assistant.content.contains("thinking: reply to user"));
     assert!(!assistant.content.contains("say text="));
 }
 
@@ -4167,7 +4222,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v20"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v21"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4258,7 +4313,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Always set status to progress, final, or blocked"));
     assert!(prompt.contains("text/plain, text/markdown, or text/x-diff"));
     assert!(prompt.contains("Keep say actions and MAAP batch rationales terse but informative"));
-    assert!(prompt.contains("Treat batch rationales as thinking-line deltas"));
+    assert!(prompt.contains("Treat batch rationales as current-turn deltas"));
     assert!(prompt.contains("optional top-level thought field"));
     assert!(prompt.contains("durable work note"));
     assert!(prompt.contains("may appear only in verbose-or-higher thinking logs"));
@@ -4289,7 +4344,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Good catch"));
     assert!(prompt.contains("You're right"));
     assert!(prompt.contains("Exactly"));
-    assert!(prompt.contains("Batch rationale is persisted as a thinking line for future context"));
+    assert!(prompt.contains("Batch rationale is transient current-turn guidance, not durable memory"));
+    assert!(prompt.contains("Use the optional thought field, not rationale"));
     assert!(prompt.contains("decide whether the work has reached a sequence point"));
     assert!(prompt.contains("first evidence pass identified the owner or diagnosis"));
     assert!(prompt.contains("an implementation/report direction was chosen"));
@@ -4371,8 +4427,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
     assert!(prompt.contains("is model-facing evidence"));
     assert!(prompt.contains("treat recent action_result output as an evidence cache"));
-    assert!(prompt.contains("implicit path -> line ranges read map"));
-    assert!(prompt.contains("subtract already observed ranges"));
+    assert!(prompt.contains("reuse a recent read or search result"));
+    assert!(prompt.contains("read only missing or stale ranges"));
     assert!(prompt.contains("after mutation prefer execution-based validation over rereading"));
     assert!(prompt.contains("reread only for a validation failure"));
     assert!(prompt.contains("avoid printf/echo explanations"));

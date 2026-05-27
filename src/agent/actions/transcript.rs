@@ -160,8 +160,9 @@ fn provider_tool_result_content_for_execution(execution: &AgentTurnExecution) ->
 ///
 /// The returned text is the same assistant content durable transcript storage
 /// would persist for the execution: visible `say` text is retained, non-visible
-/// actions are summarized, and MAAP rationale text is preserved as `thinking:`
-/// lines without retaining raw protocol JSON or inline file payloads.
+/// actions are summarized, and only explicit durable `thought` notes are
+/// preserved as `thinking:` lines without retaining raw protocol JSON or inline
+/// file payloads.
 pub fn assistant_context_content_for_execution(execution: &AgentTurnExecution) -> String {
     assistant_transcript_content(execution)
 }
@@ -214,13 +215,16 @@ fn transcript_label_is_expanded_skill(label: &str) -> bool {
 /// Returns durable assistant transcript text without copying raw protocol JSON
 /// or inline file payloads into long-lived transcript storage.
 ///
-/// MAAP rationale text is persisted as compact `thinking:` lines because it is
-/// the model-authored continuity thread behind the visible action sequence.
+/// Routine batch/action rationale is intentionally omitted from durable
+/// assistant history because it is usually immediate execution intent such as
+/// "read exact anchors" or "check test lines" that causes future requests to
+/// over-weight investigation churn. Only explicit durable `thought` notes are
+/// persisted as `thinking:` lines.
 fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return execution.response.raw_text.clone();
     };
-    let mut thinking_lines = assistant_transcript_rationale_lines(batch);
+    let mut thinking_lines = assistant_transcript_durable_thinking_lines(batch);
     if !execution.response.raw_text.trim().is_empty()
         && !assistant_raw_text_looks_like_maap_payload(&execution.response.raw_text)
     {
@@ -247,27 +251,19 @@ fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
     thinking_lines.join("\n")
 }
 
-/// Returns model-authored rationale and thought text as transcript-visible
-/// thinking lines.
+/// Returns durable model-authored thinking notes as transcript-visible lines.
 ///
-/// Batch and action rationales are rendered as thinking messages in the pane
-/// UI. Batch thoughts are hidden from normal-mode pane logs but still persisted
-/// here so later turns can reference durable work notes without storing raw
-/// MAAP payloads.
-fn assistant_transcript_rationale_lines(batch: &MaapBatch) -> Vec<String> {
+/// The explicit `thought` field is the only durable assistant work-note
+/// channel. Batch/action rationale remains available in runtime logs and action
+/// results for the current turn, but it is not replayed into future assistant
+/// context because it tends to encode transient execution intent rather than
+/// stable decisions.
+fn assistant_transcript_durable_thinking_lines(batch: &MaapBatch) -> Vec<String> {
     let mut lines = Vec::new();
-    if !batch.rationale.trim().is_empty() {
-        lines.extend(assistant_transcript_thinking_lines(&batch.rationale));
-    }
     if let Some(thought) = batch.thought.as_deref()
         && !thought.trim().is_empty()
     {
         lines.extend(assistant_transcript_thinking_lines(thought));
-    }
-    for action in &batch.actions {
-        if !action.rationale.trim().is_empty() {
-            lines.extend(assistant_transcript_thinking_lines(&action.rationale));
-        }
     }
     lines
 }

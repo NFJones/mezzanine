@@ -831,10 +831,11 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     let context = service.agent_turn_contexts.get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
-            && block
+            && block.content.contains("failing shell")
+            && !block
                 .content
                 .contains("thinking: test action batch rationale")
-            && block
+            && !block
                 .content
                 .contains("thinking: exercise failure feedback")
     }));
