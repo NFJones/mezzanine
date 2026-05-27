@@ -615,9 +615,12 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -699,9 +702,12 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -779,6 +785,7 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![config_change_action("config-1")],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -868,9 +875,12 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -953,9 +963,12 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1041,6 +1054,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1132,6 +1146,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1223,6 +1238,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1315,6 +1331,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1403,6 +1420,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1493,6 +1511,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
             final_turn: false,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1519,6 +1538,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
                 },
             }],
             final_turn: false,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1537,6 +1557,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "I cannot access that MCP server.")],
             final_turn: true,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1655,6 +1676,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
             final_turn: false,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1681,6 +1703,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             agent_id: turn.agent_id.clone(),
             actions: vec![heredoc_action],
             final_turn: false,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1699,6 +1722,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "I will use a file action instead.")],
             final_turn: true,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1798,6 +1822,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected.")],
             final_turn: true,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1887,6 +1912,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
             final_turn: false,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1913,6 +1939,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
                 },
             }],
             final_turn: false,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -1931,6 +1958,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             agent_id: turn.agent_id.clone(),
             actions: vec![say_action("say-1", "Corrected asynchronously.")],
             final_turn: true,
+            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -2076,6 +2104,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![mcp_action("mcp-1")],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2170,9 +2199,12 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2246,9 +2278,12 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2334,9 +2369,12 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2427,9 +2465,12 @@ fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2535,9 +2576,12 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: Some(1000),
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2613,6 +2657,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2695,6 +2740,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2764,6 +2810,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("a1")],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3202,6 +3249,44 @@ fn shell_action_executor_result_includes_marker_in_terminal_observation() {
     assert!(
         structured.contains(r#""marker":"#),
         "terminal_observation in executor path should include marker: {structured}"
+    );
+}
+
+/// Verifies shell structured content preserves model-declared discovery intent
+/// and missing-fact justification for later runtime enforcement.
+#[test]
+fn shell_action_structured_content_preserves_intent_and_missing_fact() {
+    let action = AgentAction {
+        id: "shell-readiness".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ShellCommand {
+            summary: "Read the exact attach-owner lines".to_string(),
+            command: "sed -n '35,95p' src/session/clients.rs".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+            intent: Some(crate::agent::ShellCommandIntent::Read),
+            missing_fact: Some("need exact current attach-owner lines".to_string()),
+        },
+    };
+
+    let structured = crate::agent::shell_command_structured_content_json(
+        &action,
+        false,
+        serde_json::json!({"state":"allowed"}),
+        &[],
+        serde_json::json!({"exit_code":0,"signal":null}),
+    )
+    .unwrap();
+
+    assert!(structured.contains(r#""intent":"read""#), "{structured}");
+    assert!(
+        structured.contains("need exact current attach-owner lines"),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""read_observations":["#),
+        "{structured}"
     );
 }
 

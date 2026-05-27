@@ -1849,6 +1849,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1945,6 +1946,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
                     payload: crate::agent::AgentActionPayload::RequestSkills,
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3363,6 +3365,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3679,6 +3682,8 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
             interactive: false,
             stateful: false,
             timeout_ms: None,
+            intent: None,
+            missing_fact: None,
         },
     };
     service.record_shell_dispatch_history("turn-1", "git diff -- src/runtime/mod.rs");
@@ -3736,6 +3741,8 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
             interactive: false,
             stateful: false,
             timeout_ms: None,
+            intent: None,
+            missing_fact: None,
         },
     };
     service.record_shell_dispatch_success("turn-1", "just test", &validation_action);
@@ -3762,6 +3769,101 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
         "{}",
         pressure_block.content
     );
+}
+
+/// Verifies a batch-level edit-ready declaration becomes the active-turn
+/// pressure hint for the next provider continuation.
+#[test]
+fn runtime_edit_ready_phase_reaches_provider_continuation() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-edit-ready-phase","input":"patch the stale primary ownership bug"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let first_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "progress".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "the owner is localized and the next step is the smallest patch"
+                    .to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "say-progress-1".to_string(),
+                    rationale: "record the transition to editing".to_string(),
+                    payload: crate::agent::AgentActionPayload::Say {
+                        status: crate::agent::SayStatus::Progress,
+                        text: "The stale primary-owner fix is localized.".to_string(),
+                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            .to_string(),
+                    },
+                }],
+                final_turn: false,
+                next_phase: Some(crate::agent::MaapNextPhase::EditReady),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let first_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &first_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(first_execution.terminal_state, AgentTurnState::Running);
+
+    let second_provider = RuntimeRecordingProvider {
+        provider: "runtime-batch",
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
+        },
+        last_request: RefCell::new(None),
+    };
+    let second_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &second_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(second_execution.terminal_state, AgentTurnState::Completed);
+
+    let request = second_provider.last_request.borrow().clone().unwrap();
+    assert!(request.messages.iter().any(|message| {
+        message.source == ContextSourceKind::RuntimeHint
+            && message.content.contains("[action pressure]")
+            && message
+                .content
+                .contains("declared next_phase=edit_ready for this turn")
+            && message.content.contains("Prefer apply_patch, config_change, validation")
+    }));
 }
 
 /// Verifies runtime suppresses repeated progress `say` updates during a turn.
@@ -3816,6 +3918,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3868,6 +3971,7 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
                     },
                 ],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3950,6 +4054,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3989,6 +4094,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -4074,6 +4180,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
                         },
                     }],
                     final_turn: true,
+                    next_phase: None,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -4380,6 +4487,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                     agent_id: parent.agent_id.clone(),
                     actions: vec![spawn_one.clone(), spawn_two.clone()],
                     final_turn: false,
+                    next_phase: None,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -4543,6 +4651,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                     agent_id: parent.agent_id.clone(),
                     actions: vec![spawn.clone()],
                     final_turn: false,
+                    next_phase: None,
                 }),
                 provider_transcript_events: Vec::new(),
             },

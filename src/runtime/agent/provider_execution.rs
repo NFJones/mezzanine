@@ -962,6 +962,7 @@ impl RuntimeSessionService {
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
+        self.record_edit_ready_phase_from_execution(turn, &execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
@@ -1210,6 +1211,7 @@ impl RuntimeSessionService {
         self.append_agent_trace_maap_response(turn, &execution.response)?;
         self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
+        self.record_edit_ready_phase_from_execution(turn, &execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;

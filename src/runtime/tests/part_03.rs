@@ -3207,7 +3207,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| Prompt profile | default v21 |"),
+        response.contains("| Prompt profile | default v22 |"),
         "{response}"
     );
     assert!(
@@ -3533,6 +3533,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
                     },
                 ],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -4077,6 +4078,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -4267,6 +4269,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },

@@ -581,6 +581,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             interactive,
             stateful,
             timeout_ms,
+            ..
         } => {
             data.insert(
                 "summary".to_string(),

@@ -88,6 +88,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -220,6 +221,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -330,6 +332,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -431,6 +434,7 @@ fn execute_runtime_send_message_action(
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -652,6 +656,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -754,6 +759,8 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                             interactive: false,
                             stateful: false,
                             timeout_ms: None,
+                            intent: None,
+                            missing_fact: None,
                         },
                     },
                     crate::agent::AgentAction {
@@ -765,10 +772,13 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                             interactive: false,
                             stateful: false,
                             timeout_ms: None,
+                            intent: None,
+                            missing_fact: None,
                         },
                     },
                 ],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -943,9 +953,12 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1047,9 +1060,12 @@ fn dispatch_protocol_test_shell_action(
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1126,9 +1142,12 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1341,6 +1360,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1456,9 +1476,12 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1639,9 +1662,12 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: Some(1500),
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1733,6 +1759,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1846,6 +1873,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -1970,6 +1998,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2084,6 +2113,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2251,6 +2281,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2439,6 +2470,7 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
                     agent_id: turn.agent_id.clone(),
                     actions: vec![action],
                     final_turn: false,
+                    next_phase: None,
                 }),
                 provider_transcript_events: Vec::new(),
             },
@@ -2579,6 +2611,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2700,9 +2733,12 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
                         interactive: false,
                         stateful: false,
                         timeout_ms: None,
+                        intent: None,
+                        missing_fact: None,
                     },
                 }],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -2855,6 +2891,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
                 agent_id: "agent-%1".to_string(),
                 actions: vec![success_action.clone(), failed_action.clone()],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3079,6 +3116,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
                 agent_id: turn.agent_id.clone(),
                 actions: vec![success_action, failed_action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3235,6 +3273,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
                 agent_id: "agent-%1".to_string(),
                 actions: vec![first_action, second_action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3309,6 +3348,7 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
                     },
                 }],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3413,6 +3453,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
                 agent_id: "agent-%1".to_string(),
                 actions: vec![action],
                 final_turn: true,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3504,6 +3545,8 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
             interactive: false,
             stateful: false,
             timeout_ms: None,
+            intent: None,
+            missing_fact: None,
         },
     };
     let mut failed = crate::agent::ActionResult::failed(
@@ -3548,6 +3591,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![patch_action, read_action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3645,6 +3689,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3677,6 +3722,254 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
     );
     assert!(pane_text.contains("approval_denied"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies edit-ready turns reject further discovery shell actions that do not
+/// name one concrete missing fact.
+#[test]
+fn runtime_edit_ready_rejects_discovery_without_missing_fact() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-edit-ready-missing-fact","input":"patch the stale primary ownership bug"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let ready_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "ready".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "the owner is localized and the next step is the patch".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "say-progress-1".to_string(),
+                    rationale: "record the edit transition".to_string(),
+                    payload: crate::agent::AgentActionPayload::Say {
+                        status: crate::agent::SayStatus::Progress,
+                        text: "The stale primary-owner fix is localized.".to_string(),
+                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            .to_string(),
+                    },
+                }],
+                final_turn: false,
+                next_phase: Some(crate::agent::MaapNextPhase::EditReady),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let ready_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &ready_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(ready_execution.terminal_state, AgentTurnState::Running);
+
+    let invalid_read_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "read".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "read more before patching".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "read-1".to_string(),
+                    rationale: "inspect the owner again".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Read the owner again".to_string(),
+                        command: "sed -n '35,95p' src/session/clients.rs".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                        intent: Some(crate::agent::ShellCommandIntent::Read),
+                        missing_fact: None,
+                    },
+                }],
+                final_turn: false,
+                next_phase: None,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let invalid_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &invalid_read_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(invalid_execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(invalid_execution.action_results.len(), 1);
+    assert_eq!(invalid_execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        invalid_execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("edit_ready_requires_missing_fact")
+    );
+    assert!(service.running_shell_transactions.is_empty());
+}
+
+/// Verifies edit-ready turns reject repeated discovery for the same
+/// already-satisfied missing fact.
+#[test]
+fn runtime_edit_ready_rejects_repeated_missing_fact() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-edit-ready-repeat-fact","input":"patch the stale primary ownership bug"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let ready_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "ready".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "the owner is localized and the next step is the patch".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "say-progress-1".to_string(),
+                    rationale: "record the edit transition".to_string(),
+                    payload: crate::agent::AgentActionPayload::Say {
+                        status: crate::agent::SayStatus::Progress,
+                        text: "The stale primary-owner fix is localized.".to_string(),
+                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            .to_string(),
+                    },
+                }],
+                final_turn: false,
+                next_phase: Some(crate::agent::MaapNextPhase::EditReady),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let ready_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &ready_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(ready_execution.terminal_state, AgentTurnState::Running);
+
+    let missing_fact = "need exact current attach-owner lines".to_string();
+    let prior_read = crate::agent::AgentAction {
+        id: "read-prior".to_string(),
+        rationale: "read the exact owner lines".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Read the exact owner lines".to_string(),
+            command: "sed -n '35,95p' src/session/clients.rs".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+            intent: Some(crate::agent::ShellCommandIntent::Read),
+            missing_fact: Some(missing_fact.clone()),
+        },
+    };
+    service.record_shell_dispatch_success(
+        "turn-1",
+        "sed -n '35,95p' src/session/clients.rs",
+        &prior_read,
+    );
+
+    let repeated_read_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "read again".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "read the same exact owner lines again".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "read-repeat".to_string(),
+                    rationale: "repeat the same read".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Read the same owner lines again".to_string(),
+                        command: "sed -n '35,95p' src/session/clients.rs".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                        intent: Some(crate::agent::ShellCommandIntent::Read),
+                        missing_fact: Some(missing_fact),
+                    },
+                }],
+                final_turn: false,
+                next_phase: None,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let repeated_execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &repeated_read_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(repeated_execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(repeated_execution.action_results.len(), 1);
+    assert_eq!(repeated_execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        repeated_execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("edit_ready_missing_fact_repeated")
+    );
+    assert!(service.running_shell_transactions.is_empty());
 }
 
 /// Verifies unrecovered `apply_patch` failures do not expose shell-wrapper

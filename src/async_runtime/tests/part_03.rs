@@ -414,6 +414,8 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             interactive: false,
             stateful: false,
             timeout_ms: Some(60_000),
+            intent: None,
+            missing_fact: None,
         },
     };
     let response_batch = crate::agent::MaapBatch {
@@ -424,6 +426,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
         final_turn: false,
+        next_phase: None,
     };
     let execution = crate::agent::AgentTurnExecution {
         request: crate::agent::ModelRequest {
@@ -670,6 +673,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 interactive: false,
                 stateful: false,
                 timeout_ms: Some(60_000),
+                intent: None,
+                missing_fact: None,
             },
         };
         let batch = crate::agent::MaapBatch {
@@ -680,6 +685,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             agent_id: task.agent_id.clone(),
             actions: vec![action.clone()],
             final_turn: false,
+            next_phase: None,
         };
         let execution = crate::agent::AgentTurnExecution {
             request: crate::agent::ModelRequest {
@@ -808,6 +814,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 interactive: false,
                 stateful: false,
                 timeout_ms: Some(60_000),
+                intent: None,
+                missing_fact: None,
             },
         };
         let second_batch = crate::agent::MaapBatch {
@@ -818,6 +826,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             agent_id: next_task.agent_id.clone(),
             actions: vec![second_action.clone()],
             final_turn: false,
+            next_phase: None,
         };
         let second_execution = crate::agent::AgentTurnExecution {
             request: crate::agent::ModelRequest {
@@ -978,6 +987,8 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             interactive: false,
             stateful: false,
             timeout_ms: Some(60_000),
+            intent: None,
+            missing_fact: None,
         },
     };
     let response_batch = crate::agent::MaapBatch {
@@ -988,6 +999,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
         final_turn: false,
+        next_phase: None,
     };
     let execution = crate::agent::AgentTurnExecution {
         request: crate::agent::ModelRequest {
@@ -1161,6 +1173,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         agent_id: task.agent_id.clone(),
         actions: vec![batch_action],
         final_turn: false,
+        next_phase: None,
     };
     let execution = crate::agent::AgentTurnExecution {
         request: crate::agent::ModelRequest {
@@ -1334,6 +1347,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action.clone()],
                 final_turn: false,
+                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },

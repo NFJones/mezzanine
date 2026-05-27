@@ -25,6 +25,7 @@ use super::{
     encode_control_body, encode_event_notification, encode_mmp_body,
     execute_streamable_http_exchange, parse_mcp_tools_call_response,
 };
+use crate::agent::{ShellReadObservationKind, shell_read_observations_for_command};
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalStyleSpan};
@@ -4673,6 +4674,10 @@ pub(super) struct RuntimeAgentShellDispatchHistory {
     pub(super) successful_file_mutation_this_turn: bool,
     /// Whether a validation command succeeded after the latest file mutation.
     pub(super) successful_validation_after_file_mutation: bool,
+    /// Whether the provider declared the current turn ready to edit.
+    pub(super) edit_ready_declared_this_turn: bool,
+    /// Concrete post-readiness discovery justifications already satisfied.
+    pub(super) satisfied_edit_ready_missing_facts: BTreeSet<String>,
 }
 
 impl RuntimeAgentShellDispatchHistory {
@@ -4695,6 +4700,11 @@ impl RuntimeAgentShellDispatchHistory {
         self.consecutive_shell_dispatches = self.consecutive_shell_dispatches.saturating_add(1);
     }
 
+    /// Records that the provider explicitly declared the turn ready to edit.
+    pub(super) fn record_edit_ready_declared(&mut self) {
+        self.edit_ready_declared_this_turn = true;
+    }
+
     /// Records a shell command that completed successfully.
     pub(super) fn record_success(
         &mut self,
@@ -4702,7 +4712,8 @@ impl RuntimeAgentShellDispatchHistory {
         action: &AgentAction,
         command_is_validation: bool,
     ) {
-        self.succeeded_commands.push(command.into());
+        let command = command.into();
+        self.succeeded_commands.push(command.clone());
         match action.payload {
             AgentActionPayload::ShellCommand { .. } => {
                 if command_is_validation && self.successful_file_mutation_this_turn {
@@ -4712,6 +4723,14 @@ impl RuntimeAgentShellDispatchHistory {
                 } else {
                     self.consecutive_successful_shell_commands =
                         self.consecutive_successful_shell_commands.saturating_add(1);
+                }
+                if self.edit_ready_declared_this_turn
+                    && !self.successful_file_mutation_this_turn
+                    && let Some(missing_fact) =
+                        runtime_shell_command_edit_ready_missing_fact(action)
+                    && runtime_shell_command_counts_as_discovery(action, &command)
+                {
+                    self.satisfied_edit_ready_missing_facts.insert(missing_fact);
                 }
             }
             AgentActionPayload::ApplyPatch { .. } => {
@@ -4728,6 +4747,39 @@ impl RuntimeAgentShellDispatchHistory {
     pub(super) fn reset_successive_shell_commands(&mut self) {
         self.consecutive_shell_dispatches = 0;
         self.consecutive_successful_shell_commands = 0;
+    }
+}
+
+/// Returns the explicit post-readiness missing-fact justification on one shell command.
+fn runtime_shell_command_edit_ready_missing_fact(action: &AgentAction) -> Option<String> {
+    match &action.payload {
+        AgentActionPayload::ShellCommand { missing_fact, .. } => missing_fact
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Returns whether one shell command counts as discovery work.
+fn runtime_shell_command_counts_as_discovery(action: &AgentAction, command: &str) -> bool {
+    match &action.payload {
+        AgentActionPayload::ShellCommand {
+            intent: Some(intent),
+            ..
+        } => intent.is_discovery(),
+        AgentActionPayload::ShellCommand { .. } => {
+            let observations = shell_read_observations_for_command(command);
+            !observations.is_empty()
+                && observations.iter().all(|observation| {
+                    matches!(
+                        observation.kind,
+                        ShellReadObservationKind::Read | ShellReadObservationKind::Search
+                    )
+                })
+        }
+        _ => false,
     }
 }
 

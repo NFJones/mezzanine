@@ -329,6 +329,7 @@ mod tests {
                     agent_id: "agent-1".to_string(),
                     actions: Vec::new(),
                     final_turn: false,
+                    next_phase: None,
                 }),
                 provider_transcript_events: Vec::new(),
             },

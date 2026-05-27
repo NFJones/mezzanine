@@ -465,6 +465,7 @@ fn maap_batch_rejects_duplicate_action_ids() {
         agent_id: "agent-1".to_string(),
         actions: vec![shell_action("a1"), shell_action("a1")],
         final_turn: false,
+        next_phase: None,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -486,6 +487,7 @@ fn maap_batch_rejects_empty_batch_rationale() {
         agent_id: "agent-1".to_string(),
         actions: vec![shell_action("a1")],
         final_turn: false,
+        next_phase: None,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -512,6 +514,7 @@ fn maap_batch_rejects_empty_shell_command_summary() {
         agent_id: "agent-1".to_string(),
         actions: vec![action],
         final_turn: false,
+        next_phase: None,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -543,6 +546,7 @@ fn maap_batch_rejects_zero_shell_command_timeout() {
         agent_id: "agent-1".to_string(),
         actions: vec![action],
         final_turn: false,
+        next_phase: None,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -576,6 +580,7 @@ fn maap_batch_rejects_shell_command_heredoc_payloads() {
         agent_id: "agent-1".to_string(),
         actions: vec![action],
         final_turn: false,
+        next_phase: None,
     };
 
     let error = batch.validate(&turn(), &[], &[]).unwrap_err();
@@ -905,6 +910,126 @@ fn maap_parser_fills_compact_provider_defaults() {
     batch.validate(&turn(), &[], &[]).unwrap();
 }
 
+/// Verifies compact MAAP batches can declare the implementation-readiness phase
+/// and preserve structured shell discovery metadata for later runtime checks.
+#[test]
+fn maap_parser_accepts_edit_ready_and_shell_discovery_metadata() {
+    let raw_text = serde_json::json!({
+        "rationale": "enough evidence to patch",
+        "next_phase": "edit_ready",
+        "actions": [
+            {
+                "type": "shell_command",
+                "summary": "Read the exact attach-owner lines",
+                "command": "sed -n '35,95p' src/session/clients.rs",
+                "intent": "read",
+                "missing_fact": "need exact current attach-owner lines"
+            }
+        ]
+    })
+    .to_string();
+
+    let batch = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap();
+
+    assert_eq!(
+        batch.next_phase,
+        Some(crate::agent::MaapNextPhase::EditReady)
+    );
+    match &batch.actions[0].payload {
+        AgentActionPayload::ShellCommand {
+            intent,
+            missing_fact,
+            ..
+        } => {
+            assert_eq!(
+                *intent,
+                Some(crate::agent::ShellCommandIntent::Read)
+            );
+            assert_eq!(
+                missing_fact.as_deref(),
+                Some("need exact current attach-owner lines")
+            );
+        }
+        payload => panic!("unexpected payload: {payload:?}"),
+    }
+    batch.validate(&turn(), &[], &[]).unwrap();
+}
+
+/// Verifies the parser rejects unknown implementation phase declarations.
+#[test]
+fn maap_parser_rejects_unknown_next_phase() {
+    let raw_text = serde_json::json!({
+        "rationale": "phase test",
+        "next_phase": "patching",
+        "actions": [{"type": "say", "status": "final", "text": "done"}]
+    })
+    .to_string();
+
+    let error = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap_err();
+
+    assert!(
+        error.message().contains("unknown maap next_phase patching"),
+        "{}",
+        error.message()
+    );
+}
+
+/// Verifies the parser rejects unknown shell discovery intents.
+#[test]
+fn maap_parser_rejects_unknown_shell_intent() {
+    let raw_text = serde_json::json!({
+        "rationale": "intent test",
+        "actions": [
+            {
+                "type": "shell_command",
+                "summary": "Inspect owner",
+                "command": "sed -n '1,40p' src/lib.rs",
+                "intent": "inspect"
+            }
+        ]
+    })
+    .to_string();
+
+    let error = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap_err();
+
+    assert!(
+        error.message().contains("unknown shell command intent inspect"),
+        "{}",
+        error.message()
+    );
+}
+
+/// Verifies edit-ready discovery metadata cannot carry an empty missing-fact
+/// justification.
+#[test]
+fn maap_batch_rejects_empty_shell_missing_fact() {
+    let raw_text = serde_json::json!({
+        "rationale": "missing fact test",
+        "next_phase": "edit_ready",
+        "actions": [
+            {
+                "type": "shell_command",
+                "summary": "Read the owner",
+                "command": "sed -n '1,40p' src/lib.rs",
+                "intent": "read",
+                "missing_fact": "   "
+            }
+        ]
+    })
+    .to_string();
+
+    let batch = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap();
+    let error = batch.validate(&turn(), &[], &[]).unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("shell command missing_fact must not be empty"),
+        "{}",
+        error.message()
+    );
+}
+
 /// Verifies compact provider-native MAAP output can carry an optional durable
 /// thought field without making it part of the required compact envelope.
 #[test]
@@ -999,6 +1124,7 @@ fn maap_batch_accepts_nonfinal_say_only_actions() {
             },
         }],
         final_turn: false,
+        next_phase: None,
     };
 
     batch.validate(&turn(), &[], &[]).unwrap();
@@ -1067,6 +1193,7 @@ fn maap_batch_rejects_unavailable_mcp_server() {
             },
         }],
         final_turn: false,
+        next_phase: None,
     };
 
     let error = batch
@@ -1096,6 +1223,7 @@ fn maap_batch_rejects_unavailable_mcp_tool() {
             },
         }],
         final_turn: false,
+        next_phase: None,
     };
     let available_tools = vec![McpPromptTool {
         server_id: "fs".to_string(),
@@ -3501,6 +3629,8 @@ fn semantic_shell_command_plan_preserves_explicit_timeout() {
             interactive: false,
             stateful: false,
             timeout_ms: Some(1500),
+            intent: None,
+            missing_fact: None,
         },
     };
 
@@ -3525,6 +3655,8 @@ fn semantic_shell_command_plan_leaves_omitted_timeout_unset() {
             interactive: false,
             stateful: false,
             timeout_ms: None,
+            intent: None,
+            missing_fact: None,
         },
     };
 
@@ -3835,6 +3967,7 @@ impl ModelProvider for CapabilityBatchProvider {
                     agent_id: request.agent_id.clone(),
                     actions: vec![capability_action("capability-1", self.capability)],
                     final_turn: false,
+                    next_phase: None,
                 }),
                 provider_transcript_events: Vec::new(),
 });

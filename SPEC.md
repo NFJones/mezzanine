@@ -3536,12 +3536,18 @@ The internal/audit action batch MUST be a JSON object with:
 - `turn_id`: The active turn identity.
 - `agent_id`: The proposing agent identity.
 - `actions`: An array of action objects.
+- `next_phase`: Optional `null` or `edit_ready`. Models SHOULD set
+  `next_phase=edit_ready` once the current turn has enough evidence to begin
+  implementation. This is an execution-readiness declaration for the active
+  turn, not user-visible prose.
 - `final`: A Boolean indicating whether the agent believes the turn is
   complete after the listed actions.
 
 Provider-native compact output MUST include `rationale` and `actions`, and MUST
 omit runtime-owned fields unless the provider is using a compatibility fallback
-that cannot enforce the compact schema.
+that cannot enforce the compact schema. Provider-native compact output MAY
+include `next_phase` when the model is explicitly declaring implementation
+readiness for the active turn.
 
 Each action object MUST include:
 
@@ -3787,6 +3793,17 @@ A `shell_command` action MAY include:
   Omitted values default to `false`.
 - `timeout_ms`: Requested timeout or `null`. Omitted values use the configured
   default timeout.
+- `intent`: Optional coarse classification such as `read`, `search`, `build`,
+  `test`, `format`, `git`, or `other`.
+- `missing_fact`: Optional concrete missing fact that justifies an additional
+  discovery read/search command after the turn has already declared
+  `next_phase=edit_ready`.
+
+After a turn declares `next_phase=edit_ready` and before a successful file
+mutation settles that turn, Mezzanine MUST reject discovery-style
+`shell_command` actions that omit `missing_fact`. It SHOULD also reject a
+repeated discovery-style `shell_command` when the same `missing_fact` was
+already satisfied by a successful earlier discovery action in the same turn.
 
 For compatibility with provider-native outputs that do not yet follow the
 current schema, Mezzanine MAY synthesize a missing `shell_command.summary` from
@@ -6013,6 +6030,12 @@ similar chaining for tightly coupled fail-fast steps that should share one
 outcome and one output stream.
 For repository search, the prompt SHOULD recommend `rg` or `rg --files` when
 available.
+The prompt MUST explain that once the current turn has enough evidence to start
+implementation, the model should declare `next_phase=edit_ready` on the MAAP
+batch instead of merely narrating readiness in prose. It MUST explain that
+after `next_phase=edit_ready`, further discovery shell work should use
+`intent=read` or `intent=search` plus one concrete `missing_fact`, otherwise
+the model should prefer implementation, validation, repair, or reporting.
 
 The prompt MUST explain that `apply_patch` is the model-facing filesystem
 content-mutation action. It MUST state that `apply_patch` is a MAAP action, not

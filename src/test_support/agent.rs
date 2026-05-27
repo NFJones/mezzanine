@@ -170,6 +170,7 @@ impl BatchBuilder {
                 agent_id: "agent-1".to_string(),
                 actions,
                 final_turn: true,
+                next_phase: None,
             },
         }
     }
@@ -214,6 +215,8 @@ impl ActionBuilder {
                 interactive: false,
                 stateful: false,
                 timeout_ms: Some(1000),
+                intent: None,
+                missing_fact: None,
             },
         }
     }
