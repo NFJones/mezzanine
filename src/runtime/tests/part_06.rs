@@ -3799,6 +3799,108 @@ fn runtime_edit_ready_declaring_batch_can_finish_its_last_owner_read() {
     );
 }
 
+/// Verifies edit-ready is not armed while the declaring batch is still waiting
+/// for shell readiness to dispatch its own final owner read.
+///
+/// The post-readiness discovery guard applies only after the declaring batch
+/// has actually left pending-shell-dispatch limbo. If the pane first needs a
+/// readiness probe, the stored resume path must still be able to dispatch that
+/// same read command without demanding a `missing_fact`.
+#[test]
+fn runtime_edit_ready_waiting_readiness_does_not_block_declaring_read() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-edit-ready-readiness-wait","input":"patch the shell prompt label"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "read then patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "read the prompt owner, then patch".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "read-1".to_string(),
+                    rationale: "capture the exact prompt owner lines".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Read the exact prompt owner lines".to_string(),
+                        command: "sed -n '1,40p' src/readline/prompt.rs".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                        intent: Some(crate::agent::ShellCommandIntent::Read),
+                        missing_fact: None,
+                    },
+                }],
+                final_turn: false,
+                next_phase: Some(crate::agent::MaapNextPhase::EditReady),
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(
+        service
+            .agent_turn_shell_dispatch_history
+            .get("turn-1")
+            .is_none_or(|history| !history.edit_ready_declared_this_turn)
+    );
+
+    mark_test_pane_ready(&mut service, "%1");
+    let resumed = service
+        .dispatch_stored_running_shell_actions("turn-1")
+        .unwrap()
+        .expect("pending shell dispatch should resume");
+
+    assert_eq!(resumed.terminal_state, AgentTurnState::Running);
+    assert_eq!(resumed.action_results[0].status, ActionStatus::Running);
+    assert!(resumed.action_results[0].error.is_none());
+    assert!(
+        service
+            .running_shell_transactions
+            .values()
+            .any(|transaction| matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "read-1"
+            ))
+    );
+    assert!(
+        service
+            .agent_turn_shell_dispatch_history
+            .get("turn-1")
+            .is_some_and(|history| history.edit_ready_declared_this_turn)
+    );
+}
+
 /// Verifies edit-ready turns reject further discovery shell actions that do not
 /// name one concrete missing fact.
 #[test]

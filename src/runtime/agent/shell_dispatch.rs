@@ -227,6 +227,9 @@ impl RuntimeSessionService {
         if !declared {
             return Ok(());
         }
+        if self.execution_has_pending_shell_dispatch(&turn.turn_id, execution) {
+            return Ok(());
+        }
         let history = self
             .agent_turn_shell_dispatch_history
             .entry(turn.turn_id.clone())
@@ -345,6 +348,7 @@ impl RuntimeSessionService {
             "pending_shell_dispatch resume started",
         )?;
         let dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
+        self.record_edit_ready_phase_from_execution(&turn, &execution)?;
         self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
         let mut terminal_state = execution.terminal_state;
         let mut transcript_entries = 0usize;
