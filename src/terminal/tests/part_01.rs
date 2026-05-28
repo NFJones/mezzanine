@@ -3864,6 +3864,52 @@ fn readline_prompt_client_presentation_places_prompt_on_status_row() {
     assert!(presentation.cursor_visible);
 }
 
+/// Verifies agent prompt row styling uses terminal display width instead of
+/// Unicode scalar count when the rendered prompt contains a wide glyph.
+///
+/// A double-width glyph on the prompt row still occupies two terminal cells.
+/// The full-row prompt style span must therefore cover the fitted display
+/// width, or the trailing cell after the wide glyph renders with the wrong
+/// background.
+#[test]
+fn readline_prompt_client_presentation_styles_agent_prompt_by_display_width() {
+    let view = RenderedClientView {
+        role: ClientViewRole::Primary,
+        authoritative_size: Size::new(12, 3).unwrap(),
+        client_size: Size::new(12, 3).unwrap(),
+        lines: vec!["pane".to_string(), "body".to_string(), "old".to_string()],
+        line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
+        selection: None,
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: 0,
+        cursor_column: 0,
+        cursor_visible: false,
+        cursor_style: TerminalCursorStyle::Block,
+        cursor_blink: true,
+        cursor_blink_interval_ms: 500,
+        application_keypad: false,
+        bracketed_paste: false,
+        animation_refresh_interval_ms: 0,
+        ui_theme: UiTheme::default(),
+        agent_prompt_region: None,
+        primary_prompt_active: false,
+    };
+    let mut prompt = crate::readline::ReadlinePrompt::new(crate::readline::ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("界x");
+
+    let presentation = compose_readline_prompt_client_presentation(&view, &prompt);
+
+    assert_eq!(presentation.lines.len(), 3);
+    assert_eq!(terminal_text_width(&presentation.lines[2]), 12);
+    assert!(presentation.lines[2].contains('界'));
+    assert!(presentation.lines[2].chars().count() < 12);
+    assert_eq!(presentation.line_style_spans[2].len(), 1);
+    assert_eq!(presentation.line_style_spans[2][0].start, 0);
+    assert_eq!(presentation.line_style_spans[2][0].length, 12);
+}
+
 /// Verifies that prompt overlays composed from plain line batches still carry
 /// cursor placement for attached-terminal output. Control-socket and async
 /// prompt paths use this helper when they do not have a full `RenderedClientView`

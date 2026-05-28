@@ -86,7 +86,7 @@ pub fn compose_readline_prompt_client_presentation(
     if let Some(last) = line_style_spans.last_mut() {
         let presentation_width = lines
             .last()
-            .map(|line| line.chars().count())
+            .map(|line| terminal_text_width(line))
             .unwrap_or(width);
         if prompt.kind == ReadlinePromptKind::Agent && presentation_width > 0 {
             last.clear();
