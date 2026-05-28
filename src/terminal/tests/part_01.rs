@@ -1483,6 +1483,65 @@ fn client_loop_scopes_application_mouse_forwarding_to_pane_regions() {
     );
 }
 
+/// Verifies full-screen pane regions do not capture mouse input unless the pane
+/// application explicitly enables mouse tracking. Alternate-screen programs that
+/// only draw a full-screen interface still leave wheel scrolling and drag-copy
+/// routing owned by Mezzanine.
+#[test]
+fn client_loop_routes_full_screen_mouse_to_mux_until_application_mouse_is_enabled() {
+    let mut config = TerminalClientLoopConfig {
+        mouse_pane_regions: vec![MousePaneRegion {
+            pane_id: "%1".to_string(),
+            column: 4,
+            row: 2,
+            columns: 40,
+            rows: 20,
+            application_sgr_mouse_mode: false,
+            application_mouse_mode: false,
+            copy_mode_active: false,
+            active: true,
+        }],
+        ..TerminalClientLoopConfig::default()
+    };
+
+    assert_eq!(
+        route_client_input(b"\x1b[<65;12;5M", &config).unwrap(),
+        TerminalClientLoopAction::HandleMouse(MouseAction::ScrollHistory {
+            lines: 3,
+            position: CopyPosition {
+                line: 4,
+                column: 11,
+            },
+        })
+    );
+    assert_eq!(
+        route_client_input(b"\x1b[<32;12;5M", &config).unwrap(),
+        TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionUpdate(
+            CopyPosition {
+                line: 4,
+                column: 11,
+            }
+        ))
+    );
+
+    config.mouse_pane_regions[0].application_mouse_mode = true;
+    config.mouse_pane_regions[0].application_sgr_mouse_mode = true;
+    assert_eq!(
+        route_client_input(b"\x1b[<65;12;5M", &config).unwrap(),
+        TerminalClientLoopAction::ForwardMouseToPane {
+            pane_id: "%1".to_string(),
+            input: b"\x1b[<65;8;3M".to_vec(),
+        }
+    );
+    assert_eq!(
+        route_client_input(b"\x1b[<32;12;5M", &config).unwrap(),
+        TerminalClientLoopAction::ForwardMouseToPane {
+            pane_id: "%1".to_string(),
+            input: b"\x1b[<32;8;3M".to_vec(),
+        }
+    );
+}
+
 /// Verifies that the first button press in an unfocused mouse-aware pane is a
 /// Mezzanine focus action instead of being forwarded to the previously focused
 /// pane. After that focus update, later events in the same pane may be forwarded
