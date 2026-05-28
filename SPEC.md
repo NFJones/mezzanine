@@ -809,7 +809,8 @@ Pane frames MUST support the following fields:
 - `pane.process_name`: Primary process name when known.
 - `pane.exit_status`: Exit status after the primary process exits.
 - `pane.pwd`: Current pane working directory, shortened relative to the user's
-  home directory when possible.
+  home directory when possible and compacted to at most the last three path
+  segments when deeper.
 - `pane.mode`: Current pane interaction mode, such as normal, copy, resize, or
   agent.
 - `agent.id`: Agent identity associated with the pane.
@@ -859,7 +860,9 @@ pane titles in the same family as window title pills.
 When a pane is viewing scrollback rather than the live bottom, the default pane
 frame MUST surface the current pane working directory as a right-aligned
 `pane.pwd` pill, displayed relative to the user's home directory when possible,
-so users can track the active shell location without relying on shell prompts.
+and compacted to at most the last three path segments with a leading ellipsis
+when deeper, so users can track the active shell location without relying on
+shell prompts.
 The `pane.pwd` pill MUST appear to the left of agent model, reasoning, and
 status pills when those fields are visible. When a pane is viewing scrollback
 rather than the live bottom, the default pane frame MUST also surface

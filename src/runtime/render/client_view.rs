@@ -1209,18 +1209,55 @@ impl RuntimeSessionService {
         let home = std::env::var_os("HOME")
             .filter(|home| !home.is_empty())
             .map(std::path::PathBuf::from);
-        let Some(home) = home.as_deref() else {
-            return path.to_string_lossy().to_string();
-        };
-        if path == home {
-            return "~".to_string();
+        if let Some(home) = home.as_deref() {
+            if path == home {
+                return "~".to_string();
+            }
+            if let Ok(relative) = path.strip_prefix(home)
+                && !relative.as_os_str().is_empty()
+            {
+                let segments = relative
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                return Self::runtime_compact_working_directory_segments(Some("~"), &segments);
+            }
         }
-        if let Ok(relative) = path.strip_prefix(home)
-            && !relative.as_os_str().is_empty()
-        {
-            return format!("~/{}", relative.to_string_lossy());
+
+        let segments = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::RootDir => None,
+                std::path::Component::Normal(segment) => {
+                    Some(segment.to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let prefix = path.has_root().then_some("/");
+        Self::runtime_compact_working_directory_segments(prefix, &segments)
+    }
+
+    /// Compacts pane working-directory segments for frame rendering.
+    fn runtime_compact_working_directory_segments(
+        prefix: Option<&str>,
+        segments: &[String],
+    ) -> String {
+        if segments.is_empty() {
+            return prefix.unwrap_or_default().to_string();
         }
-        path.to_string_lossy().to_string()
+        if segments.len() <= 3 {
+            return match prefix {
+                Some("~") => format!("~/{segments}", segments = segments.join("/")),
+                Some("/") => format!("/{segments}", segments = segments.join("/")),
+                Some(prefix) => format!("{prefix}/{segments}", segments = segments.join("/")),
+                None => segments.join("/"),
+            };
+        }
+        format!(
+            "…/{}",
+            segments[segments.len().saturating_sub(3)..].join("/")
+        )
     }
 
     /// Runs the pending observer status line operation for this subsystem.

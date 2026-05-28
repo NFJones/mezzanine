@@ -179,7 +179,7 @@ The prefix key table remains available even when direct bindings are omitted.
 | `frames.window.enabled` | boolean | `true` | Render the window frame/status bar. |
 | `frames.window.position` | string | `"bottom"` | `top`, `bottom`, or `border`. |
 | `frames.window.template` | string | `"#{window.list}"` | Left/main window frame template. |
-| `frames.window.right_status` | string | `"#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"` | Right-aligned status and command buttons. |
+| `frames.window.right_status` | string | `"#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"` | Right-aligned status and command buttons; the built-in `pane.pwd` display is home-relative when possible and collapses deep paths to the last three segments. |
 | `frames.window.style` | string | `"default"` | Frame text style: `default`, `bold`, `underline`, `inverse`, or `reverse`. |
 | `frames.window.visible_fields` | string array | `[...]` | Allowed template fields for window frames. |
 

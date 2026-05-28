@@ -627,6 +627,50 @@ fn runtime_frame_context_reports_home_relative_pane_working_directory() {
         Some(expected.as_str())
     );
 }
+
+/// Verifies that deep pane working directories collapse to the last three path
+/// segments in the default window status. This keeps the footer compact while
+/// still surfacing the most actionable cwd context for narrow frame rows.
+#[test]
+fn runtime_frame_context_compacts_deep_pane_working_directory() {
+    let mut service = test_runtime_service();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let home = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from);
+    let path = home
+        .as_ref()
+        .map(|home| home.join("Documents/repos/mezzanine/src/runtime"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/worktrees/mez/src/runtime"));
+    service
+        .pane_current_working_directories
+        .insert(pane_id.clone(), path);
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get(&pane_id).unwrap();
+
+    assert_eq!(
+        pane_context.current_working_directory.as_deref(),
+        Some("…/mezzanine/src/runtime")
+    );
+    assert_eq!(
+        config
+            .frame_context
+            .window_status
+            .as_ref()
+            .and_then(|status| status.active_pane_working_directory.as_deref()),
+        Some("…/mezzanine/src/runtime")
+    );
+}
+
 /// Verifies that frame context leaves unused dynamic right-status fields empty
 /// when the configured template only references pane working-directory data.
 /// This avoids repeated uptime and datetime formatting work on redraws that do
