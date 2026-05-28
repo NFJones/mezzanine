@@ -60,7 +60,8 @@ pub use types::{
     AuthCredentialKind, AuthCredentialState, AuthFlowPlan, AuthInteractivePromptPlan, AuthMetadata,
     AuthMethod, AuthPaths, AuthPromptAction, AuthStatus, CredentialStore,
     CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, ProviderBrowserFlowPlan, ProviderEntitlementPersistence,
+    FileCredentialFallbackReason, McpAuthMetadata, McpAuthStatus, McpCredentialKind,
+    McpOAuthCredential, ProviderBrowserFlowPlan, ProviderEntitlementPersistence,
     ProviderEntitlementPlan, ProviderEntitlementValidation,
 };
 

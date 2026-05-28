@@ -5,13 +5,15 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    Args, BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer, ConfigMutation,
-    ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
-    DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore, Result,
-    Subcommand, TrustDecision, Write, compose_effective_config, default_trust_database_path,
-    discover_existing_overlays, discover_project_root, fs, json_escape, json_optional,
-    migrate_config_file, persist_config_mutation, write_json_or_plain,
+    Args, AuthPaths, AuthStore, BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer,
+    ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths,
+    ConfigScope, DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore,
+    Result, Subcommand, TrustDecision, Write, compose_effective_config,
+    default_trust_database_path, discover_existing_overlays, discover_project_root, fs,
+    json_escape, json_optional, migrate_config_file, persist_config_mutation, write_json_or_plain,
 };
+use crate::auth::{AuthCredentialState, McpAuthStatus};
+use sha2::Digest;
 
 // MCP subcommands and config mutation helpers.
 
@@ -48,6 +50,66 @@ pub(super) fn run_mcp<W: Write>(
                 ));
             };
             let output = format!(r#"{{"server":{server}}}"#);
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Login {
+            id,
+            scopes,
+            client_id,
+            resource,
+            credential_store,
+            replace_env_token,
+        } => {
+            validate_config_identifier(&id, "MCP server id")?;
+            let effective = load_primary_effective_config(&paths)?;
+            let binding = configured_mcp_http_binding(&effective, &id)?;
+            if binding.bearer_token_env.is_some() && !replace_env_token {
+                return Err(MezError::invalid_args(
+                    "mcp login refuses bearer_token_env servers unless --replace-env-token is set",
+                ));
+            }
+            if credential_store
+                .as_deref()
+                .is_some_and(|store| store != "file" && store != "os")
+            {
+                return Err(MezError::invalid_args(
+                    "mcp login --credential-store must be `file` or `os`",
+                ));
+            }
+            let output = format!(
+                r#"{{"server_id":"{}","action":"interactive-required","reason":"oauth-login-not-yet-implemented","url_origin":"{}","scopes":{},"client_id":{},"resource":{},"credential_store":{}}}"#,
+                json_escape(&id),
+                json_escape(binding.url_origin.as_deref().unwrap_or_default()),
+                string_list_json(&scopes),
+                json_optional(client_id.as_deref()),
+                json_optional(resource.as_deref()),
+                json_optional(credential_store.as_deref())
+            );
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Logout { id } => {
+            validate_config_identifier(&id, "MCP server id")?;
+            let store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
+            let changed = store.logout_mcp_server(&id)?;
+            let output = format!(
+                r#"{{"server_id":"{}","logged_out":{},"changed":{}}}"#,
+                json_escape(&id),
+                changed,
+                changed
+            );
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Status { id } => {
+            validate_config_identifier(&id, "MCP server id")?;
+            let effective = load_primary_effective_config(&paths)?;
+            let binding = configured_mcp_auth_binding(&effective, &id)?;
+            let store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
+            let status = store.mcp_status(
+                &id,
+                binding.url_origin.as_deref(),
+                binding.url_fingerprint.as_deref(),
+            )?;
+            let output = mcp_status_json(&binding, &status);
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Add {
@@ -174,6 +236,36 @@ enum McpCliCommand {
     List,
     /// Inspects one configured MCP server.
     Inspect {
+        /// MCP server id.
+        id: String,
+    },
+    /// Starts MCP HTTP OAuth login for one configured server.
+    Login {
+        /// MCP server id.
+        id: String,
+        /// Comma-separated or repeated OAuth scopes.
+        #[arg(long, value_delimiter = ',')]
+        scopes: Vec<String>,
+        /// OAuth client id for servers that require a pre-registered client.
+        #[arg(long)]
+        client_id: Option<String>,
+        /// OAuth resource parameter to request.
+        #[arg(long)]
+        resource: Option<String>,
+        /// Credential store preference for persisted MCP OAuth secrets.
+        #[arg(long)]
+        credential_store: Option<String>,
+        /// Permit login even when bearer_token_env is configured.
+        #[arg(long)]
+        replace_env_token: bool,
+    },
+    /// Deletes stored MCP OAuth credentials for one configured server.
+    Logout {
+        /// MCP server id.
+        id: String,
+    },
+    /// Reports secret-safe MCP auth status for one configured server.
+    Status {
         /// MCP server id.
         id: String,
     },
@@ -439,6 +531,155 @@ pub(super) fn configured_mcp_server_json(effective: &EffectiveConfig, id: &str) 
         json_optional(url),
         args
     ))
+}
+
+/// Secret-safe auth binding for one configured MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct McpAuthBinding {
+    /// Configured server id.
+    id: String,
+    /// Configured transport label.
+    transport: &'static str,
+    /// Configured server URL when the transport is HTTP.
+    url: Option<String>,
+    /// URL origin used to bind stored OAuth credentials.
+    url_origin: Option<String>,
+    /// Stable fingerprint of the full configured URL.
+    url_fingerprint: Option<String>,
+    /// Environment variable used for bearer auth, when configured.
+    bearer_token_env: Option<String>,
+}
+
+/// Resolves the configured auth binding for status output.
+fn configured_mcp_auth_binding(effective: &EffectiveConfig, id: &str) -> Result<McpAuthBinding> {
+    let prefix = format!("mcp_servers.{id}.");
+    if !effective
+        .values()
+        .keys()
+        .any(|path| path.starts_with(&prefix))
+    {
+        return Err(MezError::new(
+            crate::error::MezErrorKind::NotFound,
+            "MCP server not found",
+        ));
+    }
+    let url = effective
+        .get(&format!("{prefix}url"))
+        .map(ToOwned::to_owned);
+    let transport = if url.is_some() {
+        "streamable_http"
+    } else {
+        "stdio"
+    };
+    let (url_origin, url_fingerprint) = if let Some(url) = url.as_deref() {
+        (Some(http_url_origin(url)?), Some(url_fingerprint(url)))
+    } else {
+        (None, None)
+    };
+    Ok(McpAuthBinding {
+        id: id.to_string(),
+        transport,
+        url,
+        url_origin,
+        url_fingerprint,
+        bearer_token_env: effective
+            .get(&format!("{prefix}bearer_token_env"))
+            .map(ToOwned::to_owned),
+    })
+}
+
+/// Resolves and validates the HTTP auth binding required by `mcp login`.
+fn configured_mcp_http_binding(effective: &EffectiveConfig, id: &str) -> Result<McpAuthBinding> {
+    let binding = configured_mcp_auth_binding(effective, id)?;
+    let Some(url) = binding.url.as_deref() else {
+        return Err(MezError::invalid_args(
+            "mcp login requires a streamable HTTP server",
+        ));
+    };
+    if !url.starts_with("https://") {
+        return Err(MezError::invalid_args(
+            "mcp login requires an HTTPS server URL",
+        ));
+    }
+    Ok(binding)
+}
+
+/// Computes an origin string from a configured HTTP URL.
+fn http_url_origin(url: &str) -> Result<String> {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return Err(MezError::invalid_args(
+            "MCP HTTP server URL must include a scheme",
+        ));
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|authority| !authority.is_empty())
+        .ok_or_else(|| MezError::invalid_args("MCP HTTP server URL must include a host"))?;
+    Ok(format!("{}://{}", scheme.to_ascii_lowercase(), authority))
+}
+
+/// Computes the stable non-secret configured-URL fingerprint for MCP auth binding.
+fn url_fingerprint(url: &str) -> String {
+    let digest = sha2::Sha256::digest(url.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("sha256:{hex}")
+}
+
+/// Renders a JSON array of strings.
+fn string_list_json(values: &[String]) -> String {
+    let values = values
+        .iter()
+        .map(|value| format!("\"{}\"", json_escape(value)))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(","))
+}
+
+/// Renders secret-safe MCP auth status as JSON.
+fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> String {
+    let auth_mode = if binding.bearer_token_env.is_some() {
+        "env-bearer"
+    } else if status.metadata_present {
+        "oauth"
+    } else {
+        "none"
+    };
+    let scopes = status
+        .metadata
+        .as_ref()
+        .map(|metadata| string_list_json(&metadata.scopes))
+        .unwrap_or_else(|| "[]".to_string());
+    let expiry = status
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.token_expires_at.as_deref());
+    format!(
+        r#"{{"server_id":"{}","transport":"{}","auth_mode":"{}","authenticated":{},"metadata_present":{},"stale_url":{},"credential_state":"{}","bearer_token_env":{},"url_origin":{},"url_fingerprint":{},"token_expires_at":{},"scopes":{}}}"#,
+        json_escape(&binding.id),
+        binding.transport,
+        auth_mode,
+        status.authenticated,
+        status.metadata_present,
+        status.stale_url,
+        mcp_credential_state_name(&status.credential_state),
+        json_optional(binding.bearer_token_env.as_deref()),
+        json_optional(binding.url_origin.as_deref()),
+        json_optional(binding.url_fingerprint.as_deref()),
+        json_optional(expiry),
+        scopes
+    )
+}
+
+/// Returns the stable display name for a secret-safe credential state.
+fn mcp_credential_state_name(state: &AuthCredentialState) -> &'static str {
+    match state {
+        AuthCredentialState::LoggedOut => "logged-out",
+        AuthCredentialState::MissingSecret { .. } => "missing-secret",
+        AuthCredentialState::Available { .. } => "available",
+    }
 }
 
 /// Runs the config value array json operation for this subsystem.

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use crate::error::{MezError, Result};
 
-use super::types::{AuthCredentialKind, AuthMetadata};
+use super::types::{AuthCredentialKind, AuthMetadata, McpAuthMetadata, McpCredentialKind};
 
 impl AuthMetadata {
     /// Runs the new operation for this subsystem.
@@ -55,6 +55,59 @@ impl AuthMetadata {
             return Err(MezError::config(
                 "auth metadata must not contain raw provider credentials or tokens",
             ));
+        }
+
+        Ok(())
+    }
+}
+
+impl McpAuthMetadata {
+    /// Creates non-secret metadata for one MCP OAuth credential.
+    pub fn new(
+        server_id: impl Into<String>,
+        url_origin: impl Into<String>,
+        url_fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            server_id: server_id.into(),
+            credential_kind: McpCredentialKind::OAuthBearer,
+            url_origin: url_origin.into(),
+            url_fingerprint: url_fingerprint.into(),
+            scopes: Vec::new(),
+            credential_store_ref: None,
+            refresh_credential_store_ref: None,
+            token_expires_at: None,
+        }
+    }
+
+    /// Rejects raw credential material in MCP metadata before persistence.
+    pub fn validate_non_secret(&self) -> Result<()> {
+        let secret_markers = ["sk-", "Bearer ", "-----BEGIN", "token="];
+        let fields = [
+            self.server_id.as_str(),
+            self.credential_kind.as_str(),
+            self.url_origin.as_str(),
+            self.url_fingerprint.as_str(),
+            self.credential_store_ref.as_deref().unwrap_or_default(),
+            self.refresh_credential_store_ref
+                .as_deref()
+                .unwrap_or_default(),
+            self.token_expires_at.as_deref().unwrap_or_default(),
+        ];
+
+        for field in fields {
+            if secret_markers.iter().any(|marker| field.contains(marker)) {
+                return Err(MezError::config(
+                    "MCP auth metadata must not contain raw credentials or tokens",
+                ));
+            }
+        }
+        for scope in &self.scopes {
+            if secret_markers.iter().any(|marker| scope.contains(marker)) {
+                return Err(MezError::config(
+                    "MCP auth metadata must not contain raw credentials or tokens",
+                ));
+            }
         }
 
         Ok(())
@@ -134,6 +187,115 @@ pub(super) fn encode_all_metadata(map: &BTreeMap<String, AuthMetadata>) -> Strin
     text
 }
 
+/// Encodes one MCP auth metadata entry into non-secret key/value fields.
+pub(super) fn encode_mcp_metadata(metadata: &McpAuthMetadata) -> String {
+    format!(
+        "server_id = \"{}\"\ncredential_kind = \"{}\"\nurl_origin = \"{}\"\nurl_fingerprint = \"{}\"\nscopes = \"{}\"\ncredential_store_ref = \"{}\"\nrefresh_credential_store_ref = \"{}\"\ntoken_expires_at = \"{}\"\n",
+        toml_escape(&metadata.server_id),
+        toml_escape(metadata.credential_kind.as_str()),
+        toml_escape(&metadata.url_origin),
+        toml_escape(&metadata.url_fingerprint),
+        toml_escape(&metadata.scopes.join(",")),
+        toml_escape(metadata.credential_store_ref.as_deref().unwrap_or_default()),
+        toml_escape(
+            metadata
+                .refresh_credential_store_ref
+                .as_deref()
+                .unwrap_or_default()
+        ),
+        toml_escape(metadata.token_expires_at.as_deref().unwrap_or_default())
+    )
+}
+
+/// Encodes all MCP auth metadata entries into a single TOML-like document.
+pub(super) fn encode_all_mcp_metadata(map: &BTreeMap<String, McpAuthMetadata>) -> String {
+    let mut text = String::new();
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort();
+    for (index, server_id) in keys.iter().enumerate() {
+        let metadata = &map[*server_id];
+        if index > 0 {
+            text.push('\n');
+        }
+        text.push_str(&format!("[{}]\n", toml_escape(server_id)));
+        text.push_str(&encode_mcp_metadata(metadata));
+    }
+    text
+}
+
+/// Decodes one MCP auth metadata entry from non-secret key/value fields.
+pub(super) fn decode_mcp_metadata(data: &str) -> Result<McpAuthMetadata> {
+    let mut values = BTreeMap::new();
+    for line in data.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(MezError::config("malformed MCP auth metadata line"));
+        };
+        values.insert(key.trim(), parse_toml_string(value.trim())?);
+    }
+
+    let mut metadata = McpAuthMetadata::new(
+        required(&values, "server_id")?,
+        required(&values, "url_origin")?,
+        required(&values, "url_fingerprint")?,
+    );
+    metadata.credential_kind = optional(&values, "credential_kind")
+        .as_deref()
+        .map(parse_mcp_credential_kind)
+        .transpose()?
+        .unwrap_or(McpCredentialKind::OAuthBearer);
+    metadata.scopes = optional(&values, "scopes")
+        .map(|value| parse_scope_list(&value))
+        .unwrap_or_default();
+    metadata.credential_store_ref = optional(&values, "credential_store_ref");
+    metadata.refresh_credential_store_ref = optional(&values, "refresh_credential_store_ref");
+    metadata.token_expires_at = optional(&values, "token_expires_at");
+    metadata.validate_non_secret()?;
+    Ok(metadata)
+}
+
+/// Decodes all MCP auth metadata entries into a map keyed by server id.
+pub(super) fn decode_all_mcp_metadata(data: &str) -> Result<BTreeMap<String, McpAuthMetadata>> {
+    let trimmed = data.trim();
+    if trimmed.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    if !trimmed.contains('[') {
+        return decode_mcp_metadata(data).map(|entry| {
+            let mut map = BTreeMap::new();
+            map.insert(entry.server_id.clone(), entry);
+            map
+        });
+    }
+    let mut map = BTreeMap::new();
+    let mut current_server_id: Option<String> = None;
+    let mut current_fields = String::new();
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(inner) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            if let Some(server_id) = current_server_id.take() {
+                let metadata = decode_mcp_metadata(&current_fields)?;
+                map.insert(server_id, metadata);
+                current_fields = String::new();
+            }
+            current_server_id = Some(parse_toml_bare_key(inner)?);
+        } else if current_server_id.is_some() {
+            current_fields.push_str(line);
+            current_fields.push('\n');
+        }
+    }
+    if let Some(server_id) = current_server_id {
+        let metadata = decode_mcp_metadata(&current_fields)?;
+        map.insert(server_id, metadata);
+    }
+    Ok(map)
+}
+
 /// Decodes a multi-provider metadata document into a map keyed by provider.
 pub(super) fn decode_all_metadata(data: &str) -> Result<BTreeMap<String, AuthMetadata>> {
     let trimmed = data.trim();
@@ -188,6 +350,25 @@ fn parse_credential_kind(value: &str) -> Result<AuthCredentialKind> {
             "unsupported auth credential kind `{value}`; expected `api-key` or `chatgpt`"
         ))
     })
+}
+
+/// Parses an MCP credential kind from its stable metadata value.
+fn parse_mcp_credential_kind(value: &str) -> Result<McpCredentialKind> {
+    McpCredentialKind::from_metadata_value(value).ok_or_else(|| {
+        MezError::config(format!(
+            "unsupported MCP credential kind `{value}`; expected `oauth-bearer`"
+        ))
+    })
+}
+
+/// Parses the compact comma-separated MCP scope list used in metadata files.
+fn parse_scope_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Runs the infer credential kind operation for this subsystem.

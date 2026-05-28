@@ -18,15 +18,18 @@ use super::file_store::PrivateFileCredentialStore;
 use super::fs::{
     ensure_private_dir, path_is_under_directory, set_private_file, validate_safe_name,
 };
-use super::metadata::{decode_all_metadata, encode_all_metadata};
+use super::metadata::{
+    decode_all_mcp_metadata, decode_all_metadata, encode_all_mcp_metadata, encode_all_metadata,
+};
 use super::openai_oauth::{OpenAiProviderCredential, refresh_openai_provider_credential_async};
 use super::secret_service::NativeSecretServiceCredentialStore;
 use super::types::{
     AuthCredentialKind, AuthCredentialState, AuthFlowPlan, AuthInteractivePromptPlan, AuthMetadata,
     AuthMethod, AuthPaths, AuthPromptAction, AuthStatus, CredentialStore,
     CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, ProviderBrowserFlowPlan, ProviderEntitlementPersistence,
-    ProviderEntitlementPlan, ProviderEntitlementValidation,
+    FileCredentialFallbackReason, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
+    ProviderBrowserFlowPlan, ProviderEntitlementPersistence, ProviderEntitlementPlan,
+    ProviderEntitlementValidation,
 };
 
 /// Defines the OPENAI PROVIDER const used by this subsystem.
@@ -284,6 +287,23 @@ impl AuthStore {
         Ok(self.paths.auth_file().to_path_buf())
     }
 
+    /// Writes non-secret MCP auth metadata without storing token material.
+    pub fn write_mcp_metadata(&self, metadata: &McpAuthMetadata) -> Result<PathBuf> {
+        metadata.validate_non_secret()?;
+        let mut existing = self.read_all_mcp_metadata()?;
+        existing.insert(metadata.server_id.clone(), metadata.clone());
+        ensure_private_dir(self.paths.root())?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(self.paths.mcp_auth_file())?;
+        file.write_all(encode_all_mcp_metadata(&existing).as_bytes())?;
+        file.sync_all()?;
+        set_private_file(self.paths.mcp_auth_file())?;
+        Ok(self.paths.mcp_auth_file().to_path_buf())
+    }
+
     /// Reads all provider metadata entries from the auth file.
     pub fn read_all_metadata(&self) -> Result<BTreeMap<String, AuthMetadata>> {
         if !self.paths.auth_file().exists() {
@@ -294,9 +314,24 @@ impl AuthStore {
         decode_all_metadata(&data)
     }
 
+    /// Reads all MCP auth metadata entries from the MCP auth file.
+    pub fn read_all_mcp_metadata(&self) -> Result<BTreeMap<String, McpAuthMetadata>> {
+        if !self.paths.mcp_auth_file().exists() {
+            return Ok(BTreeMap::new());
+        }
+        let mut data = String::new();
+        fs::File::open(self.paths.mcp_auth_file())?.read_to_string(&mut data)?;
+        decode_all_mcp_metadata(&data)
+    }
+
     /// Reads metadata for a specific provider.
     pub fn read_metadata_for_provider(&self, provider: &str) -> Result<Option<AuthMetadata>> {
         Ok(self.read_all_metadata()?.remove(provider))
+    }
+
+    /// Reads MCP auth metadata for a configured MCP server id.
+    pub fn read_mcp_metadata_for_server(&self, server_id: &str) -> Result<Option<McpAuthMetadata>> {
+        Ok(self.read_all_mcp_metadata()?.remove(server_id))
     }
 
     /// Runs the read metadata operation for this subsystem.
@@ -333,6 +368,31 @@ impl AuthStore {
         }))
     }
 
+    /// Reports secret-safe MCP auth status for one configured server.
+    pub fn mcp_status(
+        &self,
+        server_id: &str,
+        url_origin: Option<&str>,
+        url_fingerprint: Option<&str>,
+    ) -> Result<McpAuthStatus> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let metadata = self.read_mcp_metadata_for_server(server_id)?;
+        let credential_state = self.mcp_credential_state(metadata.as_ref())?;
+        let stale_url = metadata.as_ref().is_some_and(|metadata| {
+            url_origin.is_some_and(|origin| origin != metadata.url_origin)
+                || url_fingerprint
+                    .is_some_and(|fingerprint| fingerprint != metadata.url_fingerprint)
+        });
+        Ok(McpAuthStatus {
+            server_id: server_id.to_string(),
+            authenticated: credential_state.authenticated() && !stale_url,
+            metadata_present: metadata.is_some(),
+            credential_state,
+            metadata,
+            stale_url,
+        })
+    }
+
     /// Runs the write file secret operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -344,6 +404,54 @@ impl AuthStore {
         let secret = SecretString::from(secret);
         self.file_credential_store(provider)?
             .store_secret(provider, &secret)
+    }
+
+    /// Stores an MCP OAuth credential through the chosen credential store.
+    pub fn login_mcp_oauth_credential(
+        &self,
+        mut metadata: McpAuthMetadata,
+        credential: McpOAuthCredential,
+        credential_store: &dyn CredentialStore,
+    ) -> Result<McpAuthMetadata> {
+        validate_safe_name(
+            &metadata.server_id,
+            "MCP server id is not credential-store safe",
+        )?;
+        if credential.access_token.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "MCP OAuth access token must not be empty",
+            ));
+        }
+        let access_secret = SecretString::from(credential.access_token);
+        let access_name = mcp_access_credential_name(&metadata.server_id);
+        metadata.credential_store_ref =
+            Some(credential_store.store_secret(&access_name, &access_secret)?);
+        if let Some(refresh_token) = credential.refresh_token {
+            let refresh_secret = SecretString::from(refresh_token);
+            let refresh_name = mcp_refresh_credential_name(&metadata.server_id);
+            metadata.refresh_credential_store_ref =
+                Some(credential_store.store_secret(&refresh_name, &refresh_secret)?);
+        }
+        metadata.token_expires_at = credential.token_expires_at;
+        metadata.scopes = credential.scopes;
+        self.write_mcp_metadata(&metadata)?;
+        Ok(metadata)
+    }
+
+    /// Loads the MCP OAuth access token for a configured server.
+    pub fn mcp_access_token(&self, server_id: &str) -> Result<SecretString> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let metadata = self
+            .read_mcp_metadata_for_server(server_id)?
+            .ok_or_else(|| {
+                MezError::invalid_state(format!("MCP server `{server_id}` is not authenticated"))
+            })?;
+        let reference = metadata.credential_store_ref.as_deref().ok_or_else(|| {
+            MezError::invalid_state("MCP auth metadata has no credential reference")
+        })?;
+        self.load_secret(reference)?
+            .filter(|secret| !secret.expose_secret().trim().is_empty())
+            .ok_or_else(|| MezError::invalid_state("MCP OAuth credential is unavailable"))
     }
 
     /// Runs the login with api key operation for this subsystem.
@@ -750,6 +858,40 @@ impl AuthStore {
         Ok(changed)
     }
 
+    /// Removes stored MCP OAuth secrets and metadata for one configured server.
+    pub fn logout_mcp_server(&self, server_id: &str) -> Result<bool> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let mut metadata_entries = self.read_all_mcp_metadata()?;
+        let Some(metadata) = metadata_entries.remove(server_id) else {
+            return Ok(false);
+        };
+        let mut changed = false;
+        if let Some(reference) = metadata.credential_store_ref.as_deref() {
+            changed |= self.remove_secret(reference)?;
+        }
+        if let Some(reference) = metadata.refresh_credential_store_ref.as_deref() {
+            changed |= self.remove_secret(reference)?;
+        }
+        if metadata_entries.is_empty() {
+            if self.paths.mcp_auth_file().exists() {
+                fs::remove_file(self.paths.mcp_auth_file())?;
+                changed = true;
+            }
+        } else {
+            ensure_private_dir(self.paths.root())?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(self.paths.mcp_auth_file())?;
+            file.write_all(encode_all_mcp_metadata(&metadata_entries).as_bytes())?;
+            file.sync_all()?;
+            set_private_file(self.paths.mcp_auth_file())?;
+            changed = true;
+        }
+        Ok(changed)
+    }
+
     /// Runs the credential state operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -758,6 +900,26 @@ impl AuthStore {
     fn credential_state(&self, metadata: Option<&AuthMetadata>) -> Result<AuthCredentialState> {
         let os_store = CommandBackedCredentialStore::secret_tool();
         self.credential_state_with_os_store(metadata, &os_store)
+    }
+
+    /// Computes MCP credential availability without exposing token material.
+    fn mcp_credential_state(
+        &self,
+        metadata: Option<&McpAuthMetadata>,
+    ) -> Result<AuthCredentialState> {
+        let Some(metadata) = metadata else {
+            return Ok(AuthCredentialState::LoggedOut);
+        };
+        let Some(reference) = metadata.credential_store_ref.as_deref() else {
+            return Ok(AuthCredentialState::MissingSecret { reference: None });
+        };
+        self.credential_state_for_reference(reference)
+    }
+
+    /// Computes credential availability for one opaque credential-store reference.
+    fn credential_state_for_reference(&self, reference: &str) -> Result<AuthCredentialState> {
+        let os_store = CommandBackedCredentialStore::secret_tool();
+        self.credential_state_for_reference_with_os_store(reference, &os_store)
     }
 
     /// Runs the credential state with os store operation for this subsystem.
@@ -777,6 +939,15 @@ impl AuthStore {
             return Ok(AuthCredentialState::MissingSecret { reference: None });
         };
 
+        self.credential_state_for_reference_with_os_store(reference, os_store)
+    }
+
+    /// Computes credential availability for one reference with an injected OS store.
+    pub(super) fn credential_state_for_reference_with_os_store<R: CredentialCommandRunner>(
+        &self,
+        reference: &str,
+        os_store: &CommandBackedCredentialStore<R>,
+    ) -> Result<AuthCredentialState> {
         if reference.starts_with(CredentialStoreKind::OperatingSystem.reference_prefix()) {
             let native_store = NativeSecretServiceCredentialStore::new();
             let contains = if native_store.provider_from_reference(reference)?.is_some() {
@@ -918,4 +1089,14 @@ fn current_unix_seconds() -> Result<u64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| MezError::invalid_state("system clock is before the Unix epoch"))?
         .as_secs())
+}
+
+/// Returns the credential-store entry name for an MCP access token.
+fn mcp_access_credential_name(server_id: &str) -> String {
+    format!("mcp-{server_id}-access")
+}
+
+/// Returns the credential-store entry name for an MCP refresh token.
+fn mcp_refresh_credential_name(server_id: &str) -> String {
+    format!("mcp-{server_id}-refresh")
 }

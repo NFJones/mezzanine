@@ -78,6 +78,81 @@ pub struct AuthMetadata {
     pub token_expires_at: Option<String>,
 }
 
+/// Non-secret MCP OAuth metadata bound to one configured MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpAuthMetadata {
+    /// Stable configured MCP server identifier.
+    pub server_id: String,
+    /// Secret-bearing credential class represented by this MCP auth record.
+    pub credential_kind: McpCredentialKind,
+    /// Origin component of the URL that minted the credential.
+    pub url_origin: String,
+    /// Stable fingerprint of the full configured MCP URL.
+    pub url_fingerprint: String,
+    /// Optional non-secret OAuth scopes attached to the credential.
+    pub scopes: Vec<String>,
+    /// Opaque access-token credential-store reference.
+    pub credential_store_ref: Option<String>,
+    /// Opaque refresh-token credential-store reference.
+    pub refresh_credential_store_ref: Option<String>,
+    /// Optional Unix-seconds access-token expiration timestamp.
+    pub token_expires_at: Option<String>,
+}
+
+/// Secret-bearing MCP credential class represented by MCP auth metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpCredentialKind {
+    /// OAuth access token used as a bearer token for streamable HTTP MCP.
+    OAuthBearer,
+}
+
+impl McpCredentialKind {
+    /// Returns the stable metadata string written to the MCP auth file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OAuthBearer => "oauth-bearer",
+        }
+    }
+
+    /// Parses a stable metadata string into an MCP credential kind.
+    pub fn from_metadata_value(value: &str) -> Option<Self> {
+        match value {
+            "oauth-bearer" => Some(Self::OAuthBearer),
+            _ => None,
+        }
+    }
+}
+
+/// Secret-safe MCP auth status for a configured server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpAuthStatus {
+    /// Stable configured MCP server identifier.
+    pub server_id: String,
+    /// Whether a usable access-token secret is currently available.
+    pub authenticated: bool,
+    /// Whether metadata exists for this server.
+    pub metadata_present: bool,
+    /// Secret-safe credential availability state.
+    pub credential_state: AuthCredentialState,
+    /// Credential metadata when present.
+    pub metadata: Option<McpAuthMetadata>,
+    /// URL binding mismatch for current config, when detected.
+    pub stale_url: bool,
+}
+
+/// Secret-bearing MCP OAuth credential returned by a login or refresh flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpOAuthCredential {
+    /// Access token used in the MCP Authorization header.
+    pub access_token: String,
+    /// Optional refresh token used to renew the access token.
+    pub refresh_token: Option<String>,
+    /// Optional Unix-seconds access-token expiration timestamp.
+    pub token_expires_at: Option<String>,
+    /// Optional non-secret scopes granted with the credential.
+    pub scopes: Vec<String>,
+}
+
 /// Secret-bearing credential class represented by an auth metadata record.
 ///
 /// The credential kind is non-secret. Runtime provider setup uses it to choose
@@ -124,6 +199,11 @@ pub struct AuthPaths {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     auth_file: PathBuf,
+    /// Stores the mcp auth file value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    mcp_auth_file: PathBuf,
     /// Stores the secret directory value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -141,6 +221,7 @@ impl AuthPaths {
         Self {
             root: root.to_path_buf(),
             auth_file: root.join("auth.toml"),
+            mcp_auth_file: root.join("mcp-auth.toml"),
             secret_directory: root.join("auth-secrets"),
         }
     }
@@ -161,6 +242,15 @@ impl AuthPaths {
     /// on duplicated control-flow logic.
     pub fn auth_file(&self) -> &Path {
         &self.auth_file
+    }
+
+    /// Runs the mcp auth file operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn mcp_auth_file(&self) -> &Path {
+        &self.mcp_auth_file
     }
 
     /// Runs the secret directory operation for this subsystem.
