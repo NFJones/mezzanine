@@ -196,6 +196,25 @@ impl ActiveSelector {
             candidate,
         ))
     }
+
+    /// Returns whether the current prompt should start a fresh selector inside
+    /// a just-completed directory instead of cycling the previous candidate set.
+    ///
+    /// # Parameters
+    /// - `line`: Current prompt line after a selected candidate was applied.
+    /// - `cursor`: Current prompt cursor byte offset.
+    pub fn should_refresh_from_selected_directory(&self, line: &str, cursor: usize) -> bool {
+        let Some(candidate) = self.plan.candidates.get(self.selected_index) else {
+            return false;
+        };
+        if candidate.append_space || !candidate.value.ends_with('/') {
+            return false;
+        }
+        self.selected_line()
+            .is_some_and(|(selected_line, selected_cursor)| {
+                selected_line == line && selected_cursor == cursor
+            })
+    }
 }
 
 /// Builds a selector plan for the token at `cursor`.
@@ -1176,9 +1195,9 @@ fn clamp_to_char_boundary(value: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
-        apply_selector_candidate, plan_selector, plan_selector_with_extra, shadow_hint,
-        shadow_hint_with_extra,
+        ActiveSelector, SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate,
+        SelectorSurface, apply_selector_candidate, plan_selector, plan_selector_with_extra,
+        shadow_hint, shadow_hint_with_extra,
     };
     use std::fs;
     use std::sync::Mutex;
@@ -1380,6 +1399,51 @@ mod tests {
 
         assert_eq!(line, "list-windows; mcp-add ");
         assert_eq!(cursor, line.len());
+    }
+
+    /// Verifies directory path selections request a fresh selector on the next
+    /// Tab so path completion can continue into that directory.
+    #[test]
+    fn active_selector_refreshes_after_directory_candidate_selection() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mez-selector-refresh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        std::env::set_current_dir(&root).unwrap();
+
+        let selector = ActiveSelector::start(
+            SelectorSurface::AgentCommand,
+            "/list-mcp ./sr",
+            "/list-mcp ./sr".len(),
+            false,
+        )
+        .unwrap();
+        let (line, cursor) = selector.selected_line().unwrap();
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(line, "/list-mcp ./src/");
+        assert!(selector.should_refresh_from_selected_directory(&line, cursor));
+    }
+
+    /// Verifies non-directory selections continue cycling within the active
+    /// candidate set instead of forcing a fresh selector.
+    #[test]
+    fn active_selector_keeps_argument_candidate_selection_active() {
+        let selector = ActiveSelector::start(
+            SelectorSurface::MezzanineCommand,
+            "mcp-add st",
+            "mcp-add st".len(),
+            false,
+        )
+        .unwrap();
+        let (line, cursor) = selector.selected_line().unwrap();
+
+        assert_eq!(line, "mcp-add stdio ");
+        assert!(!selector.should_refresh_from_selected_directory(&line, cursor));
     }
 
     /// Verifies that non-mutating command-name shadow hints reuse selector

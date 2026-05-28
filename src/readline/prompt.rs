@@ -356,6 +356,12 @@ impl ReadlinePrompt {
         let Some(surface) = self.selector_surface() else {
             return ReadlineOutcome::Noop;
         };
+        if self.selector.as_ref().is_some_and(|selector| {
+            selector
+                .should_refresh_from_selected_directory(self.buffer.line(), self.buffer.cursor())
+        }) {
+            self.selector = None;
+        }
         let selector = match self.selector.as_mut() {
             Some(selector) if selector.surface == surface => {
                 if reverse {
