@@ -642,6 +642,15 @@ Command rule fields for each entry in a command rule array:
 | `mcp_servers.<name>.tool_approvals` | map | omitted | Per-tool approval policy. |
 | `mcp_servers.<name>.external_capability` | string or table | omitted | Declared external capability metadata. |
 
+For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
+auth credential store rather than in `mcp_servers`. Login uses browser
+authorization-code PKCE. When authorization-server metadata advertises an RFC
+7591 dynamic client registration endpoint and no `--client-id` is provided,
+Mezzanine registers a public native client for the localhost callback and keeps
+only the returned non-secret client id in MCP auth metadata for refresh. A
+configured `bearer_token_env` remains the highest-precedence bearer credential
+source for that server.
+
 ### `auth`
 
 | Field | Type | Default declaration | Description |

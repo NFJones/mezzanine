@@ -5571,11 +5571,17 @@ variables MUST remain limited to configured `env` values and explicitly listed
 
 Mezzanine MUST support streamable HTTP MCP servers with `url` and optional
 HTTP headers, bearer-token environment references, or stored OAuth credentials
-created by `mez mcp login`. A configured `bearer_token_env` MUST take
-precedence over stored OAuth credentials. Stored MCP OAuth credentials MUST be
-bound to the configured server id, URL origin, and URL fingerprint, and URL
-rebinding MUST make status report stale credentials until the user logs in
-again. On stored-OAuth 401 or 403 responses, the runtime MUST attempt one
+created by `mez mcp login`. MCP OAuth login MUST use authorization-code PKCE.
+When no explicit client id is supplied and authorization-server metadata
+advertises an RFC 7591 `registration_endpoint`, login MUST dynamically register
+a public native client and persist the returned non-secret client id with the
+stored credential metadata for later refresh. If dynamic registration is not
+advertised, login MAY fall back to the built-in public client id for providers
+that accept it. A configured `bearer_token_env` MUST take precedence over
+stored OAuth credentials. Stored MCP OAuth credentials MUST be bound to the
+configured server id, URL origin, and URL fingerprint, and URL rebinding MUST
+make status report stale credentials until the user logs in again. On
+stored-OAuth 401 or 403 responses, the runtime MUST attempt one
 refresh-and-retry when a refresh token and token endpoint are available.
 
 Mezzanine MUST support per-server `enabled` state.

@@ -33,21 +33,18 @@ pub async fn run_mcp_oauth_login_async(
     resource: Option<&str>,
 ) -> Result<McpOAuthCredential> {
     let metadata = discover_mcp_oauth_metadata(server_url).await?;
-    let client_id = client_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_CLIENT_ID);
     let resource = resource.map(str::trim).filter(|value| !value.is_empty());
     let listener = bind_browser_login_listener()?;
     let redirect_uri = format!(
         "http://127.0.0.1:{}/callback",
         listener.local_addr()?.port()
     );
+    let client_id = resolve_mcp_oauth_client_id_async(client_id, &metadata, &redirect_uri).await?;
     let pkce = generate_pkce();
     let state = random_urlsafe_token(32);
     let auth_url = build_authorize_url(
         &metadata.authorization_endpoint,
-        client_id,
+        &client_id,
         &redirect_uri,
         &pkce,
         &state,
@@ -62,7 +59,7 @@ pub async fn run_mcp_oauth_login_async(
     let code = wait_for_browser_authorization_code_async(listener, &state).await?;
     let mut credential = exchange_mcp_code_for_tokens_async(
         &metadata.token_endpoint,
-        client_id,
+        &client_id,
         &redirect_uri,
         &pkce.code_verifier,
         &code,
@@ -70,7 +67,7 @@ pub async fn run_mcp_oauth_login_async(
         resource,
     )
     .await?;
-    credential.client_id = Some(client_id.to_string());
+    credential.client_id = Some(client_id);
     credential.resource = resource.map(ToOwned::to_owned);
     credential.authorization_endpoint = Some(metadata.authorization_endpoint);
     credential.token_endpoint = Some(metadata.token_endpoint);
@@ -114,6 +111,7 @@ pub async fn refresh_mcp_oauth_credential_async(
 struct McpOAuthMetadata {
     authorization_endpoint: String,
     token_endpoint: String,
+    registration_endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +131,7 @@ async fn discover_mcp_oauth_metadata(server_url: &str) -> Result<McpOAuthMetadat
         Err(_) => Ok(McpOAuthMetadata {
             authorization_endpoint: format!("{}/oauth/authorize", origin.trim_end_matches('/')),
             token_endpoint: format!("{}/oauth/token", origin.trim_end_matches('/')),
+            registration_endpoint: None,
         }),
     }
 }
@@ -155,10 +154,77 @@ async fn fetch_oauth_metadata(url: &str) -> Result<McpOAuthMetadata> {
     })?;
     let authorization_endpoint = string_json_field(&value, "authorization_endpoint")?;
     let token_endpoint = string_json_field(&value, "token_endpoint")?;
+    let registration_endpoint = optional_string_json_field(&value, "registration_endpoint");
     Ok(McpOAuthMetadata {
         authorization_endpoint,
         token_endpoint,
+        registration_endpoint,
     })
+}
+
+async fn resolve_mcp_oauth_client_id_async(
+    requested_client_id: Option<&str>,
+    metadata: &McpOAuthMetadata,
+    redirect_uri: &str,
+) -> Result<String> {
+    if let Some(client_id) = requested_client_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(client_id.to_string());
+    }
+    if let Some(registration_endpoint) = metadata.registration_endpoint.as_deref() {
+        return register_mcp_oauth_client_async(registration_endpoint, redirect_uri).await;
+    }
+    Ok(DEFAULT_CLIENT_ID.to_string())
+}
+
+async fn register_mcp_oauth_client_async(
+    registration_endpoint: &str,
+    redirect_uri: &str,
+) -> Result<String> {
+    let request = dynamic_client_registration_body(redirect_uri);
+    let response = async_http_client()
+        .post(registration_endpoint)
+        .header("Content-Type", "application/json")
+        .body(request)
+        .send()
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "MCP OAuth dynamic client registration failed: {error}"
+            ))
+        })?;
+    let status = response.status();
+    let body = response.text().await.map_err(|error| {
+        MezError::invalid_state(format!(
+            "MCP OAuth dynamic client registration response read failed: {error}"
+        ))
+    })?;
+    if !status.is_success() {
+        return Err(MezError::invalid_state(format!(
+            "MCP OAuth dynamic client registration returned status {}",
+            status.as_u16()
+        )));
+    }
+    let value: Value = serde_json::from_str(&body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "MCP OAuth dynamic client registration response was not JSON: {error}"
+        ))
+    })?;
+    string_json_field(&value, "client_id")
+}
+
+fn dynamic_client_registration_body(redirect_uri: &str) -> String {
+    serde_json::json!({
+        "client_name": "Mezzanine",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "native",
+    })
+    .to_string()
 }
 
 async fn exchange_mcp_code_for_tokens_async(
@@ -450,6 +516,15 @@ fn string_json_field(value: &Value, field: &str) -> Result<String> {
         .ok_or_else(|| MezError::invalid_state(format!("MCP OAuth response missing `{field}`")))
 }
 
+fn optional_string_json_field(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn http_url_origin(url: &str) -> Result<String> {
     let Some((scheme, rest)) = url.split_once("://") else {
         return Err(MezError::invalid_args(
@@ -543,6 +618,40 @@ mod tests {
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("scope=tools.read%20tools.write"));
         assert!(url.contains("resource=https%3A%2F%2Fmcp.example.test"));
+    }
+
+    /// Verifies dynamic client registration uses the RFC 7591 metadata fields
+    /// expected for a public native PKCE authorization-code client.
+    #[test]
+    fn dynamic_client_registration_body_describes_public_pkce_client() {
+        let body = dynamic_client_registration_body("http://127.0.0.1:1457/callback");
+        let value: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(value["client_name"], "Mezzanine");
+        assert_eq!(value["redirect_uris"][0], "http://127.0.0.1:1457/callback");
+        assert_eq!(value["grant_types"][0], "authorization_code");
+        assert_eq!(value["grant_types"][1], "refresh_token");
+        assert_eq!(value["response_types"][0], "code");
+        assert_eq!(value["token_endpoint_auth_method"], "none");
+        assert_eq!(value["application_type"], "native");
+    }
+
+    /// Verifies OAuth metadata parsing retains an advertised dynamic client
+    /// registration endpoint so login can avoid static fallback client ids.
+    #[test]
+    fn oauth_metadata_parses_registration_endpoint() {
+        let value: Value = serde_json::from_str(
+            r#"{"authorization_endpoint":"https://auth.example.test/authorize","token_endpoint":"https://auth.example.test/token","registration_endpoint":"https://auth.example.test/register"}"#,
+        )
+        .unwrap();
+        let metadata = McpOAuthMetadata {
+            authorization_endpoint: string_json_field(&value, "authorization_endpoint").unwrap(),
+            token_endpoint: string_json_field(&value, "token_endpoint").unwrap(),
+            registration_endpoint: optional_string_json_field(&value, "registration_endpoint"),
+        };
+        assert_eq!(
+            metadata.registration_endpoint.as_deref(),
+            Some("https://auth.example.test/register")
+        );
     }
 
     /// Verifies callback parsing rejects CSRF state mismatches while accepting

@@ -445,6 +445,13 @@ mez [--json] <command> [options]
 | `mez mcp ...`              | List, add, remove, enable, disable, inspect, login, logout, and status MCP servers. |
 | `mez memory ...`           | List, add, inspect, edit, delete, and export persistent memory. |
 
+`mez mcp login <server-id>` authenticates streamable HTTP MCP servers with a
+browser authorization-code PKCE flow. If the server advertises OAuth dynamic
+client registration and you do not pass `--client-id`, Mezzanine registers a
+public native client for the localhost callback and stores only the returned
+non-secret client id plus token references in the auth store metadata. Raw MCP
+OAuth access and refresh tokens are never written to config files.
+
 ## Configuration Quick Reference
 
 Use the dedicated reference for generated defaults, supported fields, and layer
