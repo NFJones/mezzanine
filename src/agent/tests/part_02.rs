@@ -84,8 +84,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("shell_command: exact pane shell input"));
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
     assert!(prompt.contains("is model-facing evidence"));
-    assert!(prompt.contains("treat recent action_result output as an evidence cache"));
-    assert!(prompt.contains("reuse a recent read or search result"));
+    assert!(prompt.contains("reuse recent action_result output directly"));
+    assert!(prompt.contains("when it already contains the needed current file range or match"));
     assert!(prompt.contains("read only missing or stale ranges"));
     assert!(prompt.contains("after mutation prefer execution-based validation over rereading"));
     assert!(prompt.contains("reread only for a validation failure"));

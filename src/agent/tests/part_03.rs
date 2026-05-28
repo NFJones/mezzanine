@@ -2632,7 +2632,7 @@ fn openai_test_stable_prefix_parts(request: &ModelRequest) -> (String, Vec<serde
 ///
 /// Historical tool output should stay available as regular context so later
 /// turns can reference exact prior command evidence without routing through a
-/// generated evidence ledger.
+/// generated summary layer.
 #[test]
 fn openai_historical_tool_results_replay_outside_stable_prefix() {
     let profile = ModelProfile {
@@ -2816,11 +2816,11 @@ fn openai_current_action_results_remain_volatile_suffix() {
     assert!(diagnostics.volatile_input_bytes > 2);
 }
 
-/// Verifies active-turn read/search action results are summarized into a
-/// dedicated read ledger block so follow-up requests can see explicit owner
-/// coverage without inferring it from raw shell output alone.
+/// Verifies active-turn read/search action results replay directly into the
+/// provider request instead of being replaced with a synthetic read-ledger
+/// block.
 #[test]
-fn openai_current_turn_read_ledger_summarizes_recent_read_coverage() {
+fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -2862,25 +2862,32 @@ fn openai_current_turn_read_ledger_summarizes_recent_read_coverage() {
     let body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
     let input = body["input"].as_array().unwrap();
-    let read_ledger = input
+    let raw_results = input
         .iter()
-        .find_map(|message| {
-            let text = message["content"][0]["text"].as_str()?;
-            text.contains("[current-turn read ledger]").then_some(text)
-        })
-        .expect("current-turn read ledger should be present");
+        .filter_map(|message| message["content"][0]["text"].as_str())
+        .filter(|text| text.contains("[current action result]") && text.contains("[action_result read-"))
+        .collect::<Vec<_>>();
 
-    assert!(
-        read_ledger.contains(
-            "read target=src/runtime/render/overlay.rs ranges=300-420,1148-1238"
-        ),
-        "{read_ledger}"
-    );
-    assert!(
-        read_ledger
-            .contains("search target=docs/reference/issue backlog.md query=overlay style"),
-        "{read_ledger}"
-    );
+    assert_eq!(raw_results.len(), 3, "{raw_results:#?}");
+    assert!(raw_results.iter().any(|text| {
+        text.contains("sed -n '300,420p' src/runtime/render/overlay.rs")
+            && text.contains("owner body")
+    }));
+    assert!(raw_results.iter().any(|text| {
+        text.contains("sed -n '1148,1238p' src/runtime/render/overlay.rs")
+            && text.contains("helper body")
+    }));
+    assert!(raw_results.iter().any(|text| {
+        text.contains("rg -n \"overlay style\" \"docs/reference/issue backlog.md\"")
+            && text.contains("120: overlay style")
+    }));
+    let synthetic_summary = input
+        .iter()
+        .filter_map(|message| message["content"][0]["text"].as_str())
+        .any(|text| {
+            text.contains("Recent successful read/search coverage for this active turn.")
+        });
+    assert!(!synthetic_summary);
 }
 
 /// Verifies a long OpenAI session promotes already-observed non-shell action

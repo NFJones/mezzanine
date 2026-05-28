@@ -2473,7 +2473,7 @@ fn explicit_context_compaction_uses_configured_retained_tail_percent() {
 /// Verifies explicit compaction keeps current execution evidence and repo guidance
 /// exact while folding older unrelated context into a bulk summary.
 ///
-/// Removing the generated evidence ledger must not make provider-limit
+/// Removing generated provider-visible evidence summaries must not make provider-limit
 /// compaction drop the newest raw action-result evidence that the next
 /// continuation still needs to reference directly.
 #[test]
@@ -2529,8 +2529,8 @@ fn explicit_context_compaction_protects_guidance_and_recent_action_result() {
     );
 }
 
-/// Verifies provider request assembly no longer generates an evidence-ledger
-/// helper block for prior action history.
+/// Verifies provider request assembly no longer generates a synthetic helper
+/// block for prior action history.
 #[test]
 fn model_request_does_not_generate_evidence_ledger_block() {
     let mut blocks = vec![ContextBlock {
@@ -4317,8 +4317,8 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(prompt.contains("one outcome and one output stream"));
     assert!(prompt.contains("Stdout/stderr, including non-zero exit status"));
     assert!(prompt.contains("is model-facing evidence"));
-    assert!(prompt.contains("treat recent action_result output as an evidence cache"));
-    assert!(prompt.contains("reuse a recent read or search result"));
+    assert!(prompt.contains("reuse recent action_result output directly"));
+    assert!(prompt.contains("when it already contains the needed current file range or match"));
     assert!(prompt.contains("read only missing or stale ranges"));
     assert!(prompt.contains("after mutation prefer execution-based validation over rereading"));
     assert!(prompt.contains("reread only for a validation failure"));
