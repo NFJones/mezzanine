@@ -92,7 +92,7 @@ impl OpenAiMaapToolSurface {
                 Self::FUNCTION_CALL_DISCIPLINE
             ),
             Self::Shell => format!(
-                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. When the current turn has enough evidence to start implementation, declare next_phase=edit_ready on the batch. After next_phase=edit_ready, any further discovery shell_command should use intent=read or intent=search and include one concrete missing_fact. {} {}",
+                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -266,14 +266,9 @@ pub(super) fn maap_action_batch_schema(
                 "minItems": 1,
                 "description": "At least one visible or executable action from this function tool's currently active MAAP action surface.",
                 "items": maap_action_schema(allowed_actions, available_mcp_tools)
-            },
-            "next_phase": {
-                "type": ["string", "null"],
-                "enum": ["edit_ready", null],
-                "description": "Optional explicit transition for the active turn. Use edit_ready once the current turn has enough evidence to begin implementation. After declaring edit_ready, any additional read/search shell_command should carry one concrete missing_fact."
             }
         },
-        "required": ["rationale", "thought", "actions", "next_phase"],
+        "required": ["rationale", "thought", "actions"],
         "additionalProperties": false
     })
 }
@@ -518,23 +513,8 @@ fn maap_shell_command_action_schema() -> serde_json::Value {
                     "description": "Exact bounded, noninteractive pane shell input for one logical inspection, command, build, test, format, validation, filesystem, or git action. Prefer one focused command; use separate shell_command actions for independent work. Do not run apply_patch as a shell program; use the apply_patch action. Heredocs and here-strings are disabled."
                 }),
             ),
-            (
-                "intent",
-                serde_json::json!({
-                    "type": ["string", "null"],
-                    "enum": ["read", "search", "build", "test", "format", "git", "other", null],
-                    "description": "Optional coarse shell intent. Use read/search for discovery work, test/build/format/git for execution or validation work, and other when none of the listed intents fit."
-                }),
-            ),
-            (
-                "missing_fact",
-                serde_json::json!({
-                    "type": ["string", "null"],
-                    "description": "Optional concrete missing fact that justifies an additional discovery shell command after next_phase=edit_ready has already been declared. Omit when not needed."
-                }),
-            ),
         ],
-        &["summary", "command", "intent", "missing_fact"],
+        &["summary", "command"],
     )
 }
 

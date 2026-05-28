@@ -122,24 +122,11 @@ pub fn shell_command_structured_content_json(
     } else {
         plan.command.clone()
     };
-    let (intent, missing_fact) = match &action.payload {
-        AgentActionPayload::ShellCommand {
-            intent,
-            missing_fact,
-            ..
-        } => (
-            intent.map(crate::agent::ShellCommandIntent::as_str),
-            missing_fact.as_deref(),
-        ),
-        _ => (None, None),
-    };
     let read_observations = shell_read_observations_for_command(&command);
     let value = serde_json::json!({
         "kind": action.action_type(),
         "summary": plan.summary,
         "command": command,
-        "intent": intent,
-        "missing_fact": missing_fact,
         "read_observations": read_observations,
         "generated_command_elided": generated_command_elided,
         "generated_command_bytes": if generated_command_elided { Some(plan.command.len()) } else { None },

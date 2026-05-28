@@ -604,8 +604,6 @@ fn posix_wrapper_can_encode_child_output_for_model_transport() {
             interactive: false,
             stateful: false,
             timeout_ms: None,
-            intent: None,
-            missing_fact: None,
         },
     };
 
@@ -646,8 +644,6 @@ fn shell_output_transport_decodes_complete_prefix_when_truncated() {
             interactive: false,
             stateful: false,
             timeout_ms: None,
-            intent: None,
-            missing_fact: None,
         },
     };
     let stdout = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nZm9vCg";
@@ -3877,7 +3873,6 @@ fn turn_execution_transcript_summarizes_maap_action_batches() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![action],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -3985,7 +3980,6 @@ fn turn_execution_transcript_preserves_visible_say_text() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", &visible_text)],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -4110,7 +4104,7 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v22"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v21"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();

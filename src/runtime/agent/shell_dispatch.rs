@@ -7,7 +7,6 @@
 //! pane transaction writer remains in the facade for now.
 
 use super::*;
-use crate::agent::{MaapNextPhase, ShellReadObservationKind, shell_read_observations_for_command};
 use crate::runtime::types::RuntimeAgentShellDispatchHistory;
 
 /// Label for the turn-volatile context block that nudges concrete action after
@@ -24,8 +23,6 @@ enum RuntimeActionPressurePhase {
         /// Current staged severity for the shell-command streak.
         severity: RuntimeActionPressureSeverity,
     },
-    /// The provider already declared the current turn ready for implementation.
-    EditReadyAwaitingMutation,
     /// A file mutation succeeded and no validation command has succeeded yet.
     MutationAwaitingValidation,
     /// A file mutation and at least one validation command have succeeded.
@@ -148,32 +145,6 @@ impl RuntimeSessionService {
                 )),
             )));
         }
-        if history.edit_ready_declared_this_turn
-            && !history.successful_file_mutation_this_turn
-            && runtime_shell_command_counts_as_discovery(action, command)
-        {
-            let Some(missing_fact) = runtime_shell_command_edit_ready_missing_fact(action) else {
-                return Ok(Some(ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    "edit_ready_requires_missing_fact",
-                    "after declaring next_phase=edit_ready, additional read/search shell_command actions must include one concrete missing_fact",
-                )?));
-            };
-            if history
-                .satisfied_edit_ready_missing_facts
-                .contains(&missing_fact)
-            {
-                return Ok(Some(ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    "edit_ready_missing_fact_repeated",
-                    "after a successful post-readiness discovery command, repeating the same missing_fact is not allowed; patch, validate, or name a different concrete missing fact",
-                )?));
-            }
-        }
         Ok(None)
     }
 
@@ -211,37 +182,6 @@ impl RuntimeSessionService {
                 runtime_shell_command_looks_like_validation(command),
             );
         self.refresh_agent_action_pressure_context(turn_id);
-    }
-
-    /// Records an explicit implementation-readiness phase declared by the provider.
-    pub(super) fn record_edit_ready_phase_from_execution(
-        &mut self,
-        turn: &AgentTurnRecord,
-        execution: &AgentTurnExecution,
-    ) -> Result<()> {
-        let declared = execution
-            .response
-            .action_batch
-            .as_ref()
-            .is_some_and(|batch| batch.next_phase == Some(MaapNextPhase::EditReady));
-        if !declared {
-            return Ok(());
-        }
-        let history = self
-            .agent_turn_shell_dispatch_history
-            .entry(turn.turn_id.clone())
-            .or_default();
-        if history.edit_ready_declared_this_turn {
-            return Ok(());
-        }
-        history.record_edit_ready_declared();
-        self.refresh_agent_action_pressure_context(&turn.turn_id);
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            "turn phase edit_ready declared by provider batch",
-        )?;
-        Ok(())
     }
 
     /// Resets the inspection streak when a provider batch takes a different
@@ -1081,9 +1021,6 @@ fn runtime_action_pressure_phase(
     if history.successful_file_mutation_this_turn {
         return Some(RuntimeActionPressurePhase::MutationAwaitingValidation);
     }
-    if history.edit_ready_declared_this_turn {
-        return Some(RuntimeActionPressurePhase::EditReadyAwaitingMutation);
-    }
     let consecutive_shell_dispatches = history.consecutive_shell_dispatches;
     if consecutive_shell_dispatches >= threshold {
         let severity = runtime_action_pressure_severity(consecutive_shell_dispatches, threshold);
@@ -1133,9 +1070,6 @@ fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) ->
                 "This turn has already dispatched {consecutive_shell_dispatches} consecutive shell_command actions. {severity_message}"
             )
         }
-        RuntimeActionPressurePhase::EditReadyAwaitingMutation => {
-            "A prior provider batch already declared next_phase=edit_ready for this turn. Prefer apply_patch, config_change, validation, repair, or final reporting now.".to_string()
-        }
         RuntimeActionPressurePhase::MutationAwaitingValidation => {
             "A file mutation has already succeeded this turn. Prefer execution-based validation, required format/build/lint/test commands, focused diff/status review, or final report now.".to_string()
         }
@@ -1150,39 +1084,6 @@ fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) ->
          Use another shell_command only for one named missing fact that would make the next edit, execution-based validation, repair, commit, or report wrong. \
          This is advisory context, not a failed action result, and it does not relax repository rules or permission/capability requirements."
     )
-}
-
-/// Returns the explicit post-readiness missing-fact justification on one shell command.
-fn runtime_shell_command_edit_ready_missing_fact(action: &AgentAction) -> Option<String> {
-    match &action.payload {
-        AgentActionPayload::ShellCommand { missing_fact, .. } => missing_fact
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        _ => None,
-    }
-}
-
-/// Returns whether one shell command counts as discovery work.
-fn runtime_shell_command_counts_as_discovery(action: &AgentAction, command: &str) -> bool {
-    match &action.payload {
-        AgentActionPayload::ShellCommand {
-            intent: Some(intent),
-            ..
-        } => intent.is_discovery(),
-        AgentActionPayload::ShellCommand { .. } => {
-            let observations = shell_read_observations_for_command(command);
-            !observations.is_empty()
-                && observations.iter().all(|observation| {
-                    matches!(
-                        observation.kind,
-                        ShellReadObservationKind::Read | ShellReadObservationKind::Search
-                    )
-                })
-        }
-        _ => false,
-    }
 }
 
 /// Returns whether a shell command appears to be execution-based validation.

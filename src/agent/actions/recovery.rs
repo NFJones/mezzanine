@@ -252,7 +252,6 @@ pub(super) fn failed_capability_request_execution(
         agent_id: agent_id.clone(),
         actions,
         final_turn: true,
-        next_phase: None,
     };
     let action_results = terminal_batch
         .actions

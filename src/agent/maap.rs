@@ -94,83 +94,6 @@ impl SayStatus {
     }
 }
 
-/// Declares the next runtime execution phase a MAAP batch is ready for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaapNextPhase {
-    /// The active turn has enough evidence to start implementation.
-    EditReady,
-}
-
-impl MaapNextPhase {
-    /// Parses one compact provider-authored next-phase token.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "edit_ready" => Some(Self::EditReady),
-            _ => None,
-        }
-    }
-
-    /// Returns the compact JSON spelling for this phase.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::EditReady => "edit_ready",
-        }
-    }
-}
-
-/// Declares the coarse intent for one shell command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellCommandIntent {
-    /// Bounded file-content inspection.
-    Read,
-    /// Local text search.
-    Search,
-    /// Build or compile work.
-    Build,
-    /// Test or verification work.
-    Test,
-    /// Formatting work.
-    Format,
-    /// Git/history/status work.
-    Git,
-    /// Any other shell activity.
-    Other,
-}
-
-impl ShellCommandIntent {
-    /// Parses one compact shell intent token.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "read" => Some(Self::Read),
-            "search" => Some(Self::Search),
-            "build" => Some(Self::Build),
-            "test" => Some(Self::Test),
-            "format" => Some(Self::Format),
-            "git" => Some(Self::Git),
-            "other" => Some(Self::Other),
-            _ => None,
-        }
-    }
-
-    /// Returns the compact JSON spelling for this intent.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Search => "search",
-            Self::Build => "build",
-            Self::Test => "test",
-            Self::Format => "format",
-            Self::Git => "git",
-            Self::Other => "other",
-        }
-    }
-
-    /// Returns whether the intent is discovery-oriented.
-    pub fn is_discovery(self) -> bool {
-        matches!(self, Self::Read | Self::Search)
-    }
-}
-
 /// Carries Agent Action Payload state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -242,10 +165,6 @@ pub enum AgentActionPayload {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         timeout_ms: Option<u64>,
-        /// Optional coarse shell intent for runtime execution policy.
-        intent: Option<ShellCommandIntent>,
-        /// Optional justification for post-readiness discovery.
-        missing_fact: Option<String>,
     },
     /// Applies a patch through the pane shell.
     ApplyPatch {
@@ -456,8 +375,6 @@ pub struct MaapBatch {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub final_turn: bool,
-    /// Optional explicit next phase for the current turn.
-    pub next_phase: Option<MaapNextPhase>,
 }
 
 /// Carries Action Status state for this subsystem.
@@ -747,16 +664,10 @@ impl AgentAction {
                 summary,
                 command,
                 timeout_ms,
-                missing_fact,
                 ..
             } => {
                 validate_non_empty("shell command summary", summary)?;
                 validate_non_empty("shell command", command)?;
-                if matches!(missing_fact, Some(value) if value.trim().is_empty()) {
-                    return Err(MezError::invalid_args(
-                        "shell command missing_fact must not be empty when provided",
-                    ));
-                }
                 if matches!(timeout_ms, Some(0)) {
                     return Err(MezError::invalid_args(
                         "shell command timeout_ms must be greater than zero",
@@ -1019,12 +930,6 @@ fn parse_maap_action_batch_value(
         .or_else(|| identity.map(|(_, agent_id)| agent_id.to_string()))
         .ok_or_else(|| MezError::invalid_args("maap field agent_id is required"))?;
     let final_turn = optional_bool(object, "final")?.unwrap_or_else(|| infer_final_turn(&actions));
-    let next_phase = optional_string(object, "next_phase")?
-        .map(|value| {
-            MaapNextPhase::parse(value)
-                .ok_or_else(|| MezError::invalid_args(format!("unknown maap next_phase {value}")))
-        })
-        .transpose()?;
     Ok(MaapBatch {
         protocol,
         rationale,
@@ -1033,7 +938,6 @@ fn parse_maap_action_batch_value(
         agent_id,
         actions,
         final_turn,
-        next_phase,
     })
 }
 
@@ -1081,14 +985,6 @@ fn parse_maap_action_value(index: usize, value: &serde_json::Value) -> Result<Ag
             interactive: optional_bool(object, "interactive")?.unwrap_or(false),
             stateful: optional_bool(object, "stateful")?.unwrap_or(false),
             timeout_ms: optional_nullable_u64(object, "timeout_ms")?,
-            intent: optional_string(object, "intent")?
-                .map(|value| {
-                    ShellCommandIntent::parse(value).ok_or_else(|| {
-                        MezError::invalid_args(format!("unknown shell command intent {value}"))
-                    })
-                })
-                .transpose()?,
-            missing_fact: optional_string(object, "missing_fact")?.map(str::to_string),
         },
         "apply_patch" => AgentActionPayload::ApplyPatch {
             patch: required_string(object, "patch")?.to_string(),

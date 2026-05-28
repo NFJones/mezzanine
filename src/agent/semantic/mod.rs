@@ -48,7 +48,6 @@ pub fn local_action_plan(action: &AgentAction) -> Result<Option<LocalActionPlan>
             interactive,
             stateful,
             timeout_ms,
-            ..
         } => {
             validate_agent_authored_shell_command(command)?;
             Ok(Some(LocalActionPlan {

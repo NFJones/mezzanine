@@ -3559,8 +3559,6 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             interactive: false,
             stateful: false,
             timeout_ms: None,
-            intent: None,
-            missing_fact: None,
         },
     };
     let mut failed = crate::agent::ActionResult::failed(
@@ -3594,7 +3592,6 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         agent_id: task.agent_id.clone(),
         actions: vec![write_action, read_action],
         final_turn: false,
-        next_phase: None,
     };
     let execution = crate::agent::AgentTurnExecution {
         request: crate::agent::ModelRequest {
@@ -3744,7 +3741,6 @@ async fn async_actor_applies_agent_provider_completion_events() {
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
         final_turn: true,
-        next_phase: None,
     };
     let execution = crate::agent::AgentTurnExecution {
         request: crate::agent::ModelRequest {
@@ -3916,7 +3912,6 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         agent_id: task.agent_id.clone(),
         actions: vec![action.clone()],
         final_turn: true,
-        next_phase: None,
     };
     let execution = crate::agent::AgentTurnExecution {
         request: crate::agent::ModelRequest {

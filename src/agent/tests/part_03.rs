@@ -401,7 +401,6 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
                     payload: AgentActionPayload::Complete,
                 }],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         },
@@ -485,7 +484,6 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -509,7 +507,6 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-1")],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -614,7 +611,6 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -633,7 +629,6 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "done")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -732,7 +727,6 @@ fn turn_runner_capability_limit_execution_matches_terminal_batch() {
             agent_id: turn.agent_id.clone(),
             actions: vec![capability_action("capability-1", AgentCapability::Shell)],
             final_turn: false,
-            next_phase: None,
         }),
         provider_transcript_events: Vec::new(),
 };
@@ -822,7 +816,6 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![abort_action("abort-1", "need more repository context")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -841,7 +834,6 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -860,7 +852,6 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "Ready.")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -956,7 +947,6 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![capability_action("capability-1", AgentCapability::Shell)],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -985,7 +975,6 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
                     },
                 }],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1064,7 +1053,6 @@ fn turn_runner_accepts_say_with_capability_request() {
                     capability_action("capability-1", AgentCapability::Shell),
                 ],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1083,7 +1071,6 @@ fn turn_runner_accepts_say_with_capability_request() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![shell_action("shell-1")],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1170,7 +1157,6 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
                     capability_action("capability-2", AgentCapability::Subagent),
                 ],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1189,7 +1175,6 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-2", "Ready to proceed.")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1289,7 +1274,6 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
                     },
                 }],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1392,7 +1376,6 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1475,7 +1458,6 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1558,7 +1540,6 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "retry later")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1632,7 +1613,6 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
                     AgentCapability::NetworkFetch,
                 )],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1651,7 +1631,6 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
                 agent_id: turn.agent_id.clone(),
                 actions: vec![say_action("say-1", "hello")],
                 final_turn: true,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
 }),
@@ -1834,7 +1813,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         capability_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "thought", "actions", "next_phase"])
+        serde_json::json!(["rationale", "thought", "actions"])
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
@@ -3589,7 +3568,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert_eq!(value["tool_choice"]["name"], "submit_maap_shell_actions");
     assert_eq!(
         shell_tool["parameters"]["required"],
-        serde_json::json!(["rationale", "thought", "actions", "next_phase"])
+        serde_json::json!(["rationale", "thought", "actions"])
     );
     let shell_description = shell_tool["description"].as_str().unwrap();
     assert!(shell_description.contains("Return a function call, not prose"));
@@ -3604,10 +3583,6 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
 
     let action_schemas = openai_tool_action_schemas(shell_tool);
     let action_types = openai_tool_action_types(shell_tool);
-    let shell_command_schema = action_schemas
-        .iter()
-        .find(|schema| schema["properties"]["type"]["enum"][0] == "shell_command")
-        .expect("shell tool should expose shell_command");
     assert!(action_types.contains(&"say".to_string()));
     assert!(action_types.contains(&"shell_command".to_string()));
     assert!(action_types.contains(&"apply_patch".to_string()));
@@ -3638,26 +3613,6 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
             "Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill"
         ),
         "{allowed_surface}"
-    );
-    assert_eq!(
-        shell_tool["parameters"]["properties"]["next_phase"]["enum"],
-        serde_json::json!(["edit_ready", null])
-    );
-    assert_eq!(
-        shell_command_schema["properties"]["intent"]["enum"],
-        serde_json::json!(["read", "search", "build", "test", "format", "git", "other", null])
-    );
-    assert_eq!(
-        shell_command_schema["properties"]["missing_fact"]["type"],
-        serde_json::json!(["string", "null"])
-    );
-    assert!(
-        shell_description.contains("declare next_phase=edit_ready"),
-        "{shell_description}"
-    );
-    assert!(
-        shell_description.contains("include one concrete missing_fact"),
-        "{shell_description}"
     );
 
     let shell_schema = action_schemas

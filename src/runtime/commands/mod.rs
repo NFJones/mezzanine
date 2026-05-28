@@ -4099,7 +4099,6 @@ mod tests {
                     },
                 }],
                 final_turn: false,
-                next_phase: None,
             }),
             provider_transcript_events: Vec::new(),
         };

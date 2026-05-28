@@ -111,8 +111,8 @@ pub use context::{
 pub use maap::{
     AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionContentBlock, ActionError, ActionResult,
-    ActionStatus, AgentAction, AgentActionPayload, MaapBatch, MaapNextPhase, SayStatus,
-    ShellCommandIntent, agent_output_content_type_is_diff, agent_output_content_type_is_markdown,
+    ActionStatus, AgentAction, AgentActionPayload, MaapBatch, SayStatus,
+    agent_output_content_type_is_diff, agent_output_content_type_is_markdown,
     normalize_agent_output_content_type, parse_fenced_maap_action_batch,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn,
