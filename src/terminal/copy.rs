@@ -8,6 +8,7 @@ use super::{
     MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
     normalize_selection, search_backward, search_forward, validate_copy_position,
 };
+use crate::readline::readline_word_column_range;
 
 // Copy mode, selection, and search primitives.
 
@@ -474,6 +475,31 @@ impl CopyMode {
         Ok(())
     }
 
+    /// Selects the readline-style word segment surrounding one copy position.
+    ///
+    /// # Parameters
+    /// - `position`: Copy-mode position whose line and column identify the
+    ///   clicked terminal cell.
+    pub fn select_word_at(&mut self, position: CopyPosition) -> Result<()> {
+        let position = self.clamp_position(position);
+        let Some(line) = self.lines.get(position.line) else {
+            return Err(MezError::invalid_args(
+                "copy mode word selection line is invalid",
+            ));
+        };
+        let (start, end) = readline_word_column_range(line, position.column);
+        self.select_range(
+            CopyPosition {
+                line: position.line,
+                column: start,
+            },
+            CopyPosition {
+                line: position.line,
+                column: end,
+            },
+        )
+    }
+
     /// Runs the clear selection operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -620,10 +646,7 @@ fn previous_word_column(line: &str, column: usize) -> usize {
     while index > 0 && chars[index.saturating_sub(1)].is_whitespace() {
         index = index.saturating_sub(1);
     }
-    while index > 0 && !chars[index.saturating_sub(1)].is_whitespace() {
-        index = index.saturating_sub(1);
-    }
-    index
+    readline_word_column_range(line, index.saturating_sub(1)).0
 }
 
 /// Returns the current line column reached by moving forward by one word-like
@@ -634,10 +657,7 @@ fn next_word_column(line: &str, column: usize) -> usize {
     while index < chars.len() && chars[index].is_whitespace() {
         index = index.saturating_add(1);
     }
-    while index < chars.len() && !chars[index].is_whitespace() {
-        index = index.saturating_add(1);
-    }
-    index
+    readline_word_column_range(line, index).1
 }
 
 /// Formats copied selection lines by removing display-only agent gutters.

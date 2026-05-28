@@ -621,6 +621,8 @@ pub enum MouseAction {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     CopySelectionStart(CopyPosition),
+    /// Selects and copies the readline-style word segment under the pointer.
+    CopyWord(CopyPosition),
     /// Represents the Copy Selection Update case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

@@ -233,6 +233,7 @@ impl RuntimeSessionService {
             scrollback_copy_mode_panes: BTreeSet::new(),
             mouse_resize_drag_state: None,
             mouse_selection_drag_state: None,
+            last_mouse_click_state: None,
             pressed_window_action: None,
             pane_transcript_refs: BTreeMap::new(),
             terminal_history_limit: DEFAULT_HISTORY_LIMIT,

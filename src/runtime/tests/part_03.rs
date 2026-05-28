@@ -563,6 +563,46 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies that a repeated pane-content click copies the surrounding
+/// readline-style word to the mouse paste buffer and host clipboard. This
+/// protects double-click selection from using a separate whitespace-only token
+/// model or leaving copy mode active after the word is copied.
+#[test]
+fn runtime_double_click_copies_readline_word_under_pointer() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    service.host_clipboard =
+        HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"alpha beta --flag");
+    service.pane_screens.insert("%1".to_string(), screen);
+
+    for _ in 0..2 {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::HandleMouse(MouseAction::FocusPane(
+                        CopyPosition { line: 0, column: 7 },
+                    ))],
+                    output_lines: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    }
+
+    assert_eq!(service.paste_buffers.get("mouse"), Some("beta"));
+    assert_eq!(TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(), ["beta"]);
+    assert!(!service.active_copy_modes.contains_key("%1"));
+}
+
 /// Verifies that the attached-terminal detach binding runs through the runtime
 /// lifecycle path rather than mutating session client state directly. The
 /// lifecycle helper updates the service state and emits the client-detached

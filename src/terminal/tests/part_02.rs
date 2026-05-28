@@ -1199,6 +1199,26 @@ fn copy_mode_can_write_selection_to_bounded_paste_buffer() {
     assert_eq!(listed[0].preview, "lpha be");
 }
 
+/// Verifies copy-mode word selection uses readline delimiter rules.
+///
+/// Double-click mouse copy and modified copy-mode cursor movement share this
+/// helper, so punctuation runs such as command flags must select separately
+/// from adjacent identifier text rather than as one whitespace-delimited word.
+#[test]
+fn copy_mode_selects_readline_word_at_position() {
+    let mut screen = TerminalScreen::new(Size::new(30, 1).unwrap(), 10).unwrap();
+    screen.feed(b"run --flag=value");
+    let mut copy = CopyMode::from_screen(&screen, 1).unwrap();
+
+    copy.select_word_at(CopyPosition { line: 0, column: 5 })
+        .unwrap();
+    assert_eq!(copy.copy_selection().unwrap(), "--");
+
+    copy.select_word_at(CopyPosition { line: 0, column: 7 })
+        .unwrap();
+    assert_eq!(copy.copy_selection().unwrap(), "flag");
+}
+
 /// Verifies paste buffers reject invalid names and oversized content.
 ///
 /// This regression scenario documents the behavior being protected so a

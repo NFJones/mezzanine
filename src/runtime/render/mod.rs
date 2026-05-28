@@ -6,7 +6,8 @@
 
 use super::types::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySelection,
-    RuntimeDisplayOverlaySelectionKind, RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
+    RuntimeDisplayOverlaySelectionKind, RuntimeMouseClickState, RuntimePaneAgentStatusSelector,
+    RuntimePrimaryPromptInput,
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
@@ -32,6 +33,9 @@ use super::{
     runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use std::collections::BTreeSet;
+
+/// Maximum elapsed time between two pane-content clicks recognized as a double click.
+const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 
 use crate::agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, AgentAction,
@@ -3001,23 +3005,59 @@ impl RuntimeSessionService {
                         pane_id: self.active_pane_id()?.to_string(),
                         position,
                     });
+                let pane_id = target.pane_id.clone();
                 self.session
-                    .select_pane_global(primary_client_id, target.pane_id.as_str())?;
+                    .select_pane_global(primary_client_id, pane_id.as_str())?;
                 if self.execute_agent_command_link_at_pane_position(
                     primary_client_id,
-                    target.pane_id.as_str(),
+                    pane_id.as_str(),
                     target.position,
                 )? {
                     self.mouse_selection_drag_state = None;
+                    self.last_mouse_click_state = None;
                     return Ok(true);
                 }
+                let now = current_unix_millis();
+                if self.last_mouse_click_state.as_ref().is_some_and(|click| {
+                    click.pane_id == pane_id
+                        && click.position == target.position
+                        && now.saturating_sub(click.clicked_at_unix_ms)
+                            <= DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS
+                }) {
+                    self.mouse_selection_drag_state = None;
+                    self.last_mouse_click_state = None;
+                    self.copy_word_at_pane_position(
+                        primary_client_id,
+                        pane_id.as_str(),
+                        target.position,
+                    )?;
+                    return Ok(true);
+                }
+                self.last_mouse_click_state = Some(RuntimeMouseClickState {
+                    pane_id: pane_id.clone(),
+                    position: target.position,
+                    clicked_at_unix_ms: now,
+                });
                 self.mouse_selection_drag_state = Some(MouseSelectionDragState {
-                    pane_id: target.pane_id,
+                    pane_id,
                     position: target.position,
                     origin_position: position,
                     autoscroll_position: None,
                 });
                 Ok(true)
+            }
+            MouseAction::CopyWord(position) => {
+                let target = self
+                    .mouse_pane_target_at(position)
+                    .unwrap_or(MousePaneTarget {
+                        pane_id: self.active_pane_id()?.to_string(),
+                        position,
+                    });
+                self.copy_word_at_pane_position(
+                    primary_client_id,
+                    target.pane_id.as_str(),
+                    target.position,
+                )
             }
             MouseAction::FocusPaneOnly(position) => {
                 let target = self
@@ -3633,6 +3673,37 @@ impl RuntimeSessionService {
                 autoscroll_position: target.edge.map(|_| position),
             });
         }
+        Ok(true)
+    }
+
+    /// Selects and copies the readline-style word under one pane-local position.
+    ///
+    /// # Parameters
+    /// - `primary_client_id`: The primary client whose focus follows the click.
+    /// - `pane_id`: Pane whose copy-mode buffer supplies the word text.
+    /// - `position`: Pane-local terminal cell used as the word-selection anchor.
+    fn copy_word_at_pane_position(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        pane_id: &str,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        self.session
+            .select_pane_global(primary_client_id, pane_id)?;
+        let copied = {
+            let copy_mode = self.ensure_active_copy_mode(pane_id)?;
+            let position = runtime_copy_position_for_view(copy_mode, position);
+            copy_mode.select_word_at(position)?;
+            copy_mode.copy_selection()?
+        };
+        self.mouse_selection_drag_state = None;
+        self.active_copy_modes.remove(pane_id);
+        self.scrollback_copy_mode_panes.remove(pane_id);
+        self.copy_text_to_buffer_and_host_clipboard(
+            "mouse",
+            copied,
+            format!("pane:{pane_id}:mouse-word"),
+        )?;
         Ok(true)
     }
 

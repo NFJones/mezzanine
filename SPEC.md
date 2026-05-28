@@ -2090,7 +2090,9 @@ pane readability, while preserving content indentation beyond that visual
 padding.
 
 Mouse text selection MUST interact with copy mode and paste buffers according
-to the configured mouse policy.
+to the configured mouse policy. Double-clicking pane text MUST select and copy
+the surrounding readline-style word segment to the `mouse` paste buffer and to
+the host clipboard on a best-effort basis.
 
 ### 7.7 Messages, Activity, and Bell Notifications
 

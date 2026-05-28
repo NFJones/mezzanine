@@ -13,6 +13,44 @@ use unicode_width::UnicodeWidthChar;
 
 const READLINE_PASTE_BLOCK_MARKER_BASE: u32 = 0xf0000;
 
+/// Returns the shell-style word range surrounding a character column.
+///
+/// Columns are counted in Unicode scalar values so terminal copy-mode callers
+/// can share readline delimiter rules without depending on prompt buffer byte
+/// cursors. Whitespace columns select an empty range at the clicked column.
+pub(crate) fn readline_word_column_range(text: &str, column: usize) -> (usize, usize) {
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return (0, 0);
+    }
+    let index = column.min(chars.len().saturating_sub(1));
+    let Some(ch) = chars.get(index).copied() else {
+        return (chars.len(), chars.len());
+    };
+    if ch.is_whitespace() {
+        return (index, index);
+    }
+
+    let identifier = readline_word_is_identifier(ch);
+    let mut start = index;
+    while start > 0 {
+        let previous = chars[start.saturating_sub(1)];
+        if previous.is_whitespace() || readline_word_is_identifier(previous) != identifier {
+            break;
+        }
+        start = start.saturating_sub(1);
+    }
+    let mut end = index.saturating_add(1);
+    while end < chars.len() {
+        let next = chars[end];
+        if next.is_whitespace() || readline_word_is_identifier(next) != identifier {
+            break;
+        }
+        end = end.saturating_add(1);
+    }
+    (start, end)
+}
+
 impl Default for ReadlineBuffer {
     /// Runs the default operation for this subsystem.
     ///

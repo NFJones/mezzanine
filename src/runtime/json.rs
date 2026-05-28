@@ -1049,6 +1049,7 @@ pub(super) fn mouse_action_name(action: MouseAction) -> &'static str {
         MouseAction::ResizePane { .. } => "resize-pane",
         MouseAction::FinishResizePane => "finish-resize-pane",
         MouseAction::CopySelectionStart(_) => "copy-selection-start",
+        MouseAction::CopyWord(_) => "copy-word",
         MouseAction::CopySelectionUpdate(_) => "copy-selection-update",
         MouseAction::CopySelectionFinish(_) => "copy-selection-finish",
         MouseAction::ScrollHistory { .. } => "scroll-history",

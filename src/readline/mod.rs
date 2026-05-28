@@ -32,6 +32,7 @@ mod prompt_loop;
 /// declaration makes the boundary available to the crate.
 mod types;
 
+pub(crate) use buffer::readline_word_column_range;
 pub use decoder::apply_readline_terminal_input;
 #[cfg(test)]
 pub use prompt_loop::run_readline_prompt_loop;

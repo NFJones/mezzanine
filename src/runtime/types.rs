@@ -3669,6 +3669,8 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) mouse_selection_drag_state: Option<MouseSelectionDragState>,
+    /// Last pane content click observed for double-click word selection.
+    pub(super) last_mouse_click_state: Option<RuntimeMouseClickState>,
     /// Stores the pressed window status-bar action value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -4367,6 +4369,17 @@ pub(super) struct MouseSelectionDragState {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub autoscroll_position: Option<CopyPosition>,
+}
+
+/// Last pane-content click used to recognize double-click word selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RuntimeMouseClickState {
+    /// Pane whose content received the click.
+    pub pane_id: String,
+    /// Pane-local terminal cell clicked by the user.
+    pub position: CopyPosition,
+    /// Monotonic-enough wall-clock timestamp used for a small double-click window.
+    pub clicked_at_unix_ms: u64,
 }
 
 /// Carries Mouse Resize Drag State state for this subsystem.

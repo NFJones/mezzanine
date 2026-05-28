@@ -235,6 +235,10 @@ Default workflow keys follow conventional multiplexer placement:
 | `Ctrl+A C`                  | Create a new window group.             |
 | `Ctrl+A (` / `Ctrl+A )`     | Previous or next group.                |
 
+With mouse support enabled, dragging selects pane text and double-clicking
+copies the surrounding readline-style word into the `mouse` paste buffer and
+host clipboard when clipboard integration is available.
+
 The Mezzanine command prompt accepts commands such as `new-window`,
 `split-window`, `select-pane`, `set-theme`, `list-keys`, `show-options`, and
 `refresh-provider-info`. Commands entered there are parsed by Mezzanine, not by
