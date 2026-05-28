@@ -21,15 +21,16 @@ use super::{
     key_chord_notation, list_baseline_commands, list_buffers_display, list_clients,
     list_current_session, list_default_key_bindings, list_default_themes, list_groups,
     list_observers, list_panes, list_windows, mark_pane_ready_audit_record,
-    mark_pane_ready_warning_display, mcp_add_plan_display, mcp_remove_plan_display,
-    mcp_retry_plan_display, mcp_server_id, mutated_pane_command_outcome, mutation_plans_changed,
-    mutation_plans_reload_required, pane_readiness_state_name, parse_command_sequence,
-    parse_config_command_value, paste_buffer_display, paste_clipboard_display,
-    persist_command_config_mutation, persist_command_theme_config, persist_mcp_add,
-    persist_mcp_remove, pipe_pane_display, positional_args, resume_session_display,
-    save_buffer_display, search_history_display, set_option_args, set_theme_arg,
-    show_default_options, show_messages_display, show_metrics_display, snapshot_session_display,
-    validate_config_file,
+    mark_pane_ready_warning_display, mcp_add_plan_display, mcp_login_plan_display,
+    mcp_logout_plan_display, mcp_remove_plan_display, mcp_retry_plan_display, mcp_server_id,
+    mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
+    mutation_plans_changed, mutation_plans_reload_required, pane_readiness_state_name,
+    parse_command_sequence, parse_config_command_value, paste_buffer_display,
+    paste_clipboard_display, persist_command_config_mutation, persist_command_theme_config,
+    persist_mcp_add, persist_mcp_remove, pipe_pane_display, positional_args,
+    resume_session_display, save_buffer_display, search_history_display, set_option_args,
+    set_theme_arg, show_default_options, show_messages_display, show_metrics_display,
+    snapshot_session_display, validate_config_file,
 };
 
 // In-memory command execution entry points.
@@ -72,6 +73,27 @@ pub fn execute_auth_command(
             command: invocation.name.clone(),
             body: execute_auth_login(auth_store, invocation)?,
         }),
+        "mcp-login" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: mcp_login_plan_display(invocation)?,
+        }),
+        "mcp-logout" => {
+            let server_id = mcp_server_id(invocation, "mcp-logout requires a server id")?;
+            let changed = auth_store.logout_mcp_server(server_id)?;
+            Ok(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: format!(
+                    "server={server_id}:logged_out={changed}:changed={changed}:source=auth-store"
+                ),
+            })
+        }
+        "mcp-status" => {
+            let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
+            Ok(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: mcp_status_store_display(auth_store.mcp_status(server_id, None, None)?),
+            })
+        }
         _ => Err(MezError::invalid_args(format!(
             "command `{}` is not an auth command",
             invocation.name
@@ -851,6 +873,18 @@ pub fn execute_command(
         "mcp-remove" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: mcp_remove_plan_display(invocation)?,
+        }),
+        "mcp-login" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: mcp_login_plan_display(invocation)?,
+        }),
+        "mcp-logout" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: mcp_logout_plan_display(invocation)?,
+        }),
+        "mcp-status" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: mcp_status_plan_display(invocation)?,
         }),
         "mcp-retry" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),

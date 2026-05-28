@@ -539,3 +539,32 @@ pub(super) fn auth_status_store_display(status: AuthStatus) -> String {
         ),
     }
 }
+
+/// Runs the mcp status store display operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn mcp_status_store_display(status: crate::auth::McpAuthStatus) -> String {
+    match status.credential_state {
+        crate::auth::AuthCredentialState::Available { store, .. } => format!(
+            "server={} authenticated={} metadata_present={} stale_url={} credential_store={} source=auth-store",
+            status.server_id,
+            status.authenticated,
+            status.metadata_present,
+            status.stale_url,
+            credential_store_kind_name(store)
+        ),
+        crate::auth::AuthCredentialState::LoggedOut => format!(
+            "server={} authenticated=false metadata_present=false state=logged-out source=auth-store",
+            status.server_id
+        ),
+        crate::auth::AuthCredentialState::MissingSecret { reference } => format!(
+            "server={} authenticated=false metadata_present={} stale_url={} state=missing-secret reference_present={} source=auth-store",
+            status.server_id,
+            status.metadata_present,
+            status.stale_url,
+            reference.is_some()
+        ),
+    }
+}

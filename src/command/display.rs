@@ -1354,6 +1354,42 @@ pub(super) fn mcp_remove_plan_display(invocation: &CommandInvocation) -> Result<
     ))
 }
 
+/// Runs the mcp login plan display operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn mcp_login_plan_display(invocation: &CommandInvocation) -> Result<String> {
+    let server_id = mcp_server_id(invocation, "mcp-login requires a server id")?;
+    Ok(format!(
+        "server={server_id}:authenticated=false:action=interactive-required:reason=run-mez-mcp-login"
+    ))
+}
+
+/// Runs the mcp logout plan display operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn mcp_logout_plan_display(invocation: &CommandInvocation) -> Result<String> {
+    let server_id = mcp_server_id(invocation, "mcp-logout requires a server id")?;
+    Ok(format!(
+        "server={server_id}:logged_out=false:reason=auth-store-unavailable"
+    ))
+}
+
+/// Runs the mcp status plan display operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn mcp_status_plan_display(invocation: &CommandInvocation) -> Result<String> {
+    let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
+    Ok(format!(
+        "server={server_id}:authenticated=false:state=unknown:reason=auth-store-unavailable"
+    ))
+}
+
 /// Runs the mcp retry plan display operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

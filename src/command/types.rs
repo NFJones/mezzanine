@@ -247,6 +247,9 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "auth-status",
     "mcp-add",
     "mcp-remove",
+    "mcp-login",
+    "mcp-logout",
+    "mcp-status",
     "mcp-retry",
     "snapshot-session",
     "resume-session",
@@ -294,9 +297,8 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         | "reject-observer"
         | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,
         "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file" | "auth-login"
-        | "auth-status" | "mcp-add" | "mcp-remove" | "mark-pane-ready" => {
-            BaselineCommandStatus::StoreRequired
-        }
+        | "auth-status" | "mcp-add" | "mcp-remove" | "mcp-login" | "mcp-logout" | "mcp-status"
+        | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "snapshot-session" | "resume-session" => BaselineCommandStatus::ControlRequired,
         _ => BaselineCommandStatus::Implemented,
     }
