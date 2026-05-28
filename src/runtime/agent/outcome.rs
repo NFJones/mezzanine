@@ -9,8 +9,13 @@ use super::*;
 use crate::skills::is_valid_skill_name;
 
 impl RuntimeSessionService {
-    /// Queues one bounded provider continuation after model-correctable action
+    /// Queues one provider continuation after model-correctable action
     /// failures.
+    ///
+    /// Most model-correctable failures consume a bounded recovery budget keyed
+    /// by stable failed-action signatures. `apply_patch` failures remain
+    /// model-correctable but intentionally bypass that budget so the model can
+    /// iterate on patch context as needed.
     ///
     /// Real execution failures are useful model context: a bad shell command,
     /// timeout, or failed tool call often gives the model enough information to
@@ -28,20 +33,24 @@ impl RuntimeSessionService {
         }
         let attempt_limit = self.agent_action_failure_retry_limit.max(1);
         let attempt_keys = runtime_failure_feedback_attempt_keys(&turn.turn_id, execution);
+        let unbounded_apply_patch_recovery =
+            runtime_execution_uses_unbounded_apply_patch_recovery(execution);
         let mut attempts_after_update = Vec::with_capacity(attempt_keys.len());
-        let mut any_budget_remaining = false;
+        let mut any_budget_remaining = unbounded_apply_patch_recovery;
         for attempt_key in &attempt_keys {
             let attempts = self
                 .agent_turn_failure_feedback_attempts
                 .entry(attempt_key.clone())
                 .or_insert(0);
-            if *attempts < attempt_limit {
+            if unbounded_apply_patch_recovery {
+                *attempts += 1;
+            } else if *attempts < attempt_limit {
                 *attempts += 1;
                 any_budget_remaining = true;
             }
             attempts_after_update.push(*attempts);
         }
-        let exhausted = !any_budget_remaining;
+        let exhausted = !unbounded_apply_patch_recovery && !any_budget_remaining;
         let attempt = attempts_after_update.into_iter().max().unwrap_or(0);
         if exhausted {
             self.append_agent_trace_turn_event(
@@ -99,15 +108,21 @@ impl RuntimeSessionService {
         let aggregate_guidance = runtime_failure_feedback_loop_guard_aggregate_note(execution)
             .map(|guidance| format!("\n{guidance}"))
             .unwrap_or_default();
+        let budget_header = if unbounded_apply_patch_recovery {
+            String::new()
+        } else {
+            format!(
+                "attempt={} max={}\n                 ",
+                attempt, attempt_limit
+            )
+        };
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
             label: "action failure feedback".to_string(),
             content: format!(
                 "[ephemeral action failure feedback]\n\
-                 attempt={} max={}\n\
-                 One or more actions failed during this turn. Use the action result context above to correct the plan for the same user request. Do not repeat an identical failed action unless you changed the inputs or can explain why the repeat is necessary. Emit a new MAAP action batch with a visible or executable next step.{}{}{}{}",
-                attempt,
-                attempt_limit,
+                 {}One or more actions failed during this turn. Use the action result context above to correct the plan for the same user request. Do not repeat an identical failed action unless you changed the inputs or can explain why the repeat is necessary. Emit a new MAAP action batch with a visible or executable next step.{}{}{}{}",
+                budget_header,
                 evidence_guidance,
                 specific_guidance,
                 repeat_guidance,
@@ -118,8 +133,12 @@ impl RuntimeSessionService {
         execution.terminal_state = AgentTurnState::Running;
         self.pending_agent_provider_tasks
             .insert(turn.turn_id.clone());
-        let feedback_status_line =
-            runtime_failure_feedback_status_line(execution, attempt, attempt_limit);
+        let feedback_status_line = runtime_failure_feedback_status_line(
+            execution,
+            attempt,
+            attempt_limit,
+            unbounded_apply_patch_recovery,
+        );
         self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &feedback_status_line)?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -821,10 +840,10 @@ pub(super) fn runtime_execution_can_feed_failure_to_model(execution: &AgentTurnE
 
 /// Returns the failure-feedback attempt keys for one failed execution.
 ///
-/// The turn id scopes cleanup while the hash scopes attempts to individual
-/// failed action signatures. A batch with several model-correctable failures
-/// therefore receives one retry budget per failed action instead of amortizing
-/// a shared budget across unrelated failures.
+/// The turn id scopes cleanup while the hash scopes repeated failures to
+/// individual failed action signatures. Bounded retries consult these keys for
+/// budget accounting, while unbounded `apply_patch` recovery reuses the same
+/// keys only to track repeated identical failures for guidance.
 pub(super) fn runtime_failure_feedback_attempt_keys(
     turn_id: &str,
     execution: &AgentTurnExecution,
@@ -850,6 +869,24 @@ pub(super) fn runtime_failure_feedback_attempt_key_for_result(
         &runtime_failure_feedback_action_signature(result),
     );
     format!("{turn_id}:{digest}")
+}
+
+/// Returns true when all model-correctable failures in one execution are
+/// `apply_patch` failures that should bypass the bounded retry budget.
+pub(super) fn runtime_execution_uses_unbounded_apply_patch_recovery(
+    execution: &AgentTurnExecution,
+) -> bool {
+    let mut saw_feedback_candidate = false;
+    for result in execution.action_results.iter() {
+        if !runtime_action_result_is_feedback_candidate(result) {
+            continue;
+        }
+        saw_feedback_candidate = true;
+        if result.action_type != "apply_patch" {
+            return false;
+        }
+    }
+    saw_feedback_candidate
 }
 
 /// Returns stable, non-secret material identifying one failed action result.
@@ -1102,7 +1139,7 @@ pub(super) fn runtime_failure_feedback_repeat_guidance(
     }
     if runtime_execution_has_apply_patch_hunk_mismatch(execution) {
         return Some(
-            "\nRepeated apply-patch recovery: this failure signature has already consumed a recovery attempt. Do not emit another apply_patch action until you have read the affected target file or otherwise obtained current target context."
+            "\nRepeated apply-patch recovery: the same failure signature repeated. Do not emit another apply_patch action until you have read the affected target file or otherwise obtained current target context."
                 .to_string(),
         );
     }
@@ -1149,6 +1186,7 @@ pub(super) fn runtime_failure_feedback_status_line(
     execution: &AgentTurnExecution,
     attempt: usize,
     attempt_limit: usize,
+    unbounded_apply_patch_recovery: bool,
 ) -> String {
     let reason = if runtime_execution_has_apply_patch_hunk_mismatch(execution) {
         "patch hunk mismatch"
@@ -1161,7 +1199,13 @@ pub(super) fn runtime_failure_feedback_status_line(
     } else {
         "action failure"
     };
-    format!("agent: action failed; asking model to recover ({attempt}/{attempt_limit}, {reason})")
+    if unbounded_apply_patch_recovery {
+        format!("agent: action failed; asking model to recover ({reason})")
+    } else {
+        format!(
+            "agent: action failed; asking model to recover ({attempt}/{attempt_limit}, {reason})"
+        )
+    }
 }
 
 /// Describes why one failed execution cannot be fed back for correction.
@@ -1281,6 +1325,10 @@ pub(super) fn runtime_unrecovered_failure_reason(
             "recovery unavailable: {}",
             runtime_recovery_unavailable_detail(execution)
         );
+    }
+    if runtime_execution_uses_unbounded_apply_patch_recovery(execution) {
+        return "recovery unavailable: no model-correction continuation was queued after the apply_patch failure"
+            .to_string();
     }
     let attempt_limit = attempt_limit.max(1);
     let attempt = runtime_failure_feedback_attempt_keys(turn_id, execution)

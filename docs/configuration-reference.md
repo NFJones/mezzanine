@@ -352,7 +352,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `agents.shell_only` | boolean | `true` | Require local system actions to go through the pane shell. |
 | `agents.compaction_raw_retention_percent` | integer | `10` | Percent of raw context retained during manual compaction and provider context-limit recovery; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
-| `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature. |
+| `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
 | `agents.implementation_pressure_after_shell_actions` | integer | `5` | Successive shell-action count before adding an advisory take-action hint. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |

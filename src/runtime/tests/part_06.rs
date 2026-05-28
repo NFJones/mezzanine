@@ -2110,7 +2110,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
                 && block.label == "action failure feedback"
         })
         .expect("feedback block should be present");
-    assert!(feedback.content.contains("max=5"), "{}", feedback.content);
+    assert!(!feedback.content.contains("attempt="), "{}", feedback.content);
     assert!(
         feedback.content.contains("Mutation-evidence rule"),
         "{}",
@@ -2193,10 +2193,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         pane_text.contains("agent: action failed; asking model to recover"),
         "{pane_text}"
     );
-    assert!(
-        pane_text.contains("(1/5, patch hunk mismatch)"),
-        "{pane_text}"
-    );
+    assert!(pane_text.contains("(patch hunk mismatch)"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -2323,10 +2320,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
         pane_text.contains("agent: action failed; asking model to recover"),
         "{pane_text}"
     );
-    assert!(
-        pane_text.contains("(1/5, patch hunk mismatch)"),
-        "{pane_text}"
-    );
+    assert!(pane_text.contains("(patch hunk mismatch)"), "{pane_text}");
     assert!(!pane_text.contains("recovery unavailable"), "{pane_text}");
     let copy_response = service
         .execute_agent_shell_command(&primary, "/copy-patches buffer failed-patches")
@@ -2359,14 +2353,15 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
-/// Verifies repeated identical `apply_patch` hunk mismatches share one bounded
-/// recovery budget.
+/// Verifies repeated identical `apply_patch` hunk mismatches stay unbounded
+/// and omit retry-budget noise.
 ///
 /// Provider wording and generated action ids can vary while the model repeats
-/// the same bad patch. The retry key should therefore follow the failed action
-/// signature and diagnostic rather than provider prose.
+/// the same bad patch. `apply_patch` recovery should still track repeated
+/// identical failures for guidance, but it must not consume the generic
+/// bounded retry budget or surface `(attempt/max)` status text.
 #[test]
-fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
+fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budget() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2448,26 +2443,24 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
         }
     };
 
-    let mut first_execution = build_execution("first provider wording", "patch-a");
-    assert!(
-        service
-            .queue_agent_failure_feedback_for_correction(
-                &turn,
-                &mut first_execution,
-                "apply_patch_hunk_mismatch",
-            )
-            .unwrap()
-    );
-    let mut second_execution = build_execution("different provider wording", "patch-b");
-    assert!(
-        service
-            .queue_agent_failure_feedback_for_correction(
-                &turn,
-                &mut second_execution,
-                "apply_patch_hunk_mismatch",
-            )
-            .unwrap()
-    );
+    for index in 0..8 {
+        let action_id = format!("patch-{index}");
+        let raw_text = if index % 2 == 0 {
+            "first provider wording"
+        } else {
+            "different provider wording"
+        };
+        let mut execution = build_execution(raw_text, &action_id);
+        assert!(
+            service
+                .queue_agent_failure_feedback_for_correction(
+                    &turn,
+                    &mut execution,
+                    "apply_patch_hunk_mismatch",
+                )
+                .unwrap()
+        );
+    }
 
     assert_eq!(
         service
@@ -2475,7 +2468,7 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
             .values()
             .copied()
             .collect::<Vec<_>>(),
-        vec![2]
+        vec![8]
     );
     let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
     let feedback = context
@@ -2488,10 +2481,25 @@ fn runtime_apply_patch_hunk_mismatch_retry_key_ignores_provider_prose() {
         })
         .expect("second feedback block should be present");
     assert!(
-        feedback.content.contains("Repeated apply-patch recovery"),
+        !feedback.content.contains("attempt="),
         "{}",
         feedback.content
     );
+    assert!(
+        feedback.content.contains("Repeated apply-patch recovery: the same failure signature repeated."),
+        "{}",
+        feedback.content
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent: action failed; asking model to recover (patch hunk mismatch)"),
+        "{pane_text}"
+    );
+    assert!(!pane_text.contains("/5"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -3434,8 +3442,11 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let pane_text_flat = pane_text.replace("▐ ", "").replace('\n', "");
     assert!(
-        pane_text.contains("failed; recovery unavailable: correction budget remained"),
+        pane_text_flat.contains(
+            "failed; recovery unavailable: no model-correction continuation was queued after the apply_patch failure"
+        ),
         "{pane_text}"
     );
     assert!(

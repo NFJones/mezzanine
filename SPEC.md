@@ -2448,7 +2448,9 @@ context-limit recovery rather than proactive threshold compaction.
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one
 bad action in a batch cannot consume the recovery budget for a different
-failed action.
+failed action. `apply_patch` failures are excluded from this bounded recovery
+budget and MAY be retried until they succeed or some other blocker ends the
+turn.
 `agents.implementation_pressure_after_shell_actions` MUST be a positive integer
 and MUST default to `3`. It defines the gentle shell-command inspection
 pressure threshold; runtime-owned inspection pressure MUST escalate to medium at
@@ -3415,8 +3417,9 @@ failures, runtime shell-dispatch or network-action loop guard failures, runtime
 network request or HTTP failures, config validation failures, local message
 payload validation failures, and subagent spawn validation failures. Non-zero
 `shell_command` exits are ordinary command results rather than semantic-action
-failures: Mezzanine MUST preserve the failed action result and queue model
-continuation without consuming failure-feedback retry budget. The
+failures, and `apply_patch` failures are patch-context recovery rather than
+bounded retry events: Mezzanine MUST preserve the failed action result and
+queue model continuation without consuming failure-feedback retry budget. The
 continuation context MUST include the failed action results and SHOULD include
 settled successful action results from the same batch so the model can avoid
 repeating work that already produced usable evidence. Correctable failures MUST
@@ -4118,11 +4121,11 @@ execution error, Mezzanine MAY feed the failed action result back to the model
 and ask for a corrected next step within the same turn. This failure-feedback
 continuation MUST be bounded per stable failed-action signature by
 `agents.action_failure_retry_limit`, MUST NOT apply to non-zero
-`shell_command` exits, user rejections, approval denials, policy denials,
-command timeouts, or user cancellations, and MUST preserve the failed action
-result for audit, diagnostics, and model context. If the bounded correction
-attempts for each model-correctable failed action are exhausted, Mezzanine MUST
-settle the turn as failed.
+`shell_command` exits, `apply_patch` failures, user rejections, approval
+denials, policy denials, command timeouts, or user cancellations, and MUST
+preserve the failed action result for audit, diagnostics, and model context.
+If the bounded correction attempts for each model-correctable failed action are
+exhausted, Mezzanine MUST settle the turn as failed.
 When one model-correctable action fails before later shell-backed sibling
 actions have reached the pane shell, those inactive unsent siblings MUST NOT
 make recovery unavailable. Mezzanine SHOULD abandon the unsent sibling actions,
