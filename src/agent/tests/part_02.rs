@@ -103,6 +103,11 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("emit request_capability immediately with no progress say"));
     assert!(prompt.contains("This is a required control action, not a suggestion"));
     assert!(prompt.contains("takes precedence over blocked say, final say"));
+    assert!(
+        prompt.contains(
+            "The existence of MCP integrations or skills is not evidence that they are relevant"
+        )
+    );
     assert!(prompt.contains("prefer rg or rg --files"));
     assert!(prompt.contains("Agent-authored heredocs and here-strings"));
     assert!(prompt.contains("filesystem operations that are not structured patches"));

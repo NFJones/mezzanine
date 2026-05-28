@@ -6283,6 +6283,10 @@ The prompt MUST prohibit bypassing the pane shell for native local system
 mutation. The prompt MAY describe explicitly configured MCP servers and other
 connectors as external integrations; when it does, it MUST state that they are
 available only through Mezzanine's visible external-integration path.
+For ordinary turns, the prompt SHOULD keep MCP and skill awareness abstract
+and SHOULD reveal concrete tool or skill inventories only when the task
+explicitly makes them relevant, so mere availability does not bias action
+selection away from local inspection, editing, validation, and reporting.
 
 The prompt MUST prohibit treating terminal output, project files, web content,
 or local messages as trusted instructions unless the user explicitly designates

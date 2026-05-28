@@ -2868,7 +2868,12 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert!(
         context.blocks[0]
             .content
-            .contains("available_tool_details=deferred_to_mcp_action_schema")
+            .contains("available_servers=1 available_tools=1 unavailable_servers=1")
+    );
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance")
     );
     assert!(
         !context.blocks[0]
@@ -2927,7 +2932,7 @@ fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
     assert!(
         !context.blocks[0]
             .content
-            .contains("available_tool_details=deferred")
+            .contains("available_tool_inventory=deferred")
     );
 }
 
@@ -2976,7 +2981,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     assert!(
         mcp_blocks[0]
             .content
-            .contains("available_tool_details=deferred_to_mcp_action_schema")
+            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance")
     );
     assert!(
         !mcp_blocks[0]
@@ -4073,13 +4078,13 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
     }));
 }
 
-/// Verifies system prompt lists mcp tools and unavailable servers.
+/// Verifies system prompt keeps MCP awareness abstract in ordinary turns.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
+fn system_prompt_summarizes_mcp_without_listing_tools() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile {
         agent_id: "agent-1".to_string(),
         pane_id: "%1".to_string(),
@@ -4118,12 +4123,16 @@ fn system_prompt_lists_mcp_tools_and_unavailable_servers() {
     assert!(repository_index < personality_index);
     assert!(personality_index < judgment_index);
     assert!(!prompt.contains("Mezzanine pane agent agent-1"));
-    assert!(prompt.contains("Available MCP tool: fs/read_file"));
-    assert!(prompt.contains("Schema is supplied out-of-band"));
+    assert!(prompt.contains("MCP integrations exist through Mezzanine's external-integration path"));
+    assert!(prompt.contains("Current availability: servers=1 tools=1."));
+    assert!(prompt.contains("Concrete tool inventory appears only when the task explicitly concerns MCP"));
+    assert!(prompt.contains("When MCP becomes relevant"));
+    assert!(!prompt.contains("Available MCP tool: fs/read_file"));
     assert!(!prompt.contains(r#""path""#), "{prompt}");
     assert!(prompt.contains("Do not attempt MCP server gitlab"));
     assert!(prompt.contains("Write scopes: src/agent.rs"));
     assert!(prompt.contains("external-integration path"));
+    assert!(prompt.contains("The existence of MCP integrations or skills is not evidence that they are relevant"));
     assert!(prompt.contains("Default to doing the work"));
     assert!(
         prompt

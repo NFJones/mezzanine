@@ -69,8 +69,15 @@ pub fn append_mcp_context(
     if summary.available_tools.is_empty() && summary.unavailable_servers.is_empty() {
         return AgentContext::new(context.blocks);
     }
+    let available_server_count = summary
+        .available_tools
+        .iter()
+        .map(|tool| tool.server_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     let mut lines = vec![format!(
-        "available_tools={} unavailable_servers={}",
+        "available_servers={} available_tools={} unavailable_servers={}",
+        available_server_count,
         summary.available_tools.len(),
         summary.unavailable_servers.len()
     )];
@@ -91,7 +98,7 @@ pub fn append_mcp_context(
             ));
         }
     } else if !available_tools.is_empty() {
-        lines.push("available_tool_details=deferred_to_mcp_action_schema".to_string());
+        lines.push("available_tool_inventory=deferred_until_explicit_mcp_relevance".to_string());
     }
     for server in &unavailable_servers {
         lines.push(format!(
@@ -131,7 +138,10 @@ fn mcp_context_should_include_tool_details(
 /// Returns whether text is explicitly about MCP or one available MCP tool.
 fn mcp_context_text_requests_details(content: &str, available_tools: &[McpPromptTool]) -> bool {
     let normalized = content.to_ascii_lowercase();
-    if normalized.contains("mcp") || normalized.contains("/list-mcp") {
+    if normalized.contains("/list-mcp")
+        || normalized.contains("mcp")
+        || normalized.contains("integration")
+    {
         return true;
     }
     available_tools.iter().any(|tool| {
