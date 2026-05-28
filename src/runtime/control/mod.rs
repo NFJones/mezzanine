@@ -92,13 +92,13 @@ const RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER: &str = "runtime-control-live-override
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 4096;
+const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 /// Defines the AGENT TRANSCRIPT CONTEXT READ BYTES const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const AGENT_TRANSCRIPT_CONTEXT_READ_BYTES: u64 = 1024 * 1024;
-const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 16 * 1024;
+const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
 
 /// Returns the number of transcript entries from the current post-compaction
 /// window that may be replayed into model context.
@@ -180,7 +180,7 @@ fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<S
     }
 }
 
-/// Returns sanitized transcript tool output for model-facing replay.
+/// Returns transcript tool output for model-facing replay.
 ///
 /// Previous action results are often the user's freshest evidence, especially
 /// failed file reads and shell observations. Web fetch/search payloads are
@@ -198,9 +198,8 @@ fn runtime_transcript_tool_context_content(content: &str) -> Option<String> {
     ) {
         return None;
     }
-    let redacted = runtime_context_redact_sensitive_tokens(trimmed);
     Some(truncate_runtime_context_text(
-        &redacted,
+        trimmed,
         AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES,
         "transcript tool context",
     ))
@@ -213,36 +212,6 @@ fn transcript_tool_action_type(content: &str) -> Option<&str> {
         .next()?
         .split_whitespace()
         .find_map(|token| token.strip_prefix("action_type="))
-}
-
-/// Redacts obvious credential-shaped tokens before replaying tool context.
-fn runtime_context_redact_sensitive_tokens(content: &str) -> String {
-    content
-        .split_inclusive(char::is_whitespace)
-        .map(runtime_context_redact_sensitive_segment)
-        .collect()
-}
-
-/// Redacts one whitespace-delimited segment while preserving trailing spacing.
-fn runtime_context_redact_sensitive_segment(segment: &str) -> String {
-    let token_end = segment
-        .char_indices()
-        .rev()
-        .find_map(|(index, ch)| (!ch.is_whitespace()).then_some(index + ch.len_utf8()))
-        .unwrap_or(0);
-    let (token, suffix) = segment.split_at(token_end);
-    let lower = token.to_ascii_lowercase();
-    if lower.starts_with("sk-")
-        || lower.contains("api_key")
-        || lower.contains("credential")
-        || lower.contains("password")
-        || lower.contains("secret")
-        || lower.contains("token")
-    {
-        format!("[redacted]{suffix}")
-    } else {
-        segment.to_string()
-    }
 }
 
 /// Reports whether transcript text is an expanded skill body rather than the

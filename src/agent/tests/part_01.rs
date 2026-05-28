@@ -2338,13 +2338,13 @@ fn model_request_groups_stable_prefix_before_volatile_suffix() {
             ContextSourceKind::System,
             ContextSourceKind::ActionResult,
             ContextSourceKind::UserInstruction,
-            ContextSourceKind::EvidenceLedger,
         ]
     );
     assert!(request.messages[0].content.contains("stable guidance"));
-    assert!(request.messages.iter().any(|message| message.source
-        == ContextSourceKind::EvidenceLedger
-        && message.content.contains("volatile result")));
+    assert!(request
+        .messages
+        .iter()
+        .all(|message| message.source != ContextSourceKind::EvidenceLedger));
 
     let request = assemble_model_request(
         &ModelProfile {
@@ -2388,14 +2388,14 @@ fn model_request_groups_stable_prefix_before_volatile_suffix() {
         vec![
             ContextSourceKind::System,
             ContextSourceKind::UserInstruction,
-            ContextSourceKind::EvidenceLedger,
             ContextSourceKind::ActionResult,
         ]
     );
     assert!(request.messages[0].content.contains("stable guidance"));
-    assert!(request.messages.iter().any(|message| message.source
-        == ContextSourceKind::EvidenceLedger
-        && message.content.contains("test -s file")));
+    assert!(request
+        .messages
+        .iter()
+        .all(|message| message.source != ContextSourceKind::EvidenceLedger));
 }
 
 /// Verifies provider request assembly preserves context until provider feedback
@@ -2471,11 +2471,13 @@ fn explicit_context_compaction_uses_configured_retained_tail_percent() {
 }
 
 /// Verifies explicit compaction keeps current execution evidence and repo guidance
-/// exact while folding older unrelated context into a bulk summary. These
-/// blocks are what prevent long recovery turns from rereading instructions or
-/// repeating recently completed commands after provider-limit compaction.
+/// exact while folding older unrelated context into a bulk summary.
+///
+/// Removing the generated evidence ledger must not make provider-limit
+/// compaction drop the newest raw action-result evidence that the next
+/// continuation still needs to reference directly.
 #[test]
-fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result() {
+fn explicit_context_compaction_protects_guidance_and_recent_action_result() {
     let mut blocks = vec![
         ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
@@ -2512,11 +2514,6 @@ fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result
             && block.content.contains("run just test")
     }));
     assert!(context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::EvidenceLedger
-            && block.content.contains("fresh evidence")
-            && block.content.contains("command=rg cache")
-    }));
-    assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult && block.content.contains("fresh evidence")
     }));
     assert!(context.blocks.iter().any(|block| {
@@ -2532,26 +2529,21 @@ fn explicit_context_compaction_protects_guidance_ledger_and_recent_action_result
     );
 }
 
-/// Verifies provider request assembly does not drop ledger entries just because
-/// a fixed count threshold was reached, and does not truncate sub-mebibyte
-/// entry summaries before the aggregate ledger budget is exhausted.
+/// Verifies provider request assembly no longer generates an evidence-ledger
+/// helper block for prior action history.
 #[test]
-fn model_request_keeps_evidence_ledger_entries_until_aggregate_size_limit() {
+fn model_request_does_not_generate_evidence_ledger_block() {
     let mut blocks = vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
         content: "Continue from the existing command history.".to_string(),
     }];
-    let long_summary = format!(
-        "ledger summary head {} tail-marker",
-        "detail ".repeat(40)
-    );
-    for index in 0..520 {
+    for index in 0..8 {
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
             label: format!("action result {index}"),
             content: format!(
-                "[action_result action-{index} shell_command succeeded]\ncommand: git status --short path-{index}\noutput:\nledger evidence {index} {long_summary}"
+                "[action_result action-{index} shell_command succeeded]\ncommand: git status --short path-{index}\noutput:\nhistory evidence {index}"
             ),
         });
     }
@@ -2571,124 +2563,10 @@ fn model_request_keeps_evidence_ledger_entries_until_aggregate_size_limit() {
     )
     .unwrap();
 
-    let ledger = request
+    assert!(request
         .messages
         .iter()
-        .find(|message| message.source == ContextSourceKind::EvidenceLedger)
-        .expect("evidence ledger should be present");
-    let entry_count = ledger
-        .content
-        .lines()
-        .filter(|line| line.starts_with("- category="))
-        .count();
-
-    assert_eq!(entry_count, 520);
-    assert!(ledger.content.contains("command=git status --short path-519"));
-    assert!(ledger.content.contains("tail-marker"));
-}
-
-/// Verifies provider request assembly bounds the generated evidence ledger by
-/// aggregate payload size rather than entry count.
-#[test]
-fn model_request_caps_evidence_ledger_at_one_mebibyte() {
-    let mut blocks = vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        label: "user".to_string(),
-        content: "Continue from the existing command history.".to_string(),
-    }];
-    for index in 0..6 {
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            label: format!("action result {index}"),
-            content: format!(
-                "[action_result action-{index} shell_command succeeded]\ncommand: make aggregate-evidence-{index}\noutput:\naggregate evidence {index} {}",
-                "detail".repeat(45_000)
-            ),
-        });
-    }
-
-    let request = assemble_model_request(
-        &ModelProfile {
-            provider: "openai".to_string(),
-            model: "default".to_string(),
-            reasoning_profile: None,
-            latency_preference: None,
-            multimodal_required: false,
-            provider_options: std::collections::BTreeMap::new(),
-            safety_tier: None,
-        },
-        &turn(),
-        &AgentContext::new(blocks).unwrap(),
-    )
-    .unwrap();
-
-    let ledger = request
-        .messages
-        .iter()
-        .find(|message| message.source == ContextSourceKind::EvidenceLedger)
-        .expect("evidence ledger should be present");
-
-    assert!(ledger.content.len() <= 1024 * 1024);
-    assert!(ledger.content.contains("aggregate evidence 0"));
-    assert!(ledger.content.contains("aggregate evidence 1"));
-    assert!(!ledger.content.contains("aggregate evidence 3"));
-}
-
-/// Verifies repeated bounded reads of the same owner collapse into one ledger
-/// entry so continuations see the newest anchor-localization result without a
-/// reinforcing wall of nearly identical read history.
-#[test]
-fn model_request_collapses_repeated_read_entries_by_target() {
-    let mut blocks = vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        label: "user".to_string(),
-        content: "Patch the overlay style helper.".to_string(),
-    }];
-    for (index, range) in ["300,420p", "1150,1245p", "1148,1238p"]
-        .into_iter()
-        .enumerate()
-    {
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            label: format!("action result {index}"),
-            content: format!(
-                "[action_result read-{index} shell_command succeeded]\ncommand: rtk run -- sed -n '{range}' src/runtime/render/overlay.rs\noutput:\nowner anchor {index}"
-            ),
-        });
-    }
-
-    let request = assemble_model_request(
-        &ModelProfile {
-            provider: "openai".to_string(),
-            model: "default".to_string(),
-            reasoning_profile: None,
-            latency_preference: None,
-            multimodal_required: false,
-            provider_options: std::collections::BTreeMap::new(),
-            safety_tier: None,
-        },
-        &turn(),
-        &AgentContext::new(blocks).unwrap(),
-    )
-    .unwrap();
-
-    let ledger = request
-        .messages
-        .iter()
-        .find(|message| message.source == ContextSourceKind::EvidenceLedger)
-        .expect("evidence ledger should be present");
-
-    assert_eq!(
-        ledger
-            .content
-            .lines()
-            .filter(|line| line.contains("src/runtime/render/overlay.rs"))
-            .count(),
-        1
-    );
-    assert!(ledger.content.contains("repeated_reads=3"));
-    assert!(ledger.content.contains("owner anchor 2"));
-    assert!(!ledger.content.contains("owner anchor 0"));
+        .all(|message| message.source != ContextSourceKind::EvidenceLedger));
 }
 
 /// Verifies request assembly does not compact older context merely because a

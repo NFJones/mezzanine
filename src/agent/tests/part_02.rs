@@ -1382,13 +1382,13 @@ fn action_result_context_preserves_patch_relevant_shell_output() {
 
     let context = action_result_context_content(&result);
 
-    assert!(!context.contains(&format!("$ {command}")), "{context}");
     assert!(
         context
-            .contains("$ literal prompt line\n> literal continuation line\ntrailing spaces   \n"),
+            .contains(&format!(
+                "$ {command}\n$ literal prompt line\n> literal continuation line\ntrailing spaces   \nMEZ_MARKER_TOKEN=abc\n"
+            )),
         "{context}"
     );
-    assert!(!context.contains("MEZ_MARKER_TOKEN"), "{context}");
 }
 
 /// Verifies model-facing shell context serializes structured read observations
@@ -3386,6 +3386,41 @@ fn action_result_context_truncates_large_result_body_at_256k() {
     assert!(context.contains("[mez: action result content truncated after 262144 bytes]"));
     assert!(!context.contains("tail-marker"), "{context}");
     assert!(context.len() < 264 * 1024, "context bytes={}", context.len());
+}
+
+/// Verifies shell action result context preserves the recorded output preview
+/// bytes exactly instead of stripping echoed commands or Mezzanine wrapper
+/// lines.
+#[test]
+fn shell_action_result_context_preserves_raw_recorded_output_preview() {
+    use crate::agent::ActionContentBlock;
+
+    let result = ActionResult {
+        protocol: "maap/1".to_string(),
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        action_id: "shell-raw".to_string(),
+        action_type: "shell_command",
+        status: ActionStatus::Succeeded,
+        content: vec![ActionContentBlock::text(
+            "shell command exited with status 0".to_string(),
+        )],
+        structured_content_json: Some(
+            serde_json::json!({
+                "command": "printf 'hello\\n'",
+                "terminal_observation": {
+                    "exit_code": 0,
+                    "combined_output_preview": "$ printf 'hello\\n'\nMEZ_MARKER_TOKEN=abc\nhello\n"
+                }
+            })
+            .to_string(),
+        ),
+        is_error: false,
+        error: None,
+    };
+
+    let context = action_result_context_content(&result);
+    assert!(context.contains("output:\n$ printf 'hello\\n'\nMEZ_MARKER_TOKEN=abc\nhello\n"));
 }
 
 /// Verifies the runtime network executor rejects non-HTTP(S) fetch URLs before

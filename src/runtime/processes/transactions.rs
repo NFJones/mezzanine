@@ -12,7 +12,7 @@ use super::*;
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES: usize = 64 * 1024;
+pub(super) const RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES: usize = 256 * 1024;
 /// Maximum retained snapshot bytes for the read phase of `apply_patch`.
 ///
 /// The read phase carries remote file bytes that Rust must patch internally, so

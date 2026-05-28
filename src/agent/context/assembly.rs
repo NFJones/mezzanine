@@ -81,10 +81,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
             });
             continue;
         }
-        if matches!(
-            block.source,
-            ContextSourceKind::ProjectGuidance | ContextSourceKind::TranscriptTool
-        ) {
+        if matches!(block.source, ContextSourceKind::ProjectGuidance) {
             continue;
         }
         messages.push(ModelMessage {

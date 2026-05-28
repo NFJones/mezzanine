@@ -1,9 +1,10 @@
 //! Action-result transcript and model-context rendering.
 //!
 //! This module owns compact, bounded projections of action results for
-//! durable transcript storage and follow-up model context. It keeps shell
-//! observation cleanup, skill-result summarization, JSON audit pruning, and
-//! truncation notices separate from turn execution.
+//! durable transcript storage and follow-up model context. It keeps
+//! skill-result summarization, JSON audit pruning, and truncation notices
+//! separate from turn execution while preserving raw shell output bytes inside
+//! ordinary model context.
 
 use super::{ActionResult, ActionStatus, ShellReadObservation};
 
@@ -216,11 +217,7 @@ fn append_shell_action_result_context(result: &ActionResult, lines: &mut Vec<Str
     let output = shell_action_result_output_for_context(result, terminal_observation);
     if !output.trim().is_empty() {
         lines.push("output:".to_string());
-        let command = structured_object
-            .and_then(|object| object.get("command"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        lines.push(compact_shell_output_for_context(&output, command));
+        lines.push(output);
     }
     if structured.is_some() {
         return;
@@ -243,38 +240,6 @@ fn append_read_observation_lines(lines: &mut Vec<String>, observations: &[ShellR
                 .expect("shell read observations should always serialize")
         ));
     }
-}
-
-/// Removes Mezzanine-owned shell wrapper echo from model-facing output when the
-/// runtime observation still contains shell repaint or wrapper lines.
-fn compact_shell_output_for_context(output: &str, command: &str) -> String {
-    let command = command.trim();
-    let mut cleaned = String::new();
-    let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
-    for line in normalized.split_inclusive('\n') {
-        let (line, had_newline) = line
-            .strip_suffix('\n')
-            .map(|line| (line, true))
-            .unwrap_or((line, false));
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if had_newline && !cleaned.is_empty() && !cleaned.ends_with('\n') {
-                cleaned.push('\n');
-            }
-            continue;
-        }
-        if !command.is_empty() && shell_output_line_is_echoed_command(line, command) {
-            continue;
-        }
-        if shell_output_line_is_mezzanine_wrapper(trimmed) {
-            continue;
-        }
-        cleaned.push_str(line);
-        if had_newline {
-            cleaned.push('\n');
-        }
-    }
-    cleaned
 }
 
 /// Returns true when a line is known Mezzanine wrapper traffic rather than user
@@ -306,31 +271,6 @@ pub(super) fn shell_output_line_is_mezzanine_wrapper(trimmed: &str) -> bool {
     ]
     .iter()
     .any(|marker| trimmed.contains(marker))
-}
-
-/// Returns true when a line is the shell echo of the executed command.
-fn shell_output_line_is_echoed_command(line: &str, command: &str) -> bool {
-    let mut remaining = line.trim_start();
-    if remaining.trim() == command {
-        return true;
-    }
-    loop {
-        if let Some(next) = remaining.strip_prefix("$ ") {
-            remaining = next.trim_start();
-            if remaining.trim() == command {
-                return true;
-            }
-            continue;
-        }
-        if let Some(next) = remaining.strip_prefix("> ") {
-            remaining = next.trim_start();
-            if remaining.trim() == command {
-                return true;
-            }
-            continue;
-        }
-        return false;
-    }
 }
 
 /// Appends non-empty model-readable result text.

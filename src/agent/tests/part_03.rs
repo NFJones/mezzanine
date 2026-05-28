@@ -2627,14 +2627,14 @@ fn openai_test_stable_prefix_parts(request: &ModelRequest) -> (String, Vec<serde
     let stable_input = value["stable_input"].as_array().unwrap().clone();
     (instructions, stable_input)
 }
-/// Verifies historical tool transcript entries are summarized into the evidence
-/// ledger instead of replayed as raw provider input.
+/// Verifies historical tool transcript entries replay as ordinary provider
+/// input outside the reusable stable prefix.
 ///
-/// Older raw tool output can be large and unrelated to the active task. Request
-/// assembly should preserve the actionable fact in a compact ledger while
-/// keeping the reusable prefix limited to stable conversation context.
+/// Historical tool output should stay available as regular context so later
+/// turns can reference exact prior command evidence without routing through a
+/// generated evidence ledger.
 #[test]
-fn openai_historical_tool_results_are_summarized_outside_stable_prefix() {
+fn openai_historical_tool_results_replay_outside_stable_prefix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -2705,20 +2705,20 @@ fn openai_historical_tool_results_are_summarized_outside_stable_prefix() {
     let first_body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&first).unwrap()).unwrap();
     let first_input = first_body["input"].as_array().unwrap();
-    assert!(!first_input.iter().any(|message| {
+    let historical_tool_text = first_input
+        .iter()
+        .find_map(|message| {
+            let text = message["content"][0]["text"].as_str()?;
+            text.contains("[historical tool result]").then_some(text)
+        })
+        .expect("historical tool result should replay as ordinary input");
+    assert!(historical_tool_text.contains("stable evidence"));
+    assert!(historical_tool_text.contains("command: rg cache"));
+    assert!(first_input.iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
             .is_some_and(|text| text.contains("[historical tool result]"))
     }));
-    let ledger_text = first_input
-        .iter()
-        .find_map(|message| {
-            let text = message["content"][0]["text"].as_str()?;
-            text.contains("[evidence ledger]").then_some(text)
-        })
-        .expect("historical tool result should be summarized into the evidence ledger");
-    assert!(ledger_text.contains("stable evidence"));
-    assert!(ledger_text.contains("command=rg cache"));
     let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
     let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
     assert!(!first_prefix.contains("[historical tool result]"));
@@ -2737,8 +2737,8 @@ fn openai_historical_tool_results_are_summarized_outside_stable_prefix() {
     );
 }
 /// Verifies current-turn action results remain outside the OpenAI reusable
-/// prefix while historical tool transcript entries are represented only by the
-/// compact evidence ledger.
+/// prefix while historical tool transcript entries stay in volatile regular
+/// context.
 ///
 /// Execution evidence for the active instruction must stay in the volatile
 /// suffix so the provider sees it after the latest user request and does not
@@ -2803,10 +2803,13 @@ fn openai_current_action_results_remain_volatile_suffix() {
     assert!(!prefix.contains("[current action result]"));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"].as_str().is_some_and(|text| {
-            text.contains("[evidence ledger]")
-                && text.contains("cached evidence")
-                && text.contains("fresh evidence")
+            text.contains("[historical tool result]") && text.contains("cached evidence")
         })
+    }));
+    assert!(input.iter().any(|message| {
+        message["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("[current action result]") && text.contains("fresh evidence"))
     }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert_eq!(diagnostics.stable_input_bytes, 2);
@@ -2880,14 +2883,15 @@ fn openai_current_turn_read_ledger_summarizes_recent_read_coverage() {
     );
 }
 
-/// Verifies a long OpenAI session promotes already-observed action results into
-/// compact stable-prefix evidence without replaying large raw action output.
+/// Verifies a long OpenAI session promotes already-observed non-shell action
+/// results into bounded stable-prefix evidence without removing the latest raw
+/// action result.
 ///
 /// The latest action result is still raw current execution evidence, but
 /// earlier results that a later assistant response already observed are safe to
-/// carry forward as immutable committed evidence. This keeps the reusable
-/// provider prefix growing across long sessions while preventing fetched pages
-/// and command output from permanently bloating the volatile suffix.
+/// carry forward as immutable committed evidence. The committed summary cap is
+/// now much larger, so the stable prefix may retain raw detail that older
+/// builds elided.
 #[test]
 fn openai_long_session_promotes_observed_action_results_to_stable_committed_evidence() {
     let profile = ModelProfile {
@@ -2977,12 +2981,12 @@ fn openai_long_session_promotes_observed_action_results_to_stable_committed_evid
     assert!(prefix.contains("committed evidence fetch-0"));
     assert!(prefix.contains("provider-doc-0-title"));
     assert!(prefix.contains("provider-doc-11-title"));
-    assert!(!prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED"));
+    assert!(prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
     assert!(!prefix.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));
 
     let body_text = openai_responses_request_body(&request).unwrap();
     assert!(body_text.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));
-    assert!(!body_text.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED"));
+    assert!(body_text.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
     let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
     let input = body["input"].as_array().unwrap();
     let user_index = input

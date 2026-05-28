@@ -109,8 +109,9 @@ pub enum ContextSourceKind {
     TranscriptAssistant,
     /// Represents a prior tool/action transcript message.
     ///
-    /// Historical tool entries remain bounded and sanitized before becoming
-    /// model context.
+    /// Historical tool entries replay as ordinary volatile model context after
+    /// runtime filtering removes omitted action families such as web fetch and
+    /// web search.
     TranscriptTool,
     /// Represents a compact ledger of evidence already gathered in a turn.
     ///

@@ -856,8 +856,6 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .contains("[action_result shell-fail shell_command succeeded]")
             && block.content.contains("exit_code: 2")
             && block.content.contains("model-visible failure output")
-            && !block.content.contains("mez_marker=spoof")
-            && !block.content.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__")
     }));
     assert!(!context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint

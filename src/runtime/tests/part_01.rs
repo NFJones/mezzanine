@@ -2052,13 +2052,13 @@ fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
             observed_output_truncated: false,
         },
     );
-    let output = vec![b'x'; 70_000];
+    let output = vec![b'x'; 300_000];
 
     service.record_running_shell_transaction_output("%1", &output);
 
     let transaction = service.running_shell_transactions.get("marker-1").unwrap();
-    assert_eq!(transaction.observed_output_bytes, 70_001);
-    assert_eq!(transaction.observed_output_preview.len(), 65_536);
+    assert_eq!(transaction.observed_output_bytes, 300_001);
+    assert_eq!(transaction.observed_output_preview.len(), 262_144);
     assert!(transaction.observed_output_truncated);
 }
 
