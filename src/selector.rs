@@ -978,6 +978,10 @@ fn path_completion_allowed(surface: SelectorSurface, context: &TokenContext) -> 
     if path_query_is_explicit(&context.query) {
         return true;
     }
+    if surface == SelectorSurface::AgentCommand && agent_query_likely_targets_relative_path(context)
+    {
+        return true;
+    }
     let Some(command) = context.tokens_before.first() else {
         return false;
     };
@@ -1013,10 +1017,52 @@ fn command_accepts_path_argument(surface: SelectorSurface, command: &str) -> boo
 /// # Parameters
 /// - `query`: Current completion query.
 fn path_query_is_explicit(query: &str) -> bool {
-    query.starts_with("./")
+    query == "~"
+        || query.starts_with("./")
         || query.starts_with("../")
         || query.starts_with("~/")
         || query.starts_with('/')
+}
+
+/// Returns whether an agent-shell token likely targets a relative path.
+///
+/// # Parameters
+/// - `context`: Token context at the current cursor.
+fn agent_query_likely_targets_relative_path(context: &TokenContext) -> bool {
+    relative_path_query_is_probable(&context.query)
+        || context
+            .tokens_before
+            .last()
+            .is_some_and(|token| agent_token_introduces_path(token))
+}
+
+/// Returns whether the current token looks like an unprefixed relative path.
+///
+/// # Parameters
+/// - `query`: Current completion query.
+fn relative_path_query_is_probable(query: &str) -> bool {
+    !query.is_empty() && query.contains('/') && !query.starts_with('/')
+}
+
+/// Returns whether one prior agent-shell token commonly introduces a path.
+///
+/// # Parameters
+/// - `token`: Prior token before the current completion query.
+fn agent_token_introduces_path(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "at" | "dir"
+            | "directory"
+            | "file"
+            | "files"
+            | "folder"
+            | "from"
+            | "in"
+            | "into"
+            | "path"
+            | "paths"
+            | "under"
+    )
 }
 
 /// Splits a path query into lookup directory, displayed prefix, and basename.
@@ -1024,6 +1070,9 @@ fn path_query_is_explicit(query: &str) -> bool {
 /// # Parameters
 /// - `query`: Current completion query.
 fn path_completion_parts(query: &str) -> (PathBuf, String, String) {
+    if query == "~" {
+        return (expand_home_path("~"), "~/".to_string(), String::new());
+    }
     let (raw_directory, name_prefix) = match query.rsplit_once('/') {
         Some((directory, name)) => {
             let directory = if directory.is_empty() { "/" } else { directory };
@@ -1286,7 +1335,9 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mez-selector-paths-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("fixtures")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("fixture.toml"), "value = true\n").unwrap();
+        fs::write(root.join("src").join("selector.rs"), "// fixture\n").unwrap();
         std::env::set_current_dir(&root).unwrap();
 
         let command_plan = plan_selector(
@@ -1299,6 +1350,12 @@ mod tests {
             SelectorSurface::AgentCommand,
             "/list-mcp ./fi",
             "/list-mcp ./fi".len(),
+        )
+        .unwrap();
+        let relative_agent_plan = plan_selector(
+            SelectorSurface::AgentCommand,
+            "inspect src/sel",
+            "inspect src/sel".len(),
         )
         .unwrap();
 
@@ -1322,6 +1379,56 @@ mod tests {
                 .candidates
                 .iter()
                 .any(|candidate| candidate.value == "./fixture.toml")
+        );
+        assert!(
+            relative_agent_plan
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == "src/selector.rs")
+        );
+    }
+
+    /// Verifies bare-tilde agent path queries expand against the caller home
+    /// directory instead of trying to match a literal `~` filename.
+    #[test]
+    fn selector_plans_agent_path_candidates_for_bare_tilde() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let home_root =
+            std::env::temp_dir().join(format!("mez-selector-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home_root);
+        fs::create_dir_all(home_root.join("notes")).unwrap();
+        fs::write(home_root.join("notes.txt"), "remember me\n").unwrap();
+        let original_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home_root);
+        }
+
+        let plan = plan_selector(
+            SelectorSurface::AgentCommand,
+            "inspect ~",
+            "inspect ~".len(),
+        )
+        .unwrap();
+
+        match original_home {
+            Some(home) => unsafe {
+                std::env::set_var("HOME", home);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
+        }
+        let _ = fs::remove_dir_all(&home_root);
+
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.value == "~/notes/")
+        );
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.value == "~/notes.txt")
         );
     }
 
