@@ -196,15 +196,11 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
 }
 
 /// Renders Mezzanine tool/action evidence through an OpenAI-supported message
-/// role while preserving its provenance in-band.
+/// role while keeping the provider-visible wrapper stable across current and
+/// persisted replay.
 fn openai_tool_result_input_text(message: &ModelMessage) -> String {
-    let marker = match message.source {
-        ContextSourceKind::ActionResult => "[current action result]",
-        ContextSourceKind::TranscriptTool => "[historical tool result]",
-        _ => "[tool result]",
-    };
     format!(
-        "{marker}\n\
+        "[executed result]\n\
          This is executed Mezzanine action output, not a new user request.\n\
          {}",
         message.content
@@ -225,12 +221,12 @@ fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
         | ContextSourceKind::Transcript
         | ContextSourceKind::TranscriptUser
         | ContextSourceKind::TranscriptAssistant
+        | ContextSourceKind::TranscriptTool
         | ContextSourceKind::CommittedEvidence => true,
         ContextSourceKind::Policy => !message.content.starts_with("[scheduler state]\n"),
         ContextSourceKind::UserInstruction
         | ContextSourceKind::LocalMessage
         | ContextSourceKind::RuntimeHint
-        | ContextSourceKind::TranscriptTool
         | ContextSourceKind::EvidenceLedger
         | ContextSourceKind::ActionResult => false,
     }
@@ -255,7 +251,7 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
              This controller state is authoritative for action eligibility. \
              OpenAI may receive a cache-stable list of inactive MAAP tools, but tool_choice selects only active_function_tool for this request. \
              Emit only action objects whose type appears in allowed_actions and is present in the selected function schema. \
-             Treat [current action result] and [action_result ...] messages as current execution evidence. If they already satisfy the task, emit say with status final instead of requesting capability or rerunning actions to reconfirm them. \
+             Treat [executed result] and [action_result ...] messages as current execution evidence. If they already satisfy the task, emit say with status final instead of requesting capability or rerunning actions to reconfirm them. \
              Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill. Users can still invoke skills explicitly with $<skill-name> syntax before this request is built. \
              If the needed action type is absent and request_capability appears in allowed_actions, emit request_capability immediately for the needed coarse capability; do not spend the response on a plan or progress message. \
              If no listed action can make progress, emit say with status blocked or final. \
@@ -337,12 +333,13 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     material.push_str("prompt_version=");
     material.push_str(&AGENT_PROMPT_PROFILE_VERSION.to_string());
     material.push('\n');
-    material.push_str("session_id=");
+    material.push_str("lineage_id=");
     material.push_str(
         request
-            .prompt_cache_session_id
+            .prompt_cache_lineage_id
             .as_deref()
-            .unwrap_or("session-unknown"),
+            .or(request.prompt_cache_session_id.as_deref())
+            .unwrap_or("lineage-unknown"),
     );
     material.push('\n');
     material.push_str("cache_family=responses-routing-v4\n");
@@ -502,6 +499,7 @@ mod tests {
             prompt_cache_retention: None,
             max_output_tokens: None,
             prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             available_mcp_tools: Vec::new(),

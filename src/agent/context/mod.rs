@@ -322,6 +322,7 @@ impl ContextBlock {
             | ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence => {
                 if self.stability() == ContextStability::TurnVolatile {
                     ContextCachePolicy::Ineligible
@@ -331,7 +332,6 @@ impl ContextBlock {
                     ContextCachePolicy::Eligible
                 }
             }
-            ContextSourceKind::TranscriptTool => ContextCachePolicy::Ineligible,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::LocalMessage
             | ContextSourceKind::RuntimeHint

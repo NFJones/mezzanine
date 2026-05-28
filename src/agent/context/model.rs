@@ -436,12 +436,21 @@ pub struct ModelRequest {
     /// Provider output-token cap, when configured or temporarily escalated for
     /// an output-limit retry.
     pub max_output_tokens: Option<usize>,
-    /// Live Mezzanine session identifier used to route provider prompt-cache
-    /// entries without coupling the local key to provider or model names.
+    /// Live Mezzanine session identifier used for cache diagnostics and
+    /// runtime-origin tracking without coupling routing to provider or model
+    /// names.
     ///
     /// The value is non-secret and is derived from runtime session context when
     /// present. Requests built outside a live session leave it unset.
     pub prompt_cache_session_id: Option<String>,
+    /// Stable prompt-cache lineage identifier for requests that should share
+    /// one provider-side cache namespace even if runtime session identity
+    /// changes across resume or inherited fork flows.
+    ///
+    /// The value is non-secret and is derived from runtime conversation
+    /// metadata when present. Requests built outside a live conversation leave
+    /// it unset and fall back to the session id or an unknown placeholder.
+    pub prompt_cache_lineage_id: Option<String>,
     /// Stores the turn id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -203,6 +203,7 @@ fn runtime_auto_sizing_request(
             .cloned(),
         max_output_tokens: auto_sizing.router_profile.max_output_tokens(),
         prompt_cache_session_id: None,
+        prompt_cache_lineage_id: None,
         turn_id: format!("{}:auto-sizing", turn.turn_id),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),

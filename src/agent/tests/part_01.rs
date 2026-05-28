@@ -2144,10 +2144,10 @@ fn model_request_keeps_context_sources_distinct() {
         request.messages[0].content
     );
     assert_eq!(request.messages[1].role, ModelMessageRole::Developer);
-    assert_eq!(request.messages[2].source, ContextSourceKind::Transcript);
-    assert_eq!(request.messages[3].source, ContextSourceKind::LocalMessage);
-    assert_eq!(request.messages[4].source, ContextSourceKind::RuntimeHint);
-    assert_eq!(request.messages[4].role, ModelMessageRole::Developer);
+    assert_eq!(request.messages[2].source, ContextSourceKind::LocalMessage);
+    assert_eq!(request.messages[3].source, ContextSourceKind::RuntimeHint);
+    assert_eq!(request.messages[3].role, ModelMessageRole::Developer);
+    assert_eq!(request.messages[4].source, ContextSourceKind::Transcript);
 }
 
 /// Verifies loaded skill bodies narrow the model's concrete action surface.
@@ -2219,9 +2219,7 @@ fn model_request_keeps_skill_actions_disabled_after_skill_catalog_result() {
 }
 
 /// Verifies context blocks expose cache-stability metadata without changing the
-/// stored source, label, and content shape. The provider renderer relies on
-/// these classifications to keep stable prefix material separate from volatile
-/// turn-local state.
+/// stored source, label, and content shape.
 #[test]
 fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
     let project = ContextBlock {
@@ -2265,11 +2263,8 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
     assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
     assert!(!scheduler.stable_prefix_eligible());
     assert_eq!(transcript_tool.stability(), ContextStability::SessionStable);
-    assert_eq!(
-        transcript_tool.cache_policy(),
-        ContextCachePolicy::Ineligible
-    );
-    assert!(!transcript_tool.stable_prefix_eligible());
+    assert_eq!(transcript_tool.cache_policy(), ContextCachePolicy::Eligible);
+    assert!(transcript_tool.stable_prefix_eligible());
     assert_eq!(
         committed_evidence.stability(),
         ContextStability::SessionStable
@@ -2286,15 +2281,14 @@ fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
     assert!(action.recoverable_for_compaction());
 }
 
-/// Verifies provider request assembly groups stable reusable context ahead of
-/// volatile suffix material while preserving volatile blocks in chronological
-/// order.
+/// Verifies provider request assembly preserves observed context order while
+/// still embedding project guidance into the system prompt.
 ///
 /// Action results appended after a user instruction are execution evidence for
 /// that instruction, so request assembly must not move the user instruction
 /// behind the action result and make the completed work look stale.
 #[test]
-fn model_request_groups_stable_prefix_before_volatile_suffix() {
+fn model_request_preserves_context_observation_order() {
     let request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -3416,7 +3410,10 @@ fn turn_execution_can_be_converted_to_transcript_entries() {
             .any(|entry| entry.role == TranscriptRole::Assistant)
     );
     assert!(entries.iter().any(|entry| {
-        entry.role == TranscriptRole::Tool && entry.content.contains("action_id=a1")
+        entry.role == TranscriptRole::Tool
+            && entry
+                .content
+                .contains("[action_result a1 shell_command running]")
     }));
 }
 
@@ -3508,7 +3505,7 @@ fn turn_execution_transcript_stores_hidden_provider_native_tool_call_events() {
         panic!("expected DeepSeek tool-result event");
     };
     assert_eq!(tool_call_id, "call_1");
-    assert!(content.contains("action_id=a1"));
+    assert!(content.contains("[action_result a1 shell_command running]"));
     let visible = entries
         .iter()
         .filter(|entry| entry.role != TranscriptRole::System)

@@ -1816,6 +1816,7 @@ impl RuntimeSessionService {
                 .agent_shell_store
                 .ensure_session(metadata.pane_id.clone())?;
             session.session_id = metadata.conversation_id.clone();
+            session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
             session.visibility = visibility;
             session.running_turn_id = None;
             session.transcript_entries = metadata.transcript_entries;
@@ -1938,6 +1939,7 @@ impl RuntimeSessionService {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
                     conversation_id: session.session_id.clone(),
+                    prompt_cache_lineage_id: session.prompt_cache_lineage_id.clone(),
                     visibility: agent_shell_visibility_json_name(session.visibility).to_string(),
                     running_turn_id: session.running_turn_id.clone(),
                     transcript_entries: session.transcript_entries,
@@ -1992,6 +1994,8 @@ impl RuntimeSessionService {
             if metadata.conversation_id != conversation_id {
                 continue;
             }
+            let session = self.agent_shell_store.ensure_session(pane_id.to_string())?;
+            session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {
                 self.model_profile_overrides
                     .pane_profiles

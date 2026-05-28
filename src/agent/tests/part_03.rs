@@ -2071,7 +2071,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(allowed_surface.contains("authoritative for action eligibility"));
     assert!(allowed_surface.contains("cache-stable list"));
     assert!(allowed_surface.contains("Emit only action objects whose type appears"));
-    assert!(allowed_surface.contains("Treat [current action result]"));
+    assert!(allowed_surface.contains("Treat [executed result]"));
 }
 
 /// Verifies OpenAI request rendering keeps Mezzanine action results
@@ -2126,7 +2126,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         .position(|message| {
             message["content"][0]["text"]
                 .as_str()
-                .is_some_and(|text| text.starts_with("[current action result]"))
+                .is_some_and(|text| text.starts_with("[executed result]"))
         })
         .unwrap();
     let action_message = &input[action_index];
@@ -2138,7 +2138,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
     );
     assert_eq!(action_message["role"], "user");
     assert!(
-        action_text.starts_with("[current action result]\n"),
+        action_text.starts_with("[executed result]\n"),
         "{action_text}"
     );
     assert!(
@@ -2211,12 +2211,128 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     );
 }
 
-/// Verifies OpenAI prompt-cache routing keys are scoped by Mezzanine session
-/// identity rather than fragmented by provider or model names. The provider
-/// still validates exact prefix bytes, but the local routing namespace should
-/// follow the durable session so model switches can reuse compatible prefixes.
+/// Verifies OpenAI prompt-cache routing keys follow an explicit lineage id when
+/// runtime context provides one.
+///
+/// The local routing namespace should survive provider/model switches and
+/// resume-like session-id changes when the inherited conversation prefix is the
+/// same.
 #[test]
-fn openai_prompt_cache_key_uses_session_identity_not_provider_or_model() {
+fn openai_prompt_cache_key_uses_lineage_identity_not_provider_or_model() {
+    let context_for_session = |session_id: &str, lineage_id: Option<&str>| {
+        let mut blocks = vec![
+            ContextBlock {
+                source: ContextSourceKind::Configuration,
+                label: "session identity".to_string(),
+                content: format!("session_id={session_id} session_name=default"),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "inspect the repo".to_string(),
+            },
+        ];
+        if let Some(lineage_id) = lineage_id {
+            blocks.insert(
+                1,
+                ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    label: "prompt cache lineage".to_string(),
+                    content: lineage_id.to_string(),
+                },
+            );
+        }
+        AgentContext::new(blocks).unwrap()
+    };
+    let profile = |provider: &str, model: &str| ModelProfile {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let inherited_lineage_openai = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-a", Some("lineage-parent")),
+    )
+    .unwrap();
+    let inherited_lineage_other_model = assemble_model_request(
+        &profile("deepseek", "deepseek-b"),
+        &turn(),
+        &context_for_session("session-a", Some("lineage-parent")),
+    )
+    .unwrap();
+    let resumed_session_same_lineage = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-b", Some("lineage-parent")),
+    )
+    .unwrap();
+    let fresh_lineage = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-b", Some("lineage-fresh")),
+    )
+    .unwrap();
+    let lineage_fallback_session_a = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-a", None),
+    )
+    .unwrap();
+    let lineage_fallback_session_b = assemble_model_request(
+        &profile("openai", "gpt-a"),
+        &turn(),
+        &context_for_session("session-b", None),
+    )
+    .unwrap();
+
+    let inherited_lineage_value: serde_json::Value = serde_json::from_str(
+        &openai_responses_request_body(&inherited_lineage_openai).unwrap(),
+    )
+    .unwrap();
+    let inherited_lineage_other_value: serde_json::Value = serde_json::from_str(
+        &openai_responses_request_body(&inherited_lineage_other_model).unwrap(),
+    )
+    .unwrap();
+    let resumed_session_value: serde_json::Value = serde_json::from_str(
+        &openai_responses_request_body(&resumed_session_same_lineage).unwrap(),
+    )
+    .unwrap();
+    let fresh_lineage_value: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&fresh_lineage).unwrap()).unwrap();
+    let fallback_a_value: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&lineage_fallback_session_a).unwrap())
+            .unwrap();
+    let fallback_b_value: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&lineage_fallback_session_b).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        inherited_lineage_value["prompt_cache_key"],
+        inherited_lineage_other_value["prompt_cache_key"]
+    );
+    assert_eq!(
+        inherited_lineage_value["prompt_cache_key"],
+        resumed_session_value["prompt_cache_key"]
+    );
+    assert_ne!(
+        inherited_lineage_value["prompt_cache_key"],
+        fresh_lineage_value["prompt_cache_key"]
+    );
+    assert_ne!(
+        fallback_a_value["prompt_cache_key"],
+        fallback_b_value["prompt_cache_key"]
+    );
+}
+
+/// Verifies OpenAI prompt-cache routing keys fall back to Mezzanine session
+/// identity when no explicit lineage id is present.
+#[test]
+fn openai_prompt_cache_key_falls_back_to_session_identity() {
     let context_for_session = |session_id: &str| {
         AgentContext::new(vec![
             ContextBlock {
@@ -2709,7 +2825,7 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
         .iter()
         .find_map(|message| {
             let text = message["content"][0]["text"].as_str()?;
-            text.contains("[historical tool result]").then_some(text)
+            text.contains("[executed result]").then_some(text)
         })
         .expect("historical tool result should replay as ordinary input");
     assert!(historical_tool_text.contains("stable evidence"));
@@ -2717,12 +2833,12 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
     assert!(first_input.iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("[historical tool result]"))
+            .is_some_and(|text| text.contains("[executed result]"))
     }));
     let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
     let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
-    assert!(!first_prefix.contains("[historical tool result]"));
-    assert!(!first_prefix.contains("stable evidence"));
+    assert!(first_prefix.contains("[executed result]"));
+    assert!(first_prefix.contains("stable evidence"));
     assert_eq!(first_prefix, second_prefix);
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
@@ -2736,8 +2852,8 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
         second_diagnostics.volatile_input_sha256
     );
 }
-/// Verifies current-turn action results remain outside the OpenAI reusable
-/// prefix while historical tool transcript entries stay in volatile regular
+/// Verifies current-turn action results remain after the latest user request
+/// while historical tool transcript entries stay reusable stable prefix
 /// context.
 ///
 /// Execution evidence for the active instruction must stay in the volatile
@@ -2793,26 +2909,26 @@ fn openai_current_action_results_remain_volatile_suffix() {
         .position(|message| {
             message["content"][0]["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("[current action result]"))
+                .is_some_and(|text| text.contains("[executed result]") && text.contains("fresh evidence"))
         })
         .expect("current action result should be rendered into input");
     assert!(action_index > user_index);
     let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
-    assert!(!prefix.contains("[historical tool result]"));
-    assert!(!prefix.contains("cached evidence"));
-    assert!(!prefix.contains("[current action result]"));
+    assert!(prefix.contains("[executed result]"));
+    assert!(prefix.contains("cached evidence"));
+    assert!(!prefix.contains("fresh evidence"));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"].as_str().is_some_and(|text| {
-            text.contains("[historical tool result]") && text.contains("cached evidence")
+            text.contains("[executed result]") && text.contains("cached evidence")
         })
     }));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("[current action result]") && text.contains("fresh evidence"))
+            .is_some_and(|text| text.contains("[executed result]") && text.contains("fresh evidence"))
     }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
-    assert_eq!(diagnostics.stable_input_bytes, 2);
+    assert!(diagnostics.stable_input_bytes > 2);
     assert!(diagnostics.volatile_input_bytes > 2);
 }
 
@@ -2865,7 +2981,7 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
     let raw_results = input
         .iter()
         .filter_map(|message| message["content"][0]["text"].as_str())
-        .filter(|text| text.contains("[current action result]") && text.contains("[action_result read-"))
+        .filter(|text| text.contains("[executed result]") && text.contains("[action_result read-"))
         .collect::<Vec<_>>();
 
     assert_eq!(raw_results.len(), 3, "{raw_results:#?}");
@@ -2890,17 +3006,14 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
     assert!(!synthetic_summary);
 }
 
-/// Verifies a long OpenAI session promotes already-observed non-shell action
-/// results into bounded stable-prefix evidence without removing the latest raw
-/// action result.
+/// Verifies a long OpenAI session keeps already-observed action results raw
+/// instead of rewriting them into committed summaries during ordinary request
+/// assembly.
 ///
-/// The latest action result is still raw current execution evidence, but
-/// earlier results that a later assistant response already observed are safe to
-/// carry forward as immutable committed evidence. The committed summary cap is
-/// now much larger, so the stable prefix may retain raw detail that older
-/// builds elided.
+/// Ordinary continuation should preserve already-observed evidence byte for
+/// byte. Compaction remains the only path that may rewrite old history.
 #[test]
-fn openai_long_session_promotes_observed_action_results_to_stable_committed_evidence() {
+fn openai_long_session_keeps_observed_action_results_raw_without_committed_evidence() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -2954,18 +3067,11 @@ fn openai_long_session_promotes_observed_action_results_to_stable_committed_evid
     let request =
         assemble_model_request(&profile, &turn(), &AgentContext::new(blocks).unwrap()).unwrap();
 
-    let committed = request
+    assert!(!request
         .messages
         .iter()
-        .filter(|message| message.source == ContextSourceKind::CommittedEvidence)
-        .collect::<Vec<_>>();
-    assert_eq!(committed.len(), 12);
-    assert!(
-        committed
-            .iter()
-            .all(|message| message.content.contains("[committed_evidence]"))
-    );
-    assert!(!request.messages.iter().any(|message| {
+        .any(|message| message.source == ContextSourceKind::CommittedEvidence));
+    assert!(request.messages.iter().any(|message| {
         message.source == ContextSourceKind::ActionResult && message.content.contains("fetch-0")
     }));
     assert_eq!(
@@ -2974,7 +3080,7 @@ fn openai_long_session_promotes_observed_action_results_to_stable_committed_evid
             .iter()
             .filter(|message| message.source == ContextSourceKind::ActionResult)
             .count(),
-        1
+        13
     );
     assert!(request.messages.iter().any(|message| {
         message.source == ContextSourceKind::ActionResult
@@ -2984,12 +3090,8 @@ fn openai_long_session_promotes_observed_action_results_to_stable_committed_evid
     }));
 
     let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
-    assert!(prefix.contains("[committed_evidence]"));
-    assert!(prefix.contains("committed evidence fetch-0"));
-    assert!(prefix.contains("provider-doc-0-title"));
-    assert!(prefix.contains("provider-doc-11-title"));
-    assert!(prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
-    assert!(!prefix.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));
+    assert!(!prefix.contains("[committed_evidence]"));
+    assert!(!prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
 
     let body_text = openai_responses_request_body(&request).unwrap();
     assert!(body_text.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));
@@ -3530,7 +3632,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     );
     assert!(allowed_surface.contains("cache-stable list"));
     assert!(allowed_surface.contains("active_function_tool=submit_maap_shell_actions"));
-    assert!(allowed_surface.contains("Treat [current action result]"));
+    assert!(allowed_surface.contains("Treat [executed result]"));
     assert!(
         allowed_surface.contains(
             "Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill"

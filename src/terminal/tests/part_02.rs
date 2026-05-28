@@ -2932,7 +2932,7 @@ fn render_attached_client_view_keeps_agent_prompt_space_transparent_in_copy_mode
     assert!(view.lines[2].contains("four"), "{:?}", view.lines);
     assert_eq!(view.lines[3], " ".repeat(30));
     assert!(
-        view.lines.iter().all(|line| !line.contains("agent>")),
+        view.lines.iter().all(|line| !line.contains("mez>")),
         "{:?}",
         view.lines
     );
@@ -4151,8 +4151,8 @@ fn terminal_screen_soft_wraps_agent_transcript_rows_with_gutter() {
 
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
-    assert_eq!(screen.visible_lines()[0], "▐ mez> abc");
-    assert_eq!(screen.visible_lines()[1], "▐ defghi");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abcde");
+    assert_eq!(screen.visible_lines()[1], "▐ fghi");
 }
 
 /// Verifies ordinary hosted terminal output that happens to start with the
@@ -4180,12 +4180,12 @@ fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
     screen.resize(Size::new(16, 5).unwrap());
-    assert_eq!(screen.visible_lines()[0], "▐ mez> abcdefg");
-    assert_eq!(screen.visible_lines()[1], "▐ hi");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abcdefghi");
+    assert_eq!(screen.visible_lines()[1], "");
 
     screen.resize(Size::new(10, 5).unwrap());
-    assert_eq!(screen.visible_lines()[0], "▐ mez> a");
-    assert_eq!(screen.visible_lines()[1], "▐ bcdefghi");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abc");
+    assert_eq!(screen.visible_lines()[1], "▐ defghi");
 }
 /// Verifies that row-only pane resizes preserve scrollback and visible content
 /// without reflowing wrapped history or pulling retained scrollback back into

@@ -245,15 +245,6 @@ fn bulk_compacted_model_context_block(
     }
 }
 
-/// Returns whether context blocks already have the local bulk compaction shape.
-pub(super) fn model_context_has_bulk_compaction_summary(blocks: &[ContextBlock]) -> bool {
-    blocks.first().is_some_and(|block| {
-        block.source == ContextSourceKind::Memory
-            && block.label == "context compaction summary"
-            && block.content.starts_with(MODEL_CONTEXT_COMPACTED_PREFIX)
-    })
-}
-
 /// Returns a stable source label for local compaction diagnostics.
 pub(super) fn model_context_source_kind_name(source: ContextSourceKind) -> &'static str {
     match source {

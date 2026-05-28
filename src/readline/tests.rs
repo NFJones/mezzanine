@@ -681,7 +681,7 @@ fn readline_agent_prompt_renders_slash_command_shadow_hint() {
 
     assert_eq!(prompt.buffer.line(), "/log");
     assert_eq!(prompt.render_with_shadow_hint(), "mez> /log-level");
-    assert_eq!(prompt.rendered_shadow_hint_columns(), Some((11, 6)));
+    assert_eq!(prompt.rendered_shadow_hint_columns(), Some((9, 6)));
 }
 
 /// Verifies agent prompts use an interactive Ctrl+R reverse history search.

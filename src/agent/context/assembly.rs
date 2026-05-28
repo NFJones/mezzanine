@@ -1,19 +1,17 @@
 //! Provider request assembly for agent context.
 //!
 //! This module owns the final context-to-provider-message projection. It keeps
-//! repository-guidance embedding, cache-aware context ordering, prompt-cache
-//! session extraction, and the default MAAP action surface out of the context
-//! type facade.
+//! repository-guidance embedding, prompt-cache metadata extraction, and the
+//! default MAAP action surface out of the context type facade.
 
 use super::super::{
     AgentPromptProfile, AgentTurnRecord, ProviderTranscriptEvent,
     build_agent_system_prompt_with_repository_instructions, role_for_source, validate_non_empty,
 };
-use super::compaction::model_context_has_bulk_compaction_summary;
 use super::evidence::prepare_model_context_blocks;
 use super::skills::constrain_skill_actions_for_loaded_context;
 use super::{
-    AgentContext, AllowedActionSet, ContextBlock, ContextSourceKind, ContextStability,
+    AgentContext, AllowedActionSet, ContextBlock, ContextSourceKind,
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelInteractionKind, ModelMessage,
     ModelMessageRole, ModelProfile, ModelRequest, model_context_block_header,
 };
@@ -52,12 +50,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
     validate_non_empty("model", &profile.model)?;
     validate_non_empty("turn_id", &turn.turn_id)?;
 
-    let prepared_blocks = prepare_model_context_blocks(context.blocks.clone());
-    let blocks = if model_context_has_bulk_compaction_summary(&prepared_blocks) {
-        prepared_blocks
-    } else {
-        order_model_context_blocks(prepared_blocks)
-    };
+    let blocks = prepare_model_context_blocks(context.blocks.clone());
     let repository_instruction_blocks = blocks
         .iter()
         .filter(|block| block.source == ContextSourceKind::ProjectGuidance)
@@ -84,6 +77,14 @@ pub fn assemble_model_request_with_retained_tail_percent(
         if matches!(block.source, ContextSourceKind::ProjectGuidance) {
             continue;
         }
+        if block.source == ContextSourceKind::Configuration
+            && matches!(
+                block.label.as_str(),
+                "session identity" | "pane identity" | "prompt cache lineage"
+            )
+        {
+            continue;
+        }
         messages.push(ModelMessage {
             role: role_for_source(block.source),
             source: block.source,
@@ -107,6 +108,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
             .cloned(),
         max_output_tokens: profile.max_output_tokens(),
         prompt_cache_session_id: prompt_cache_session_id_from_blocks(&blocks),
+        prompt_cache_lineage_id: prompt_cache_lineage_id_from_blocks(&blocks),
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),
@@ -135,25 +137,15 @@ fn prompt_cache_session_id_from_blocks(blocks: &[ContextBlock]) -> Option<String
         .map(ToOwned::to_owned)
 }
 
-/// Returns provider context blocks with stable reusable material before
-/// turn-volatile material while preserving relative order inside each group.
-///
-/// The volatile suffix is chronological execution evidence. In particular,
-/// action results appended after the user's instruction must remain after that
-/// instruction so the model can see that the requested check already ran.
-fn order_model_context_blocks(blocks: Vec<ContextBlock>) -> Vec<ContextBlock> {
-    let mut indexed = blocks.into_iter().enumerate().collect::<Vec<_>>();
-    indexed.sort_by_key(|(index, block)| (model_context_block_group_rank(block), *index));
-    indexed.into_iter().map(|(_, block)| block).collect()
-}
-
-/// Returns the cache-aware ordering group for one context block.
-fn model_context_block_group_rank(block: &ContextBlock) -> u8 {
-    if block.stable_prefix_eligible() {
-        0
-    } else if block.stability() == ContextStability::SessionStable {
-        1
-    } else {
-        2
-    }
+/// Extracts the stable prompt-cache lineage id from hidden runtime metadata.
+fn prompt_cache_lineage_id_from_blocks(blocks: &[ContextBlock]) -> Option<String> {
+    blocks
+        .iter()
+        .find(|block| {
+            block.source == ContextSourceKind::Configuration
+                && block.label == "prompt cache lineage"
+        })
+        .map(|block| block.content.trim())
+        .filter(|lineage_id| !lineage_id.is_empty())
+        .map(ToOwned::to_owned)
 }

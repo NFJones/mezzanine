@@ -2515,7 +2515,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .normal_content_lines()
         .join("\n");
     assert!(
-        resumed_pane_text.contains("rendered sa") && resumed_pane_text.contains("ved response"),
+        resumed_pane_text.contains("rendered sa") && resumed_pane_text.contains("response"),
         "{resumed_pane_text}"
     );
     assert!(
@@ -2857,6 +2857,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%1".to_string(),
                 conversation_id: "saved-tokens".to_string(),
+                prompt_cache_lineage_id: "lineage-saved-tokens".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,
                 transcript_entries: 1,
@@ -3024,6 +3025,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%1".to_string(),
                 conversation_id: "legacy-ask".to_string(),
+                prompt_cache_lineage_id: "lineage-legacy-ask".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,
                 transcript_entries: 1,
@@ -3072,6 +3074,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 mezzanine_session_id: "$foreign".to_string(),
                 pane_id: "%1".to_string(),
                 conversation_id: "foreign".to_string(),
+                prompt_cache_lineage_id: "lineage-foreign".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,
                 transcript_entries: 1,

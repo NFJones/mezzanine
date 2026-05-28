@@ -17,11 +17,11 @@ const MODEL_ACTION_RESULT_CONTENT_LIMIT_BYTES: u64 = 256 * 1024;
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
 pub(in crate::agent) fn action_result_transcript_content(result: &ActionResult) -> String {
-    let mut content = format!(
-        "action_id={} action_type={} status={:?}",
-        result.action_id, result.action_type, result.status
-    );
     if matches!(result.action_type, "request_skills" | "call_skill") {
+        let mut content = format!(
+            "action_id={} action_type={} status={:?}",
+            result.action_id, result.action_type, result.status
+        );
         if let Some(summary) = skill_action_result_transcript_summary(result) {
             content.push_str("\nskill_action_summary:\n");
             content.push_str(&summary);
@@ -34,21 +34,7 @@ pub(in crate::agent) fn action_result_transcript_content(result: &ActionResult) 
         }
         return content;
     }
-    if !result.content.is_empty() {
-        content.push_str("\ncontent:\n");
-        content.push_str(&result.content_text());
-    }
-    if let Some(data) = &result.structured_content_json {
-        content.push_str("\nstructured_content:\n");
-        content.push_str(data);
-    }
-    if let Some(error) = &result.error {
-        content.push_str("\nerror:");
-        content.push_str(&error.code);
-        content.push(' ');
-        content.push_str(&error.message);
-    }
-    content
+    action_result_context_content(result)
 }
 
 /// Builds a compact durable summary for non-effecting skill actions.

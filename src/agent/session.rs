@@ -232,6 +232,12 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub pane_id: String,
+    /// Stores the prompt-cache lineage id value for this data structure.
+    ///
+    /// The lineage remains stable across resume or inherited fork flows so
+    /// provider prompt caching can continue from the same observed prefix even
+    /// when the runtime conversation or session id changes.
+    pub prompt_cache_lineage_id: String,
     /// Stores the visibility value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -282,6 +288,7 @@ impl AgentShellStore {
                 AgentShellSession {
                     session_id: new_agent_session_uuid(),
                     pane_id: pane_id.clone(),
+                    prompt_cache_lineage_id: new_agent_session_uuid(),
                     visibility: AgentShellVisibility::Hidden,
                     running_turn_id: None,
                     transcript_entries: 0,
@@ -420,6 +427,18 @@ impl AgentShellStore {
         conversation_id: impl Into<String>,
         transcript_entries: u64,
     ) -> Result<&AgentShellSession> {
+        self.bind_conversation_with_lineage(pane_id, conversation_id, transcript_entries, None)
+    }
+
+    /// Binds a pane to one conversation while optionally overriding prompt-cache
+    /// lineage for inherited fork or restore flows.
+    pub fn bind_conversation_with_lineage(
+        &mut self,
+        pane_id: &str,
+        conversation_id: impl Into<String>,
+        transcript_entries: u64,
+        prompt_cache_lineage_id: Option<String>,
+    ) -> Result<&AgentShellSession> {
         let conversation_id = conversation_id.into();
         validate_non_empty("conversation id", &conversation_id)?;
         let session = self.session_mut(pane_id)?;
@@ -429,6 +448,10 @@ impl AgentShellStore {
             ));
         }
         session.session_id = conversation_id;
+        if let Some(lineage_id) = prompt_cache_lineage_id {
+            validate_non_empty("prompt cache lineage id", &lineage_id)?;
+            session.prompt_cache_lineage_id = lineage_id;
+        }
         session.transcript_entries = transcript_entries;
         session.visibility = AgentShellVisibility::Visible;
         Ok(session)
@@ -473,6 +496,7 @@ impl AgentShellStore {
             AgentShellSession {
                 session_id: new_agent_session_uuid(),
                 pane_id: pane_id.to_string(),
+                prompt_cache_lineage_id: new_agent_session_uuid(),
                 visibility: AgentShellVisibility::Visible,
                 running_turn_id: None,
                 transcript_entries: 0,

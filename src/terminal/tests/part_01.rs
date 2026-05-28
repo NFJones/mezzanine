@@ -3553,7 +3553,7 @@ fn render_attached_client_view_keeps_agent_prompt_before_right_divider() {
     let prompt_row = view
         .lines
         .iter()
-        .position(|line| line.contains("agent>"))
+        .position(|line| line.contains("mez>"))
         .expect("left agent prompt should be visible");
     assert_eq!(
         view.lines[prompt_row].chars().nth(divider_column),
@@ -3732,10 +3732,10 @@ fn readline_prompt_status_row_renders_prompt_and_cursor_column() {
         row.status,
         ClientStatusLine {
             kind: ClientStatusKind::Plain,
-            text: "▐ mez> run".to_string(),
+            text: "▐ mez> run  ".to_string(),
         }
     );
-    assert_eq!(row.cursor_column, 11);
+    assert_eq!(row.cursor_column, 9);
     assert!(row.cursor_visible);
 }
 
@@ -3899,9 +3899,9 @@ fn prompt_region_presentation_places_agent_prompt_inside_pane() {
     );
 
     assert_eq!(presentation.lines[0], "top line            ");
-    assert_eq!(presentation.lines[2], "ol▐ mez> go       ");
+    assert_eq!(presentation.lines[2], "ol▐ mez> go         ");
     assert_eq!(presentation.cursor_row, 2);
-    assert_eq!(presentation.cursor_column, 13);
+    assert_eq!(presentation.cursor_column, 11);
     assert!(presentation.cursor_visible);
     assert_eq!(
         presentation.line_style_spans[2]
@@ -3942,9 +3942,9 @@ fn prompt_region_presentation_wraps_prompt_at_word_boundary() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ mez> alpha          ");
-    assert_eq!(presentation.lines[2], "         beta           ");
-    assert_eq!(presentation.lines[3], "         gamma          ");
+    assert_eq!(presentation.lines[1], "▐ mez> alpha            ");
+    assert_eq!(presentation.lines[2], "       beta             ");
+    assert_eq!(presentation.lines[3], "       gamma            ");
 }
 
 /// Verifies hard-wrapped unbroken agent prompt input starts at the top of the
@@ -3973,8 +3973,8 @@ fn prompt_region_presentation_hard_wrap_keeps_first_row_stable() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ mez> abcdefg        ");
-    assert_eq!(presentation.lines[2], "         hijkl          ");
+    assert_eq!(presentation.lines[1], "▐ mez> abcdefghi        ");
+    assert_eq!(presentation.lines[2], "       jkl              ");
     assert_eq!(presentation.lines[3], "footer                  ");
 }
 
@@ -4004,16 +4004,16 @@ fn prompt_region_presentation_styles_agent_shadow_hint() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[2], "o▐ mez> /model    ");
+    assert_eq!(presentation.lines[2], "o▐ mez> /model      ");
     assert!(
         presentation.line_style_spans[2]
             .iter()
-            .any(|span| span.start == 14 && span.length == 2 && span.rendition.dim)
+            .any(|span| span.start == 12 && span.length == 2 && span.rendition.dim)
     );
     assert!(
         presentation.line_style_spans[2]
             .iter()
-            .any(|span| span.start == 14
+            .any(|span| span.start == 12
                 && span.length == 2
                 && span.rendition.foreground.is_some_and(|foreground| {
                     test_color_is_grayscale(foreground)
@@ -4068,7 +4068,7 @@ fn prompt_region_presentation_uses_contrast_prompt_foreground_on_light_theme() {
     assert!(
         presentation.line_style_spans[2]
             .iter()
-            .any(|span| span.start == 14
+            .any(|span| span.start == 12
                 && span.length == 2
                 && span.rendition.dim
                 && span.rendition.foreground.is_some_and(|foreground| {
@@ -4117,7 +4117,7 @@ fn prompt_region_presentation_styles_agent_skill_shadow_hint() {
         &theme,
     );
 
-    assert_eq!(presentation.lines[2], "o▐ mez> $review   ");
+    assert_eq!(presentation.lines[2], "o▐ mez> $review     ");
     let prompt_span = presentation.line_style_spans[2]
         .iter()
         .find(|span| span.start == 1 && span.length == 18)
@@ -4217,7 +4217,7 @@ fn prompt_region_presentation_expands_agent_prompt_for_long_input() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[0], "▐ mez> [200 chars ");
+    assert_eq!(presentation.lines[0], "▐ mez> [200 chars pa");
     assert_eq!(presentation.cursor_row, 3);
     assert_eq!(presentation.cursor_column, 19);
     assert!(presentation.cursor_visible);

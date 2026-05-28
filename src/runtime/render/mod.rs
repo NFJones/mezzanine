@@ -4597,7 +4597,7 @@ mod tests {
 
         assert_eq!(
             wrapped,
-            vec!["mez> alpha beta".to_string(), "       gamma".to_string()]
+            vec!["mez> alpha beta".to_string(), "     gamma".to_string()]
         );
     }
 
@@ -4620,10 +4620,9 @@ mod tests {
         assert_eq!(
             wrapped,
             vec![
-                "mez> aaaaa".to_string(),
-                "       aaaaa".to_string(),
-                "       aaaaa".to_string(),
-                "       a".to_string()
+                "mez> aaaaaaa".to_string(),
+                "     aaaaaaa".to_string(),
+                "     aa".to_string()
             ]
         );
     }
@@ -4663,7 +4662,7 @@ mod tests {
             wrapped,
             vec![
                 "mez> alpha beta".to_string(),
-                "       gamma delta".to_string()
+                "     gamma delta".to_string()
             ]
         );
     }

@@ -325,13 +325,15 @@ fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
 
     screen.feed("\x1b[31m▐ mez> \x1b[0mabc✔️d".as_bytes());
 
-    assert_eq!(screen.visible_lines()[0], "▐ mez> abc");
-    assert_eq!(screen.visible_lines()[1], "▐ ✔ d");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abc✔ d");
     assert!(
-        screen
-            .visible_lines()
-            .iter()
-            .take(2)
-            .all(|line| !line.trim().is_empty())
+        screen.visible_lines()[1].trim().is_empty(),
+        "{:?}",
+        screen.visible_lines()
+    );
+    assert!(
+        screen.visible_lines()[1].trim().is_empty(),
+        "{:?}",
+        screen.visible_lines()
     );
 }

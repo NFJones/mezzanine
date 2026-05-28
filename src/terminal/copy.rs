@@ -671,26 +671,46 @@ fn flush_agent_copy_run(output: &mut Vec<String>, agent_run: &mut Vec<String>) {
 
 /// Removes assistant labels and visual continuation padding from an agent run.
 fn normalize_agent_copy_run(lines: &mut [String]) {
-    let assistant_indent = AGENT_COPY_ASSISTANT_LABEL.chars().count();
-    let mut continuation_indent = None;
+    let assistant_indent =
+        AGENT_COPY_ASSISTANT_LABEL.chars().count() + AGENT_COPY_INDICATOR_PREFIX.chars().count();
     let mut saw_assistant_label = false;
-    for line in lines.iter_mut() {
-        if let Some(rest) = line.strip_prefix(AGENT_COPY_ASSISTANT_LABEL) {
-            *line = rest.to_string();
-            continuation_indent = Some(assistant_indent);
+    let mut segment_start = None;
+    for index in 0..lines.len() {
+        let stripped = lines[index]
+            .strip_prefix(AGENT_COPY_ASSISTANT_LABEL)
+            .map(str::to_string);
+        if let Some(rest) = stripped {
+            if let Some(start) = segment_start.take() {
+                dedent_agent_copy_segment(&mut lines[start..index]);
+            }
+            lines[index] = rest;
             saw_assistant_label = true;
-            continue;
+            segment_start = Some(index.saturating_add(1));
         }
-        if let Some(indent) = continuation_indent
-            && line_has_leading_spaces(line, indent)
-        {
-            *line = strip_leading_chars(line, indent);
-            continue;
-        }
-        continuation_indent = None;
+    }
+    if let Some(start) = segment_start {
+        dedent_agent_copy_segment(&mut lines[start..]);
     }
     if !saw_assistant_label {
         dedent_orphan_agent_continuation_lines(lines, assistant_indent);
+    }
+}
+
+/// Dedents one assistant-copy continuation segment by its common prefix.
+fn dedent_agent_copy_segment(lines: &mut [String]) {
+    let common_indent = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| leading_space_count(line))
+        .min()
+        .unwrap_or(0);
+    if common_indent == 0 {
+        return;
+    }
+    for line in lines {
+        if line_has_leading_spaces(line, common_indent) {
+            *line = strip_leading_chars(line, common_indent);
+        }
     }
 }
 

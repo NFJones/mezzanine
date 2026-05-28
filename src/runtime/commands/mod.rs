@@ -1807,6 +1807,10 @@ impl RuntimeSessionService {
         };
         let prompt_seed =
             Self::runtime_agent_fork_prompt_seed(&store.prompt_history(&source)?, input);
+        let source_lineage = self
+            .agent_shell_store
+            .get(pane_id)
+            .map(|session| session.prompt_cache_lineage_id.clone());
         let target = invocation
             .args
             .split_whitespace()
@@ -1824,10 +1828,11 @@ impl RuntimeSessionService {
         )?;
         self.agent_shell_store.enter_or_resume(&started.pane_id)?;
         let (session_id, transcript_entries, visibility) = {
-            let session = self.agent_shell_store.bind_conversation(
+            let session = self.agent_shell_store.bind_conversation_with_lineage(
                 &started.pane_id,
                 &summary.conversation_id,
                 summary.entries as u64,
+                source_lineage,
             )?;
             (
                 session.session_id.clone(),

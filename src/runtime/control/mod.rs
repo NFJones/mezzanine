@@ -183,19 +183,15 @@ fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<S
 /// Returns transcript tool output for model-facing replay.
 ///
 /// Previous action results are often the user's freshest evidence, especially
-/// failed file reads and shell observations. Web fetch/search payloads are
-/// omitted because replaying historical page bodies or URLs has repeatedly
-/// biased later turns toward stale external content.
+/// failed file reads and shell observations. Historical replay should stay
+/// byte-stable so later turns see the same durable tool context they already
+/// observed.
 fn runtime_transcript_tool_context_content(content: &str) -> Option<String> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let action_type = transcript_tool_action_type(trimmed);
-    if matches!(
-        action_type,
-        Some("fetch_url" | "web_search" | "request_skills" | "call_skill")
-    ) {
+    if transcript_tool_content_is_omitted_for_replay(trimmed) {
         return None;
     }
     Some(truncate_runtime_context_text(
@@ -205,13 +201,16 @@ fn runtime_transcript_tool_context_content(content: &str) -> Option<String> {
     ))
 }
 
-/// Extracts the `action_type=<kind>` token from a durable tool transcript line.
-fn transcript_tool_action_type(content: &str) -> Option<&str> {
-    content
-        .lines()
-        .next()?
-        .split_whitespace()
-        .find_map(|token| token.strip_prefix("action_type="))
+/// Returns whether one durable tool transcript payload should stay out of
+/// later model context because it is metadata or workflow body rather than
+/// execution evidence.
+fn transcript_tool_content_is_omitted_for_replay(content: &str) -> bool {
+    content.starts_with("[action_result ")
+        && [" fetch_url ", " web_search "]
+            .iter()
+            .any(|needle| content.contains(needle))
+        || content.contains("action_type=request_skills")
+        || content.contains("action_type=call_skill")
 }
 
 /// Reports whether transcript text is an expanded skill body rather than the
@@ -862,6 +861,18 @@ impl RuntimeSessionService {
                 self.session.id, self.session.name
             ),
         });
+        if let Some(lineage_id) = self
+            .agent_shell_store
+            .get(pane_id)
+            .map(|session| session.prompt_cache_lineage_id.clone())
+            .filter(|lineage_id| !lineage_id.trim().is_empty())
+        {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::Configuration,
+                label: "prompt cache lineage".to_string(),
+                content: lineage_id,
+            });
+        }
 
         let window_name = runtime_pane_by_id(&self.session, pane_id)
             .map(|(window, _pane)| window.name.clone())?;

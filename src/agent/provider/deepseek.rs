@@ -711,6 +711,7 @@ mod tests {
             prompt_cache_retention: None,
             max_output_tokens: None,
             prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             available_mcp_tools: Vec::new(),

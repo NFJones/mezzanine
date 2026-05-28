@@ -59,7 +59,7 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
     assert!(!copied.contains('│'), "{copied}");
 }
 
-/// Verifies plain `agent>` output wraps under the assistant indicator.
+/// Verifies plain `mez>` output wraps under the assistant indicator.
 ///
 /// Markdown output already has element-aware continuation indentation. Plain
 /// assistant text should use the same transcript geometry instead of relying
@@ -92,7 +92,7 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
         pane_text.contains("▐ mez> alpha beta gamma"),
         "{pane_text}"
     );
-    assert!(pane_text.contains("▐        delta epsilon"), "{pane_text}");
+    assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
 /// Verifies model-authored diff output uses the diff content renderer.
@@ -220,10 +220,10 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
         .join("\n");
     assert!(pane_text.contains("mez> *** Begin Patch"), "{pane_text}");
     assert!(
-        pane_text.contains("       *** Update File: docs/example.md"),
+        pane_text.contains("     *** Update File: docs/example.md"),
         "{pane_text}"
     );
-    assert!(pane_text.contains("       +new"), "{pane_text}");
+    assert!(pane_text.contains("     +new"), "{pane_text}");
     assert!(!pane_text.contains("[mez: no output]"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -417,12 +417,12 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
     let pane_text = pane_lines.join("\n");
 
     assert!(pane_text.contains("▐ mez> 1. first numbered item"), "{pane_text}");
-    assert!(pane_text.contains("▐        2. second numbered item"), "{pane_text}");
-    assert!(pane_text.contains("▐        • bullet item"), "{pane_text}");
+    assert!(pane_text.contains("▐      2. second numbered item"), "{pane_text}");
+    assert!(pane_text.contains("▐      • bullet item"), "{pane_text}");
     assert!(
         !pane_lines
             .iter()
-            .any(|line| line.trim_end() == "▐ mez> 1." || line.trim_end() == "▐        2." || line.trim_end() == "▐        •"),
+            .any(|line| line.trim_end() == "▐ mez> 1." || line.trim_end() == "▐      2." || line.trim_end() == "▐      •"),
         "{pane_text}"
     );
 }
@@ -642,7 +642,7 @@ fn runtime_agent_slash_markdown_display_opens_command_overlay() {
         .unwrap();
     let heading_line = &overlay.lines[heading_index];
     assert!(!heading_line.contains("##"), "{heading_line:?}");
-    assert!(!heading_line.contains("agent>"), "{heading_line:?}");
+    assert!(!heading_line.contains("mez>"), "{heading_line:?}");
     assert_eq!(heading_line, "Agent Status");
     assert!(
         overlay
@@ -982,6 +982,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 prompt_cache_retention: None,
                 max_output_tokens: None,
                 prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 available_mcp_tools: Vec::new(),

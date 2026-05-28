@@ -99,6 +99,8 @@ pub struct AgentSessionMetadata {
     pub pane_id: String,
     /// Durable conversation identity bound to the pane.
     pub conversation_id: String,
+    /// Stable prompt-cache lineage identity for provider routing continuity.
+    pub prompt_cache_lineage_id: String,
     /// Agent shell visibility name.
     pub visibility: String,
     /// Running turn at the time of the checkpoint, if any.

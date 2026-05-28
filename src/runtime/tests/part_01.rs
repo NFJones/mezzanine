@@ -971,6 +971,7 @@ fn runtime_model_request_fixture_for_agent(
         prompt_cache_retention: None,
         max_output_tokens: None,
         prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
         turn_id: turn_id.to_string(),
         agent_id: agent_id.to_string(),
         available_mcp_tools: Vec::new(),

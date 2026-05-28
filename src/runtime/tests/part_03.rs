@@ -3218,7 +3218,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         response.contains("| src | agent-%1 | owned-write |"),
         "{response}"
     );
-    assert!(response.contains("| Context | 4 blocks"), "{response}");
+    assert!(response.contains("| Context | 5 blocks"), "{response}");
     assert!(
         response.contains("| Provider tokens | 2 models; see Provider Token Usage |"),
         "{response}"

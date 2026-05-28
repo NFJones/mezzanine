@@ -429,6 +429,7 @@ pub(super) fn runtime_model_compaction_request(
         latency_preference: profile.latency_preference.clone(),
         max_output_tokens: profile.max_output_tokens(),
         prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
         turn_id,
         agent_id,
         available_mcp_tools: Vec::new(),

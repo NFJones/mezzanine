@@ -237,6 +237,7 @@ impl AgentSessionMetadata {
         validate_non_empty("mezzanine session id", &self.mezzanine_session_id)?;
         validate_non_empty("pane id", &self.pane_id)?;
         validate_conversation_id(&self.conversation_id)?;
+        validate_non_empty("prompt cache lineage id", &self.prompt_cache_lineage_id)?;
         validate_agent_visibility(&self.visibility)?;
         if let Some(turn_id) = self.running_turn_id.as_deref() {
             validate_non_empty("running turn id", turn_id)?;
@@ -290,6 +291,7 @@ impl AgentSessionMetadata {
             self.mezzanine_session_id.clone(),
             self.pane_id.clone(),
             self.conversation_id.clone(),
+            self.prompt_cache_lineage_id.clone(),
             self.visibility.clone(),
             self.running_turn_id.clone().unwrap_or_default(),
             self.transcript_entries.to_string(),
@@ -330,20 +332,48 @@ impl AgentSessionMetadata {
             || fields.len() == 19
             || fields.len() == 20
             || fields.len() == 21
-            || fields.len() == 22)
+            || fields.len() == 22
+            || fields.len() == 23)
             || fields[0] != AGENT_SESSION_METADATA_VERSION
         {
             return Err(MezError::invalid_args(
                 "invalid agent session metadata entry",
             ));
         }
+        let legacy_layout = fields.len() <= 22;
+        let prompt_cache_lineage_id = if legacy_layout {
+            fields[3].clone()
+        } else {
+            fields[4].clone()
+        };
+        let visibility_index = if legacy_layout { 4 } else { 5 };
+        let running_turn_index = if legacy_layout { 5 } else { 6 };
+        let transcript_entries_index = if legacy_layout { 6 } else { 7 };
+        let log_level_index = if legacy_layout { 7 } else { 8 };
+        let pane_model_profile_index = if legacy_layout { 8 } else { 9 };
+        let planning_enabled_index = if legacy_layout { 9 } else { 10 };
+        let response_style_index = if legacy_layout { 10 } else { 11 };
+        let routing_enabled_index = if legacy_layout { 11 } else { 12 };
+        let working_directory_index = if legacy_layout { 12 } else { 13 };
+        let project_root_index = if legacy_layout { 13 } else { 14 };
+        let token_usage_start = if legacy_layout { 14 } else { 15 };
+        let approval_policy_index = if legacy_layout { 18 } else { 19 };
+        let context_usage_index = if legacy_layout { 19 } else { 20 };
+        let token_usage_by_model_index = if legacy_layout { 20 } else { 21 };
+        let context_usage_snapshot_index = if legacy_layout { 21 } else { 22 };
         let token_usage = if fields.len() >= 18 {
             ModelTokenUsage {
-                input_tokens: parse_u64(&fields[14], "agent session input_tokens")?,
-                output_tokens: parse_u64(&fields[15], "agent session output_tokens")?,
-                reasoning_tokens: parse_u64(&fields[16], "agent session reasoning_tokens")?,
+                input_tokens: parse_u64(&fields[token_usage_start], "agent session input_tokens")?,
+                output_tokens: parse_u64(
+                    &fields[token_usage_start + 1],
+                    "agent session output_tokens",
+                )?,
+                reasoning_tokens: parse_u64(
+                    &fields[token_usage_start + 2],
+                    "agent session reasoning_tokens",
+                )?,
                 cached_input_tokens: fields
-                    .get(17)
+                    .get(token_usage_start + 3)
                     .filter(|value| !value.is_empty())
                     .map(|value| parse_u64(value, "agent session cached_input_tokens"))
                     .transpose()?,
@@ -355,34 +385,53 @@ impl AgentSessionMetadata {
             mezzanine_session_id: fields[1].clone(),
             pane_id: fields[2].clone(),
             conversation_id: fields[3].clone(),
-            visibility: fields[4].clone(),
-            running_turn_id: (!fields[5].is_empty()).then(|| fields[5].clone()),
-            transcript_entries: parse_u64(&fields[6], "agent session transcript_entries")?,
-            log_level: fields[7].clone(),
-            pane_model_profile: (!fields[8].is_empty()).then(|| fields[8].clone()),
-            planning_enabled: parse_bool(&fields[9], "planning_enabled")?,
-            response_style: (!fields[10].is_empty()).then(|| fields[10].clone()),
+            prompt_cache_lineage_id,
+            visibility: fields[visibility_index].clone(),
+            running_turn_id: (!fields[running_turn_index].is_empty())
+                .then(|| fields[running_turn_index].clone()),
+            transcript_entries: parse_u64(
+                &fields[transcript_entries_index],
+                "agent session transcript_entries",
+            )?,
+            log_level: fields[log_level_index].clone(),
+            pane_model_profile: (!fields[pane_model_profile_index].is_empty())
+                .then(|| fields[pane_model_profile_index].clone()),
+            planning_enabled: parse_bool(&fields[planning_enabled_index], "planning_enabled")?,
+            response_style: (!fields[response_style_index].is_empty())
+                .then(|| fields[response_style_index].clone()),
             routing_enabled: fields
-                .get(11)
+                .get(routing_enabled_index)
                 .filter(|value| !value.is_empty())
                 .map(|value| parse_bool(value, "routing_enabled"))
                 .transpose()?,
-            working_directory: fields.get(12).filter(|value| !value.is_empty()).cloned(),
-            project_root: fields.get(13).filter(|value| !value.is_empty()).cloned(),
+            working_directory: fields
+                .get(working_directory_index)
+                .filter(|value| !value.is_empty())
+                .cloned(),
+            project_root: fields
+                .get(project_root_index)
+                .filter(|value| !value.is_empty())
+                .cloned(),
             token_usage,
             token_usage_by_model: fields
-                .get(20)
+                .get(token_usage_by_model_index)
                 .filter(|value| !value.is_empty())
                 .map(|value| decode_token_usage_by_model(value))
                 .transpose()?
                 .unwrap_or_default(),
             context_usage_snapshot: fields
-                .get(21)
+                .get(context_usage_snapshot_index)
                 .filter(|value| !value.is_empty())
                 .map(|value| decode_context_usage_snapshot(value))
                 .transpose()?,
-            approval_policy: fields.get(18).filter(|value| !value.is_empty()).cloned(),
-            context_usage: fields.get(19).filter(|value| !value.is_empty()).cloned(),
+            approval_policy: fields
+                .get(approval_policy_index)
+                .filter(|value| !value.is_empty())
+                .cloned(),
+            context_usage: fields
+                .get(context_usage_index)
+                .filter(|value| !value.is_empty())
+                .cloned(),
         };
         metadata.validate()?;
         Ok(metadata)
