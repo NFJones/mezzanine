@@ -3841,7 +3841,7 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
 
     assert_eq!(initial_search.forwarded_bytes, 0);
     assert!(initial_search.view_refresh_required);
-    assert!(initial_search.full_redraw_required);
+    assert!(!initial_search.full_redraw_required);
     assert_eq!(
         service
             .primary_display_overlay

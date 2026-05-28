@@ -49,7 +49,8 @@ use crate::terminal::{
     TerminalWindowGroupFrameContext, UiTheme, WindowFrameCommandKind,
     compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
     modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
-    pane_frame_agent_status_pillbox_cells, window_group_frame_pillbox_cells,
+    pane_frame_agent_status_pillbox_cells, terminal_grapheme_width, terminal_graphemes,
+    terminal_text_width, window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -335,6 +336,7 @@ impl RuntimeSessionService {
                 search_query: None,
                 search_match_line: None,
                 search_status: None,
+                mouse_selection: None,
                 selections,
                 active_selection_index,
                 dismiss_on_any_input,
@@ -726,6 +728,15 @@ impl RuntimeSessionService {
             TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay {
                 position,
             }) => self.apply_primary_display_overlay_selection(primary_client_id, *position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::BeginDisplayOverlaySelection {
+                position,
+            }) => self.begin_primary_display_overlay_mouse_selection(*position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::UpdateDisplayOverlaySelection {
+                position,
+            }) => self.update_primary_display_overlay_mouse_selection(*position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::FinishDisplayOverlaySelection {
+                position,
+            }) => self.finish_primary_display_overlay_mouse_selection(primary_client_id, *position),
             TerminalClientLoopAction::HandleMouse(MouseAction::ScrollDisplayOverlay { lines }) => {
                 self.apply_primary_display_overlay_scroll(*lines)
             }
@@ -763,11 +774,11 @@ impl RuntimeSessionService {
                 matches!(
                     runtime_display_overlay_input_action(input),
                     RuntimeDisplayOverlayInputAction::Exit
-                        | RuntimeDisplayOverlayInputAction::StartSearch
-                        | RuntimeDisplayOverlayInputAction::EditSearchText
-                        | RuntimeDisplayOverlayInputAction::EditSearchBackspace
                         | RuntimeDisplayOverlayInputAction::SelectActive
-                )
+                ) && self
+                    .primary_display_overlay
+                    .as_ref()
+                    .is_none_or(|overlay| overlay.search_input.is_none())
             }
             TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay { .. }) => true,
             TerminalClientLoopAction::HandleMouse(MouseAction::ScrollDisplayOverlay { .. }) => {
@@ -814,6 +825,135 @@ impl RuntimeSessionService {
         }
         self.execute_primary_display_overlay_selection_command(primary_client_id, &command)
     }
+
+    /// Starts a mouse text selection in the primary command-output overlay.
+    fn begin_primary_display_overlay_mouse_selection(
+        &mut self,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
+        else {
+            return Ok(false);
+        };
+        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            overlay.mouse_selection = Some((selection_position, selection_position));
+        }
+        Ok(true)
+    }
+
+    /// Extends a mouse text selection in the primary command-output overlay.
+    fn update_primary_display_overlay_mouse_selection(
+        &mut self,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
+        else {
+            return Ok(false);
+        };
+        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            let start = overlay
+                .mouse_selection
+                .map(|(start, _)| start)
+                .unwrap_or(selection_position);
+            overlay.mouse_selection = Some((start, selection_position));
+        }
+        Ok(true)
+    }
+
+    /// Finishes a mouse text selection in the primary command-output overlay and copies it.
+    fn finish_primary_display_overlay_mouse_selection(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
+        else {
+            return Ok(false);
+        };
+        let copied = if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            let start = overlay
+                .mouse_selection
+                .map(|(start, _)| start)
+                .unwrap_or(selection_position);
+            overlay.mouse_selection = Some((start, selection_position));
+            primary_display_overlay_copy_selection(overlay)
+        } else {
+            None
+        };
+        if let Some(copied) = copied.filter(|text| !text.is_empty()) {
+            self.copy_text_to_buffer_and_host_clipboard(
+                "mouse",
+                copied,
+                "display-overlay:mouse".to_string(),
+            )?;
+            return Ok(true);
+        }
+        self.apply_primary_display_overlay_selection(primary_client_id, position)
+    }
+
+    /// Converts one terminal mouse cell to overlay-content coordinates.
+    fn primary_display_overlay_position_for_mouse(
+        &self,
+        position: CopyPosition,
+    ) -> Option<CopyPosition> {
+        let overlay = self.primary_display_overlay.as_ref()?;
+        let line = position.line.checked_sub(1)?;
+        let line = overlay.scroll_offset.saturating_add(line);
+        let text = overlay.lines.get(line)?;
+        let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line);
+        let column = position.column.saturating_sub(prefix_columns);
+        let column = column.min(terminal_text_width(text));
+        Some(CopyPosition { line, column })
+    }
+}
+
+/// Copies the currently selected primary display-overlay text.
+fn primary_display_overlay_copy_selection(overlay: &RuntimeDisplayOverlay) -> Option<String> {
+    let (start, end) = overlay.mouse_selection?;
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    if start.line == end.line {
+        return overlay
+            .lines
+            .get(start.line)
+            .map(|line| primary_display_overlay_line_slice(line, start.column, end.column));
+    }
+    let mut copied = Vec::new();
+    let first = overlay.lines.get(start.line)?;
+    copied.push(primary_display_overlay_line_slice(
+        first,
+        start.column,
+        terminal_text_width(first),
+    ));
+    for line_index in start.line.saturating_add(1)..end.line {
+        copied.push(overlay.lines.get(line_index)?.clone());
+    }
+    let last = overlay.lines.get(end.line)?;
+    copied.push(primary_display_overlay_line_slice(last, 0, end.column));
+    Some(copied.join("\n"))
+}
+
+/// Returns one display-column slice from a primary display-overlay line.
+fn primary_display_overlay_line_slice(line: &str, start: usize, end: usize) -> String {
+    let mut output = String::new();
+    let mut column = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let width = terminal_grapheme_width(grapheme);
+        let next = column.saturating_add(width);
+        if next <= start {
+            column = next;
+            continue;
+        }
+        if column >= end || next > end {
+            break;
+        }
+        output.push_str(grapheme);
+        column = next;
+    }
+    output
 }
 
 /// Returns the overlay selection index under a mouse position.
@@ -2844,6 +2984,9 @@ impl RuntimeSessionService {
                 self.pane_agent_status_selector = None;
                 Ok(true)
             }
+            MouseAction::BeginDisplayOverlaySelection { .. }
+            | MouseAction::UpdateDisplayOverlaySelection { .. }
+            | MouseAction::FinishDisplayOverlaySelection { .. } => Ok(false),
             MouseAction::SelectDisplayOverlay { .. } | MouseAction::ScrollDisplayOverlay { .. } => {
                 Ok(false)
             }
@@ -4792,6 +4935,7 @@ mod tests {
                 search_query: None,
                 search_match_line: None,
                 search_status: None,
+                mouse_selection: None,
             },
             selection,
         );
@@ -4837,6 +4981,7 @@ mod tests {
             search_query: None,
             search_match_line: None,
             search_status: None,
+            mouse_selection: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -4893,6 +5038,7 @@ mod tests {
             search_query: None,
             search_match_line: None,
             search_status: None,
+            mouse_selection: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);

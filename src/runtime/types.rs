@@ -1038,6 +1038,8 @@ pub(super) struct RuntimeDisplayOverlay {
     pub(super) search_match_line: Option<usize>,
     /// Transient pager search feedback shown in the overlay footer.
     pub(super) search_status: Option<String>,
+    /// Active mouse text selection inside overlay content, in overlay-line coordinates.
+    pub(super) mouse_selection: Option<(CopyPosition, CopyPosition)>,
     /// Selectable line-to-command mappings rendered inside this overlay.
     ///
     /// Lines without an entry remain inert. The line index is measured against

@@ -1620,7 +1620,17 @@ fn route_mouse_event(
         return Ok(TerminalClientLoopAction::HandleMouse(
             match (event.kind, event.button) {
                 (super::MouseEventKind::Press, super::MouseButton::Left) => {
-                    MouseAction::SelectDisplayOverlay {
+                    MouseAction::BeginDisplayOverlaySelection {
+                        position: mouse_copy_position(event),
+                    }
+                }
+                (super::MouseEventKind::Drag, super::MouseButton::Left) => {
+                    MouseAction::UpdateDisplayOverlaySelection {
+                        position: mouse_copy_position(event),
+                    }
+                }
+                (super::MouseEventKind::Release, super::MouseButton::Left) => {
+                    MouseAction::FinishDisplayOverlaySelection {
                         position: mouse_copy_position(event),
                     }
                 }

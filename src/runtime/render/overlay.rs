@@ -7,6 +7,7 @@
 //! input dispatch and frame composition.
 
 use super::*;
+use unicode_width::UnicodeWidthStr;
 
 /// Render placement for an open pane agent status selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,10 @@ pub(super) struct PaneAgentStatusSelectorLayoutItem {
 
 /// Maximum number of model/reasoning picker rows shown at once.
 pub(super) const PANE_AGENT_STATUS_SELECTOR_MAX_ROWS: usize = 30;
+/// Selector marker shown in front of the active command-output overlay row.
+const DISPLAY_OVERLAY_ACTIVE_SELECTOR: &str = "▶ ";
+/// Placeholder marker shown in front of inactive selectable overlay rows.
+const DISPLAY_OVERLAY_INACTIVE_SELECTOR: &str = "  ";
 /// Returns a compact MCP server state label for command completion details.
 pub(super) fn agent_shell_mcp_display_state_name(
     enabled: bool,
@@ -1025,13 +1030,13 @@ pub(super) fn runtime_display_overlay_render_lines(overlay: &RuntimeDisplayOverl
         .enumerate()
         .map(|(line_index, line)| {
             if active_line == Some(line_index) {
-                format!("▶ {line}")
+                format!("{DISPLAY_OVERLAY_ACTIVE_SELECTOR}{line}")
             } else if overlay
                 .selections
                 .iter()
                 .any(|selection| selection.line_index == line_index)
             {
-                format!("  {line}")
+                format!("{DISPLAY_OVERLAY_INACTIVE_SELECTOR}{line}")
             } else {
                 line.to_string()
             }
@@ -1056,10 +1061,22 @@ pub(super) fn runtime_display_overlay_rendered_selection_start(
     selection: &RuntimeDisplayOverlaySelection,
 ) -> usize {
     selection.start_column
-        + usize::from(runtime_display_overlay_line_has_selection(
-            overlay,
-            selection.line_index,
-        )) * 2
+        + runtime_display_overlay_line_prefix_columns(overlay, selection.line_index)
+}
+
+/// Returns the terminal-cell width occupied by one rendered overlay row gutter.
+pub(super) fn runtime_display_overlay_line_prefix_columns(
+    overlay: &RuntimeDisplayOverlay,
+    line_index: usize,
+) -> usize {
+    usize::from(runtime_display_overlay_line_has_selection(
+        overlay, line_index,
+    )) * runtime_display_overlay_selection_prefix_columns()
+}
+
+/// Returns the terminal-cell width occupied by selectable overlay row gutters.
+pub(super) fn runtime_display_overlay_selection_prefix_columns() -> usize {
+    UnicodeWidthStr::width(DISPLAY_OVERLAY_ACTIVE_SELECTOR)
 }
 
 /// Returns the modal overlay footer text for the active overlay.
@@ -1117,9 +1134,7 @@ pub(super) fn runtime_display_overlay_body_style_spans(
     line_index: usize,
     max_columns: usize,
 ) -> Vec<TerminalStyleSpan> {
-    let prefix_columns = usize::from(runtime_display_overlay_line_has_selection(
-        overlay, line_index,
-    )) * 2;
+    let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line_index);
     let visible_columns = max_columns.saturating_sub(prefix_columns);
     overlay
         .line_style_spans
@@ -1184,20 +1199,10 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyleSpan> {
     let body_spans = runtime_display_overlay_body_style_spans(overlay, line_index, max_columns);
+    let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line_index);
     let mut spans = Vec::new();
-    if overlay.search_match_line == Some(line_index) && max_columns > 0 {
-        append_uncovered_overlay_selection_span(
-            &mut spans,
-            0,
-            max_columns,
-            runtime_display_overlay_selection_rendition(
-                ui_theme,
-                RuntimeDisplayOverlaySelectionKind::Primary,
-                true,
-            ),
-            &body_spans,
-        );
-    }
+    let search_rendition = (overlay.search_match_line == Some(line_index) && max_columns > 0)
+        .then(|| ui_theme.colors.copy_selection.rendition());
     for (selection_index, selection) in overlay.selections.iter().enumerate() {
         if selection.line_index != line_index {
             continue;
@@ -1231,7 +1236,72 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
     for span in body_spans {
         push_or_extend_style_span(&mut spans, span);
     }
+    if let Some(rendition) = search_rendition {
+        push_or_extend_style_span(
+            &mut spans,
+            TerminalStyleSpan {
+                start: prefix_columns,
+                length: max_columns.saturating_sub(prefix_columns),
+                rendition,
+            },
+        );
+    }
+    append_display_overlay_mouse_selection_spans(
+        &mut spans,
+        overlay.mouse_selection,
+        line_index,
+        prefix_columns,
+        max_columns,
+        ui_theme.colors.copy_selection.rendition(),
+    );
     spans
+}
+
+/// Appends copy-selection style spans for one rendered overlay content row.
+fn append_display_overlay_mouse_selection_spans(
+    spans: &mut Vec<TerminalStyleSpan>,
+    selection: Option<(CopyPosition, CopyPosition)>,
+    line_index: usize,
+    prefix_columns: usize,
+    max_columns: usize,
+    rendition: GraphicRendition,
+) {
+    let Some((start, end)) = selection else {
+        return;
+    };
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    if line_index < start.line || line_index > end.line {
+        return;
+    }
+    let content_start = if line_index == start.line {
+        start.column
+    } else {
+        0
+    };
+    let content_end = if line_index == end.line {
+        end.column
+    } else {
+        max_columns.saturating_sub(prefix_columns)
+    };
+    let rendered_start = prefix_columns
+        .saturating_add(content_start)
+        .min(max_columns);
+    let rendered_end = prefix_columns.saturating_add(content_end).min(max_columns);
+    if rendered_start >= rendered_end {
+        return;
+    }
+    push_or_extend_style_span(
+        spans,
+        TerminalStyleSpan {
+            start: rendered_start,
+            length: rendered_end.saturating_sub(rendered_start),
+            rendition,
+        },
+    );
 }
 
 /// Computes terminal placement for a pane agent model/reasoning selector.

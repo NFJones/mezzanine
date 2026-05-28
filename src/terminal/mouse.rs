@@ -539,6 +539,21 @@ pub enum MouseAction {
     },
     /// Closes an open pane agent selector without applying a value.
     ClosePaneAgentStatusSelector,
+    /// Starts a text selection inside the primary command-output overlay.
+    BeginDisplayOverlaySelection {
+        /// Zero-based terminal position where the selection started.
+        position: CopyPosition,
+    },
+    /// Extends a text selection inside the primary command-output overlay.
+    UpdateDisplayOverlaySelection {
+        /// Zero-based terminal position currently under the pointer.
+        position: CopyPosition,
+    },
+    /// Finishes a text selection inside the primary command-output overlay.
+    FinishDisplayOverlaySelection {
+        /// Zero-based terminal position where the selection ended.
+        position: CopyPosition,
+    },
     /// Selects a line in the primary command-output overlay.
     SelectDisplayOverlay {
         /// Zero-based terminal position clicked by the user.

@@ -1333,7 +1333,7 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
     display_overlay_config.primary_display_overlay_active = true;
     assert_eq!(
         route_client_input(b"\x1b[<0;4;3M", &display_overlay_config).unwrap(),
-        TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay {
+        TerminalClientLoopAction::HandleMouse(MouseAction::BeginDisplayOverlaySelection {
             position: CopyPosition { line: 2, column: 3 },
         })
     );
