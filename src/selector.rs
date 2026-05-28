@@ -515,7 +515,7 @@ fn mezzanine_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
 fn agent_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
     if context.tokens_before.is_empty() {
         if !context.query.is_empty() && !context.query.starts_with('/') {
-            return Vec::new();
+            return path_candidates(SelectorSurface::AgentCommand, context);
         }
         return baseline_slash_commands()
             .into_iter()
@@ -982,6 +982,12 @@ fn path_completion_allowed(surface: SelectorSurface, context: &TokenContext) -> 
     {
         return true;
     }
+    if surface == SelectorSurface::AgentCommand
+        && context.tokens_before.is_empty()
+        && agent_root_query_may_target_path(&context.query)
+    {
+        return true;
+    }
     let Some(command) = context.tokens_before.first() else {
         return false;
     };
@@ -1036,6 +1042,14 @@ fn agent_query_likely_targets_relative_path(context: &TokenContext) -> bool {
             .is_some_and(|token| agent_token_introduces_path(token))
 }
 
+/// Returns whether the agent prompt root token may reasonably target a path.
+///
+/// # Parameters
+/// - `query`: Current completion query.
+fn agent_root_query_may_target_path(query: &str) -> bool {
+    !query.is_empty() && !query.starts_with('$') && !query.starts_with('/')
+}
+
 /// Returns whether the current token looks like an unprefixed relative path.
 ///
 /// # Parameters
@@ -1073,19 +1087,34 @@ fn path_completion_parts(query: &str) -> (PathBuf, String, String) {
     if query == "~" {
         return (expand_home_path("~"), "~/".to_string(), String::new());
     }
-    let (raw_directory, name_prefix) = match query.rsplit_once('/') {
-        Some((directory, name)) => {
-            let directory = if directory.is_empty() { "/" } else { directory };
-            (directory.to_string(), name.to_string())
+    let (mut directory, mut display_prefix, remainder) =
+        if let Some(remainder) = query.strip_prefix("~/") {
+            (expand_home_path("~"), "~/".to_string(), remainder)
+        } else if let Some(remainder) = query.strip_prefix('/') {
+            (PathBuf::from("/"), "/".to_string(), remainder)
+        } else {
+            (PathBuf::from("."), String::new(), query)
+        };
+    if remainder.is_empty() {
+        return (directory, display_prefix, String::new());
+    }
+    let mut name_prefix = String::new();
+    let mut components = remainder.split('/').peekable();
+    while let Some(component) = components.next() {
+        let has_more_components = components.peek().is_some();
+        if !has_more_components && !query.ends_with('/') {
+            name_prefix = component.to_string();
+            break;
         }
-        None => (".".to_string(), query.to_string()),
-    };
-    let directory = expand_home_path(&raw_directory);
-    let display_prefix = match query.rsplit_once('/') {
-        Some(("", _)) => "/".to_string(),
-        Some((prefix, _)) => format!("{prefix}/"),
-        None => String::new(),
-    };
+        let next_directory = directory.join(component);
+        if component.is_empty() || !next_directory.is_dir() {
+            name_prefix = component.to_string();
+            break;
+        }
+        directory = next_directory;
+        display_prefix.push_str(component);
+        display_prefix.push('/');
+    }
     (directory, display_prefix, name_prefix)
 }
 
@@ -1385,6 +1414,56 @@ mod tests {
                 .candidates
                 .iter()
                 .any(|candidate| candidate.value == "src/selector.rs")
+        );
+    }
+
+    /// Verifies first-token agent shell input still plans filesystem
+    /// completions when the user starts with a likely relative path instead of
+    /// a slash command.
+    #[test]
+    fn selector_plans_agent_root_path_candidates_for_first_token() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mez-selector-root-paths-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        std::env::set_current_dir(&root).unwrap();
+
+        let plan = plan_selector(SelectorSurface::AgentCommand, "sr", 2).unwrap();
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.value == "src/")
+        );
+    }
+
+    /// Verifies incomplete directory components stay breadth-first so a stray
+    /// slash after a partial directory name still suggests that directory
+    /// instead of trying to recurse into a non-existent path.
+    #[test]
+    fn selector_plans_breadth_first_candidates_for_incomplete_directory_components() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mez-selector-breadth-first-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        std::env::set_current_dir(&root).unwrap();
+
+        let plan = plan_selector(SelectorSurface::AgentCommand, "sr/", 3).unwrap();
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(
+            plan.candidates
+                .iter()
+                .any(|candidate| candidate.value == "src/")
         );
     }
 
