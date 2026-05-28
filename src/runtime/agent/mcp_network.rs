@@ -40,6 +40,18 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running MCP result does not match an action")
                 })?;
+            if !self
+                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+            {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!(
+                        "agent: {}",
+                        runtime_agent_action_summary(&action)
+                            .unwrap_or_else(|| "MCP call".to_string())
+                    ),
+                )?;
+            }
             let permission_policy = self.permission_policy_for_turn(turn);
             let auto_allowed = permission_policy.approval_policy
                 == crate::permissions::ApprovalPolicy::AutoAllow
@@ -109,6 +121,18 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running MCP result does not match an action")
                 })?;
+            if !self
+                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+            {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!(
+                        "agent: {}",
+                        runtime_agent_action_summary(&action)
+                            .unwrap_or_else(|| "MCP call".to_string())
+                    ),
+                )?;
+            }
             let permission_policy = self.permission_policy_for_turn(turn);
             let auto_allowed = permission_policy.approval_policy
                 == crate::permissions::ApprovalPolicy::AutoAllow

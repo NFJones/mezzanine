@@ -2882,6 +2882,213 @@ fn runtime_config_change_action_logs_styled_action_line_in_normal_mode() {
     );
 }
 
+/// Verifies MCP tool calls log a compact normal-mode action line with the
+/// invoked server, tool, and compact JSON arguments.
+///
+/// MCP actions do not execute through the pane shell, but operators still need
+/// a first-class execution row that makes the tool target and arguments visible
+/// without waiting for verbose mode or failure output.
+#[test]
+fn runtime_mcp_call_logs_styled_action_line_in_normal_mode() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "mcp-1".to_string(),
+        rationale: String::new(),
+        payload: crate::agent::AgentActionPayload::McpCall {
+            server: "github".to_string(),
+            tool: "search_issues".to_string(),
+            arguments_json: r#"{ "query": "prompt cache", "limit": 5 }"#.to_string(),
+        },
+    };
+
+    let emitted = service
+        .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+        .unwrap();
+    assert!(emitted);
+
+    let styled_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let pane_text = styled_lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(pane_text.contains("agent: mcp call: github/search_issues"));
+    assert!(pane_text.contains("args={"));
+    assert!(pane_text.contains(r#""query":"prompt cache""#));
+    assert!(pane_text.contains(r#""limit":5"#));
+    let action_line = styled_lines
+        .iter()
+        .find(|line| line.text.contains("agent: mcp call:"))
+        .unwrap();
+    let theme = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .ui_theme;
+    let prefix_column = display_column_for_fragment(&action_line.text, "agent:");
+    let action_column = display_column_for_fragment(&action_line.text, "mcp call");
+    let argument_column = display_column_for_fragment(&action_line.text, "github/search_issues");
+    let prefix_rendition = styled_line_rendition_at(action_line, prefix_column);
+    let action_rendition = styled_line_rendition_at(action_line, action_column);
+    let argument_rendition = styled_line_rendition_at(action_line, argument_column);
+    assert_eq!(
+        prefix_rendition.foreground,
+        Some(theme.colors.agent_transcript_status.foreground)
+    );
+    assert!(prefix_rendition.dim);
+    assert_eq!(
+        action_rendition.foreground,
+        Some(theme.colors.agent_transcript_command.foreground)
+    );
+    assert!(action_rendition.bold);
+    assert_ne!(
+        argument_rendition.foreground,
+        Some(theme.colors.agent_transcript_command.foreground),
+        "{action_line:?}"
+    );
+}
+
+/// Verifies skill catalog lookup logs a compact normal-mode action line.
+///
+/// Non-effecting skill discovery still needs the same execution visibility as
+/// other runtime actions so the pane shows that the agent performed a catalog
+/// lookup instead of silently continuing provider turns.
+#[test]
+fn runtime_skill_lookup_logs_styled_action_line_in_normal_mode() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "skill-catalog-1".to_string(),
+        rationale: String::new(),
+        payload: crate::agent::AgentActionPayload::RequestSkills,
+    };
+
+    let emitted = service
+        .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+        .unwrap();
+    assert!(emitted);
+
+    let styled_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let action_line = styled_lines
+        .iter()
+        .find(|line| line.text.contains("agent: skill lookup:"))
+        .unwrap();
+    assert!(
+        action_line
+            .text
+            .contains("agent: skill lookup: available skills"),
+        "{action_line:?}"
+    );
+    let theme = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .ui_theme;
+    let prefix_column = display_column_for_fragment(&action_line.text, "agent:");
+    let action_column = display_column_for_fragment(&action_line.text, "skill lookup");
+    let prefix_rendition = styled_line_rendition_at(action_line, prefix_column);
+    let action_rendition = styled_line_rendition_at(action_line, action_column);
+    assert_eq!(
+        prefix_rendition.foreground,
+        Some(theme.colors.agent_transcript_status.foreground)
+    );
+    assert!(prefix_rendition.dim);
+    assert_eq!(
+        action_rendition.foreground,
+        Some(theme.colors.agent_transcript_command.foreground)
+    );
+    assert!(action_rendition.bold);
+}
+
+/// Verifies skill loading logs the selected skill name and appended task
+/// context in a compact normal-mode action line.
+///
+/// Loaded skills can materially change the next provider step, so the pane
+/// should expose both the invoked skill and the extra context that shaped the
+/// load request.
+#[test]
+fn runtime_skill_load_logs_styled_action_line_in_normal_mode() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "skill-load-1".to_string(),
+        rationale: String::new(),
+        payload: crate::agent::AgentActionPayload::CallSkill {
+            name: "review".to_string(),
+            additional_context: Some("focus on context replay churn".to_string()),
+        },
+    };
+
+    let emitted = service
+        .append_agent_action_execution_text_to_terminal_buffer("%1", &action)
+        .unwrap();
+    assert!(emitted);
+
+    let styled_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let pane_text = styled_lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(pane_text.contains("agent: skill load: review"));
+    assert!(pane_text.contains("context=focus on context replay churn"));
+    let action_line = styled_lines
+        .iter()
+        .find(|line| line.text.contains("agent: skill load:"))
+        .unwrap();
+    let theme = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .ui_theme;
+    let prefix_column = display_column_for_fragment(&action_line.text, "agent:");
+    let action_column = display_column_for_fragment(&action_line.text, "skill load");
+    let argument_column = display_column_for_fragment(&action_line.text, "review");
+    let prefix_rendition = styled_line_rendition_at(action_line, prefix_column);
+    let action_rendition = styled_line_rendition_at(action_line, action_column);
+    let argument_rendition = styled_line_rendition_at(action_line, argument_column);
+    assert_eq!(
+        prefix_rendition.foreground,
+        Some(theme.colors.agent_transcript_status.foreground)
+    );
+    assert!(prefix_rendition.dim);
+    assert_eq!(
+        action_rendition.foreground,
+        Some(theme.colors.agent_transcript_command.foreground)
+    );
+    assert!(action_rendition.bold);
+    assert_ne!(
+        argument_rendition.foreground,
+        Some(theme.colors.agent_transcript_command.foreground),
+        "{action_line:?}"
+    );
+}
+
 /// Verifies approved non-theme agent `config_change` actions persist through
 /// the same user config mutation path that terminal control requests use.
 ///

@@ -462,6 +462,18 @@ impl RuntimeSessionService {
                     self.execute_network_action_for_turn_blocking(&turn, &action)?;
             }
             AgentActionPayload::McpCall { .. } => {
+                if !self
+                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+                {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        &format!(
+                            "agent: {}",
+                            runtime_agent_action_summary(&action)
+                                .unwrap_or_else(|| "MCP call".to_string())
+                        ),
+                    )?;
+                }
                 execution.action_results[result_index] =
                     self.execute_mcp_action_for_turn(&turn, &action, true)?;
             }

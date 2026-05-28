@@ -2918,6 +2918,37 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             agent_action_display_preview(operation),
             agent_action_display_preview(setting_path)
         ),
+        AgentActionPayload::McpCall {
+            server,
+            tool,
+            arguments_json,
+        } => {
+            let mut header = format!(
+                "mcp call: {}/{}",
+                agent_action_display_preview(server),
+                agent_action_display_preview(tool)
+            );
+            let arguments = agent_action_json_argument_preview(arguments_json);
+            if !arguments.is_empty() {
+                header.push_str(" args=");
+                header.push_str(&arguments);
+            }
+            header
+        }
+        AgentActionPayload::RequestSkills => "skill lookup: available skills".to_string(),
+        AgentActionPayload::CallSkill {
+            name,
+            additional_context,
+        } => {
+            let mut header = format!("skill load: {}", agent_action_display_preview(name));
+            if let Some(context) = additional_context.as_deref().map(str::trim)
+                && !context.is_empty()
+            {
+                header.push_str(" context=");
+                header.push_str(&agent_action_display_preview(context));
+            }
+            header
+        }
         AgentActionPayload::SpawnAgent {
             role,
             placement,
@@ -3138,6 +3169,19 @@ pub(super) fn agent_action_display_preview(value: &str) -> String {
         preview.push_str("...");
     }
     preview
+}
+
+/// Builds a compact preview for action arguments that are already JSON.
+pub(super) fn agent_action_json_argument_preview(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "{}" || trimmed == "null" {
+        return String::new();
+    }
+    serde_json::from_str::<serde_json::Value>(trimmed)
+        .ok()
+        .and_then(|value| serde_json::to_string(&value).ok())
+        .map(|text| agent_action_display_preview(&text))
+        .unwrap_or_else(|| agent_action_display_preview(trimmed))
 }
 
 /// Builds a compact preview for one or more action paths.

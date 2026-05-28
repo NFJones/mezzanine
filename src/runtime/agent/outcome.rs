@@ -1636,6 +1636,8 @@ pub(super) fn runtime_agent_action_has_runtime_visible_effect(action: &AgentActi
             | AgentActionPayload::WebSearch { .. }
             | AgentActionPayload::FetchUrl { .. }
             | AgentActionPayload::McpCall { .. }
+            | AgentActionPayload::RequestSkills
+            | AgentActionPayload::CallSkill { .. }
             | AgentActionPayload::SendMessage { .. }
             | AgentActionPayload::SpawnAgent { .. }
             | AgentActionPayload::ConfigChange { .. }
