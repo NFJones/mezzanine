@@ -74,6 +74,10 @@ impl McpAuthMetadata {
             url_origin: url_origin.into(),
             url_fingerprint: url_fingerprint.into(),
             scopes: Vec::new(),
+            client_id: None,
+            resource: None,
+            authorization_endpoint: None,
+            token_endpoint: None,
             credential_store_ref: None,
             refresh_credential_store_ref: None,
             token_expires_at: None,
@@ -88,6 +92,10 @@ impl McpAuthMetadata {
             self.credential_kind.as_str(),
             self.url_origin.as_str(),
             self.url_fingerprint.as_str(),
+            self.client_id.as_deref().unwrap_or_default(),
+            self.resource.as_deref().unwrap_or_default(),
+            self.authorization_endpoint.as_deref().unwrap_or_default(),
+            self.token_endpoint.as_deref().unwrap_or_default(),
             self.credential_store_ref.as_deref().unwrap_or_default(),
             self.refresh_credential_store_ref
                 .as_deref()
@@ -190,12 +198,21 @@ pub(super) fn encode_all_metadata(map: &BTreeMap<String, AuthMetadata>) -> Strin
 /// Encodes one MCP auth metadata entry into non-secret key/value fields.
 pub(super) fn encode_mcp_metadata(metadata: &McpAuthMetadata) -> String {
     format!(
-        "server_id = \"{}\"\ncredential_kind = \"{}\"\nurl_origin = \"{}\"\nurl_fingerprint = \"{}\"\nscopes = \"{}\"\ncredential_store_ref = \"{}\"\nrefresh_credential_store_ref = \"{}\"\ntoken_expires_at = \"{}\"\n",
+        "server_id = \"{}\"\ncredential_kind = \"{}\"\nurl_origin = \"{}\"\nurl_fingerprint = \"{}\"\nscopes = \"{}\"\nclient_id = \"{}\"\nresource = \"{}\"\nauthorization_endpoint = \"{}\"\ntoken_endpoint = \"{}\"\ncredential_store_ref = \"{}\"\nrefresh_credential_store_ref = \"{}\"\ntoken_expires_at = \"{}\"\n",
         toml_escape(&metadata.server_id),
         toml_escape(metadata.credential_kind.as_str()),
         toml_escape(&metadata.url_origin),
         toml_escape(&metadata.url_fingerprint),
         toml_escape(&metadata.scopes.join(",")),
+        toml_escape(metadata.client_id.as_deref().unwrap_or_default()),
+        toml_escape(metadata.resource.as_deref().unwrap_or_default()),
+        toml_escape(
+            metadata
+                .authorization_endpoint
+                .as_deref()
+                .unwrap_or_default()
+        ),
+        toml_escape(metadata.token_endpoint.as_deref().unwrap_or_default()),
         toml_escape(metadata.credential_store_ref.as_deref().unwrap_or_default()),
         toml_escape(
             metadata
@@ -246,6 +263,10 @@ pub(super) fn decode_mcp_metadata(data: &str) -> Result<McpAuthMetadata> {
     metadata.scopes = optional(&values, "scopes")
         .map(|value| parse_scope_list(&value))
         .unwrap_or_default();
+    metadata.client_id = optional(&values, "client_id");
+    metadata.resource = optional(&values, "resource");
+    metadata.authorization_endpoint = optional(&values, "authorization_endpoint");
+    metadata.token_endpoint = optional(&values, "token_endpoint");
     metadata.credential_store_ref = optional(&values, "credential_store_ref");
     metadata.refresh_credential_store_ref = optional(&values, "refresh_credential_store_ref");
     metadata.token_expires_at = optional(&values, "token_expires_at");

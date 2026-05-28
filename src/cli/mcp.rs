@@ -12,7 +12,10 @@ use super::{
     default_trust_database_path, discover_existing_overlays, discover_project_root, fs,
     json_escape, json_optional, migrate_config_file, persist_config_mutation, write_json_or_plain,
 };
-use crate::auth::{AuthCredentialState, McpAuthStatus};
+use crate::auth::{
+    AuthCredentialState, CredentialStorePlan, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
+    NativeSecretServiceCredentialStore, run_mcp_oauth_login_async,
+};
 use sha2::Digest;
 
 // MCP subcommands and config mutation helpers.
@@ -22,9 +25,10 @@ use sha2::Digest;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn run_mcp<W: Write>(
+pub(super) async fn run_mcp<W: Write>(
     parsed: McpCliArgs,
     env: CliEnv,
+    interactive: bool,
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<()> {
@@ -76,14 +80,59 @@ pub(super) fn run_mcp<W: Write>(
                     "mcp login --credential-store must be `file` or `os`",
                 ));
             }
+            if !interactive {
+                return Err(MezError::invalid_args(
+                    "mcp login requires an interactive terminal for browser OAuth callback handling",
+                ));
+            }
+            let server_url = binding.url.as_deref().ok_or_else(|| {
+                MezError::invalid_state("mcp login HTTP binding has no configured URL")
+            })?;
+            let credential = run_mcp_oauth_login_async(
+                server_url,
+                &scopes,
+                client_id.as_deref(),
+                resource.as_deref(),
+            )
+            .await?;
+            let metadata = McpAuthMetadata::new(
+                id.clone(),
+                binding
+                    .url_origin
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                binding
+                    .url_fingerprint
+                    .clone()
+                    .unwrap_or_else(|| url_fingerprint(server_url)),
+            );
+            let store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
+            let metadata = run_mcp_auth_store_operation({
+                let store = store.clone();
+                let credential_store = credential_store.clone();
+                move || {
+                    login_mcp_oauth_credential_for_cli(
+                        &store,
+                        metadata,
+                        credential_store.as_deref(),
+                        credential,
+                    )
+                }
+            })
+            .await?;
+            let credential_store_name = metadata
+                .credential_store_ref
+                .as_deref()
+                .and_then(|reference| reference.split_once(':').map(|(prefix, _)| prefix))
+                .unwrap_or("unknown");
             let output = format!(
-                r#"{{"server_id":"{}","action":"interactive-required","reason":"oauth-login-not-yet-implemented","url_origin":"{}","scopes":{},"client_id":{},"resource":{},"credential_store":{}}}"#,
+                r#"{{"server_id":"{}","authenticated":true,"metadata_present":true,"credential_store":"{}","url_origin":"{}","url_fingerprint":"{}","token_expires_at":{},"scopes":{}}}"#,
                 json_escape(&id),
-                json_escape(binding.url_origin.as_deref().unwrap_or_default()),
-                string_list_json(&scopes),
-                json_optional(client_id.as_deref()),
-                json_optional(resource.as_deref()),
-                json_optional(credential_store.as_deref())
+                json_escape(credential_store_name),
+                json_escape(&metadata.url_origin),
+                json_escape(&metadata.url_fingerprint),
+                json_optional(metadata.token_expires_at.as_deref()),
+                string_list_json(&metadata.scopes)
             );
             write_json_or_plain(stdout, output_format, &output)?;
         }
@@ -636,6 +685,51 @@ fn string_list_json(values: &[String]) -> String {
         .map(|value| format!("\"{}\"", json_escape(value)))
         .collect::<Vec<_>>();
     format!("[{}]", values.join(","))
+}
+
+/// Runs a blocking MCP auth-store operation off the async CLI task.
+async fn run_mcp_auth_store_operation<T, F>(operation: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!("MCP auth credential-store task failed: {error}"))
+        })?
+}
+
+/// Stores an MCP OAuth credential with the CLI-selected credential backend.
+fn login_mcp_oauth_credential_for_cli(
+    store: &AuthStore,
+    metadata: McpAuthMetadata,
+    credential_store: Option<&str>,
+    credential: McpOAuthCredential,
+) -> Result<McpAuthMetadata> {
+    match credential_store {
+        Some("file") => {
+            let file_store = store.file_credential_store(&metadata.server_id)?;
+            store.login_mcp_oauth_credential(metadata, credential, &file_store)
+        }
+        Some("os") => {
+            let os_store = NativeSecretServiceCredentialStore::new();
+            store.login_mcp_oauth_credential(metadata, credential, &os_store)
+        }
+        Some(other) => Err(MezError::invalid_args(format!(
+            "unknown credential store `{other}`"
+        ))),
+        None => match store.credential_store_plan(&metadata.server_id) {
+            CredentialStorePlan::OperatingSystem { .. } => {
+                let os_store = NativeSecretServiceCredentialStore::new();
+                store.login_mcp_oauth_credential(metadata, credential, &os_store)
+            }
+            CredentialStorePlan::PrivateFileFallback { .. } => {
+                let file_store = store.file_credential_store(&metadata.server_id)?;
+                store.login_mcp_oauth_credential(metadata, credential, &file_store)
+            }
+        },
+    }
 }
 
 /// Renders secret-safe MCP auth status as JSON.

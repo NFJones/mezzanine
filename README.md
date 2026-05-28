@@ -436,7 +436,7 @@ mez [--json] <command> [options]
 | `mez auth login --api-key` | Authenticate with an API key.                                   |
 | `mez auth status`          | Show auth state.                                                |
 | `mez auth logout`          | Remove stored auth for the active profile.                      |
-| `mez mcp ...`              | List, add, remove, enable, disable, and inspect MCP servers.    |
+| `mez mcp ...`              | List, add, remove, enable, disable, inspect, login, logout, and status MCP servers. |
 | `mez memory ...`           | List, add, inspect, edit, delete, and export persistent memory. |
 
 ## Configuration Quick Reference

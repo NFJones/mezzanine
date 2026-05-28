@@ -505,6 +505,7 @@ impl RuntimeSessionService {
             transports: &mut self.mcp_transports,
             audit_log,
             environment,
+            auth_store: self.auth_store.as_ref(),
             session_id: self.session.id.to_string(),
             actor: AuditActor {
                 kind: "agent".to_string(),
@@ -598,6 +599,7 @@ impl RuntimeSessionService {
             transports: &mut self.mcp_transports,
             audit_log,
             environment,
+            auth_store: self.auth_store.as_ref(),
             session_id: self.session.id.to_string(),
             actor: AuditActor {
                 kind: "agent".to_string(),

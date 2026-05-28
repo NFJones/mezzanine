@@ -91,6 +91,14 @@ pub struct McpAuthMetadata {
     pub url_fingerprint: String,
     /// Optional non-secret OAuth scopes attached to the credential.
     pub scopes: Vec<String>,
+    /// Optional OAuth client identifier used to mint/refresh the credential.
+    pub client_id: Option<String>,
+    /// Optional OAuth resource indicator sent during login/refresh.
+    pub resource: Option<String>,
+    /// Authorization endpoint used by the browser login flow.
+    pub authorization_endpoint: Option<String>,
+    /// Token endpoint used by login and refresh flows.
+    pub token_endpoint: Option<String>,
     /// Opaque access-token credential-store reference.
     pub credential_store_ref: Option<String>,
     /// Opaque refresh-token credential-store reference.
@@ -151,6 +159,14 @@ pub struct McpOAuthCredential {
     pub token_expires_at: Option<String>,
     /// Optional non-secret scopes granted with the credential.
     pub scopes: Vec<String>,
+    /// Optional OAuth client identifier used to mint/refresh the credential.
+    pub client_id: Option<String>,
+    /// Optional OAuth resource indicator sent during login/refresh.
+    pub resource: Option<String>,
+    /// Authorization endpoint used by the login flow.
+    pub authorization_endpoint: Option<String>,
+    /// Token endpoint used by login and refresh flows.
+    pub token_endpoint: Option<String>,
 }
 
 /// Secret-bearing credential class represented by an auth metadata record.

@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AsyncMcpActionExecutor, AuditActor, AuditLog, AuditRecord, BTreeMap, ClientId, Command,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, Duration, EventKind, FocusedShellExecutor,
+    AsyncMcpActionExecutor, AuditActor, AuditLog, AuditRecord, AuthStore, BTreeMap, ClientId,
+    Command, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Duration, EventKind, FocusedShellExecutor,
     FocusedShellHookOutput, HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus,
     HookFailure, HookFailureKind, MarkerToken, McpActionExecutor, McpToolCallPlan,
     McpToolCallResponse, MezError, PaneDescriptor, Path, PendingFocusedShellHookContinuation,
@@ -172,6 +172,11 @@ pub(super) struct RuntimeMcpActionExecutor<'a> {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) environment: BTreeMap<String, String>,
+    /// Stores the auth store value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) auth_store: Option<&'a AuthStore>,
     /// Stores the session id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -248,7 +253,7 @@ impl AsyncMcpActionExecutor for RuntimeMcpActionExecutor<'_> {
         }
         let result = self
             .transports
-            .call_tool_async(plan, &self.environment)
+            .call_tool_async(plan, &self.environment, self.auth_store)
             .await;
         let outcome = match &result {
             Ok(response) if response.is_error => "tool_error",

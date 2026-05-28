@@ -231,7 +231,9 @@ pub async fn run_with<W: Write, E: Write>(
         Some(CliCommand::Auth(args)) => {
             run_auth(args, env, interactive, output_format, stdout).await?;
         }
-        Some(CliCommand::Mcp(args)) => run_mcp(args, env, output_format, stdout)?,
+        Some(CliCommand::Mcp(args)) => {
+            run_mcp(args, env, interactive, output_format, stdout).await?;
+        }
         Some(CliCommand::Memory(args)) => {
             run_memory(args, env, output_format, stdout)?;
         }

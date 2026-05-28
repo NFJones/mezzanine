@@ -18,6 +18,7 @@ use super::file_store::PrivateFileCredentialStore;
 use super::fs::{
     ensure_private_dir, path_is_under_directory, set_private_file, validate_safe_name,
 };
+use super::mcp_oauth::refresh_mcp_oauth_credential_async;
 use super::metadata::{
     decode_all_mcp_metadata, decode_all_metadata, encode_all_mcp_metadata, encode_all_metadata,
 };
@@ -434,6 +435,10 @@ impl AuthStore {
         }
         metadata.token_expires_at = credential.token_expires_at;
         metadata.scopes = credential.scopes;
+        metadata.client_id = credential.client_id;
+        metadata.resource = credential.resource;
+        metadata.authorization_endpoint = credential.authorization_endpoint;
+        metadata.token_endpoint = credential.token_endpoint;
         self.write_mcp_metadata(&metadata)?;
         Ok(metadata)
     }
@@ -452,6 +457,95 @@ impl AuthStore {
         self.load_secret(reference)?
             .filter(|secret| !secret.expose_secret().trim().is_empty())
             .ok_or_else(|| MezError::invalid_state("MCP OAuth credential is unavailable"))
+    }
+
+    /// Loads the MCP OAuth refresh token for a configured server when available.
+    pub fn mcp_refresh_token(&self, server_id: &str) -> Result<Option<SecretString>> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let Some(metadata) = self.read_mcp_metadata_for_server(server_id)? else {
+            return Ok(None);
+        };
+        let Some(reference) = metadata.refresh_credential_store_ref.as_deref() else {
+            return Ok(None);
+        };
+        self.load_secret(reference)
+    }
+
+    /// Refreshes and writes back one stored MCP OAuth credential.
+    pub async fn refresh_mcp_oauth_credential_for_server_async(
+        &self,
+        server_id: &str,
+    ) -> Result<bool> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let Some(mut metadata) = self.read_mcp_metadata_for_server(server_id)? else {
+            return Ok(false);
+        };
+        let Some(refresh_reference) = metadata.refresh_credential_store_ref.as_deref() else {
+            return Ok(false);
+        };
+        let Some(refresh_token) = self.load_secret(refresh_reference)? else {
+            return Ok(false);
+        };
+        let token_endpoint = metadata
+            .token_endpoint
+            .clone()
+            .ok_or_else(|| MezError::invalid_state("MCP auth metadata has no token endpoint"))?;
+        let credential = refresh_mcp_oauth_credential_async(
+            &token_endpoint,
+            refresh_token.expose_secret(),
+            metadata.client_id.as_deref(),
+            metadata.resource.as_deref(),
+        )
+        .await?;
+        self.update_mcp_oauth_credential(&mut metadata, credential)?;
+        Ok(true)
+    }
+
+    /// Writes refreshed MCP OAuth access and refresh tokens through existing references.
+    fn update_mcp_oauth_credential(
+        &self,
+        metadata: &mut McpAuthMetadata,
+        credential: McpOAuthCredential,
+    ) -> Result<()> {
+        let access_reference = metadata.credential_store_ref.clone().ok_or_else(|| {
+            MezError::invalid_state("MCP auth metadata has no credential reference")
+        })?;
+        metadata.credential_store_ref = Some(self.store_secret_like_reference(
+            &access_reference,
+            &mcp_access_credential_name(&metadata.server_id),
+            &credential.access_token,
+        )?);
+        if let Some(refresh_token) = credential.refresh_token {
+            let refresh_anchor = metadata
+                .refresh_credential_store_ref
+                .as_deref()
+                .unwrap_or(access_reference.as_str());
+            metadata.refresh_credential_store_ref = Some(self.store_secret_like_reference(
+                refresh_anchor,
+                &mcp_refresh_credential_name(&metadata.server_id),
+                &refresh_token,
+            )?);
+        }
+        metadata.token_expires_at = credential
+            .token_expires_at
+            .or(metadata.token_expires_at.take());
+        if !credential.scopes.is_empty() {
+            metadata.scopes = credential.scopes;
+        }
+        if credential.client_id.is_some() {
+            metadata.client_id = credential.client_id;
+        }
+        if credential.resource.is_some() {
+            metadata.resource = credential.resource;
+        }
+        if credential.authorization_endpoint.is_some() {
+            metadata.authorization_endpoint = credential.authorization_endpoint;
+        }
+        if credential.token_endpoint.is_some() {
+            metadata.token_endpoint = credential.token_endpoint;
+        }
+        self.write_mcp_metadata(metadata)?;
+        Ok(())
     }
 
     /// Runs the login with api key operation for this subsystem.

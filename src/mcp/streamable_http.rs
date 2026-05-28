@@ -83,6 +83,12 @@ pub async fn execute_streamable_http_exchange(
     .await?;
     let content_type = header_value(&response.headers, "content-type").unwrap_or_default();
     if !(200..300).contains(&response.status_code) {
+        if matches!(response.status_code, 401 | 403) {
+            return Err(MezError::forbidden(format!(
+                "streamable HTTP MCP server returned auth status {}",
+                response.status_code
+            )));
+        }
         return Err(MezError::invalid_state(format!(
             "streamable HTTP MCP server returned status {}",
             response.status_code

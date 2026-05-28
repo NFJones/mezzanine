@@ -369,7 +369,8 @@ for:
 - `mez snapshot`: Create, list, inspect, delete, or resume session snapshots.
 - `mez config`: Inspect, validate, and edit configuration.
 - `mez auth`: Start authentication, show authentication status, and log out.
-- `mez mcp`: List, add, remove, enable, disable, and inspect MCP servers.
+- `mez mcp`: List, add, remove, enable, disable, inspect, login, logout, and
+  report status for MCP servers.
 
 CLI subcommands that mutate session state MUST use the control endpoint and
 MUST be subject to the same authentication and permission rules as equivalent
@@ -5550,7 +5551,13 @@ variables MUST remain limited to configured `env` values and explicitly listed
 `env_vars`.
 
 Mezzanine MUST support streamable HTTP MCP servers with `url` and optional
-HTTP headers or bearer-token environment references.
+HTTP headers, bearer-token environment references, or stored OAuth credentials
+created by `mez mcp login`. A configured `bearer_token_env` MUST take
+precedence over stored OAuth credentials. Stored MCP OAuth credentials MUST be
+bound to the configured server id, URL origin, and URL fingerprint, and URL
+rebinding MUST make status report stale credentials until the user logs in
+again. On stored-OAuth 401 or 403 responses, the runtime MUST attempt one
+refresh-and-retry when a refresh token and token endpoint are available.
 
 Mezzanine MUST support per-server `enabled` state.
 

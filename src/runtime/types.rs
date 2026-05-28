@@ -25,9 +25,11 @@ use super::{
     encode_control_body, encode_event_notification, encode_mmp_body,
     execute_streamable_http_exchange, parse_mcp_tools_call_response,
 };
+use crate::error::MezErrorKind;
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalStyleSpan};
+use secrecy::ExposeSecret;
 use tokio::io::AsyncWriteExt;
 
 // Runtime data types, connection tables, and provider/MCP registries.
@@ -2869,6 +2871,7 @@ impl RuntimeMcpTransportSet {
         &mut self,
         plan: &McpToolCallPlan,
         environment: &BTreeMap<String, String>,
+        auth_store: Option<&AuthStore>,
     ) -> Result<McpToolCallResponse> {
         let transport = self.transports.get_mut(&plan.server_id).ok_or_else(|| {
             MezError::invalid_state(format!(
@@ -2882,16 +2885,52 @@ impl RuntimeMcpTransportSet {
                 let request_id = state.next_request_id;
                 state.next_request_id = state.next_request_id.saturating_add(1);
                 let request = plan.json_rpc_request(request_id)?;
-                let response = execute_streamable_http_exchange(
+                let oauth_token = match &state.startup_plan.transport {
+                    crate::mcp::McpStartupTransportPlan::StreamableHttp {
+                        bearer_token_env,
+                        ..
+                    } if bearer_token_env.is_none() => {
+                        auth_store.and_then(|store| store.mcp_access_token(&plan.server_id).ok())
+                    }
+                    _ => None,
+                };
+                let response = match execute_streamable_http_exchange(
                     &state.startup_plan,
                     environment,
                     &request,
                     Some(request_id),
                     plan.timeout_ms,
                     state.session_id.as_deref(),
-                    None,
+                    oauth_token.as_ref().map(ExposeSecret::expose_secret),
                 )
-                .await?;
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error)
+                        if error.kind() == MezErrorKind::Forbidden
+                            && oauth_token.is_some()
+                            && auth_store.is_some() =>
+                    {
+                        let auth_store = auth_store.ok_or_else(|| {
+                            MezError::invalid_state("MCP OAuth refresh requires an auth store")
+                        })?;
+                        auth_store
+                            .refresh_mcp_oauth_credential_for_server_async(&plan.server_id)
+                            .await?;
+                        let refreshed_token = auth_store.mcp_access_token(&plan.server_id)?;
+                        execute_streamable_http_exchange(
+                            &state.startup_plan,
+                            environment,
+                            &request,
+                            Some(request_id),
+                            plan.timeout_ms,
+                            state.session_id.as_deref(),
+                            Some(refreshed_token.expose_secret()),
+                        )
+                        .await?
+                    }
+                    Err(error) => return Err(error),
+                };
                 if response.session_id.is_some() {
                     state.session_id = response.session_id.clone();
                 }

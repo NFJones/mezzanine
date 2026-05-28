@@ -19,6 +19,11 @@ mod file_store;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod fs;
+/// Exposes the MCP oauth module boundary.
+///
+/// The nested module keeps MCP-specific OAuth discovery, browser login, and
+/// refresh mechanics isolated from provider auth code.
+mod mcp_oauth;
 /// Exposes the metadata module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -50,6 +55,7 @@ pub use command_store::{
     CredentialCommandRunner, SystemCredentialCommandRunner,
 };
 pub use file_store::PrivateFileCredentialStore;
+pub use mcp_oauth::{refresh_mcp_oauth_credential_async, run_mcp_oauth_login_async};
 pub use openai_oauth::{
     OpenAiProviderCredential, run_openai_browser_login_async,
     run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,

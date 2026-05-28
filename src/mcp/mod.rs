@@ -53,7 +53,8 @@ pub use stdio::{
 };
 pub use streamable_http::{
     call_streamable_http_mcp_tool, discover_streamable_http_mcp_server,
-    discover_streamable_http_mcp_server_into_registry, execute_streamable_http_exchange,
+    discover_streamable_http_mcp_server_into_registry,
+    discover_streamable_http_mcp_server_with_auth_token, execute_streamable_http_exchange,
     initialize_streamable_http_mcp_server,
 };
 pub use types::{

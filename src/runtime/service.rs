@@ -29,9 +29,10 @@ use super::{
     SessionMemoryStore, SessionRegistry, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
     agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
-    discover_existing_overlays, discover_project_root, discover_streamable_http_mcp_server,
-    ensure_absolute, ensure_no_mez_separator, fs, json_escape,
-    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
+    discover_existing_overlays, discover_project_root,
+    discover_streamable_http_mcp_server_with_auth_token, ensure_absolute, ensure_no_mez_separator,
+    fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
+    runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config,
     runtime_agent_implementation_pressure_after_shell_actions_from_config,
@@ -1629,12 +1630,24 @@ impl RuntimeSessionService {
                 self.mcp_transports
                     .insert_stdio(server_id.to_string(), connection);
             }
-            McpStartupTransportPlan::StreamableHttp { .. } => {
-                let discovery = discover_streamable_http_mcp_server(
+            McpStartupTransportPlan::StreamableHttp {
+                bearer_token_env, ..
+            } => {
+                let oauth_token = if bearer_token_env.is_none() {
+                    self.auth_store
+                        .as_ref()
+                        .and_then(|store| store.mcp_access_token(server_id).ok())
+                } else {
+                    None
+                };
+                let discovery = discover_streamable_http_mcp_server_with_auth_token(
                     &plan,
                     environment,
                     "mezzanine",
                     env!("CARGO_PKG_VERSION"),
+                    oauth_token
+                        .as_ref()
+                        .map(secrecy::ExposeSecret::expose_secret),
                 )
                 .await?;
                 registry
