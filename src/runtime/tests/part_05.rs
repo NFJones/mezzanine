@@ -2420,6 +2420,18 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         })
         .unwrap();
     transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: "saved".to_string(),
+            sequence: 3,
+            created_at_unix_seconds: 2,
+            role: crate::transcript::TranscriptRole::User,
+            turn_id: "turn-new".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "latest saved prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
         .append_prompt_history("saved", "find files")
         .unwrap();
     transcript_store
@@ -2477,6 +2489,12 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     );
     assert!(picker.contains("mez-agent:/resume%20saved"), "{picker}");
     assert!(picker.contains("mez-agent:/resume%20latest"), "{picker}");
+    let saved_section = picker
+        .split("\n\n")
+        .find(|section| section.contains("mez-agent:/resume%20saved"))
+        .expect("saved session section should exist");
+    assert!(saved_section.contains("  - Prompt: latest s"), "{picker}");
+    assert!(!saved_section.contains("  - Prompt: saved p"), "{picker}");
 
     let latest = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"resume-latest","method":"agent/shell/command","params":{"idempotency_key":"resume-latest","input":"/resume --latest"}}"#,
@@ -2559,7 +2577,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     assert!(forked.contains("source=saved"), "{forked}");
     assert!(forked.contains("conversation_id=saved-fork"), "{forked}");
     assert!(forked.contains("source_pane=%1"), "{forked}");
-    assert_eq!(transcript_store.inspect("saved-fork").unwrap().len(), 2);
+    assert_eq!(transcript_store.inspect("saved-fork").unwrap().len(), 3);
     assert_eq!(
         transcript_store.inspect_presentation("saved-fork").unwrap()[0].display_lines[0],
         "mez> rendered saved response"

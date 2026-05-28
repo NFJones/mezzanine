@@ -18,6 +18,11 @@ pub(super) fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<Co
         .iter()
         .find(|entry| entry.role == super::types::TranscriptRole::User)
         .map(|entry| bounded_summary_text(&entry.content, 120));
+    let latest_user_prompt = entries
+        .iter()
+        .rev()
+        .find(|entry| entry.role == super::types::TranscriptRole::User)
+        .map(|entry| bounded_summary_text(&entry.content, 120));
     Some(ConversationSummary {
         conversation_id: first.conversation_id.clone(),
         entries: entries.len(),
@@ -28,6 +33,7 @@ pub(super) fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<Co
         pane_id: last.pane_id.clone(),
         directory,
         initial_prompt,
+        latest_user_prompt,
     })
 }
 

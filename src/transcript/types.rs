@@ -88,6 +88,8 @@ pub struct ConversationSummary {
     pub directory: Option<String>,
     /// Bounded text from the first user-authored prompt in the conversation.
     pub initial_prompt: Option<String>,
+    /// Bounded text from the most recent user-authored prompt in the conversation.
+    pub latest_user_prompt: Option<String>,
 }
 
 /// Durable pane binding and preference metadata for an active agent session.

@@ -2163,7 +2163,7 @@ impl RuntimeSessionService {
             lines.push(format!(
                 "  - Prompt: {}",
                 runtime_fit_status_line(
-                    summary.initial_prompt.as_deref().unwrap_or("-"),
+                    summary.latest_user_prompt.as_deref().unwrap_or("-"),
                     width.saturating_sub("  - Prompt: ".len())
                 )
             ));
