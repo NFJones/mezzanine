@@ -92,7 +92,7 @@ impl OpenAiMaapToolSurface {
                 Self::FUNCTION_CALL_DISCIPLINE
             ),
             Self::Shell => format!(
-                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. When the current turn has enough evidence to start implementation, declare next_phase=edit_ready on the batch. After an earlier batch has declared next_phase=edit_ready, any further discovery shell_command should use intent=read or intent=search and include one concrete missing_fact. {} {}",
+                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. When the current turn has enough evidence to start implementation, declare next_phase=edit_ready on the batch. After next_phase=edit_ready, any further discovery shell_command should use intent=read or intent=search and include one concrete missing_fact. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -270,7 +270,7 @@ pub(super) fn maap_action_batch_schema(
             "next_phase": {
                 "type": ["string", "null"],
                 "enum": ["edit_ready", null],
-                "description": "Optional explicit transition for the active turn. Use edit_ready once the current turn has enough evidence to begin implementation. After an earlier batch has declared edit_ready, any additional read/search shell_command should carry one concrete missing_fact."
+                "description": "Optional explicit transition for the active turn. Use edit_ready once the current turn has enough evidence to begin implementation. After declaring edit_ready, any additional read/search shell_command should carry one concrete missing_fact."
             }
         },
         "required": ["rationale", "thought", "actions", "next_phase"],

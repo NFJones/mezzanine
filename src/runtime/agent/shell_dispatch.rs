@@ -158,7 +158,7 @@ impl RuntimeSessionService {
                     action,
                     ActionStatus::Failed,
                     "edit_ready_requires_missing_fact",
-                    "after an earlier batch declared next_phase=edit_ready, additional read/search shell_command actions must include one concrete missing_fact",
+                    "after declaring next_phase=edit_ready, additional read/search shell_command actions must include one concrete missing_fact",
                 )?));
             };
             if history
@@ -225,9 +225,6 @@ impl RuntimeSessionService {
             .as_ref()
             .is_some_and(|batch| batch.next_phase == Some(MaapNextPhase::EditReady));
         if !declared {
-            return Ok(());
-        }
-        if self.execution_has_pending_shell_dispatch(&turn.turn_id, execution) {
             return Ok(());
         }
         let history = self
@@ -348,7 +345,6 @@ impl RuntimeSessionService {
             "pending_shell_dispatch resume started",
         )?;
         let dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
-        self.record_edit_ready_phase_from_execution(&turn, &execution)?;
         self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
         let mut terminal_state = execution.terminal_state;
         let mut transcript_entries = 0usize;
