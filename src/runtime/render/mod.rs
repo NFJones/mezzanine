@@ -491,7 +491,6 @@ impl RuntimeSessionService {
             {
                 if self.apply_primary_prompt_terminal_action(primary_client_id, action)? {
                     report.view_refresh_required = true;
-                    report.full_redraw_required = true;
                 }
                 continue;
             }
@@ -574,7 +573,6 @@ impl RuntimeSessionService {
                         match self.enter_primary_command_prompt(prefill) {
                             Ok(()) => {
                                 report.view_refresh_required = true;
-                                report.full_redraw_required = true;
                             }
                             Err(error) => {
                                 self.present_attached_action_error(&mut report, &error)?

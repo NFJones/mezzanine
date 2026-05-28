@@ -4296,7 +4296,7 @@ fn runtime_primary_command_prompt_submits_and_clears_through_terminal_step() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
-    assert!(report.full_redraw_required);
+    assert!(!report.full_redraw_required);
     let display_view = service
         .render_client_view(
             ClientViewRole::Primary,
