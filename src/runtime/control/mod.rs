@@ -17,19 +17,19 @@ use super::{
     McpServerConfig, McpServerKind, McpServerState, McpServerStatus, McpToolEffects, McpToolState,
     MemoryRecord, MessageConnection, MessageService, MessageServiceSnapshot, MezError,
     PaneCaptureSource, PaneExitRecord, PaneId, PaneProcessStart, PaneReadinessOverrideStore,
-    PaneResizeUpdate, Path, PathBuf, ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch,
-    RuntimeAutoSizingConfig, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
-    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
-    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
-    SenderIdentity, SessionRecord, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
-    SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
-    SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState,
-    SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
-    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState, SplitDirection,
-    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition, TerminalFrameStyle,
-    TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
+    PaneReadinessState, PaneResizeUpdate, Path, PathBuf, ProjectTrustStore, Recipient, Result,
+    RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
+    RuntimeSnapshotOwnedCreationContext, RuntimeSubagentLineage, RuntimeSubagentPlacement,
+    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotAgentSession,
+    SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
+    SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
+    SnapshotFrameState, SnapshotMcpExternalCapability, SnapshotMcpServerState,
+    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository,
+    SnapshotState, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
+    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition,
+    TerminalFrameStyle, TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
     append_memory_context, append_permission_policy_context, append_scheduler_context,
     approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
     decode_control_frame, decode_mmp_frame, default_trust_database_path,
@@ -874,13 +874,22 @@ impl RuntimeSessionService {
             });
         }
 
+        let readiness_state = self.pane_readiness_state(pane_id);
         let window_name = runtime_pane_by_id(&self.session, pane_id)
             .map(|(window, _pane)| window.name.clone())?;
         blocks.push(ContextBlock {
             source: ContextSourceKind::Configuration,
             label: "pane identity".to_string(),
-            content: format!("pane_id={pane_id} window_name={window_name}"),
+            content: format!(
+                "pane_id={pane_id} window_name={window_name} readiness_state={}",
+                runtime_pane_readiness_state_name(readiness_state)
+            ),
         });
+        if let Some(readiness_hint) =
+            runtime_agent_pane_readiness_context_block(pane_id, readiness_state)
+        {
+            blocks.push(readiness_hint);
+        }
 
         if let Some(session) = self.agent_shell_store.get(pane_id)
             && let Some(store) = self.agent_transcript_store.as_ref()
@@ -4109,6 +4118,41 @@ impl RuntimeSessionService {
         }
         Ok(())
     }
+}
+
+/// Builds an explicit model-visible readiness hint for non-ready panes.
+fn runtime_agent_pane_readiness_context_block(
+    pane_id: &str,
+    readiness_state: PaneReadinessState,
+) -> Option<ContextBlock> {
+    if readiness_state == PaneReadinessState::Ready {
+        return None;
+    }
+    let state_name = runtime_pane_readiness_state_name(readiness_state);
+    let content = match readiness_state {
+        PaneReadinessState::Unknown
+        | PaneReadinessState::PromptCandidate
+        | PaneReadinessState::Probing
+        | PaneReadinessState::Busy
+        | PaneReadinessState::Degraded => format!(
+            "pane_id={pane_id} readiness_state={state_name}\n\
+             Shell-backed actions for this pane may be delayed or rejected until Mezzanine confirms a safe shell boundary. \
+             Do not assume shell_command or apply_patch can execute immediately unless later action results show the pane became ready."
+        ),
+        PaneReadinessState::FullScreen
+        | PaneReadinessState::PasswordPrompt
+        | PaneReadinessState::InteractiveBlocked => format!(
+            "pane_id={pane_id} readiness_state={state_name}\n\
+             Foreground interactive content is still active in this pane, so shell_command and apply_patch cannot execute until the user exits that UI or the pane readiness changes. \
+             If local shell work is required, report the blockage or tell the user to return the pane to its shell prompt instead of emitting shell-backed actions immediately."
+        ),
+        PaneReadinessState::Ready => return None,
+    };
+    Some(ContextBlock {
+        source: ContextSourceKind::RuntimeHint,
+        label: "pane readiness".to_string(),
+        content,
+    })
 }
 
 /// Runs the append project command rule text operation for this subsystem.

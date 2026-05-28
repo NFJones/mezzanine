@@ -663,7 +663,7 @@ pub(super) fn runtime_action_result_is_feedback_candidate(result: &ActionResult)
         return false;
     }
     if result.action_type == "shell_command" {
-        return false;
+        return result.status == ActionStatus::Failed && error.code == "pane_not_ready";
     }
     if runtime_action_result_is_runtime_infrastructure_failure(result) {
         return false;
@@ -1120,6 +1120,12 @@ pub(super) fn runtime_failure_feedback_specific_guidance(
                 .to_string(),
         );
     }
+    if runtime_execution_has_pane_not_ready_shell_failure(execution) {
+        return Some(
+            "Shell-readiness recovery: the shell-backed action never reached the pane because Mezzanine knew the pane was not at a safe shell boundary. Use the readiness diagnostic from the failed action result to report the blockage, tell the user to exit the foreground interactive UI or return to the shell prompt, or wait for a later readiness change before retrying shell-backed work. Do not repeat the same shell_command immediately."
+                .to_string(),
+        );
+    }
     if runtime_execution_has_redundant_skill_action_failure(execution) {
         return Some(
             "Skill recovery: the requested skill catalog or skill context is already loaded for this turn. Do not call request_skills or call_skill again merely to confirm the workflow. Use the loaded skill instructions and emit the next concrete action; if the needed action family is not currently allowed, request it with request_capability."
@@ -1144,6 +1150,15 @@ pub(super) fn runtime_failure_feedback_repeat_guidance(
         );
     }
     None
+}
+
+/// Returns true when one failed execution contains a shell action that never
+/// reached the pane because readiness blocked dispatch.
+fn runtime_execution_has_pane_not_ready_shell_failure(execution: &AgentTurnExecution) -> bool {
+    execution.action_results.iter().any(|result| {
+        result.action_type == "shell_command"
+            && runtime_action_result_has_error_code(result, "pane_not_ready")
+    })
 }
 
 /// Builds a model-facing note for aggregated runtime loop-guard failures.

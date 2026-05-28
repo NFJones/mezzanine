@@ -779,7 +779,7 @@ impl RuntimeSessionService {
                             runtime_pane_readiness_state_name(state)
                         ),
                     )?;
-                    continue;
+                    break;
                 }
             }
             let hook_decision = self.run_configured_pre_action_hooks_with_continuation(

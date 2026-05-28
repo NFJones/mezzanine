@@ -4131,7 +4131,9 @@ execution error, Mezzanine MAY feed the failed action result back to the model
 and ask for a corrected next step within the same turn. This failure-feedback
 continuation MUST be bounded per stable failed-action signature by
 `agents.action_failure_retry_limit`, MUST NOT apply to non-zero
-`shell_command` exits, `apply_patch` failures, user rejections, approval
+`shell_command` exits, but MAY apply to pre-dispatch `shell_command` failures
+that never reached the pane shell because readiness blocked dispatch.
+`apply_patch` failures, user rejections, approval
 denials, policy denials, command timeouts, or user cancellations, and MUST
 preserve the failed action result for audit, diagnostics, and model context.
 If the bounded correction attempts for each model-correctable failed action are

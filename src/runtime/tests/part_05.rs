@@ -1748,6 +1748,35 @@ fn runtime_agent_context_explicit_skill_prompt_loads_skill_context() {
     assert_eq!(prompt_block.content, "$review focus src/lib.rs");
 }
 
+/// Verifies agent prompt context includes pane readiness diagnostics before the
+/// model plans shell-backed work.
+///
+/// If the pane is already known `interactive-blocked`, the model needs that
+/// runtime fact in context before it chooses shell actions. Without this hint,
+/// the provider can only discover the blockage after the runtime rejects the
+/// first shell batch.
+#[test]
+fn runtime_agent_context_reports_nonready_pane_readiness() {
+    let mut service = test_runtime_service();
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "inspect the status pager styling", 0)
+        .unwrap();
+
+    assert!(context.blocks.iter().any(|block| {
+        block.label == "pane identity"
+            && block
+                .content
+                .contains("readiness_state=interactive-blocked")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint
+            && block.label == "pane readiness"
+            && block.content.contains("shell_command and apply_patch cannot execute")
+    }));
+}
+
 /// Verifies explicit `$create-skill` prompt syntax loads the built-in skill
 /// authoring workflow even when no user or project skills have been installed.
 /// This keeps the built-in workflow available as normal skill context instead

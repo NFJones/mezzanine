@@ -1903,6 +1903,264 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies a shell command rejected before dispatch by pane readiness is fed
+/// back to the model for correction.
+///
+/// `pane_not_ready` means the shell command never reached the pane shell. The
+/// model should receive that readiness diagnostic and choose a different next
+/// step instead of the turn failing immediately.
+#[test]
+fn runtime_shell_pane_not_ready_queues_model_self_correction() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the pager styling")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .expect("started turn should be recorded");
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let action = crate::agent::AgentAction {
+        id: "shell-not-ready".to_string(),
+        rationale: "inspect the render owner".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the render owner.".to_string(),
+            command: "rg -n \"status pager\" src".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let mut failed = crate::agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "pane_not_ready",
+        "pane %1 is not ready for agent shell input: interactive-blocked",
+    )
+    .unwrap();
+    failed.structured_content_json = Some(
+        serde_json::json!({
+            "state": "not_ready",
+            "readiness_state": "interactive-blocked",
+            "command": "rg -n \"status pager\" src"
+        })
+        .to_string(),
+    );
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "pane not ready".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![failed],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "pane_not_ready_recovery",
+        )
+        .unwrap();
+
+    assert!(queued);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block
+                .content
+                .contains("[action_result shell-not-ready shell_command failed]")
+            && block.content.contains("interactive-blocked")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint
+            && block.content.contains("Shell-readiness recovery")
+    }));
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent: action failed; asking model to recover"),
+        "{pane_text}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies a pre-dispatch pane-readiness failure stops the current shell batch
+/// after the first failed action.
+///
+/// Later shell siblings were never sent to the pane, so the runtime should
+/// preserve them as untouched running siblings for same-turn correction rather
+/// than failing every remaining shell action with the same readiness error.
+#[test]
+fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+    let turn = crate::agent::AgentTurnRecord {
+        turn_id: "turn-pane-not-ready".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "runtime".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: AgentTurnState::Running,
+    };
+    service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
+    let first = crate::agent::AgentAction {
+        id: "shell-a".to_string(),
+        rationale: "inspect owner one".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect owner one.".to_string(),
+            command: "rg -n \"status pager\" src".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let second = crate::agent::AgentAction {
+        id: "shell-b".to_string(),
+        rationale: "inspect owner two".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect owner two.".to_string(),
+            command: "sed -n '1,120p' src/runtime/render/mod.rs".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "shell batch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "inspect with shell".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![first.clone(), second.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            crate::agent::ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                action_id: first.id.clone(),
+                action_type: "shell_command",
+                status: ActionStatus::Running,
+                content: Vec::new(),
+                structured_content_json: None,
+                is_error: false,
+                error: None,
+            },
+            crate::agent::ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                action_id: second.id.clone(),
+                action_type: "shell_command",
+                status: ActionStatus::Running,
+                content: Vec::new(),
+                structured_content_json: None,
+                is_error: false,
+                error: None,
+            },
+        ],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .agent_turn_executions
+        .insert(turn.turn_id.clone(), execution);
+    service.agent_turn_contexts.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentContext::new(vec![crate::agent::ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: "test context".to_string(),
+            content: "present".to_string(),
+        }])
+        .unwrap(),
+    );
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap()
+        .expect("execution should still be present");
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("pane_not_ready")
+    );
+    assert_eq!(execution.action_results[1].status, ActionStatus::Running);
+    assert!(!execution.action_results[1].is_error);
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent: pane %1 is not ready for agent shell input: interactive-blocked"),
+        "{pane_text}"
+    );
+    assert!(!pane_text.contains("Inspect owner two."), "{pane_text}");
+}
+
 /// Verifies pre-execution `apply_patch` transport failures are model
 /// correctable.
 ///
