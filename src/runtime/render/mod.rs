@@ -504,6 +504,7 @@ impl RuntimeSessionService {
                 TerminalClientLoopAction::ForwardToPane(input) => {
                     if self.active_agent_shell_visible()? {
                         if self.apply_attached_agent_prompt_input(primary_client_id, input)? {
+                            self.sync_tracked_pty_sizes()?;
                             report.agent_prompt_inputs_applied =
                                 report.agent_prompt_inputs_applied.saturating_add(1);
                             report.view_refresh_required = true;

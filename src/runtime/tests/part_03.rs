@@ -1278,6 +1278,68 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
     assert_eq!(prompt_state.prompt.buffer.cursor(), "abcde fghij".len());
 }
 
+/// Verifies pane-local prompt height changes immediately resize only the owning
+/// PTY. Split panes can hold prompts with different wrapped heights, so typing
+/// into one pane must not leave that pane at a stale process size or borrow the
+/// sibling pane's prompt reservation.
+#[test]
+fn runtime_agent_prompt_height_resize_is_pane_local() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(30, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap()
+        .pane_id;
+    service.session.select_pane(&primary, "%1").unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+
+    let initial_first = service.find_pane_descriptor("%1").unwrap().size;
+    let initial_second = service
+        .find_pane_descriptor(second_pane.as_str())
+        .unwrap()
+        .size;
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"alpha beta gamma delta".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert!(report.view_refresh_required);
+    let resized_first = service.find_pane_descriptor("%1").unwrap().size;
+    let resized_second = service
+        .find_pane_descriptor(second_pane.as_str())
+        .unwrap()
+        .size;
+
+    assert_eq!(resized_first.columns, initial_first.columns);
+    assert!(
+        resized_first.rows < initial_first.rows,
+        "owning pane PTY should shrink when its prompt wraps: {initial_first:?} -> {resized_first:?}"
+    );
+    assert_eq!(resized_second, initial_second);
+
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies application-cursor-mode arrows still drive agent prompt navigation.
 ///
 /// PTY applications can leave the pane in application cursor mode, which causes
