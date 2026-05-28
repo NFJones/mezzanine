@@ -1269,6 +1269,11 @@ fn encode_safe_changed_row_span_update(
     let start_column = current_cells[start].column_start;
     let current_end_cell = &current_cells[current_end.saturating_sub(1)];
     let end_column = current_end_cell.column_end;
+    if !style_spans_fit_changed_column_range(previous_spans, start_column, end_column)
+        || !style_spans_fit_changed_column_range(spans, start_column, end_column)
+    {
+        return None;
+    }
     let segment = &line[current_cells[start].byte_start..current_end_cell.byte_end];
 
     let segment_spans = clip_style_spans_to_column_range(spans, start_column, end_column);
@@ -1280,6 +1285,19 @@ fn encode_safe_changed_row_span_update(
     let mut row_update = format!("\x1b[{row};1H\x1b[0m").into_bytes();
     row_update.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
     (span_update.len() < row_update.len()).then_some(span_update)
+}
+
+/// Returns whether every style span stays inside one changed column range.
+fn style_spans_fit_changed_column_range(
+    spans: &[TerminalStyleSpan],
+    start: usize,
+    end: usize,
+) -> bool {
+    spans.iter().all(|span| {
+        let span_start = span.start;
+        let span_end = span.start.saturating_add(span.length);
+        span_start >= start && span_end <= end
+    })
 }
 
 /// Carries one rendered grapheme cell plus the rendition active across it.

@@ -2656,6 +2656,50 @@ fn attached_terminal_output_update_rewrites_rows_when_glyph_width_changes() {
     assert!(rendered.contains("aaXaa "), "{rendered:?}");
 }
 
+/// Verifies wrapped agent-prompt continuation rows with full-row styling fall
+/// back to a full-row rewrite instead of a bounded segment update.
+///
+/// History navigation can swap one wrapped continuation row for another while
+/// keeping the changed text inside a narrow interior segment. The row-diff
+/// path must still rewrite the whole row when prompt styling spans extend past
+/// the changed text, or the continuation indentation and prompt background can
+/// inherit stale cells from the prior render.
+#[test]
+fn attached_terminal_output_update_rewrites_fully_styled_prompt_continuation_rows() {
+    let previous_lines = vec!["      alpha     ".to_string()];
+    let current_lines = vec!["      omega     ".to_string()];
+    let prompt_span = crate::terminal::TerminalStyleSpan {
+        start: 0,
+        length: 16,
+        rendition: crate::terminal::GraphicRendition {
+            foreground: Some(crate::terminal::TerminalColor::Rgb(255, 255, 255)),
+            background: Some(crate::terminal::TerminalColor::Rgb(37, 40, 39)),
+            ..crate::terminal::GraphicRendition::default()
+        },
+    };
+    let previous_spans = vec![vec![prompt_span]];
+    let current_spans = vec![vec![prompt_span]];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &previous_spans);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &current_spans,
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H\x1b[0m"), "{rendered:?}");
+    assert!(rendered.contains("      omega     "), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[1;7H\x1b[0momega"), "{rendered:?}");
+}
+
 /// Verifies stable-row attached-terminal updates clear only rows that shrink
 /// instead of falling back to a full-screen redraw. This avoids stale trailing
 /// cells over remote terminal links while keeping the update bounded to the
