@@ -4528,7 +4528,8 @@ mod tests {
         render_command_markdown_body_lines, rendered_line_rendition_at,
         runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
         runtime_display_overlay_rendered_line_style_spans,
-        runtime_display_overlay_rendered_selection_start, runtime_human_readable_display_lines,
+        runtime_display_overlay_rendered_selection_start,
+        runtime_display_overlay_selection_prefix_columns, runtime_human_readable_display_lines,
         wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
         wrapped_prefixed_agent_terminal_lines,
     };
@@ -5168,6 +5169,80 @@ mod tests {
                 "column {column} lost link foreground: {spans:?}"
             );
         }
+    }
+
+    /// Verifies the active selector gutter stays isolated from a link that
+    /// begins at the first visible body column.
+    ///
+    /// `/status` renders some selectable links without a list-prefix gap. When
+    /// the active row's selector gutter abuts that first link cell, the gutter
+    /// must remain a standalone styled cell so the link highlight does not
+    /// visually shift left into the gutter column.
+    #[test]
+    fn active_markdown_overlay_front_of_line_link_keeps_gutter_separate() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("status".to_string()),
+            "[`saved`](mez-agent:%2Fresume%20saved)",
+            &ui_theme,
+        );
+        let overlay = RuntimeDisplayOverlay {
+            lines: content.lines.clone(),
+            line_style_spans: content.line_style_spans.clone(),
+            scroll_offset: 0,
+            selections: content.selections.clone(),
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match_line: None,
+            search_status: None,
+            mouse_selection: None,
+        };
+        let selection = &overlay.selections[0];
+        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        assert_eq!(
+            start,
+            runtime_display_overlay_selection_prefix_columns(),
+            "{spans:?}"
+        );
+        assert!(
+            spans.iter().any(|span| {
+                span.start == 0 && span.length == runtime_display_overlay_selection_prefix_columns()
+            }),
+            "missing isolated selector gutter span: {spans:?}"
+        );
+        let gutter_rendition = rendered_line_rendition_at(&spans, 0);
+        let gutter_trailing_rendition = rendered_line_rendition_at(&spans, start - 1);
+        let first_link_rendition = rendered_line_rendition_at(&spans, start);
+        assert_eq!(
+            gutter_rendition.foreground,
+            Some(ui_theme.colors.agent_model.foreground),
+            "gutter lost selection styling: {spans:?}"
+        );
+        assert_eq!(
+            gutter_trailing_rendition.foreground,
+            Some(ui_theme.colors.agent_model.foreground),
+            "selector gutter trailing cell lost selection styling: {spans:?}"
+        );
+        assert_eq!(
+            first_link_rendition.foreground,
+            Some(ui_theme.colors.agent_transcript_command.foreground),
+            "front-of-line link styling shifted into the gutter: {spans:?}"
+        );
+        assert!(
+            gutter_rendition.underline,
+            "gutter lost underline: {spans:?}"
+        );
+        assert!(
+            gutter_trailing_rendition.underline,
+            "selector gutter trailing cell lost underline: {spans:?}"
+        );
+        assert!(
+            first_link_rendition.underline,
+            "front-of-line link lost underline: {spans:?}"
+        );
     }
 
     /// Verifies `/list-sessions` only linkifies the first visible occurrence of

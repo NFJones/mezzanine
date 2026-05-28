@@ -1191,6 +1191,18 @@ pub(super) fn append_uncovered_overlay_selection_span(
         },
     );
 }
+
+/// Appends one style span without coalescing it into an adjacent span.
+///
+/// Overlay selection gutters must remain a standalone cell so later body or
+/// fallback selection styling cannot visually absorb the gutter when adjacent
+/// rendered spans share the same rendition.
+fn push_style_span_without_coalescing(spans: &mut Vec<TerminalStyleSpan>, span: TerminalStyleSpan) {
+    if span.length == 0 {
+        return;
+    }
+    spans.push(span);
+}
 /// Returns the fully composed style spans for one rendered overlay line.
 pub(super) fn runtime_display_overlay_rendered_line_style_spans(
     overlay: &RuntimeDisplayOverlay,
@@ -1219,11 +1231,11 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
             );
         }
         if active {
-            push_or_extend_style_span(
+            push_style_span_without_coalescing(
                 &mut spans,
                 TerminalStyleSpan {
                     start: 0,
-                    length: 1,
+                    length: prefix_columns.min(max_columns),
                     rendition: runtime_display_overlay_selection_rendition(
                         ui_theme,
                         selection.kind,
