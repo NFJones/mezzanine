@@ -97,6 +97,27 @@ fn readline_word_navigation_and_deletion_use_shell_style_segments() {
     assert_eq!(buffer.line(), "alpha ");
 }
 
+/// Verifies shell-style word deletion stops at punctuation boundaries so
+/// Alt+Backspace mirrors readline behavior for paths and flags.
+#[test]
+fn readline_word_deletion_stops_at_punctuation_boundaries() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("alpha/beta-gamma");
+
+    assert!(buffer.kill_word_left());
+    assert_eq!(buffer.line(), "alpha/beta-");
+    assert_eq!(buffer.cursor(), "alpha/beta-".len());
+    assert!(buffer.kill_word_left());
+    assert_eq!(buffer.line(), "alpha/beta");
+    assert_eq!(buffer.cursor(), "alpha/beta".len());
+    assert!(buffer.kill_word_left());
+    assert_eq!(buffer.line(), "alpha/");
+    assert_eq!(buffer.cursor(), "alpha/".len());
+    assert!(buffer.kill_word_left());
+    assert_eq!(buffer.line(), "alpha");
+    assert_eq!(buffer.cursor(), "alpha".len());
+}
+
 /// Verifies multiline readline row navigation preserves visible columns and
 /// only falls back to prompt history when no adjacent row exists.
 #[test]

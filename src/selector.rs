@@ -207,7 +207,10 @@ impl ActiveSelector {
         let Some(candidate) = self.plan.candidates.get(self.selected_index) else {
             return false;
         };
-        if candidate.append_space || !candidate.value.ends_with('/') {
+        if candidate.append_space
+            || !candidate.value.ends_with('/')
+            || !self.plan.query.ends_with('/')
+        {
             return false;
         }
         self.selected_line()
@@ -1587,10 +1590,10 @@ mod tests {
         assert_eq!(cursor, line.len());
     }
 
-    /// Verifies directory path selections request a fresh selector on the next
-    /// Tab so path completion can continue into that directory.
+    /// Verifies auto-completed directory candidates keep cycling sibling
+    /// matches until the user explicitly types more path input.
     #[test]
-    fn active_selector_refreshes_after_directory_candidate_selection() {
+    fn active_selector_keeps_cycling_after_implicit_directory_selection() {
         let _guard = CWD_TEST_LOCK.lock().unwrap();
         let original = std::env::current_dir().unwrap();
         let root =
@@ -1603,6 +1606,34 @@ mod tests {
             SelectorSurface::AgentCommand,
             "/list-mcp ./sr",
             "/list-mcp ./sr".len(),
+            false,
+        )
+        .unwrap();
+        let (line, cursor) = selector.selected_line().unwrap();
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(line, "/list-mcp ./src/");
+        assert!(!selector.should_refresh_from_selected_directory(&line, cursor));
+    }
+
+    /// Verifies an explicit trailing slash on the typed query refreshes into
+    /// the selected directory on the next Tab press.
+    #[test]
+    fn active_selector_refreshes_after_explicit_directory_selection() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mez-selector-refresh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        std::env::set_current_dir(&root).unwrap();
+
+        let selector = ActiveSelector::start(
+            SelectorSurface::AgentCommand,
+            "/list-mcp ./sr/",
+            "/list-mcp ./sr/".len(),
             false,
         )
         .unwrap();

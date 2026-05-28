@@ -3003,6 +3003,37 @@ bootstrap\tcomplete\t1714500000\n";
     assert!(!sig.git_repo);
 }
 
+/// Verifies bootstrap parsing does not trust mismatched `$SHELL` metadata over
+/// the resolved pane shell when choosing wrapper classification.
+///
+/// Async pane workers can fall back to `/bin/sh` even when the outer test or
+/// launcher environment exports `SHELL=/bin/bash`. The bootstrap metadata still
+/// records that environment shell, but runtime wrapper flags must stay aligned
+/// with the actual resolved pane shell to avoid passing bash-only options to
+/// `/bin/sh`.
+#[test]
+fn parse_bootstrap_env_output_prefers_resolved_shell_for_mismatched_metadata() {
+    use std::path::Path;
+
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\tmyhost\n\
+env\tuser\tme\n\
+env\tshell_path\t/bin/bash\n\
+env\tshell_class\tbash\n\
+env\tshell_version\tGNU bash, version 5.2.21\n\
+env\tcwd\t/repo\n\
+bootstrap\tcomplete\t1714500000\n";
+
+    let (signature, _inventory, _instruction_files) =
+        parse_bootstrap_env_output(output, Path::new("/bin/sh"));
+
+    let sig = signature.expect("signature should be parsed");
+    assert_eq!(sig.shell_path, "/bin/bash");
+    assert_eq!(sig.shell_classification, ShellClassification::PosixSh);
+    assert_eq!(sig.shell_version.as_deref(), Some("GNU bash, version 5.2.21"));
+}
+
 /// Verifies parse bootstrap env output returns none for empty output.
 ///
 /// This regression scenario documents the behavior being protected so a

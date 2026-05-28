@@ -847,8 +847,20 @@ fn previous_word_boundary(text: &str, cursor: usize) -> usize {
         }
         position = previous;
     }
+    let Some((_, ch)) = previous_char(text, position) else {
+        return position;
+    };
+    if readline_word_is_identifier(ch) {
+        while let Some((previous, ch)) = previous_char(text, position) {
+            if !readline_word_is_identifier(ch) {
+                break;
+            }
+            position = previous;
+        }
+        return position;
+    }
     while let Some((previous, ch)) = previous_char(text, position) {
-        if ch.is_whitespace() {
+        if !readline_word_is_symbol(ch) {
             break;
         }
         position = previous;
@@ -865,13 +877,35 @@ fn next_word_boundary(text: &str, cursor: usize) -> usize {
         }
         position = next;
     }
+    let Some((_, ch)) = next_char(text, position) else {
+        return position;
+    };
+    if readline_word_is_identifier(ch) {
+        while let Some((next, ch)) = next_char(text, position) {
+            if !readline_word_is_identifier(ch) {
+                break;
+            }
+            position = next;
+        }
+        return position;
+    }
     while let Some((next, ch)) = next_char(text, position) {
-        if ch.is_whitespace() {
+        if !readline_word_is_symbol(ch) {
             break;
         }
         position = next;
     }
     position
+}
+
+/// Returns whether one character belongs to a readline word token.
+fn readline_word_is_identifier(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// Returns whether one character belongs to a punctuation token between words.
+fn readline_word_is_symbol(ch: char) -> bool {
+    !ch.is_whitespace() && !readline_word_is_identifier(ch)
 }
 
 /// Returns the previous UTF-8 character start and value before cursor.

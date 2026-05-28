@@ -2424,14 +2424,22 @@ pub fn parse_bootstrap_env_output(
     environment_managers.sort();
     environment_managers.dedup();
 
+    let shell_metadata_matches_resolved =
+        shell_path.is_empty() || Path::new(&shell_path) == resolved_shell_path;
     if shell_path.is_empty() {
         shell_path = resolved_shell_path.to_string_lossy().into_owned();
     }
-    let probe_classification = shell_version.as_deref().and_then(classify_version_probe);
+    let trusted_shell_version = shell_metadata_matches_resolved
+        .then_some(shell_version.as_deref())
+        .flatten();
+    let trusted_shell_class = shell_metadata_matches_resolved
+        .then_some(shell_class.as_deref())
+        .flatten();
+    let probe_classification = trusted_shell_version.and_then(classify_version_probe);
     let resolved_shell_classification =
-        ShellClassification::classify_with_probe(resolved_shell_path, shell_version.as_deref());
+        ShellClassification::classify_with_probe(resolved_shell_path, trusted_shell_version);
     let shell_classification = probe_classification
-        .or_else(|| shell_class.as_deref().map(ShellClassification::classify))
+        .or_else(|| trusted_shell_class.map(ShellClassification::classify))
         .unwrap_or(resolved_shell_classification);
 
     let signature = if os.is_empty() && arch.is_empty() && host.is_empty() {
