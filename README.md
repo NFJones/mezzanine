@@ -237,7 +237,9 @@ Default workflow keys follow conventional multiplexer placement:
 
 With mouse support enabled, dragging selects pane text and double-clicking
 copies the surrounding readline-style word into the `mouse` paste buffer and
-host clipboard when clipboard integration is available.
+host clipboard when clipboard integration is available. Drag selection over a
+full-screen alternate-screen pane copies the visible pane text without adding it
+to scrollback or default agent context.
 
 The Mezzanine command prompt accepts commands such as `new-window`,
 `split-window`, `select-pane`, `set-theme`, `list-keys`, `show-options`, and

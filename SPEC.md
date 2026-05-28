@@ -990,6 +990,12 @@ mouse input is enabled and the host terminal supports mouse reporting.
 Mezzanine MUST support selecting text within a pane for copy and paste
 purposes.
 
+When a pane is in the alternate screen and the pane application has not captured
+mouse input, explicit mouse text selection MUST copy from the visible pane grid.
+That selected text MUST be written only through the explicit copy/paste path and
+MUST NOT be appended to normal scrollback, copy-mode history, or default agent
+context.
+
 Mouse text selection MUST remain anchored to the pane where the selection began,
 even when the pointer crosses pane borders, and MUST autoscroll scrollable pane
 history at the top and bottom pane edges. Autoscroll speed SHOULD increase in
@@ -1186,9 +1192,10 @@ context. The harness MAY know that an alternate screen is active, but default
 agent context and any history-inclusive observations MUST exclude the
 alternate-screen cell contents.
 
-User-facing commands MAY provide an explicit visible-screen capture mode for
-the active alternate screen, but alternate-screen content MUST NOT appear in
-history-inclusive capture, copy-mode history, or default agent context.
+User-facing commands and mouse text selection MAY provide an explicit
+visible-screen capture mode for the active alternate screen, but alternate-screen
+content MUST NOT appear in history-inclusive capture, copy-mode history, or
+default agent context.
 
 Mezzanine MUST preserve compatibility with programs that expect a multiplexed
 xterm-compatible terminal: full-screen programs MUST be able to enter and leave

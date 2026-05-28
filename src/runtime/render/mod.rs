@@ -3148,7 +3148,7 @@ impl RuntimeSessionService {
                     origin_position: position,
                     autoscroll_position: None,
                 });
-                let copy_mode = self.ensure_active_copy_mode(pane_id.as_str())?;
+                let copy_mode = self.ensure_mouse_selection_copy_mode(pane_id.as_str())?;
                 let position = runtime_copy_position_for_view(copy_mode, target.position);
                 copy_mode.select_range(position, position)?;
                 Ok(true)
@@ -3643,7 +3643,7 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         let copied = {
-            let copy_mode = self.ensure_active_copy_mode(pane_id.as_str())?;
+            let copy_mode = self.ensure_mouse_selection_copy_mode(pane_id.as_str())?;
             let start = copy_mode
                 .selection()
                 .map(|(start, _)| start)
@@ -3675,6 +3675,35 @@ impl RuntimeSessionService {
             });
         }
         Ok(true)
+    }
+
+    /// Ensures mouse drag selection has a copy buffer for the selected pane.
+    ///
+    /// Alternate-screen applications are excluded from normal scrollback by
+    /// design, but mouse drag selection is an explicit copy operation over the
+    /// visible pane body. For that path, seed copy mode from visible rows so
+    /// full-screen terminal apps can still be copied without changing history
+    /// capture semantics.
+    fn ensure_mouse_selection_copy_mode(&mut self, pane_id: &str) -> Result<&mut CopyMode> {
+        if !self.active_copy_modes.contains_key(pane_id) {
+            let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
+            let screen = self.pane_screens.get(pane_id).ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "pane screen not found",
+                )
+            })?;
+            let copy_mode = if screen.alternate_screen_active() {
+                CopyMode::from_visible_screen(screen, viewport_rows)?
+            } else {
+                CopyMode::from_screen(screen, viewport_rows)?
+            };
+            self.active_copy_modes
+                .insert(pane_id.to_string(), copy_mode);
+        }
+        self.active_copy_modes
+            .get_mut(pane_id)
+            .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))
     }
 
     /// Selects and copies the readline-style word under one pane-local position.

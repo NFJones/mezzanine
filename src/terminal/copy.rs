@@ -144,6 +144,42 @@ impl CopyMode {
         })
     }
 
+    /// Builds a copy-mode buffer from the currently visible terminal rows.
+    ///
+    /// This constructor is intentionally narrower than `from_screen`: it does
+    /// not include normal scrollback history. Mouse drag selection uses it for
+    /// alternate-screen applications so an explicit user selection can copy the
+    /// visible full-screen content without adding that content to normal
+    /// history or agent context.
+    pub fn from_visible_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
+        if viewport_rows == 0 {
+            return Err(MezError::invalid_args(
+                "copy mode viewport must have at least one row",
+            ));
+        }
+        let styled_lines = screen.visible_styled_lines();
+        let lines = styled_lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let copy_lines = styled_lines
+            .iter()
+            .map(|line| line.copy_text.clone().unwrap_or_else(|| line.text.clone()))
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            lines,
+            copy_lines,
+            styled_lines,
+            viewport_rows,
+            scroll_top: 0,
+            cursor: CopyPosition { line: 0, column: 0 },
+            selection: None,
+            selection_anchor: None,
+            alternate_screen_was_active: screen.alternate_screen_active(),
+        })
+    }
+
     /// Runs the alternate screen was active operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

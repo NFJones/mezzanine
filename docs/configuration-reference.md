@@ -103,7 +103,7 @@ entry is shown.
 | `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. Valid defaults include `xterm-compatible` and `dumb`. |
 | `terminal.term` | string | `"screen-256color"` | `TERM` value exposed to panes; must not claim host identity such as `xterm-256color`. |
 | `terminal.true_color` | boolean | `true` | Enable true-color presentation where supported. |
-| `terminal.mouse` | boolean | `true` | Enable mouse reporting, selection, scrolling, and UI clicks. |
+| `terminal.mouse` | boolean | `true` | Enable mouse reporting, selection, scrolling, UI clicks, and explicit visible alternate-screen selection when pane applications have not captured mouse input. |
 | `terminal.bracketed_paste` | boolean | `true` | Enable bracketed paste handling. |
 | `terminal.clipboard` | string | `"external"` | Clipboard integration mode. |
 | `terminal.clipboard_copy_command` | string or string array | omitted | Host copy command; receives content on stdin. |

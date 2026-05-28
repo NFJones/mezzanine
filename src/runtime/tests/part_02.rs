@@ -3460,6 +3460,52 @@ fn runtime_copy_mode_command_preserves_live_viewport_height() {
     assert_eq!(visible, vec!["one", "two", "three", "four"]);
 }
 
+/// Verifies mouse drag selection copies the visible alternate-screen grid.
+///
+/// Full-screen terminal applications are intentionally excluded from normal
+/// history and copy-mode buffers, but an explicit mouse drag is a user copy
+/// operation over the displayed pane body. This regression protects less/nano
+/// style alternate-screen copying without making alternate-screen content part
+/// of scrollback or default agent context.
+#[test]
+fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.window_frames_enabled = false;
+    service.pane_frames_enabled = false;
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"normal-only\n\x1b[?1049halpha beta\nsecond row");
+    assert!(screen.alternate_screen_active());
+    assert!(!screen.normal_content_lines().iter().any(|line| line.contains("alpha beta")));
+    service.pane_screens.insert(pane_id.clone(), screen);
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionStart(
+                        CopyPosition { line: 0, column: 0 },
+                    )),
+                    TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionFinish(
+                        CopyPosition { line: 1, column: 6 },
+                    )),
+                ],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(service.paste_buffers.get("mouse"), Some("alpha beta\nsecond"));
+    assert!(!service.active_copy_modes.contains_key(&pane_id));
+}
+
 /// Verifies copy-mode key navigation marks the attached view dirty without
 /// invalidating the retained terminal frame. Copy-mode scrolling only changes
 /// pane content and cursor placement, so it should use the diff renderer rather
