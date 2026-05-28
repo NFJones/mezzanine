@@ -20,8 +20,10 @@ use super::{
 };
 use crate::agent::{
     ActionResult, ActionStatus, AgentActionPayload, AgentContext, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ModelProfile, ModelTokenUsage,
+    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage,
+    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
     ModelTokenUsageKey, ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
+    provider_error_is_output_limit_exceeded,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
@@ -1562,15 +1564,73 @@ async fn execute_runtime_agent_compaction_dispatch(
     let RuntimeAgentCompactionDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            provider.send_request_async(&task.request).await
+            runtime_send_compaction_request_with_output_limit_retry(
+                &provider,
+                task.request,
+                &task.model_profile,
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-            provider.send_request_async(&task.request).await
+            runtime_send_compaction_request_with_output_limit_retry(
+                &provider,
+                task.request,
+                &task.model_profile,
+            )
+            .await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-            provider.send_request_async(&task.request).await
+            runtime_send_compaction_request_with_output_limit_retry(
+                &provider,
+                task.request,
+                &task.model_profile,
+            )
+            .await
         }
     }
+}
+
+/// Sends a model compaction request and retries once with stricter output
+/// guidance when the provider cuts off generation at its output-token limit.
+async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelProvider>(
+    provider: &P,
+    mut request: ModelRequest,
+    model_profile: &ModelProfile,
+) -> Result<ModelResponse> {
+    match provider.send_request_async(&request).await {
+        Ok(response) => Ok(response),
+        Err(error)
+            if provider_error_is_output_limit_exceeded(
+                error.message(),
+                error.provider_failure_json(),
+            ) =>
+        {
+            request =
+                runtime_agent_compaction_request_with_output_limit_retry(request, model_profile);
+            request.messages.push(ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::Configuration,
+                content: "[ephemeral compaction output-limit retry]\n\
+                    The previous compaction response was incomplete because generation hit max_output_tokens. \
+                    Return exactly one final say action containing a compact durable summary. \
+                    Keep the summary brief: preserve only active goals, decisions, changed files, validations, blockers, and next steps. \
+                    Do not include full logs, transcript excerpts, plans, or explanations. \
+                    This retry instruction is not durable transcript or future-turn context."
+                    .to_string(),
+            });
+            provider.send_request_async(&request).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Returns a compaction request with an escalated output cap for any retry.
+fn runtime_agent_compaction_request_with_output_limit_retry(
+    mut request: ModelRequest,
+    model_profile: &ModelProfile,
+) -> ModelRequest {
+    request.max_output_tokens = Some(model_profile.output_limit_retry_tokens());
+    request
 }
 
 /// Runs the provider worker error kind operation for this subsystem.
@@ -1647,6 +1707,51 @@ mod tests {
         }
     }
 
+    /// Records compaction provider requests while failing the first one with an
+    /// output-token-limit error. This keeps compaction retry coverage local to
+    /// the async worker helper instead of depending on live provider I/O.
+    #[derive(Clone, Default)]
+    struct CompactionOutputLimitThenSuccessProvider {
+        /// Provider requests observed by the retry helper.
+        requests: Arc<Mutex<Vec<ModelRequest>>>,
+    }
+
+    impl AsyncModelProvider for CompactionOutputLimitThenSuccessProvider {
+        /// Returns the test provider id used by the compaction request.
+        fn provider_id(&self) -> &str {
+            "openai"
+        }
+
+        /// Fails once with `max_output_tokens` and succeeds after retry.
+        fn send_request_async<'a>(
+            &'a self,
+            request: &'a ModelRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+            Box::pin(async move {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request.clone());
+                if requests.len() == 1 {
+                    return Err(MezError::invalid_state(
+                        "OpenAI stream returned an incomplete response: max_output_tokens",
+                    )
+                    .with_provider_failure_json(
+                        r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#,
+                    ));
+                }
+                Ok(ModelResponse {
+                    provider: self.provider_id().to_string(),
+                    model: request.model.clone(),
+                    raw_text: "compacted after output-limit retry".to_string(),
+                    usage: Default::default(),
+                    latest_request_usage: None,
+                    quota_usage: Vec::new(),
+                    action_batch: None,
+                    provider_transcript_events: Vec::new(),
+                })
+            })
+        }
+    }
+
     /// Builds one model profile for same-provider auto-sizing tests.
     fn test_model_profile(model: &str, reasoning: Option<&str>) -> ModelProfile {
         ModelProfile {
@@ -1688,6 +1793,68 @@ mod tests {
             allowed_reasoning_efforts: vec!["high".to_string(), "xhigh".to_string()],
             fallback_policy: RuntimeAutoSizingFallbackPolicy::UseDefaultProfile,
         }
+    }
+
+    /// Verifies model-backed compaction retries output-limit provider failures
+    /// with stricter summary guidance and an escalated output cap.
+    ///
+    /// Auto compaction runs through a standalone async worker rather than the
+    /// active-turn provider retry path. This regression protects OpenAI
+    /// `response.incomplete/max_output_tokens` failures from becoming terminal
+    /// compaction failures before a compact second request can succeed.
+    #[tokio::test]
+    async fn compaction_output_limit_failure_retries_with_compact_guidance() {
+        let provider = CompactionOutputLimitThenSuccessProvider::default();
+        let mut model_profile = ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-compact-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: BTreeMap::new(),
+            safety_tier: None,
+        };
+        model_profile
+            .provider_options
+            .insert("max_output_tokens".to_string(), "4096".to_string());
+        let request = ModelRequest {
+            provider: model_profile.provider.clone(),
+            model: model_profile.model.clone(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: model_profile.max_output_tokens(),
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "compact-conversation".to_string(),
+            agent_id: "agent-%1".to_string(),
+            available_mcp_tools: Vec::new(),
+            interaction_kind: ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            messages: Vec::new(),
+        };
+
+        let response = runtime_send_compaction_request_with_output_limit_retry(
+            &provider,
+            request,
+            &model_profile,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.raw_text, "compacted after output-limit retry");
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].max_output_tokens, Some(4096));
+        assert_eq!(requests[0].messages.len(), 0);
+        assert_eq!(requests[1].max_output_tokens, Some(16_384));
+        assert!(requests[1].messages.iter().any(|message| {
+            message.content.contains("compaction output-limit retry")
+                && message
+                    .content
+                    .contains("Return exactly one final say action")
+        }));
     }
 
     /// Verifies that same-provider automatic sizing is not OpenAI-specific.
