@@ -249,6 +249,10 @@ wrapping to the top when no later match exists.
 Press `Ctrl+A a` in a pane and type a request. The agent works from the focused
 pane's working directory, conversation state, and runtime settings.
 
+Agent-mode logs and rendered transcript entries wrap to the active pane width,
+capped at 120 display columns, so persisted and replayed transcript rows remain
+bounded on wide terminals.
+
 Useful slash commands include:
 
 | Command        | Purpose                                               |

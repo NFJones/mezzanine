@@ -74,11 +74,14 @@ use style::{
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
     push_or_extend_style_span,
 };
+pub(crate) use text::{
+    agent_log_wrap_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    wrap_agent_log_lines,
+};
 pub(super) use text::{
     blank_cells, blank_row, char_count, line_slice, normalize_selection, search_backward,
     search_forward, terminal_char_width, trim_row, validate_copy_position,
 };
-pub(crate) use text::{terminal_grapheme_width, terminal_graphemes, terminal_text_width};
 
 use text::{
     clip_style_span, collect_text_cells, fit_styled_width, fit_width, fitted_text_width,

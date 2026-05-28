@@ -5,6 +5,7 @@
 //! carriage returns, and backslashes.
 
 use crate::error::{MezError, Result};
+use crate::terminal::{agent_log_wrap_width, terminal_text_width, wrap_agent_log_lines};
 
 use super::types::{AgentPresentationEntry, AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use crate::agent::{ModelTokenUsage, ModelTokenUsageKey};
@@ -100,6 +101,39 @@ impl TranscriptEntry {
 }
 
 impl AgentPresentationEntry {
+    /// Returns a presentation entry whose display and copy rows obey the agent
+    /// log wrapping contract for the recorded terminal width.
+    pub(crate) fn normalized_for_agent_log_wrap(&self) -> Self {
+        if self.style_names.len() != self.display_lines.len() {
+            return self.clone();
+        }
+        let mut display_lines = Vec::new();
+        let mut style_names = Vec::new();
+        for (line, style_name) in self.display_lines.iter().zip(self.style_names.iter()) {
+            for wrapped_line in
+                wrap_agent_log_lines(std::slice::from_ref(line), self.terminal_width)
+            {
+                display_lines.push(wrapped_line);
+                style_names.push(style_name.clone());
+            }
+        }
+        let copy_lines = wrap_agent_log_lines(&self.copy_lines, self.terminal_width);
+        let changed = display_lines != self.display_lines
+            || style_names != self.style_names
+            || copy_lines != self.copy_lines;
+        Self {
+            style_names,
+            display_lines,
+            copy_lines,
+            ansi_text: if changed {
+                None
+            } else {
+                self.ansi_text.clone()
+            },
+            ..self.clone()
+        }
+    }
+
     /// Validates one durable presentation entry before persistence or replay.
     pub fn validate(&self) -> Result<()> {
         validate_conversation_id(&self.conversation_id)?;
@@ -126,6 +160,13 @@ impl AgentPresentationEntry {
             return Err(MezError::invalid_args(
                 "presentation style count must match display line count",
             ));
+        }
+        let wrap_width = agent_log_wrap_width(self.terminal_width);
+        for line in &self.display_lines {
+            validate_presentation_line_width("display", line, wrap_width)?;
+        }
+        for line in &self.copy_lines {
+            validate_presentation_line_width("copy", line, wrap_width)?;
         }
         for style in &self.style_names {
             validate_non_empty("presentation style", style)?;
@@ -182,9 +223,20 @@ impl AgentPresentationEntry {
             copy_lines: decode_string_vec(&fields[9], "presentation copy lines")?,
             ansi_text: fields.get(10).filter(|value| !value.is_empty()).cloned(),
         };
+        let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;
         Ok(entry)
     }
+}
+
+/// Validates one persisted presentation row against the effective wrap width.
+fn validate_presentation_line_width(field: &str, line: &str, wrap_width: usize) -> Result<()> {
+    if terminal_text_width(line) > wrap_width {
+        return Err(MezError::invalid_args(format!(
+            "presentation {field} line exceeds {wrap_width} display columns"
+        )));
+    }
+    Ok(())
 }
 
 /// Runs the validate conversation id operation for this subsystem.

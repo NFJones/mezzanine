@@ -169,11 +169,14 @@ pub use theme::{
 
 use client_loop::borrow_raw_fd;
 use keys::{MAX_OSC_STRING_BYTES, parse_key_chord_bytes};
+pub(crate) use render::{
+    agent_log_wrap_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    wrap_agent_log_lines,
+};
 use render::{
     blank_cells, blank_row, char_count, line_slice, normalize_selection, search_backward,
     search_forward, terminal_char_width, trim_row, validate_copy_position,
 };
-pub(crate) use render::{terminal_grapheme_width, terminal_graphemes, terminal_text_width};
 
 /// Exposes the tests module boundary.
 ///

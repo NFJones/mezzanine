@@ -106,8 +106,69 @@ fn transcript_store_compacts_presentation_tail_into_zstd_history() {
 
     assert!(compressed_path.exists());
     assert!(cleartext_path.exists());
-    assert_eq!(inspected, vec![first, second, third]);
+    assert_eq!(
+        inspected,
+        vec![
+            first.normalized_for_agent_log_wrap(),
+            second.normalized_for_agent_log_wrap(),
+            third.normalized_for_agent_log_wrap()
+        ]
+    );
     assert_eq!(next, 4);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies durable presentation appends normalize display and copy rows to the
+/// recorded pane width so replay does not depend on terminal soft wrapping.
+#[test]
+fn transcript_store_wraps_presentation_rows_to_recorded_terminal_width() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-presentation-wrap-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut entry = presentation("conv1", 1);
+    entry.terminal_width = 12;
+    entry.style_names = vec!["assistant".to_string()];
+    entry.display_lines = vec!["mez> alpha beta gamma".to_string()];
+    entry.copy_lines = vec!["copy alpha beta gamma".to_string()];
+
+    store.append_presentation(&entry).unwrap();
+
+    let inspected = store.inspect_presentation("conv1").unwrap();
+
+    assert_eq!(inspected[0].display_lines, vec!["mez> alpha", "beta gamma"]);
+    assert_eq!(inspected[0].style_names, vec!["assistant", "assistant"]);
+    assert_eq!(inspected[0].copy_lines, vec!["copy alpha", "beta gamma"]);
+    assert!(inspected[0].ansi_text.is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies presentation row normalization caps wide terminal widths at 120
+/// columns, matching the agent-mode log rendering contract.
+#[test]
+fn transcript_store_caps_presentation_rows_at_120_columns() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-transcript-presentation-cap-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut entry = presentation("conv1", 1);
+    entry.terminal_width = 200;
+    entry.style_names = vec!["assistant".to_string()];
+    entry.display_lines = vec!["x".repeat(130)];
+    entry.copy_lines = entry.display_lines.clone();
+    entry.ansi_text = None;
+
+    store.append_presentation(&entry).unwrap();
+
+    let inspected = store.inspect_presentation("conv1").unwrap();
+
+    assert_eq!(inspected[0].display_lines[0].len(), 120);
+    assert_eq!(inspected[0].display_lines[1].len(), 10);
+    assert_eq!(inspected[0].copy_lines, inspected[0].display_lines);
     let _ = fs::remove_dir_all(root);
 }
 

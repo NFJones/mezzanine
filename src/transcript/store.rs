@@ -135,6 +135,7 @@ impl AgentTranscriptStore {
     /// Presentation rows are user-interface replay state. They intentionally
     /// live beside, not inside, model-facing transcript history.
     pub fn append_presentation(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.presentation_path_for(&entry.conversation_id)?;

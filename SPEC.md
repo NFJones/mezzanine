@@ -1785,16 +1785,19 @@ user-facing response, MUST remain visible by default so the agent never appears
 silent. These agent-authored lines, their gutter prefix characters, and their
 speaker labels MUST be visually distinct through named theme colors while
 preserving their plain-text content for copy mode, history export, and terminal
-observation. When agent-authored transcript text soft-wraps in the pane,
-Mezzanine MUST repeat the display-only agent gutter prefix on continuation
-rows, and resize reflow MUST preserve that visual gutter without treating it as
-agent-authored content for copy or observation semantics. Markdown transcript
-presentation MUST wrap at the smaller of the pane terminal width or 120 display
-cells, and continuation rows MUST preserve the relevant speaker, quote, list,
-or code indentation. Non-table markdown rows MUST wrap at the nearest
-whitespace boundary before the presentation limit; if no whitespace boundary
-exists in the overflowing segment, Mezzanine SHOULD leave the segment intact
-and rely on normal terminal soft wrapping instead of inserting a hard split.
+observation. Agent-mode log rows and rendered transcript presentation rows MUST
+wrap at the smaller of the pane terminal width or 120 display cells before they
+are persisted or replayed, and hard splits MUST occur only at terminal grapheme
+boundaries when an unbroken token exceeds that limit. When agent-authored
+transcript text soft-wraps in the pane, Mezzanine MUST repeat the display-only
+agent gutter prefix on continuation rows, and resize reflow MUST preserve that
+visual gutter without treating it as agent-authored content for copy or
+observation semantics. Markdown transcript presentation MUST preserve the
+relevant speaker, quote, list, or code indentation on continuation rows.
+Non-table markdown rows MUST wrap at the nearest whitespace boundary before the
+presentation limit; if no whitespace boundary exists in the overflowing
+segment, Mezzanine SHOULD leave the segment intact and rely on normal terminal
+soft wrapping instead of inserting a hard split.
 Markdown table rows MUST preserve their table layout until they exceed the
 pane terminal width; the 120-cell cap MUST NOT force table rows to wrap on
 wider terminals.
