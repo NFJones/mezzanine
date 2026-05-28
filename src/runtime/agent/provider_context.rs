@@ -125,13 +125,20 @@ impl RuntimeSessionService {
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let budget_words = model_profile.context_window_budget_words();
+        let profile_budget_words = model_profile.context_window_budget_words();
         let recovery_attempt = attempt.max(1);
+        let recovery_budget_words = match recovery_attempt {
+            1 => profile_budget_words,
+            2 => profile_budget_words.saturating_mul(3).saturating_div(4),
+            3 => profile_budget_words.saturating_div(2),
+            _ => profile_budget_words.saturating_div(4),
+        }
+        .max(1);
         let retained_tail_percent = self.agent_compaction_raw_retention_percent;
         let (compacted_context, report) =
             compact_model_context_for_budget_with_retained_tail_percent(
                 context,
-                budget_words,
+                recovery_budget_words,
                 retained_tail_percent,
             )?;
         if !report.changed() {
@@ -139,16 +146,21 @@ impl RuntimeSessionService {
                 &turn.pane_id,
                 turn_id,
                 &format!(
-                    "context_limit_recovery skipped attempt={} budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
+                    "context_limit_recovery skipped attempt={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
                     recovery_attempt,
-                    budget_words,
+                    profile_budget_words,
+                    recovery_budget_words,
                     retained_tail_percent,
                     runtime_mezzanine_error_code(error.kind())
                 ),
             )?;
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
-                "agent: provider rejected context as too large; no compactable active turn context remains",
+                &format!(
+                    "agent: provider rejected context as too large; no compactable active turn context remains profile_budget_words={} recovery_budget_words={}",
+                    profile_budget_words,
+                    recovery_budget_words
+                ),
             )?;
             return Ok(false);
         }
@@ -157,8 +169,9 @@ impl RuntimeSessionService {
         self.append_agent_status_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(
-                "agent: provider rejected context as too large; compacted active turn context budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={}",
-                budget_words,
+                "agent: provider rejected context as too large; compacted active turn context profile_budget_words={} recovery_budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={}",
+                profile_budget_words,
+                recovery_budget_words,
                 retained_tail_percent,
                 report.compacted_blocks,
                 report.omitted_blocks
@@ -168,9 +181,10 @@ impl RuntimeSessionService {
             &turn.pane_id,
             turn_id,
             &format!(
-                "context_limit_recovery applied attempt={} budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
+                "context_limit_recovery applied attempt={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
                 recovery_attempt,
-                budget_words,
+                profile_budget_words,
+                recovery_budget_words,
                 retained_tail_percent,
                 report.compacted_blocks,
                 report.omitted_blocks,

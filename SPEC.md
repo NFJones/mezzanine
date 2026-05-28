@@ -4236,7 +4236,11 @@ recoverable active-turn context before retrying within the bounded provider
 retry policy. This recovery MUST preserve the durable turn and latest user
 instruction; it SHOULD prefer compacting or omitting recoverable action-result,
 tool, transcript, and other explicit observation context over dropping recent
-user steering wholesale.
+user steering wholesale. If the provider still rejects the retried request,
+Mezzanine MUST continue provider context-limit recovery with successively
+smaller explicit compaction budgets until the provider accepts the request,
+the bounded retry policy is exhausted, or no further recoverable compaction can
+change the active-turn context.
 
 Agents MUST support optional routing model sizing. When routing
 is enabled for a pane, agent, or subagent, the first provider step for each new

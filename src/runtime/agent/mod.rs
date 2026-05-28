@@ -107,7 +107,7 @@ use trace::*;
 const RUNTIME_AGENT_TURN_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 /// Maximum in-process provider context-limit retries for test providers.
 #[cfg(test)]
-const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 2;
+const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 3;
 /// Maximum in-process provider output-limit retries for test providers.
 #[cfg(test)]
 const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT: u32 = 2;

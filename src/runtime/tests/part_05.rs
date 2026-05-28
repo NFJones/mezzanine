@@ -1094,6 +1094,151 @@ context_window_tokens = 40000
     );
 }
 
+/// Verifies a second provider context-limit recovery attempt uses a smaller
+/// explicit compaction budget and still shrinks stored active-turn context.
+///
+/// Once one local compaction pass has already happened, a second provider
+/// rejection should not stop at the original profile budget. Recovery must use
+/// a smaller retry budget for the already-compacted context and record that
+/// narrower target in user-visible diagnostics.
+#[test]
+fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-context-limit-multi-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-context-limit-multi-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-context-limit-multi-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-multi-recovery","input":"continue with the very large observation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let profile_budget_words = service
+        .provider_registry()
+        .resolve_profile("provider-context-limit-multi-test")
+        .unwrap()
+        .context_window_budget_words();
+    let second_recovery_budget_words = profile_budget_words
+        .saturating_mul(3)
+        .saturating_div(4)
+        .max(1);
+    service.agent_turn_contexts.get_mut("turn-1").unwrap().blocks = vec![
+        ContextBlock {
+            source: ContextSourceKind::Memory,
+            label: "synthetic post-first-pass summary".to_string(),
+            content: format!("[context compacted]\n{}", "summary ".repeat(8_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained tail action result one".to_string(),
+            content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained tail action result two".to_string(),
+            content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained tail action result three".to_string(),
+            content: format!(
+                "provider-context-limit-tail-three- {}",
+                "tail ".repeat(5_000)
+            ),
+        },
+    ];
+    let before_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error = MezError::invalid_state(
+        "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
+    )
+    .with_provider_failure_json(
+        r#"{"status_code":400,"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+    );
+
+    let recovered = service
+        .recover_agent_provider_context_limit_failure(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+            2,
+        )
+        .unwrap();
+
+    assert!(recovered);
+    let after_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(after_context, before_context);
+    assert!(after_context.contains("[context compacted]"), "{after_context}");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    assert_eq!(
+        pane_text
+            .matches("provider rejected context as too large; compacted active turn context")
+            .count(),
+        1,
+        "{pane_text}"
+    );
+    assert!(
+        !pane_text.contains("no compactable active turn context remains"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped.contains(&format!("profile_budget_words={profile_budget_words}")),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped.contains(&format!(
+            "recovery_budget_words={second_recovery_budget_words}"
+        )),
+        "{pane_text}"
+    );
+}
+
 /// Verifies provider context-window wording also triggers active-turn
 /// compaction and retry before the turn is failed.
 ///
