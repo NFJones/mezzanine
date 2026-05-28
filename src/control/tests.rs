@@ -64,6 +64,7 @@ fn primary_params() -> InitializeParams {
         requested_role: RequestedRole::Primary,
         client_version: None,
         session_target_json: None,
+        detach_primary_on_disconnect: false,
         client: Some(ClientDescriptor {
             name: "test".to_string(),
             version: None,
@@ -118,6 +119,7 @@ fn none_authentication_gets_no_session_data() {
             requested_role: RequestedRole::Observer,
             client_version: None,
             session_target_json: None,
+            detach_primary_on_disconnect: false,
             client: None,
             authentication: Some(AuthenticationMaterial::none()),
         },
@@ -146,6 +148,7 @@ fn pending_observer_receives_only_request_local_status() {
             requested_role: RequestedRole::Observer,
             client_version: None,
             session_target_json: None,
+            detach_primary_on_disconnect: false,
             client: None,
             authentication: Some(AuthenticationMaterial::peer_credentials()),
         },

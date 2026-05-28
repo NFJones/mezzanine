@@ -132,6 +132,7 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
             "requested_role",
             "client_version",
             "session_target",
+            "detach_primary_on_disconnect",
             "client",
             "authentication",
         ],
@@ -159,6 +160,12 @@ pub(super) fn initialize_params_from_json(params: &str) -> Result<InitializePara
         requested_role,
         client_version: optional_string_member(&object, "client_version", "control/initialize")?,
         session_target_json: optional_session_target_member_json(&object)?,
+        detach_primary_on_disconnect: optional_bool_member(
+            &object,
+            "detach_primary_on_disconnect",
+            "control/initialize",
+        )?
+        .unwrap_or(false),
         client,
         authentication: optional_object_member_json(
             &object,

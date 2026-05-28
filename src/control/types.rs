@@ -346,6 +346,12 @@ pub struct InitializeParams {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub session_target_json: Option<String>,
+    /// Stores whether a primary connection should detach its client on disconnect.
+    ///
+    /// Foreground attach clients set this for the long-lived terminal control
+    /// socket. Short-lived administrative control clients leave it disabled so
+    /// closing a request connection does not clear primary ownership.
+    pub detach_primary_on_disconnect: bool,
     /// Stores the client value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

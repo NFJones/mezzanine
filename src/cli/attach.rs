@@ -172,9 +172,11 @@ pub(super) async fn run_attach<W: Write>(
     let mut stream = UnixStream::connect(socket_path)?;
     let terminal_size_fd = io::stdout().is_terminal().then(|| io::stdout().as_raw_fd());
     let (columns, rows) = terminal_size_from_fd_or_environment(terminal_size_fd);
+    let detach_primary_on_disconnect = request.requested_role == "primary";
     let initialize = format!(
-        r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":1,"client_name":"mez-cli","client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
+        r#"{{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{{"requested_role":"{}","requested_version":1,"client_name":"mez-cli","detach_primary_on_disconnect":{},"client":{{"name":"mez-cli","interactive":true,"terminal":{{"columns":{},"rows":{},"term":"{}"}}}}}}}}"#,
         request.requested_role,
+        detach_primary_on_disconnect,
         columns,
         rows,
         json_escape(&std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()))

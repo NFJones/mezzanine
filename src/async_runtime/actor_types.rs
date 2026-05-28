@@ -10,14 +10,15 @@ use super::{
     AsyncRuntimeControlConnectionConfig, AsyncRuntimeMessageConnectionConfig,
     AsyncRuntimeSessionHandle, AsyncWriteExt, AttachedClientStepApplication,
     AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalOutputModes,
-    ClientId, ClientStatusLine, ClientViewRole, ControlConnectionState, DeliveryCursor,
-    FanoutBatch, Framed, JoinSet, MessageConnection, MezError, PaneProcess, ProtocolFrameCodec,
-    RenderedClientView, Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderTask, RuntimeEventBatch, RuntimeEventConnectionTable,
-    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, StreamExt,
-    TerminalClientLoopConfig, TerminalStyleSpan, UnixListener, UnixStream,
-    authorize_unix_peer_raw_fd, encode_frame, oneshot, plan_attached_terminal_client_step,
+    ClientEvent, ClientId, ClientStatusLine, ClientViewRole, ControlConnectionState,
+    DeliveryCursor, FanoutBatch, Framed, JoinSet, MessageConnection, MezError, PaneProcess,
+    ProtocolFrameCodec, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch,
+    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
+    RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, Size, StreamExt, TerminalClientLoopConfig, TerminalStyleSpan,
+    UnixListener, UnixStream, authorize_unix_peer_raw_fd, encode_frame, oneshot,
+    plan_attached_terminal_client_step,
 };
 use crate::runtime::PaneResizeUpdate;
 use crate::snapshot::SnapshotRepository;
@@ -946,6 +947,7 @@ where
         tokio::select! {
             frame = framed.next() => {
                 let Some(frame) = frame else {
+                    submit_control_connection_disconnect_event(handle, connection).await?;
                     return Ok(served);
                 };
                 let input = encode_frame(&frame?);
@@ -969,6 +971,32 @@ where
             }
         }
     }
+}
+
+/// Submits a best-effort client disconnect event when a control connection EOFs.
+///
+/// The async control socket owns the live connection state, so it is the only
+/// layer that can reliably convert a foreground attach fd hangup into the
+/// runtime event that clears stale attached-primary session state. Request-local
+/// control clients do not opt into this behavior because their EOF is just the
+/// end of one RPC exchange.
+async fn submit_control_connection_disconnect_event(
+    handle: &AsyncRuntimeSessionHandle,
+    connection: &ControlConnectionState,
+) -> Result<()> {
+    if !connection.detach_primary_on_disconnect() {
+        return Ok(());
+    }
+    let Some(client_id) = connection.caller_client_id().cloned() else {
+        return Ok(());
+    };
+    let mut batch = RuntimeEventBatch::new();
+    batch.push(RuntimeEvent::Client(ClientEvent::Disconnected {
+        client_id,
+        reason: "control socket EOF".to_string(),
+    }));
+    handle.submit_runtime_events(batch).await?;
+    Ok(())
 }
 
 /// Runs the serve async runtime control listener operation for this subsystem.
