@@ -819,7 +819,7 @@ pub fn compose_client_presentation_with_styles(
             row_offset,
             column_offset,
             target_columns,
-            status_line_rendition(ClientStatusKind::CopyMode, &view.ui_theme),
+            view.ui_theme.colors.copy_selection.rendition(),
         );
     }
     if let Some(status) = status

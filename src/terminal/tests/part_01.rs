@@ -3661,6 +3661,10 @@ fn client_presentation_highlights_current_pager_search_match() {
     assert_eq!(line_style_spans[1].len(), 1);
     assert_eq!(line_style_spans[1][0].start, 5);
     assert_eq!(line_style_spans[1][0].length, 5);
+    assert_eq!(
+        line_style_spans[1][0].rendition,
+        UiTheme::default().colors.copy_selection.rendition()
+    );
 }
 /// Verifies terminal diff styling preserves pager search highlights for matching
 /// rendered row slices.
