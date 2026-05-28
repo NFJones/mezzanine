@@ -32,6 +32,7 @@ pub async fn execute_streamable_http_exchange(
     expected_id: Option<u64>,
     timeout_ms: u64,
     session_id: Option<&str>,
+    oauth_bearer_token: Option<&str>,
 ) -> Result<McpStreamableHttpResponse> {
     let McpStartupTransportPlan::StreamableHttp {
         url,
@@ -51,6 +52,8 @@ pub async fn execute_streamable_http_exchange(
                 "missing required MCP bearer token environment: {token_env}"
             ))
         })?;
+        request_headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+    } else if let Some(token) = oauth_bearer_token {
         request_headers.insert("Authorization".to_string(), format!("Bearer {token}"));
     }
 
@@ -112,6 +115,28 @@ pub async fn initialize_streamable_http_mcp_server(
     client_name: &str,
     client_version: &str,
 ) -> Result<(McpInitializeResponse, Option<String>)> {
+    initialize_streamable_http_mcp_server_with_auth_token(
+        plan,
+        environment,
+        client_name,
+        client_version,
+        None,
+    )
+    .await
+}
+
+/// Runs the initialize streamable http mcp server with auth token operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub async fn initialize_streamable_http_mcp_server_with_auth_token(
+    plan: &McpStartupPlan,
+    environment: &BTreeMap<String, String>,
+    client_name: &str,
+    client_version: &str,
+    oauth_bearer_token: Option<&str>,
+) -> Result<(McpInitializeResponse, Option<String>)> {
     let id = 1;
     let request = build_mcp_default_initialize_request(id, client_name, client_version);
     let response = execute_streamable_http_exchange(
@@ -121,6 +146,7 @@ pub async fn initialize_streamable_http_mcp_server(
         Some(id),
         plan.timeout_ms,
         None,
+        oauth_bearer_token,
     )
     .await?;
     let initialize = parse_mcp_initialize_response(&response.protocol_body, id)?;
@@ -138,9 +164,36 @@ pub async fn discover_streamable_http_mcp_server(
     client_name: &str,
     client_version: &str,
 ) -> Result<McpStreamableHttpDiscovery> {
-    let (initialize, mut session_id) =
-        initialize_streamable_http_mcp_server(plan, environment, client_name, client_version)
-            .await?;
+    discover_streamable_http_mcp_server_with_auth_token(
+        plan,
+        environment,
+        client_name,
+        client_version,
+        None,
+    )
+    .await
+}
+
+/// Runs the discover streamable http mcp server with auth token operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub async fn discover_streamable_http_mcp_server_with_auth_token(
+    plan: &McpStartupPlan,
+    environment: &BTreeMap<String, String>,
+    client_name: &str,
+    client_version: &str,
+    oauth_bearer_token: Option<&str>,
+) -> Result<McpStreamableHttpDiscovery> {
+    let (initialize, mut session_id) = initialize_streamable_http_mcp_server_with_auth_token(
+        plan,
+        environment,
+        client_name,
+        client_version,
+        oauth_bearer_token,
+    )
+    .await?;
     let notification = build_mcp_initialized_notification();
     let initialized = execute_streamable_http_exchange(
         plan,
@@ -149,6 +202,7 @@ pub async fn discover_streamable_http_mcp_server(
         None,
         plan.timeout_ms,
         session_id.as_deref(),
+        oauth_bearer_token,
     )
     .await?;
     if initialized.session_id.is_some() {
@@ -169,6 +223,7 @@ pub async fn discover_streamable_http_mcp_server(
                 Some(request_id),
                 plan.timeout_ms,
                 session_id.as_deref(),
+                oauth_bearer_token,
             )
             .await?;
             if response.session_id.is_some() {
@@ -238,6 +293,7 @@ pub async fn call_streamable_http_mcp_tool(
         Some(request_id),
         tool_call.timeout_ms,
         session_id,
+        None,
     )
     .await?;
     parse_mcp_tools_call_response(&response.protocol_body, request_id)

@@ -2889,6 +2889,7 @@ impl RuntimeMcpTransportSet {
                     Some(request_id),
                     plan.timeout_ms,
                     state.session_id.as_deref(),
+                    None,
                 )
                 .await?;
                 if response.session_id.is_some() {
