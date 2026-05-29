@@ -1151,7 +1151,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             "first saved prompt".to_string(),
             "second saved prompt".to_string(),
         ]);
-        prompt_state.prompt.buffer.set_line("alpha beta gamma");
+        prompt_state.prompt.buffer.set_line("alpha beta gamma delta");
     }
     let original_cursor = service
         .agent_prompt_inputs
@@ -1177,7 +1177,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
     let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
-    assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma");
+    assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma delta");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
 
     service
@@ -1193,7 +1193,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
         )
         .unwrap();
     let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
-    assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma");
+    assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma delta");
 
     service
         .apply_attached_terminal_step_plan(
@@ -1363,7 +1363,7 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
     );
     {
         let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
-        prompt_state.prompt.buffer.set_line("alpha beta gamma");
+        prompt_state.prompt.buffer.set_line("alpha beta gamma delta");
     }
     let original_cursor = service
         .agent_prompt_inputs
@@ -1389,7 +1389,7 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
     let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
-    assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma");
+    assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma delta");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
 }
 

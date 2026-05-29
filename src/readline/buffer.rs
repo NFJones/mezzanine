@@ -1202,6 +1202,9 @@ fn visual_row_end(text: &str, start: usize, end: usize, columns: usize) -> (usiz
             break;
         }
     }
+    if boundary >= end {
+        return (boundary, boundary, false);
+    }
     if let Some((_, space_end)) = last_space_break.filter(|(space_start, _)| *space_start > start) {
         return (space_end, space_end, space_end < end);
     }

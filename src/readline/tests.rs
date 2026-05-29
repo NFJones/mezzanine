@@ -262,6 +262,28 @@ fn readline_history_visual_row_navigation_preserves_wrap_break_space_column() {
     assert_eq!(buffer.cursor(), wrapped_tail_cursor);
 }
 
+/// Verifies fitting logical rows are not split at their last whitespace during
+/// visual-row navigation through recalled multiline history.
+///
+/// Without checking that a wrap actually overflowed the available columns,
+/// whitespace-preferred wrapping turns the last word of a short final logical
+/// line into a phantom tail row. Pressing Up from inside that word then stays
+/// inside the same logical line at the same in-word offset instead of moving to
+/// the same display column on the line above.
+#[test]
+fn readline_history_visual_row_navigation_skips_phantom_tail_rows() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("abcdefghijklmno\ndelta word");
+    assert_eq!(buffer.submit(), "abcdefghijklmno\ndelta word");
+
+    assert!(buffer.history_previous());
+    assert!(buffer.move_left());
+    assert_eq!(buffer.cursor(), "abcdefghijklmno\ndelta wor".len());
+
+    assert!(buffer.move_visual_row_up_or_history_previous(20));
+    assert_eq!(buffer.cursor(), "abcdefghi".len());
+}
+
 /// Verifies multi-line history entries remain whole entries while traversing
 /// history and only become row-navigable after an explicit edit/navigation move.
 #[test]
@@ -667,11 +689,6 @@ fn readline_agent_prompt_uses_visible_row_navigation_before_history() {
     );
     assert_eq!(prompt.buffer.line(), "first line\nsecond line wraps");
 
-    assert_eq!(
-        prompt_outcome(&mut prompt, b"\x1b[A"),
-        ReadlineOutcome::Edited
-    );
-    assert_eq!(prompt.buffer.line(), "first line\nsecond line wraps");
     assert_eq!(
         prompt_outcome(&mut prompt, b"\x1b[A"),
         ReadlineOutcome::Edited
