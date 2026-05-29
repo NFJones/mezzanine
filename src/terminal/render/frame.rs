@@ -2374,7 +2374,6 @@ pub(super) fn write_styled_merged_pane_frames_on_dividers(
             ));
             spans.extend(merged_pane_frame_boundary_style_spans(
                 geometries,
-                window,
                 row,
                 column_start,
                 width,

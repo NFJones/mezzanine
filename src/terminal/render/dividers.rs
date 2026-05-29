@@ -7,7 +7,9 @@
 use std::collections::BTreeMap;
 
 use crate::layout::{PaneGeometry, Window};
-use crate::terminal::{MouseBorderCell, TerminalFramePosition, TerminalStyleSpan, UiTheme};
+use crate::terminal::{
+    GraphicRendition, MouseBorderCell, TerminalFramePosition, TerminalStyleSpan, UiTheme,
+};
 
 use super::{pane_border_rendition, write_single_width_cell};
 
@@ -424,7 +426,6 @@ pub(super) fn draw_styled_pane_dividers(
 /// Builds style spans for divider junctions that bound a merged pane status row.
 pub(super) fn merged_pane_frame_boundary_style_spans(
     geometries: &[PaneGeometry],
-    window: &Window,
     row: u16,
     column_start: usize,
     width: usize,
@@ -438,12 +439,15 @@ pub(super) fn merged_pane_frame_boundary_style_spans(
         .map(|cell| TerminalStyleSpan {
             start: usize::from(cell.column),
             length: 1,
-            rendition: pane_border_rendition(
-                divider_cell_touches_active_pane(cell, geometries, window),
-                ui_theme,
-            ),
+            rendition: pane_divider_rendition(ui_theme),
         })
         .collect()
+}
+
+/// Returns the stable divider rendition used for merged pane-frame boundary
+/// caps.
+fn pane_divider_rendition(ui_theme: &UiTheme) -> GraphicRendition {
+    pane_border_rendition(false, ui_theme)
 }
 
 /// Returns whether a divider cell acts as a non-vertical boundary cap for a
@@ -486,4 +490,97 @@ fn divider_cell_touches_active_pane(
     let bottom_edge = geometry.row.saturating_add(geometry.rows).saturating_sub(1);
     (vertical_overlap && (column == right_edge || column.saturating_add(1) == geometry.column))
         || (horizontal_overlap && (row == bottom_edge || row.saturating_add(1) == geometry.row))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::IdFactory;
+    use crate::layout::SplitDirection;
+    use crate::terminal::{Size, Window};
+
+    /// Verifies pane divider styling still uses the active border palette when
+    /// a divider cell touches the active pane border.
+    #[test]
+    fn styled_pane_dividers_highlight_active_pane_border() {
+        let mut ids = IdFactory::default();
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 4).unwrap());
+        window
+            .split_active(&mut ids, SplitDirection::Vertical)
+            .unwrap();
+        let geometries = window.pane_geometries();
+        let rows = usize::from(window.size.rows);
+        let columns = usize::from(window.size.columns);
+        let mut text_canvas = vec![vec![' '; columns]; rows];
+        let mut style_canvas = vec![Vec::new(); rows];
+        let ui_theme = UiTheme::default();
+
+        draw_styled_pane_dividers(
+            &mut text_canvas,
+            &mut style_canvas,
+            &geometries,
+            true,
+            &window,
+            &ui_theme,
+        );
+
+        let active = pane_border_rendition(true, &ui_theme);
+        assert!(
+            style_canvas
+                .iter()
+                .flatten()
+                .any(|span| span.rendition == active)
+        );
+    }
+
+    /// Verifies merged pane-frame boundary caps keep the stable divider
+    /// palette even when pane focus moves between panes.
+    #[test]
+    fn merged_pane_frame_boundaries_use_focus_stable_rendition() {
+        let mut ids = IdFactory::default();
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(28, 6).unwrap());
+        window
+            .split_active(&mut ids, SplitDirection::Vertical)
+            .unwrap();
+        window
+            .split_active(&mut ids, SplitDirection::Horizontal)
+            .unwrap();
+        let ui_theme = UiTheme::default();
+        let stable = pane_divider_rendition(&ui_theme);
+
+        let geometries = window.pane_geometries();
+        let target = geometries
+            .iter()
+            .max_by_key(|geometry| (geometry.row, geometry.column))
+            .copied()
+            .expect("split window should produce pane geometries");
+        let row = target.row.saturating_sub(1);
+        let column_start = usize::from(target.column);
+        let width = usize::from(target.columns);
+
+        let focused_boundary_spans = merged_pane_frame_boundary_style_spans(
+            &geometries,
+            row,
+            column_start,
+            width,
+            &ui_theme,
+        );
+
+        window.select_pane("0").unwrap();
+        let unfocused_boundary_spans = merged_pane_frame_boundary_style_spans(
+            &geometries,
+            row,
+            column_start,
+            width,
+            &ui_theme,
+        );
+
+        assert!(!focused_boundary_spans.is_empty());
+        assert!(
+            focused_boundary_spans
+                .iter()
+                .all(|span| span.length == 1 && span.rendition == stable)
+        );
+        assert_eq!(focused_boundary_spans, unfocused_boundary_spans);
+    }
 }
