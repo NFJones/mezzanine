@@ -1139,13 +1139,15 @@ fn normalized_style_span_rows(
         .map(|index| line_style_spans.get(index).cloned().unwrap_or_default())
         .collect()
 }
-/// Builds style rows for terminal output lines from the same rendered view that
-/// produced the text rows.
+/// Builds style rows for full terminal presentation output lines from the same
+/// rendered view that produced the text rows.
 ///
-/// The function intentionally drops style rows unless the rendered text still
-/// matches the caller-provided output lines. That keeps focused prompt-overlay
-/// spans paired with their owning rows and prevents stale or mismatched spans
-/// from being applied to agent output such as apply-patch diff previews.
+/// The function intentionally drops style rows unless the caller-provided rows
+/// are the complete rendered presentation. Text equality for a partial row slice
+/// is not a safe provenance signal: agent output such as apply-patch diff
+/// previews can match rows already visible in an unfocused pane, and reusing
+/// those render-owned spans can apply hidden or overlay attributes to unrelated
+/// output.
 pub(crate) fn compose_terminal_output_style_spans(
     output_lines: &[String],
     rendered: Option<&(RenderedClientView, Option<ClientStatusLine>)>,
@@ -1158,16 +1160,7 @@ pub(crate) fn compose_terminal_output_style_spans(
     if styled_lines == output_lines {
         normalized_style_span_rows(&line_style_spans, output_lines.len())
     } else {
-        styled_lines
-            .windows(output_lines.len())
-            .position(|window| window == output_lines)
-            .map(|start| {
-                normalized_style_span_rows(
-                    &line_style_spans[start..start + output_lines.len()],
-                    output_lines.len(),
-                )
-            })
-            .unwrap_or_default()
+        Vec::new()
     }
 }
 /// Verifies focused render-only style rows are not reused for changed diff text.
@@ -1213,6 +1206,59 @@ fn terminal_output_style_spans_drop_focused_overlay_spans_for_mismatched_diff_ro
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: true,
+    };
+    let output_lines = vec!["+ value: Some(None)".to_string()];
+
+    let style_spans =
+        compose_terminal_output_style_spans(&output_lines, Some(&(rendered_view, None)));
+
+    assert!(style_spans.is_empty(), "{style_spans:?}");
+}
+
+/// Verifies hidden render spans are not reused for matching diff row slices.
+///
+/// This regression covers apply-patch previews in unfocused panes. The textual
+/// diff row can already be present in the rendered view, but matching that text
+/// does not prove that the output write owns the render spans. Hidden spans from
+/// the stale presentation must not be copied onto the new output where they can
+/// make Rust tokens such as `Some` and `None` invisible.
+#[cfg(test)]
+#[test]
+fn terminal_output_style_spans_drop_hidden_spans_for_matching_diff_row_slices() {
+    let hidden_some_span = TerminalStyleSpan {
+        start: 9,
+        length: 4,
+        rendition: super::GraphicRendition {
+            hidden: true,
+            ..super::GraphicRendition::default()
+        },
+    };
+    let rendered_view = RenderedClientView {
+        role: ClientViewRole::Primary,
+        authoritative_size: Size::new(40, 3).unwrap(),
+        client_size: Size::new(40, 3).unwrap(),
+        lines: vec![
+            "agent output".to_string(),
+            "+ value: Some(None)".to_string(),
+            "done".to_string(),
+        ],
+        line_style_spans: vec![Vec::new(), vec![hidden_some_span], Vec::new()],
+        selection: None,
+        requires_client_scroll: false,
+        viewport_row: 0,
+        viewport_column: 0,
+        cursor_row: 0,
+        cursor_column: 0,
+        cursor_visible: false,
+        cursor_style: TerminalCursorStyle::Block,
+        cursor_blink: true,
+        cursor_blink_interval_ms: 500,
+        application_keypad: false,
+        bracketed_paste: false,
+        animation_refresh_interval_ms: 0,
+        ui_theme: UiTheme::default(),
+        agent_prompt_region: None,
+        primary_prompt_active: false,
     };
     let output_lines = vec!["+ value: Some(None)".to_string()];
 

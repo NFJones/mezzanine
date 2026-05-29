@@ -3769,14 +3769,13 @@ fn client_presentation_highlights_current_pager_search_match() {
         UiTheme::default().colors.copy_selection.rendition()
     );
 }
-/// Verifies terminal diff styling preserves pager search highlights for matching
-/// rendered row slices.
+/// Verifies terminal output styling drops styles for matching rendered slices.
 ///
-/// The pager can emit a bounded row update instead of the full rendered view.
-/// This regression ensures the terminal writer keeps the highlight span when the
-/// outgoing rows match a contiguous slice of the rendered presentation.
+/// Partial text matches are not a safe ownership proof because unrelated action
+/// output can match rows already visible in the rendered presentation. This
+/// regression keeps render-owned styles from leaking onto bounded writes.
 #[test]
-fn terminal_output_style_spans_preserve_pager_search_highlights_for_matching_row_slice() {
+fn terminal_output_style_spans_drop_styles_for_matching_row_slice() {
     let rendered_view = RenderedClientView {
         role: ClientViewRole::Primary,
         authoritative_size: Size::new(16, 3).unwrap(),
@@ -3815,10 +3814,7 @@ fn terminal_output_style_spans_preserve_pager_search_highlights_for_matching_row
         &output_lines,
         Some(&(rendered_view, None)),
     );
-    assert_eq!(style_spans.len(), 1);
-    assert_eq!(style_spans[0].len(), 1);
-    assert_eq!(style_spans[0][0].start, 5);
-    assert_eq!(style_spans[0][0].length, 5);
+    assert!(style_spans.is_empty(), "{style_spans:?}");
 }
 
 /// Verifies readline prompt status row renders prompt and cursor column.
