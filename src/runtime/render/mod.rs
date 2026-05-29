@@ -4680,15 +4680,14 @@ mod tests {
                 span.start >= 10
                     && matches!(
                         span.rendition.foreground,
-                        Some(
-                            crate::runtime::render::presentation::AGENT_DIFF_SYNTAX_KEYWORD_FOREGROUND
-                                | crate::runtime::render::presentation::AGENT_DIFF_SYNTAX_TYPE_FOREGROUND
-                                | crate::runtime::render::presentation::AGENT_DIFF_SYNTAX_FUNCTION_FOREGROUND
-                                | crate::runtime::render::presentation::AGENT_DIFF_CONTEXT_FOREGROUND
-                        )
+                        Some(foreground)
+                            if foreground == ui_theme.colors.syntax_keyword.foreground
+                                || foreground == ui_theme.colors.syntax_type.foreground
+                                || foreground == ui_theme.colors.syntax_function.foreground
+                                || foreground == ui_theme.colors.syntax_plain.foreground
                     )
             }),
-            "syntax keyword spans should use the fixed apply-patch diff palette: {addition:?}"
+            "syntax keyword spans should follow the active theme palette: {addition:?}"
         );
     }
 
@@ -4962,30 +4961,28 @@ mod tests {
 
         assert!(
             line.style_spans.iter().any(|span| {
-                span.rendition.foreground
-                    == Some(crate::runtime::render::presentation::AGENT_DIFF_ADDITION_FOREGROUND)
+                span.rendition.foreground == Some(ui_theme.colors.agent_transcript_user.foreground)
                     && span.rendition.bold
             }),
             "{line:?}"
         );
         assert!(
             line.style_spans.iter().any(|span| {
-                span.rendition.foreground
-                    == Some(crate::runtime::render::presentation::AGENT_DIFF_DELETION_FOREGROUND)
+                span.rendition.foreground == Some(ui_theme.colors.agent_transcript_error.foreground)
                     && span.rendition.bold
             }),
             "{line:?}"
         );
     }
 
-    /// Verifies apply-patch diff previews keep fixed gutter and syntax colors
-    /// even when the active UI theme overrides transcript and syntax slots.
+    /// Verifies apply-patch diff previews follow the active theme while keeping
+    /// one render's resolved colors stable across the preview.
     ///
-    /// This regression protects semantic diff output from changing according to
-    /// pane focus or theme alias resolution by ensuring the renderer emits its
-    /// own concrete palette for diff gutters and file-aware syntax spans.
+    /// This regression protects semantic diff output from borrowing pane-focus
+    /// overlays while still requiring the renderer to use the active resolved
+    /// transcript and syntax colors for diff gutters and file-aware syntax spans.
     #[test]
-    fn readable_agent_diff_display_lines_use_constant_palette_across_themes() {
+    fn readable_agent_diff_display_lines_follow_active_theme_palette() {
         let mut definition = crate::terminal::builtin_ui_theme_definition("deepforest").unwrap();
         definition.colors.insert(
             "agent_transcript_user_fg".to_string(),
@@ -5002,6 +4999,18 @@ mod tests {
         definition
             .colors
             .insert("syntax_keyword_fg".to_string(), "#0a0b0c".to_string());
+        definition
+            .colors
+            .insert("syntax_plain_fg".to_string(), "#0d0e0f".to_string());
+        definition
+            .colors
+            .insert("syntax_type_fg".to_string(), "#101112".to_string());
+        definition
+            .colors
+            .insert("syntax_function_fg".to_string(), "#131415".to_string());
+        definition
+            .colors
+            .insert("syntax_operator_fg".to_string(), "#161718".to_string());
         let ui_theme = crate::terminal::resolve_ui_theme("constant-diff-test", definition).unwrap();
         let lines = readable_agent_diff_display_lines(
             "diff -- update file\n--- a/src/main.rs\n+++ b/src/main.rs\n\
@@ -5022,9 +5031,7 @@ mod tests {
                 span.start == 0
                     && span.length == 10
                     && span.rendition.foreground
-                        == Some(
-                            crate::runtime::render::presentation::AGENT_DIFF_ADDITION_FOREGROUND,
-                        )
+                        == Some(crate::terminal::TerminalColor::Rgb(1, 2, 3))
             }),
             "{addition:?}"
         );
@@ -5033,9 +5040,7 @@ mod tests {
                 span.start == 0
                     && span.length == 10
                     && span.rendition.foreground
-                        == Some(
-                            crate::runtime::render::presentation::AGENT_DIFF_DELETION_FOREGROUND,
-                        )
+                        == Some(crate::terminal::TerminalColor::Rgb(4, 5, 6))
             }),
             "{deletion:?}"
         );
@@ -5045,10 +5050,11 @@ mod tests {
                     && matches!(
                         span.rendition.foreground,
                         Some(
-                            crate::runtime::render::presentation::AGENT_DIFF_SYNTAX_KEYWORD_FOREGROUND
-                                | crate::runtime::render::presentation::AGENT_DIFF_SYNTAX_TYPE_FOREGROUND
-                                | crate::runtime::render::presentation::AGENT_DIFF_SYNTAX_FUNCTION_FOREGROUND
-                                | crate::runtime::render::presentation::AGENT_DIFF_CONTEXT_FOREGROUND
+                            crate::terminal::TerminalColor::Rgb(10, 11, 12)
+                                | crate::terminal::TerminalColor::Rgb(13, 14, 15)
+                                | crate::terminal::TerminalColor::Rgb(16, 17, 18)
+                                | crate::terminal::TerminalColor::Rgb(19, 20, 21)
+                                | crate::terminal::TerminalColor::Rgb(22, 23, 24)
                         )
                     )
             }),
@@ -5056,9 +5062,17 @@ mod tests {
         );
         assert!(
             addition.style_spans.iter().all(|span| {
-                span.rendition.foreground != Some(crate::terminal::TerminalColor::Rgb(1, 2, 3))
-                    && span.rendition.foreground
-                        != Some(crate::terminal::TerminalColor::Rgb(10, 11, 12))
+                span.start < 10
+                    || matches!(
+                        span.rendition.foreground,
+                        Some(
+                            crate::terminal::TerminalColor::Rgb(10, 11, 12)
+                                | crate::terminal::TerminalColor::Rgb(13, 14, 15)
+                                | crate::terminal::TerminalColor::Rgb(16, 17, 18)
+                                | crate::terminal::TerminalColor::Rgb(19, 20, 21)
+                                | crate::terminal::TerminalColor::Rgb(22, 23, 24)
+                        )
+                    )
             }),
             "{addition:?}"
         );
