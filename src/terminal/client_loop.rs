@@ -1315,12 +1315,15 @@ fn encode_safe_changed_row_span_update(
     let start_column = current_cells[start].column_start;
     let current_end_cell = &current_cells[current_end.saturating_sub(1)];
     let end_column = current_end_cell.column_end;
-    if !style_spans_fit_changed_column_range(previous_spans, start_column, end_column)
-        || !style_spans_fit_changed_column_range(spans, start_column, end_column)
-    {
-        return None;
-    }
-    let segment = &line[current_cells[start].byte_start..current_end_cell.byte_end];
+    let (start_column, end_column) =
+        expand_changed_column_range(previous_spans, spans, start_column, end_column);
+    let start_cell = current_cells
+        .iter()
+        .position(|cell| cell.column_end > start_column)?;
+    let end_cell = current_cells
+        .iter()
+        .rposition(|cell| cell.column_start < end_column)?;
+    let segment = &line[current_cells[start_cell].byte_start..current_cells[end_cell].byte_end];
 
     let segment_spans = clip_style_spans_to_column_range(spans, start_column, end_column);
     let encoded_segment = encode_styled_terminal_line(segment, &segment_spans);
@@ -1333,17 +1336,35 @@ fn encode_safe_changed_row_span_update(
     (span_update.len() < row_update.len()).then_some(span_update)
 }
 
-/// Returns whether every style span stays inside one changed column range.
-fn style_spans_fit_changed_column_range(
+/// Expands one changed column range to include any overlapping style spans.
+fn expand_changed_column_range(
+    previous_spans: &[TerminalStyleSpan],
     spans: &[TerminalStyleSpan],
     start: usize,
     end: usize,
-) -> bool {
-    spans.iter().all(|span| {
-        let span_start = span.start;
-        let span_end = span.start.saturating_add(span.length);
-        span_start >= start && span_end <= end
-    })
+) -> (usize, usize) {
+    let mut expanded_start = start;
+    let mut expanded_end = end;
+    loop {
+        let mut changed = false;
+        for span in previous_spans.iter().chain(spans.iter()) {
+            let span_start = span.start;
+            let span_end = span.start.saturating_add(span.length);
+            if span_start < expanded_end && span_end > expanded_start {
+                let next_start = expanded_start.min(span_start);
+                let next_end = expanded_end.max(span_end);
+                if next_start != expanded_start || next_end != expanded_end {
+                    expanded_start = next_start;
+                    expanded_end = next_end;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    (expanded_start, expanded_end)
 }
 
 /// Carries one rendered grapheme cell plus the rendition active across it.

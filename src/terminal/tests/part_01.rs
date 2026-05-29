@@ -2656,6 +2656,48 @@ fn attached_terminal_output_update_rewrites_rows_when_glyph_width_changes() {
     assert!(rendered.contains("aaXaa "), "{rendered:?}");
 }
 
+/// Verifies row-diff updates expand to cover trailing prompt padding when one
+/// changed prompt segment overlaps a full-row background span.
+///
+/// Pasting multiline input can replace only the visible text on one wrapped
+/// prompt row while preserving the same prompt background on trailing spaces.
+/// The incremental row encoder must repaint those trailing padding cells so the
+/// attached terminal does not leave them with stale default styling.
+#[test]
+fn attached_terminal_output_update_repaints_trailing_prompt_padding_after_text_change() {
+    let previous_lines = vec!["      ".to_string()];
+    let current_lines = vec!["alpha ".to_string()];
+    let prompt_span = crate::terminal::TerminalStyleSpan {
+        start: 0,
+        length: 6,
+        rendition: crate::terminal::GraphicRendition {
+            foreground: Some(crate::terminal::TerminalColor::Rgb(255, 255, 255)),
+            background: Some(crate::terminal::TerminalColor::Rgb(37, 40, 39)),
+            ..crate::terminal::GraphicRendition::default()
+        },
+    };
+    let previous_spans = vec![vec![prompt_span]];
+    let current_spans = vec![vec![prompt_span]];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &previous_spans);
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &current_spans,
+        None,
+        AttachedTerminalOutputModes {
+            cursor_visible: false,
+            cursor_blink: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[1;1H\x1b[0m"), "{rendered:?}");
+    assert!(rendered.contains("alpha "), "{rendered:?}");
+}
+
 /// Verifies wrapped agent-prompt continuation rows with full-row styling fall
 /// back to a full-row rewrite instead of a bounded segment update.
 ///
