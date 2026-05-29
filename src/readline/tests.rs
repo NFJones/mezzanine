@@ -187,6 +187,11 @@ fn readline_history_navigation_skips_multiline_entries_until_editing() {
     assert!(buffer.move_row_up_or_history_previous());
     assert_eq!(buffer.line(), "first line\nsecond line");
     assert!(buffer.cursor() < "first line\n".len());
+    assert!(buffer.move_row_down_or_history_next());
+    assert_eq!(buffer.line(), "first line\nsecond line");
+    assert!(buffer.cursor() > "first line\n".len());
+    assert!(buffer.move_row_down_or_history_next());
+    assert_eq!(buffer.line(), "draft");
 }
 
 /// Verifies readline submission records bounded history.
@@ -574,7 +579,47 @@ fn readline_agent_prompt_uses_visible_row_navigation_before_history() {
         prompt_outcome(&mut prompt, b"\x1b[A"),
         ReadlineOutcome::Edited
     );
+    assert_eq!(prompt.buffer.line(), "first line\nsecond line wraps");
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"\x1b[A"),
+        ReadlineOutcome::Edited
+    );
     assert_eq!(prompt.buffer.line(), "previous prompt");
+}
+
+/// Verifies visible-row navigation crosses explicit newlines by adjacent visual
+/// rows instead of jumping to a character column on the previous logical line.
+///
+/// When the prior logical line wraps, Up from a later logical line should land
+/// on that wrapped tail so the cursor does not jump horizontally before later
+/// Up and Down navigation stabilizes.
+#[test]
+fn readline_agent_prompt_preserves_visible_column_across_wrapped_logical_lines() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.set_prompt_body_columns(12);
+
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"alpha beta gamma"),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt_outcome(&mut prompt, b"\n"), ReadlineOutcome::Edited);
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"delta"),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.cursor(), "alpha beta gamma\ndelta".len());
+
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"\x1b[A"),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.cursor(), "alpha beta gamma".len());
+
+    assert_eq!(
+        prompt_outcome(&mut prompt, b"\x1b[B"),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.cursor(), "alpha beta gamma\ndelta".len());
 }
 
 /// Verifies application-cursor arrow sequences are decoded as prompt

@@ -188,6 +188,12 @@ pub struct ReadlineBuffer {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) history_cursor: Option<usize>,
+    /// Tracks whether cursor-only navigation has entered the recalled history entry.
+    ///
+    /// History traversal first treats each recalled prompt as one whole entry.
+    /// Once the user moves the editing cursor inside that entry, Up and Down
+    /// navigate its rows before falling back to older or newer history.
+    pub(super) history_entry_cursor_navigation: bool,
     /// Stores the draft before history value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

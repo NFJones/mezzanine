@@ -76,6 +76,7 @@ impl ReadlineBuffer {
             history: Vec::new(),
             history_limit,
             history_cursor: None,
+            history_entry_cursor_navigation: false,
             draft_before_history: String::new(),
             paste_blocks: Vec::new(),
             next_paste_block_id: 0,
@@ -106,6 +107,7 @@ impl ReadlineBuffer {
             self.remember_submission(entry);
         }
         self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -115,6 +117,7 @@ impl ReadlineBuffer {
         self.replace_current_line_with_text(line.into());
         self.cursor = self.line.len();
         self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -127,6 +130,7 @@ impl ReadlineBuffer {
             self.cursor -= 1;
         }
         self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -268,7 +272,9 @@ impl ReadlineBuffer {
             return false;
         }
 
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = previous_boundary(&self.line, self.cursor);
         true
     }
@@ -279,7 +285,9 @@ impl ReadlineBuffer {
             return false;
         }
 
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = next_boundary(&self.line, self.cursor);
         true
     }
@@ -291,7 +299,9 @@ impl ReadlineBuffer {
             return false;
         }
 
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = target;
         true
     }
@@ -303,7 +313,9 @@ impl ReadlineBuffer {
             return false;
         }
 
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = target;
         true
     }
@@ -313,7 +325,9 @@ impl ReadlineBuffer {
         if self.cursor == 0 {
             return false;
         }
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = 0;
         true
     }
@@ -323,7 +337,9 @@ impl ReadlineBuffer {
         if self.cursor == self.line.len() {
             return false;
         }
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = self.line.len();
         true
     }
@@ -334,7 +350,9 @@ impl ReadlineBuffer {
         if target == self.cursor {
             return false;
         }
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = target;
         true
     }
@@ -345,14 +363,16 @@ impl ReadlineBuffer {
         if target == self.cursor {
             return false;
         }
-        self.leave_history_navigation_for_edit();
+        if self.history_cursor.is_some() {
+            self.history_entry_cursor_navigation = true;
+        }
         self.cursor = target;
         true
     }
 
     /// Move up within a multiline prompt, falling back to history navigation.
     pub fn move_row_up_or_history_previous(&mut self) -> bool {
-        if self.history_cursor.is_some() {
+        if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_previous();
         }
         if let Some(target) = previous_row_cursor_position(&self.line, self.cursor) {
@@ -364,7 +384,7 @@ impl ReadlineBuffer {
 
     /// Move down within a multiline prompt, falling back to history navigation.
     pub fn move_row_down_or_history_next(&mut self) -> bool {
-        if self.history_cursor.is_some() {
+        if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_next();
         }
         if let Some(target) = next_row_cursor_position(&self.line, self.cursor) {
@@ -379,7 +399,7 @@ impl ReadlineBuffer {
     /// # Parameters
     /// - `columns`: Display cells available for the editable prompt body.
     pub fn move_visual_row_up_or_history_previous(&mut self, columns: usize) -> bool {
-        if self.history_cursor.is_some() {
+        if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_previous();
         }
         if let Some(target) = previous_visual_row_cursor_position(&self.line, self.cursor, columns)
@@ -395,7 +415,7 @@ impl ReadlineBuffer {
     /// # Parameters
     /// - `columns`: Display cells available for the editable prompt body.
     pub fn move_visual_row_down_or_history_next(&mut self, columns: usize) -> bool {
-        if self.history_cursor.is_some() {
+        if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_next();
         }
         if let Some(target) = next_visual_row_cursor_position(&self.line, self.cursor, columns) {
@@ -518,6 +538,7 @@ impl ReadlineBuffer {
         self.next_paste_block_id = self.draft_before_history_next_paste_block_id;
         self.cursor = self.line.len();
         self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
         true
@@ -616,6 +637,7 @@ impl ReadlineBuffer {
         self.line.clear();
         self.cursor = 0;
         self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
         self.draft_before_history.clear();
         self.paste_blocks.clear();
         self.draft_before_history_paste_blocks.clear();
@@ -652,6 +674,7 @@ impl ReadlineBuffer {
         self.replace_current_line_with_text(entry.clone());
         self.cursor = self.line.len();
         self.history_cursor = Some(index);
+        self.history_entry_cursor_navigation = false;
     }
 
     /// Runs the leave history navigation for edit operation for this subsystem.
@@ -661,6 +684,7 @@ impl ReadlineBuffer {
     /// on duplicated control-flow logic.
     fn leave_history_navigation_for_edit(&mut self) {
         self.history_cursor = None;
+        self.history_entry_cursor_navigation = false;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -1005,13 +1029,25 @@ fn previous_visual_row_cursor_position(text: &str, cursor: usize, columns: usize
     let current_end = line_end_after_cursor(text, cursor);
     let rows = visual_rows_for_logical_line(text, current_start, current_end, columns);
     let (row_index, column) = visual_row_index_and_column(text, cursor, &rows)?;
-    if row_index == 0 {
+    if row_index > 0 {
+        return Some(byte_index_for_display_column(
+            text,
+            rows[row_index - 1].start,
+            rows[row_index - 1].end,
+            column,
+        ));
+    }
+    if current_start == 0 {
         return None;
     }
+    let previous_end = current_start.saturating_sub(1);
+    let previous_start = line_start_before_cursor(text, previous_end);
+    let previous_rows = visual_rows_for_logical_line(text, previous_start, previous_end, columns);
+    let previous_row = previous_rows.last()?;
     Some(byte_index_for_display_column(
         text,
-        rows[row_index - 1].start,
-        rows[row_index - 1].end,
+        previous_row.start,
+        previous_row.end,
         column,
     ))
 }
@@ -1023,7 +1059,17 @@ fn next_visual_row_cursor_position(text: &str, cursor: usize, columns: usize) ->
     let current_end = line_end_after_cursor(text, cursor);
     let rows = visual_rows_for_logical_line(text, current_start, current_end, columns);
     let (row_index, column) = visual_row_index_and_column(text, cursor, &rows)?;
-    let next_row = rows.get(row_index.saturating_add(1))?;
+    let next_row = if let Some(next_row) = rows.get(row_index.saturating_add(1)) {
+        *next_row
+    } else {
+        if current_end >= text.len() {
+            return None;
+        }
+        let next_start = current_end.saturating_add(1);
+        let next_end = line_end_after_cursor(text, next_start);
+        let next_rows = visual_rows_for_logical_line(text, next_start, next_end, columns);
+        *next_rows.first()?
+    };
     Some(byte_index_for_display_column(
         text,
         next_row.start,
