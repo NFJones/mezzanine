@@ -29,8 +29,8 @@
 <div align="center">
 <picture>
     <img
-      src="./resources/mez-demo-0.webp"
-      width="500"
+      src="./resources/mez-demo.png"
+      width="800"
       alt="Mezzanine demo"
     />
 </picture>
