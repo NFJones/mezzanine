@@ -165,6 +165,55 @@ fn readline_visual_row_navigation_precedes_history_navigation() {
     assert_eq!(buffer.line(), "history");
 }
 
+/// Verifies multiline row navigation keeps the original target column after a
+/// shorter row clamps one vertical step.
+///
+/// Without sticky vertical-column tracking, moving Up from a long row into a
+/// short middle row collapses the stored column to that row end. A later Up or
+/// Down then stays pinned to the shortened column instead of returning to the
+/// original horizontal position.
+#[test]
+fn readline_multiline_row_navigation_restores_preferred_column_after_short_row() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("abcdefg\nx\nabcdefg");
+
+    assert!(buffer.move_row_up_or_history_previous());
+    assert_eq!(buffer.cursor(), "abcdefg\nx".len());
+    assert!(buffer.move_row_up_or_history_previous());
+    assert_eq!(buffer.cursor(), "abcdefg".len());
+
+    assert!(buffer.move_row_down_or_history_next());
+    assert_eq!(buffer.cursor(), "abcdefg\nx".len());
+    assert!(buffer.move_row_down_or_history_next());
+    assert_eq!(buffer.cursor(), "abcdefg\nx\nabcdefg".len());
+}
+
+/// Verifies visual-row navigation keeps wrap-boundary spaces addressable on the
+/// next wrapped row.
+///
+/// The prompt renderer drops only the single whitespace cell chosen as the wrap
+/// seam. Additional spaces after that seam remain visible at the start of the
+/// next row, so Up and Down must preserve columns through them instead of
+/// skipping directly to the next non-whitespace byte.
+#[test]
+fn readline_visual_row_navigation_preserves_wrap_boundary_spaces() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("alpha beta   gamma");
+
+    assert!(buffer.move_buffer_start());
+    assert!(buffer.move_visual_row_down_or_history_next(12));
+    assert_eq!(buffer.cursor(), "alpha beta  ".len());
+
+    assert!(buffer.move_buffer_start());
+    for _ in 0..5 {
+        assert!(buffer.move_right());
+    }
+    assert!(buffer.move_visual_row_down_or_history_next(12));
+    assert_eq!(buffer.cursor(), "alpha beta   gamm".len());
+    assert!(buffer.move_visual_row_up_or_history_previous(12));
+    assert_eq!(buffer.cursor(), "alpha".len());
+}
+
 /// Verifies multi-line history entries remain whole entries while traversing
 /// history and only become row-navigable after an explicit edit/navigation move.
 #[test]

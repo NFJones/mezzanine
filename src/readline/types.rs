@@ -194,6 +194,12 @@ pub struct ReadlineBuffer {
     /// Once the user moves the editing cursor inside that entry, Up and Down
     /// navigate its rows before falling back to older or newer history.
     pub(super) history_entry_cursor_navigation: bool,
+    /// Preferred display column retained across consecutive vertical moves.
+    ///
+    /// Wrapped or multiline rows can be shorter than the column where vertical
+    /// navigation began. Keeping the original target column lets later Up/Down
+    /// moves return to that column after passing through a shorter row.
+    pub(super) vertical_navigation_column: Option<usize>,
     /// Stores the draft before history value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

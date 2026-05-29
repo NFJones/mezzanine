@@ -77,6 +77,7 @@ impl ReadlineBuffer {
             history_limit,
             history_cursor: None,
             history_entry_cursor_navigation: false,
+            vertical_navigation_column: None,
             draft_before_history: String::new(),
             paste_blocks: Vec::new(),
             next_paste_block_id: 0,
@@ -108,6 +109,7 @@ impl ReadlineBuffer {
         }
         self.history_cursor = None;
         self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -275,6 +277,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = previous_boundary(&self.line, self.cursor);
         true
     }
@@ -288,6 +291,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = next_boundary(&self.line, self.cursor);
         true
     }
@@ -302,6 +306,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = target;
         true
     }
@@ -316,6 +321,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = target;
         true
     }
@@ -328,6 +334,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = 0;
         true
     }
@@ -340,6 +347,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = self.line.len();
         true
     }
@@ -353,6 +361,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = target;
         true
     }
@@ -366,6 +375,7 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() {
             self.history_entry_cursor_navigation = true;
         }
+        self.vertical_navigation_column = None;
         self.cursor = target;
         true
     }
@@ -375,10 +385,17 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_previous();
         }
-        if let Some(target) = previous_row_cursor_position(&self.line, self.cursor) {
+        let current_start = line_start_before_cursor(&self.line, self.cursor);
+        let current_column = self.line[current_start..self.cursor].chars().count();
+        let preferred_column = self.vertical_navigation_column.unwrap_or(current_column);
+        if let Some(target) =
+            previous_row_cursor_position(&self.line, self.cursor, preferred_column)
+        {
+            self.vertical_navigation_column = Some(preferred_column);
             self.cursor = target;
             return true;
         }
+        self.vertical_navigation_column = None;
         self.history_previous()
     }
 
@@ -387,10 +404,15 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_next();
         }
-        if let Some(target) = next_row_cursor_position(&self.line, self.cursor) {
+        let current_start = line_start_before_cursor(&self.line, self.cursor);
+        let current_column = self.line[current_start..self.cursor].chars().count();
+        let preferred_column = self.vertical_navigation_column.unwrap_or(current_column);
+        if let Some(target) = next_row_cursor_position(&self.line, self.cursor, preferred_column) {
+            self.vertical_navigation_column = Some(preferred_column);
             self.cursor = target;
             return true;
         }
+        self.vertical_navigation_column = None;
         self.history_next()
     }
 
@@ -402,11 +424,24 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_previous();
         }
-        if let Some(target) = previous_visual_row_cursor_position(&self.line, self.cursor, columns)
+        let columns = columns.max(1);
+        let current_start = line_start_before_cursor(&self.line, self.cursor);
+        let current_end = line_end_after_cursor(&self.line, self.cursor);
+        let rows = visual_rows_for_logical_line(&self.line, current_start, current_end, columns);
+        let Some((_, current_column)) = visual_row_index_and_column(&self.line, self.cursor, &rows)
+        else {
+            self.vertical_navigation_column = None;
+            return self.move_row_up_or_history_previous();
+        };
+        let preferred_column = self.vertical_navigation_column.unwrap_or(current_column);
+        if let Some(target) =
+            previous_visual_row_cursor_position(&self.line, self.cursor, columns, preferred_column)
         {
+            self.vertical_navigation_column = Some(preferred_column);
             self.cursor = target;
             return true;
         }
+        self.vertical_navigation_column = None;
         self.move_row_up_or_history_previous()
     }
 
@@ -418,10 +453,24 @@ impl ReadlineBuffer {
         if self.history_cursor.is_some() && !self.history_entry_cursor_navigation {
             return self.history_next();
         }
-        if let Some(target) = next_visual_row_cursor_position(&self.line, self.cursor, columns) {
+        let columns = columns.max(1);
+        let current_start = line_start_before_cursor(&self.line, self.cursor);
+        let current_end = line_end_after_cursor(&self.line, self.cursor);
+        let rows = visual_rows_for_logical_line(&self.line, current_start, current_end, columns);
+        let Some((_, current_column)) = visual_row_index_and_column(&self.line, self.cursor, &rows)
+        else {
+            self.vertical_navigation_column = None;
+            return self.move_row_down_or_history_next();
+        };
+        let preferred_column = self.vertical_navigation_column.unwrap_or(current_column);
+        if let Some(target) =
+            next_visual_row_cursor_position(&self.line, self.cursor, columns, preferred_column)
+        {
+            self.vertical_navigation_column = Some(preferred_column);
             self.cursor = target;
             return true;
         }
+        self.vertical_navigation_column = None;
         self.move_row_down_or_history_next()
     }
 
@@ -539,6 +588,7 @@ impl ReadlineBuffer {
         self.cursor = self.line.len();
         self.history_cursor = None;
         self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
         true
@@ -638,6 +688,7 @@ impl ReadlineBuffer {
         self.cursor = 0;
         self.history_cursor = None;
         self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
         self.draft_before_history.clear();
         self.paste_blocks.clear();
         self.draft_before_history_paste_blocks.clear();
@@ -685,6 +736,7 @@ impl ReadlineBuffer {
     fn leave_history_navigation_for_edit(&mut self) {
         self.history_cursor = None;
         self.history_entry_cursor_navigation = false;
+        self.vertical_navigation_column = None;
         self.draft_before_history.clear();
         self.draft_before_history_paste_blocks.clear();
     }
@@ -693,6 +745,7 @@ impl ReadlineBuffer {
     fn replace_current_line_with_text(&mut self, text: String) {
         self.line.clear();
         self.cursor = 0;
+        self.vertical_navigation_column = None;
         self.paste_blocks.clear();
         if text.len() >= READLINE_PASTE_BLOCK_THRESHOLD_BYTES {
             self.insert_paste_block(text);
@@ -984,12 +1037,11 @@ fn next_char(text: &str, cursor: usize) -> Option<(usize, char)> {
 }
 
 /// Returns the cursor location one logical row above while preserving column.
-fn previous_row_cursor_position(text: &str, cursor: usize) -> Option<usize> {
+fn previous_row_cursor_position(text: &str, cursor: usize, column: usize) -> Option<usize> {
     let current_start = line_start_before_cursor(text, cursor);
     if current_start == 0 {
         return None;
     }
-    let column = text[current_start..cursor].chars().count();
     let previous_end = current_start.saturating_sub(1);
     let previous_start = line_start_before_cursor(text, previous_end);
     Some(byte_index_for_column(
@@ -1001,13 +1053,11 @@ fn previous_row_cursor_position(text: &str, cursor: usize) -> Option<usize> {
 }
 
 /// Returns the cursor location one logical row below while preserving column.
-fn next_row_cursor_position(text: &str, cursor: usize) -> Option<usize> {
-    let current_start = line_start_before_cursor(text, cursor);
+fn next_row_cursor_position(text: &str, cursor: usize, column: usize) -> Option<usize> {
     let current_end = line_end_after_cursor(text, cursor);
     if current_end >= text.len() {
         return None;
     }
-    let column = text[current_start..cursor].chars().count();
     let next_start = current_end.saturating_add(1);
     let next_end = line_end_after_cursor(text, next_start);
     Some(byte_index_for_column(text, next_start, next_end, column))
@@ -1023,12 +1073,17 @@ struct VisualRow {
 }
 
 /// Returns the cursor location one visual row above while preserving column.
-fn previous_visual_row_cursor_position(text: &str, cursor: usize, columns: usize) -> Option<usize> {
+fn previous_visual_row_cursor_position(
+    text: &str,
+    cursor: usize,
+    columns: usize,
+    column: usize,
+) -> Option<usize> {
     let columns = columns.max(1);
     let current_start = line_start_before_cursor(text, cursor);
     let current_end = line_end_after_cursor(text, cursor);
     let rows = visual_rows_for_logical_line(text, current_start, current_end, columns);
-    let (row_index, column) = visual_row_index_and_column(text, cursor, &rows)?;
+    let (row_index, _) = visual_row_index_and_column(text, cursor, &rows)?;
     if row_index > 0 {
         return Some(byte_index_for_display_column(
             text,
@@ -1053,12 +1108,17 @@ fn previous_visual_row_cursor_position(text: &str, cursor: usize, columns: usize
 }
 
 /// Returns the cursor location one visual row below while preserving column.
-fn next_visual_row_cursor_position(text: &str, cursor: usize, columns: usize) -> Option<usize> {
+fn next_visual_row_cursor_position(
+    text: &str,
+    cursor: usize,
+    columns: usize,
+    column: usize,
+) -> Option<usize> {
     let columns = columns.max(1);
     let current_start = line_start_before_cursor(text, cursor);
     let current_end = line_end_after_cursor(text, cursor);
     let rows = visual_rows_for_logical_line(text, current_start, current_end, columns);
-    let (row_index, column) = visual_row_index_and_column(text, cursor, &rows)?;
+    let (row_index, _) = visual_row_index_and_column(text, cursor, &rows)?;
     let next_row = if let Some(next_row) = rows.get(row_index.saturating_add(1)) {
         *next_row
     } else {
@@ -1094,15 +1154,6 @@ fn visual_rows_for_logical_line(
             end: row_end,
         });
         row_start = consumed;
-        while row_start < end {
-            let Some(ch) = text[row_start..].chars().next() else {
-                break;
-            };
-            if !ch.is_whitespace() {
-                break;
-            }
-            row_start = row_start.saturating_add(ch.len_utf8());
-        }
     }
     if rows.is_empty() {
         rows.push(VisualRow { start, end });
