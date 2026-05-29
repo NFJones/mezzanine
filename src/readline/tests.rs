@@ -238,6 +238,30 @@ fn readline_history_visual_row_navigation_uses_wrapped_tail_row_start() {
     assert_eq!(buffer.cursor(), 0);
 }
 
+/// Verifies upward visual-row navigation preserves columns that land on the
+/// previous row's wrap-breaking whitespace.
+///
+/// Without keeping the chosen break space inside the previous visual row,
+/// moving Up from a later wrapped row can only target the previous row's last
+/// non-space character. That clamps the cursor left to the apparent line end
+/// before subsequent navigation behaves normally.
+#[test]
+fn readline_history_visual_row_navigation_preserves_wrap_break_space_column() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("header\nalpha beta  abcdefghijklmn");
+    assert_eq!(buffer.submit(), "header\nalpha beta  abcdefghijklmn");
+
+    assert!(buffer.history_previous());
+    assert!(buffer.move_left());
+    assert!(buffer.move_left());
+    let wrapped_tail_cursor = buffer.cursor();
+
+    assert!(buffer.move_visual_row_up_or_history_previous(12));
+    assert_eq!(buffer.cursor(), "header\nalpha beta  ".len());
+    assert!(buffer.move_visual_row_down_or_history_next(12));
+    assert_eq!(buffer.cursor(), wrapped_tail_cursor);
+}
+
 /// Verifies multi-line history entries remain whole entries while traversing
 /// history and only become row-navigable after an explicit edit/navigation move.
 #[test]

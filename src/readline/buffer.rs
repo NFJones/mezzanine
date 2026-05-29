@@ -1070,6 +1070,8 @@ struct VisualRow {
     start: usize,
     /// Byte offset where this visual row ends.
     end: usize,
+    /// Whether a cursor at `end` should be treated as belonging to the next row.
+    end_cursor_belongs_to_next: bool,
 }
 
 /// Returns the cursor location one visual row above while preserving column.
@@ -1118,7 +1120,19 @@ fn next_visual_row_cursor_position(
     let current_start = line_start_before_cursor(text, cursor);
     let current_end = line_end_after_cursor(text, cursor);
     let rows = visual_rows_for_logical_line(text, current_start, current_end, columns);
-    let (row_index, _) = visual_row_index_and_column(text, cursor, &rows)?;
+    let boundary_row_index = rows.iter().enumerate().find_map(|(index, row)| {
+        if index > 0
+            && cursor == row.start
+            && rows[index - 1].end == row.start
+            && column >= display_width_between(text, rows[index - 1].start, rows[index - 1].end)
+        {
+            Some(index - 1)
+        } else {
+            None
+        }
+    });
+    let row_index = boundary_row_index
+        .or_else(|| visual_row_index_and_column(text, cursor, &rows).map(|(index, _)| index))?;
     let next_row = if let Some(next_row) = rows.get(row_index.saturating_add(1)) {
         *next_row
     } else {
@@ -1148,21 +1162,27 @@ fn visual_rows_for_logical_line(
     let mut rows = Vec::new();
     let mut row_start = start;
     while row_start < end {
-        let (row_end, consumed) = visual_row_end(text, row_start, end, columns);
+        let (row_end, consumed, end_cursor_belongs_to_next) =
+            visual_row_end(text, row_start, end, columns);
         rows.push(VisualRow {
             start: row_start,
             end: row_end,
+            end_cursor_belongs_to_next,
         });
         row_start = consumed;
     }
     if rows.is_empty() {
-        rows.push(VisualRow { start, end });
+        rows.push(VisualRow {
+            start,
+            end,
+            end_cursor_belongs_to_next: false,
+        });
     }
     rows
 }
 
 /// Returns the visible row end and consumed byte offset for one soft row.
-fn visual_row_end(text: &str, start: usize, end: usize, columns: usize) -> (usize, usize) {
+fn visual_row_end(text: &str, start: usize, end: usize, columns: usize) -> (usize, usize, bool) {
     let mut width = 0usize;
     let mut boundary = start;
     let mut last_space_break = None;
@@ -1182,9 +1202,10 @@ fn visual_row_end(text: &str, start: usize, end: usize, columns: usize) -> (usiz
             break;
         }
     }
-    last_space_break
-        .filter(|(space_start, _)| *space_start > start)
-        .unwrap_or((boundary, boundary))
+    if let Some((_, space_end)) = last_space_break.filter(|(space_start, _)| *space_start > start) {
+        return (space_end, space_end, space_end < end);
+    }
+    (boundary, boundary, boundary < end)
 }
 
 /// Returns the visual row index and display column for the cursor.
@@ -1195,6 +1216,7 @@ fn visual_row_index_and_column(
 ) -> Option<(usize, usize)> {
     for (index, row) in rows.iter().enumerate() {
         if cursor == row.end
+            && row.end_cursor_belongs_to_next
             && rows
                 .get(index.saturating_add(1))
                 .is_some_and(|next| next.start == row.end)
