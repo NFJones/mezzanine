@@ -214,6 +214,30 @@ fn readline_visual_row_navigation_preserves_wrap_boundary_spaces() {
     assert_eq!(buffer.cursor(), "alpha".len());
 }
 
+/// Verifies recalled multiline history entries treat a hard wrap boundary as
+/// the start of the lower visual row during upward navigation.
+///
+/// Without this boundary disambiguation, a cursor placed at the first column of
+/// a wrapped tail row is attributed to the previous full-width row instead of
+/// the lower row. Pressing Up then falls through to the previous logical line
+/// or history entry before subsequent vertical moves recover.
+#[test]
+fn readline_history_visual_row_navigation_uses_wrapped_tail_row_start() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("header\nabcdefghijklmno");
+    assert_eq!(buffer.submit(), "header\nabcdefghijklmno");
+
+    assert!(buffer.history_previous());
+    for _ in 0..5 {
+        assert!(buffer.move_left());
+    }
+
+    assert!(buffer.move_visual_row_up_or_history_previous(10));
+    assert_eq!(buffer.cursor(), "header\n".len());
+    assert!(buffer.move_visual_row_up_or_history_previous(10));
+    assert_eq!(buffer.cursor(), 0);
+}
+
 /// Verifies multi-line history entries remain whole entries while traversing
 /// history and only become row-navigable after an explicit edit/navigation move.
 #[test]

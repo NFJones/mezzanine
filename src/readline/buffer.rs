@@ -1194,6 +1194,13 @@ fn visual_row_index_and_column(
     rows: &[VisualRow],
 ) -> Option<(usize, usize)> {
     for (index, row) in rows.iter().enumerate() {
+        if cursor == row.end
+            && rows
+                .get(index.saturating_add(1))
+                .is_some_and(|next| next.start == row.end)
+        {
+            continue;
+        }
         if cursor >= row.start && cursor <= row.end {
             return Some((index, display_width_between(text, row.start, cursor)));
         }
