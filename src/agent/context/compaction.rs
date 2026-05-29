@@ -135,6 +135,7 @@ fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> 
     for (index, block) in blocks.iter().enumerate().rev() {
         if block.source == ContextSourceKind::ActionResult {
             protected.insert(index);
+            break;
         }
     }
     protected

@@ -1239,6 +1239,113 @@ context_window_tokens = 40000
     );
 }
 
+/// Verifies repeated provider context-limit recovery can still shrink a stored
+/// action-result-only prefix after an earlier retry already narrowed context.
+///
+/// Later retries may encounter a compacted active-turn context where the next
+/// compactable prefix contains only older action results. Recovery must still
+/// summarize older exact action-result blocks instead of bailing out with a
+/// false "no compactable active turn context remains" message.
+#[test]
+fn runtime_provider_context_limit_error_recompacts_action_result_prefix() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-context-limit-action-result-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-context-limit-action-result-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-context-limit-action-result-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-action-result-recovery","input":"continue with the very large observation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.agent_turn_contexts.get_mut("turn-1").unwrap().blocks = vec![
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result one".to_string(),
+            content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result two".to_string(),
+            content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result three".to_string(),
+            content: format!(
+                "provider-context-limit-tail-three- {}",
+                "tail ".repeat(5_000)
+            ),
+        },
+    ];
+    let error = MezError::invalid_state(
+        "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
+    )
+    .with_provider_failure_json(
+        r#"{"status_code":400,"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+    );
+
+    let recovered = service
+        .recover_agent_provider_context_limit_failure(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+            2,
+        )
+        .unwrap();
+
+    assert!(recovered);
+    let after_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(after_context.contains("[context compacted]"), "{after_context}");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        "{pane_text}"
+    );
+    assert!(
+        !pane_text.contains("no compactable active turn context remains"),
+        "{pane_text}"
+    );
+}
+
 /// Verifies provider context-window wording also triggers active-turn
 /// compaction and retry before the turn is failed.
 ///
