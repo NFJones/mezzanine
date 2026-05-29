@@ -216,6 +216,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("compact", &[], SlashCommandEffect::SessionMutation, false),
         slash("copy", &[], SlashCommandEffect::SessionMutation, true),
         slash("diff", &[], SlashCommandEffect::ReadOnly, true),
+        slash("directive", &[], SlashCommandEffect::SessionMutation, true),
         slash("exit", &["quit"], SlashCommandEffect::SessionMutation, true),
         slash("init", &[], SlashCommandEffect::FileMutation, true),
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
@@ -450,6 +451,49 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "patch exports require the live runtime".to_string(),
         },
+        "directive" => {
+            let requested = invocation.args.trim();
+            let session = if requested.is_empty() || matches!(requested, "status" | "show") {
+                store.get(pane_id).ok_or_else(|| {
+                    MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "agent shell session not found for pane",
+                    )
+                })?
+            } else if matches!(requested, "clear" | "default" | "none") {
+                store.set_directive(pane_id, None)?
+            } else {
+                store.set_directive(pane_id, Some(requested.to_string()))?
+            };
+            if requested.is_empty() || matches!(requested, "status" | "show") {
+                AgentShellCommandOutcome::Display {
+                    command,
+                    body: format!(
+                        "agent directive for pane {} is {}.",
+                        session.pane_id,
+                        session
+                            .directive
+                            .as_deref()
+                            .map(|directive| format!("`{}`", directive.replace('`', "\\`")))
+                            .unwrap_or_else(|| "not set".to_string())
+                    ),
+                }
+            } else {
+                AgentShellCommandOutcome::Mutated {
+                    command,
+                    body: format!(
+                        "agent directive for pane {} is now {}.",
+                        session.pane_id,
+                        session
+                            .directive
+                            .as_deref()
+                            .map(|directive| format!("`{}`", directive.replace('`', "\\`")))
+                            .unwrap_or_else(|| "not set".to_string())
+                    ),
+                    visibility: session.visibility,
+                }
+            }
+        }
         "permissions" => match context.permission_policy {
             Some(policy) if invocation.args.is_empty() => AgentShellCommandOutcome::Display {
                 command,

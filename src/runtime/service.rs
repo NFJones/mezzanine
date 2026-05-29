@@ -1835,6 +1835,7 @@ impl RuntimeSessionService {
             session.running_turn_id = None;
             session.transcript_entries = metadata.transcript_entries;
             session.log_level = log_level;
+            session.directive = metadata.directive.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {
                 self.model_profile_overrides
                     .pane_profiles
@@ -1965,6 +1966,7 @@ impl RuntimeSessionService {
                         .cloned(),
                     planning_enabled: self.agent_planning_modes.contains(&session.pane_id),
                     response_style: self.agent_response_styles.get(&session.pane_id).cloned(),
+                    directive: session.directive.clone(),
                     routing_enabled: self.agent_routing_overrides.get(&session.pane_id).copied(),
                     approval_policy: self
                         .live_approval_policy_override
@@ -2010,6 +2012,7 @@ impl RuntimeSessionService {
             }
             let session = self.agent_shell_store.ensure_session(pane_id.to_string())?;
             session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
+            session.directive = metadata.directive.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {
                 self.model_profile_overrides
                     .pane_profiles

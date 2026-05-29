@@ -323,6 +323,7 @@ fn slash_command_registry_contains_required_baseline_commands() {
         "approval",
         "approve",
         "trust",
+        "directive",
         "list-sessions",
         "list-skills",
         "copy-context",
@@ -414,6 +415,12 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     let skills = parse_slash_command("/list-skills").unwrap().unwrap();
     assert_eq!(skills.name, "list-skills");
     assert_eq!(skills.effect, SlashCommandEffect::ReadOnly);
+    let directive = parse_slash_command("/directive focus on regressions")
+        .unwrap()
+        .unwrap();
+    assert_eq!(directive.name, "directive");
+    assert_eq!(directive.args, "focus on regressions");
+    assert_eq!(directive.effect, SlashCommandEffect::SessionMutation);
     assert_eq!(
         parse_slash_command("/sessions").unwrap_err().kind(),
         crate::error::MezErrorKind::InvalidArgs

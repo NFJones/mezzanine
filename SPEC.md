@@ -4691,6 +4691,11 @@ The baseline command capabilities are:
 - `/approvals`: Alias for `/permissions`.
 - `/approval`: Inspect or set the session approval mode. It MUST accept `ask`,
   `auto-allow`, or `full-access`.
+- `/directive`: Inspect or set a pane-local session directive that is appended
+  to the existing developer instructions for future turns without mutating user
+  configuration. Invoking it with text MUST replace the current directive for
+  the pane session; `show` or no argument MUST display the current value; and
+  `clear`, `default`, or `none` MUST remove it.
 - `/approve`: Approve a pending pane-local agent action. It MUST accept an
   approval id, `latest`, or the only pending approval for the active pane, and
   it MUST support `once`, `session`, `project`, and `global` approval scopes.

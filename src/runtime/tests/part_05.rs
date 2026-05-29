@@ -2922,6 +2922,11 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(log_level.contains("now trace"), "{log_level}");
+    let directive = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"restore-directive","method":"agent/shell/command","params":{"idempotency_key":"restore-directive","input":"/directive Prefer focused tests."}}"#,
+        &primary,
+    );
+    assert!(directive.contains("Prefer focused tests."), "{directive}");
     let saved_metadata = transcript_store
         .load_agent_session_metadata(service.session().id.as_str())
         .unwrap();
@@ -2984,6 +2989,10 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         Some("concise")
     );
     assert_eq!(
+        restored_session.directive.as_deref(),
+        Some("Prefer focused tests.")
+    );
+    assert_eq!(
         restored
             .agent_prompt_inputs
             .get("%1")
@@ -2998,6 +3007,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             String::from("/approval full-access"),
             String::from("/personality concise"),
             String::from("/log-level trace"),
+            String::from("/directive Prefer focused tests."),
         ]
     );
     let context = restored
@@ -3055,6 +3065,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 pane_model_profile: None,
                 planning_enabled: false,
                 response_style: None,
+                directive: Some("Prefer focused tests.".to_string()),
                 routing_enabled: Some(true),
                 approval_policy: Some("full-access".to_string()),
                 working_directory: None,
@@ -3223,6 +3234,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 pane_model_profile: None,
                 planning_enabled: false,
                 response_style: None,
+                directive: None,
                 routing_enabled: None,
                 approval_policy: Some("ask".to_string()),
                 working_directory: None,
@@ -3272,6 +3284,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 pane_model_profile: None,
                 planning_enabled: false,
                 response_style: None,
+                directive: None,
                 routing_enabled: None,
                 approval_policy: None,
                 working_directory: None,

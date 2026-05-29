@@ -117,6 +117,9 @@ pub struct AgentSessionMetadata {
     pub planning_enabled: bool,
     /// Pane-local response style, if one is active.
     pub response_style: Option<String>,
+    /// Pane-local session directive appended to developer instructions, if one
+    /// is active.
+    pub directive: Option<String>,
     /// Pane-local routing override, if one is active.
     pub routing_enabled: Option<bool>,
     /// Saved approval policy name for the session, if known.

@@ -1714,6 +1714,44 @@ fn agent_shell_executes_builtin_slash_command_effects() {
                 && body.contains("normal, verbose, debug, trace")
     ));
 
+    let directive = execute_agent_shell_command(&mut store, "%1", "/directive focus on tests")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        directive,
+        AgentShellCommandOutcome::Mutated {
+            visibility: AgentShellVisibility::Visible,
+            ref body,
+            ..
+        } if body.contains("agent directive for pane %1 is now `focus on tests`.")
+    ));
+    assert_eq!(
+        store.get("%1").unwrap().directive.as_deref(),
+        Some("focus on tests")
+    );
+
+    let directive_status = execute_agent_shell_command(&mut store, "%1", "/directive")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        directive_status,
+        AgentShellCommandOutcome::Display { ref body, .. }
+            if body.contains("agent directive for pane %1 is `focus on tests`.")
+    ));
+
+    let directive_clear = execute_agent_shell_command(&mut store, "%1", "/directive clear")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        directive_clear,
+        AgentShellCommandOutcome::Mutated {
+            visibility: AgentShellVisibility::Visible,
+            ref body,
+            ..
+        } if body.contains("agent directive for pane %1 is now not set.")
+    ));
+    assert_eq!(store.get("%1").unwrap().directive, None);
+
     let normal = execute_agent_shell_command(&mut store, "%1", "/log-level normal")
         .unwrap()
         .unwrap();

@@ -301,6 +301,9 @@ impl AgentSessionMetadata {
         if let Some(style) = self.response_style.as_deref() {
             validate_non_empty("response style", style)?;
         }
+        if let Some(directive) = self.directive.as_deref() {
+            validate_non_empty("directive", directive)?;
+        }
         if let Some(working_directory) = self.working_directory.as_deref() {
             validate_non_empty("working directory", working_directory)?;
         }
@@ -351,6 +354,7 @@ impl AgentSessionMetadata {
             self.pane_model_profile.clone().unwrap_or_default(),
             self.planning_enabled.to_string(),
             self.response_style.clone().unwrap_or_default(),
+            self.directive.clone().unwrap_or_default(),
             self.routing_enabled
                 .map(|enabled| enabled.to_string())
                 .unwrap_or_default(),
@@ -385,7 +389,8 @@ impl AgentSessionMetadata {
             || fields.len() == 20
             || fields.len() == 21
             || fields.len() == 22
-            || fields.len() == 23)
+            || fields.len() == 23
+            || fields.len() == 24)
             || fields[0] != AGENT_SESSION_METADATA_VERSION
         {
             return Err(MezError::invalid_args(
@@ -393,6 +398,7 @@ impl AgentSessionMetadata {
             ));
         }
         let legacy_layout = fields.len() <= 22;
+        let current_without_directive_layout = fields.len() == 23;
         let prompt_cache_lineage_id = if legacy_layout {
             fields[3].clone()
         } else {
@@ -405,14 +411,67 @@ impl AgentSessionMetadata {
         let pane_model_profile_index = if legacy_layout { 8 } else { 9 };
         let planning_enabled_index = if legacy_layout { 9 } else { 10 };
         let response_style_index = if legacy_layout { 10 } else { 11 };
-        let routing_enabled_index = if legacy_layout { 11 } else { 12 };
-        let working_directory_index = if legacy_layout { 12 } else { 13 };
-        let project_root_index = if legacy_layout { 13 } else { 14 };
-        let token_usage_start = if legacy_layout { 14 } else { 15 };
-        let approval_policy_index = if legacy_layout { 18 } else { 19 };
-        let context_usage_index = if legacy_layout { 19 } else { 20 };
-        let token_usage_by_model_index = if legacy_layout { 20 } else { 21 };
-        let context_usage_snapshot_index = if legacy_layout { 21 } else { 22 };
+        let directive_index = if legacy_layout || current_without_directive_layout {
+            None
+        } else {
+            Some(12)
+        };
+        let routing_enabled_index = if legacy_layout {
+            11
+        } else if current_without_directive_layout {
+            12
+        } else {
+            13
+        };
+        let working_directory_index = if legacy_layout {
+            12
+        } else if current_without_directive_layout {
+            13
+        } else {
+            14
+        };
+        let project_root_index = if legacy_layout {
+            13
+        } else if current_without_directive_layout {
+            14
+        } else {
+            15
+        };
+        let token_usage_start = if legacy_layout {
+            14
+        } else if current_without_directive_layout {
+            15
+        } else {
+            16
+        };
+        let approval_policy_index = if legacy_layout {
+            18
+        } else if current_without_directive_layout {
+            19
+        } else {
+            20
+        };
+        let context_usage_index = if legacy_layout {
+            19
+        } else if current_without_directive_layout {
+            20
+        } else {
+            21
+        };
+        let token_usage_by_model_index = if legacy_layout {
+            20
+        } else if current_without_directive_layout {
+            21
+        } else {
+            22
+        };
+        let context_usage_snapshot_index = if legacy_layout {
+            21
+        } else if current_without_directive_layout {
+            22
+        } else {
+            23
+        };
         let token_usage = if fields.len() >= 18 {
             ModelTokenUsage {
                 input_tokens: parse_u64(&fields[token_usage_start], "agent session input_tokens")?,
@@ -451,6 +510,10 @@ impl AgentSessionMetadata {
             planning_enabled: parse_bool(&fields[planning_enabled_index], "planning_enabled")?,
             response_style: (!fields[response_style_index].is_empty())
                 .then(|| fields[response_style_index].clone()),
+            directive: directive_index
+                .and_then(|index| fields.get(index))
+                .filter(|value| !value.is_empty())
+                .cloned(),
             routing_enabled: fields
                 .get(routing_enabled_index)
                 .filter(|value| !value.is_empty())

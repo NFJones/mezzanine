@@ -2996,6 +2996,13 @@ impl RuntimeSessionService {
                 session.transcript_entries.to_string(),
             ],
             vec![
+                "Directive".to_string(),
+                session
+                    .directive
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string()),
+            ],
+            vec![
                 "Log level".to_string(),
                 session.log_level.as_str().to_string(),
             ],
@@ -3388,6 +3395,20 @@ impl RuntimeSessionService {
                 source: ContextSourceKind::System,
                 label: "agent personality system prompt".to_string(),
                 content: prompt.clone(),
+            });
+        }
+        if let Some(directive) = self
+            .agent_shell_store
+            .get(pane_id)
+            .and_then(|session| session.directive.as_deref())
+        {
+            context.blocks.push(ContextBlock {
+                source: ContextSourceKind::DeveloperInstruction,
+                label: "agent shell directive".to_string(),
+                content: format!(
+                    "Pane-local /directive instruction for this session. Append it to the existing developer instructions for future turns:\n{}",
+                    directive
+                ),
             });
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);

@@ -258,6 +258,11 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub log_level: AgentLogLevel,
+    /// Stores the session directive value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub directive: Option<String>,
 }
 
 /// Carries Agent Shell Store state for this subsystem.
@@ -293,6 +298,7 @@ impl AgentShellStore {
                     running_turn_id: None,
                     transcript_entries: 0,
                     log_level: AgentLogLevel::Normal,
+                    directive: None,
                 },
             );
         }
@@ -472,6 +478,25 @@ impl AgentShellStore {
         Ok(session)
     }
 
+    /// Sets or clears the pane-local session directive.
+    ///
+    /// # Parameters
+    /// - `pane_id`: The pane owning the agent shell session.
+    /// - `directive`: The optional directive text appended to developer
+    ///   instructions for future turns.
+    pub fn set_directive(
+        &mut self,
+        pane_id: &str,
+        directive: Option<String>,
+    ) -> Result<&AgentShellSession> {
+        if let Some(text) = directive.as_deref() {
+            validate_non_empty("directive", text)?;
+        }
+        let session = self.session_mut(pane_id)?;
+        session.directive = directive;
+        Ok(session)
+    }
+
     /// Starts a fresh visible conversation for a pane with no transcript entries.
     ///
     /// The command refuses to switch away from a pane that still has a running
@@ -501,6 +526,7 @@ impl AgentShellStore {
                 running_turn_id: None,
                 transcript_entries: 0,
                 log_level,
+                directive: None,
             },
         );
         self.get(pane_id)
@@ -624,7 +650,9 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "diff"
         | "list-modified-files" => "copy and diagnostics",
         "approval" | "approve" | "routing" | "init" | "latency" | "list-mcp" | "log-level"
-        | "logout" | "model" | "permissions" | "personality" | "trust" => "configuration",
+        | "directive" | "logout" | "model" | "permissions" | "personality" | "trust" => {
+            "configuration"
+        }
         "help" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
@@ -664,6 +692,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "model" => "inspect or change model and reasoning settings.",
         "latency" => "inspect or change latency/cost preference.",
         "routing" => "toggle pane-local automatic model sizing.",
+        "directive" => "inspect or set a session-scoped developer-instruction addendum.",
         "personality" => "inspect or change response personality.",
         "resume" => "resume a saved conversation.",
         "fork" => "fork the current conversation into a new thread.",
@@ -685,13 +714,18 @@ fn agent_shell_command_description(name: &str) -> &'static str {
 /// on duplicated control-flow logic.
 pub(super) fn agent_shell_status_display(session: &AgentShellSession) -> String {
     format!(
-        "pane: {}\nsession: {}\nvisibility: {}\nrunning turn: {}\ntranscript entries: {}\nlog level: {}",
+        "pane: {}\nsession: {}\nvisibility: {}\nrunning turn: {}\ntranscript entries: {}\nlog level: {}\ndirective: {}",
         session.pane_id,
         session.session_id,
         agent_shell_visibility_name(session.visibility),
         session.running_turn_id.as_deref().unwrap_or("none"),
         session.transcript_entries,
-        session.log_level.as_str()
+        session.log_level.as_str(),
+        session
+            .directive
+            .as_deref()
+            .map(|directive| directive.replace('\n', "\\n"))
+            .unwrap_or_else(|| "none".to_string())
     )
 }
 

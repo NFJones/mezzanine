@@ -269,6 +269,7 @@ Useful slash commands include:
 | `/thinking`    | Toggle provider thinking mode when supported.         |
 | `/approval`    | Inspect or change approval mode.                      |
 | `/permissions` | Inspect or change permission policy.                  |
+| `/directive`   | Show or set a session-scoped developer addendum.      |
 | `/list-skills` | Show the skills available to the active pane.         |
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
