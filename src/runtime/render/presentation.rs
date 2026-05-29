@@ -51,6 +51,38 @@ pub(super) const MARKDOWN_DARK_NEUTRAL_FOREGROUND: TerminalColor =
 /// Muted foreground-only color used for table alternation on light surfaces.
 pub(super) const MARKDOWN_DARK_MUTED_FOREGROUND: TerminalColor =
     TerminalColor::Rgb(0x5a, 0x5a, 0x5a);
+/// Fixed foreground used for apply-patch diff headers regardless of theme.
+pub(super) const AGENT_DIFF_HEADER_FOREGROUND: TerminalColor = TerminalColor::Rgb(0x7a, 0xa2, 0xf7);
+/// Fixed foreground used for apply-patch added lines regardless of theme.
+pub(super) const AGENT_DIFF_ADDITION_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0x57, 0xc7, 0x85);
+/// Fixed foreground used for apply-patch removed lines regardless of theme.
+pub(super) const AGENT_DIFF_DELETION_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0xe4, 0x68, 0x76);
+/// Fixed foreground used for apply-patch context lines regardless of theme.
+pub(super) const AGENT_DIFF_CONTEXT_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0x93, 0x9a, 0xc0);
+/// Fixed foreground used for syntax-highlighted keywords inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_KEYWORD_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0xc0, 0xa3, 0xff);
+/// Fixed foreground used for syntax-highlighted strings inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_STRING_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0xa3, 0xd9, 0x77);
+/// Fixed foreground used for syntax-highlighted comments inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_COMMENT_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0x7f, 0x84, 0x9c);
+/// Fixed foreground used for syntax-highlighted numeric literals inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_NUMBER_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0xff, 0xb8, 0x6c);
+/// Fixed foreground used for syntax-highlighted type names inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_TYPE_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0x7d, 0xcf, 0xff);
+/// Fixed foreground used for syntax-highlighted function names inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_FUNCTION_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0xff, 0xcf, 0x5a);
+/// Fixed foreground used for syntax-highlighted operators inside apply-patch diffs.
+pub(super) const AGENT_DIFF_SYNTAX_OPERATOR_FOREGROUND: TerminalColor =
+    TerminalColor::Rgb(0x8f, 0xa9, 0x9a);
 /// Built-in syntax set used for file-aware diff and shell command highlighting.
 pub(super) static AGENT_DIFF_SYNTAX_SET: LazyLock<SyntaxSet> =
     LazyLock::new(SyntaxSet::load_defaults_newlines);
@@ -123,10 +155,22 @@ impl AgentTerminalPresentationStyle {
             Self::Error => ui_theme.colors.agent_transcript_error,
             Self::Command => ui_theme.colors.agent_transcript_command,
             Self::CommandDisplay => ui_theme.colors.frame_fill,
-            Self::DiffHeader => ui_theme.colors.agent_transcript_command,
-            Self::DiffAddition => ui_theme.colors.agent_transcript_user,
-            Self::DiffDeletion => ui_theme.colors.agent_transcript_error,
-            Self::DiffContext => ui_theme.colors.agent_transcript_status,
+            Self::DiffHeader => UiColorPair {
+                foreground: AGENT_DIFF_HEADER_FOREGROUND,
+                background: ui_theme.colors.frame_fill.background,
+            },
+            Self::DiffAddition => UiColorPair {
+                foreground: AGENT_DIFF_ADDITION_FOREGROUND,
+                background: ui_theme.colors.frame_fill.background,
+            },
+            Self::DiffDeletion => UiColorPair {
+                foreground: AGENT_DIFF_DELETION_FOREGROUND,
+                background: ui_theme.colors.frame_fill.background,
+            },
+            Self::DiffContext => UiColorPair {
+                foreground: AGENT_DIFF_CONTEXT_FOREGROUND,
+                background: ui_theme.colors.frame_fill.background,
+            },
         }
     }
 
@@ -1454,8 +1498,8 @@ impl AgentMarkdownRenderer {
             link_foreground: ui_theme.colors.agent_transcript_command.foreground,
             inline_code_foreground: markdown_inline_code_foreground(ui_theme),
             table_alternate_row_foreground: markdown_table_alternate_row_foreground(ui_theme),
-            diff_addition_foreground: ui_theme.colors.agent_transcript_user.foreground,
-            diff_deletion_foreground: ui_theme.colors.agent_transcript_error.foreground,
+            diff_addition_foreground: AGENT_DIFF_ADDITION_FOREGROUND,
+            diff_deletion_foreground: AGENT_DIFF_DELETION_FOREGROUND,
             current_prefix_only: false,
         }
     }
@@ -1726,7 +1770,7 @@ pub(super) fn command_preview_terminal_rendered_lines(
     classification: ShellClassification,
     ui_theme: &UiTheme,
 ) -> Vec<AgentRenderedLine> {
-    let syntax_theme = agent_diff_syntax_theme(ui_theme);
+    let syntax_theme = agent_command_syntax_theme(ui_theme);
     let mut highlighter = agent_shell_command_highlighter(classification, &syntax_theme);
     let command_rendition =
         agent_terminal_label_rendition(AgentTerminalPresentationStyle::Command, ui_theme);
@@ -2564,8 +2608,8 @@ pub(super) fn agent_shell_command_syntax(
         .filter(|syntax| syntax.name != "Plain Text")
 }
 
-/// Builds the syntax theme used for terminal diff body highlighting.
-pub(super) fn agent_diff_syntax_theme(ui_theme: &UiTheme) -> Theme {
+/// Builds the syntax theme used for shell command preview highlighting.
+pub(super) fn agent_command_syntax_theme(ui_theme: &UiTheme) -> Theme {
     Theme {
         name: Some(format!("mezzanine-{}", ui_theme.name)),
         author: Some("Mezzanine".to_string()),
@@ -2581,28 +2625,20 @@ pub(super) fn agent_diff_syntax_theme(ui_theme: &UiTheme) -> Theme {
             )),
             ..ThemeSettings::default()
         },
-        scopes: agent_diff_syntax_theme_items(ui_theme),
+        scopes: agent_command_syntax_theme_items(ui_theme),
     }
 }
 
 /// Builds TextMate scope rules from Mezzanine's active theme colors.
-pub(super) fn agent_diff_syntax_theme_items(ui_theme: &UiTheme) -> Vec<ThemeItem> {
+pub(super) fn agent_command_syntax_theme_items(ui_theme: &UiTheme) -> Vec<ThemeItem> {
     [
-        (
-            "source",
-            ui_theme.colors.syntax_plain.foreground,
-            None,
-        ),
+        ("source", ui_theme.colors.syntax_plain.foreground, None),
         (
             "comment",
             ui_theme.colors.syntax_comment.foreground,
             Some(FontStyle::ITALIC),
         ),
-        (
-            "string",
-            ui_theme.colors.syntax_string.foreground,
-            None,
-        ),
+        ("string", ui_theme.colors.syntax_string.foreground, None),
         (
             "constant.numeric, constant.character, constant.language, constant.other",
             ui_theme.colors.syntax_number.foreground,
@@ -2626,6 +2662,68 @@ pub(super) fn agent_diff_syntax_theme_items(ui_theme: &UiTheme) -> Vec<ThemeItem
         (
             "keyword.operator, punctuation",
             ui_theme.colors.syntax_operator.foreground,
+            None,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(selector, foreground, font_style)| {
+        agent_diff_syntax_theme_item(selector, foreground, font_style)
+    })
+    .collect()
+}
+
+/// Builds the syntax theme used for terminal diff body highlighting.
+pub(super) fn agent_diff_syntax_theme(ui_theme: &UiTheme) -> Theme {
+    Theme {
+        name: Some(format!("mezzanine-{}", ui_theme.name)),
+        author: Some("Mezzanine".to_string()),
+        settings: ThemeSettings {
+            foreground: Some(syntect_color_from_terminal_color(
+                AGENT_DIFF_CONTEXT_FOREGROUND,
+            )),
+            background: None,
+            accent: Some(syntect_color_from_terminal_color(
+                AGENT_DIFF_SYNTAX_KEYWORD_FOREGROUND,
+            )),
+            ..ThemeSettings::default()
+        },
+        scopes: agent_diff_syntax_theme_items(),
+    }
+}
+
+/// Builds TextMate scope rules from Mezzanine's active theme colors.
+pub(super) fn agent_diff_syntax_theme_items() -> Vec<ThemeItem> {
+    [
+        ("source", AGENT_DIFF_CONTEXT_FOREGROUND, None),
+        (
+            "comment",
+            AGENT_DIFF_SYNTAX_COMMENT_FOREGROUND,
+            Some(FontStyle::ITALIC),
+        ),
+        ("string", AGENT_DIFF_SYNTAX_STRING_FOREGROUND, None),
+        (
+            "constant.numeric, constant.character, constant.language, constant.other",
+            AGENT_DIFF_SYNTAX_NUMBER_FOREGROUND,
+            None,
+        ),
+        (
+            "keyword, storage, storage.modifier",
+            AGENT_DIFF_SYNTAX_KEYWORD_FOREGROUND,
+            Some(FontStyle::BOLD),
+        ),
+        (
+            "storage.type, support.type, entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.trait, entity.name.interface, meta.type",
+            AGENT_DIFF_SYNTAX_TYPE_FOREGROUND,
+            None,
+        ),
+        (
+            "entity.name.function, support.function, meta.function-call, variable.function",
+            AGENT_DIFF_SYNTAX_FUNCTION_FOREGROUND,
+            None,
+        ),
+        (
+            "keyword.operator, punctuation",
+            AGENT_DIFF_SYNTAX_OPERATOR_FOREGROUND,
             None,
         ),
     ]
