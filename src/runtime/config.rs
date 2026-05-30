@@ -60,12 +60,23 @@ pub(super) fn json_escape(value: &str) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_fit_status_line(value: &str, width: usize) -> String {
-    let mut line = value.chars().take(width).collect::<String>();
-    let current_width = line.chars().count();
-    if current_width < width {
-        line.push_str(&" ".repeat(width - current_width));
+    if width == 0 {
+        return String::new();
     }
-    line
+    let mut output = String::new();
+    let mut used = 0usize;
+    for grapheme in crate::terminal::terminal_graphemes(value) {
+        let grapheme_width = crate::terminal::terminal_grapheme_width(grapheme);
+        if used.saturating_add(grapheme_width) > width {
+            break;
+        }
+        output.push_str(grapheme);
+        used = used.saturating_add(grapheme_width);
+    }
+    if used < width {
+        output.push_str(&" ".repeat(width.saturating_sub(used)));
+    }
+    output
 }
 
 /// Runs the runtime config method applies to live service operation for this subsystem.
@@ -3675,4 +3686,58 @@ pub(super) fn optional_i32_json(value: Option<i32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::terminal::terminal_text_width;
+
+    use super::runtime_fit_status_line;
+
+    /// Verifies that fitting ASCII text truncates to the requested display width.
+    #[test]
+    fn fits_ascii_text_to_width() {
+        assert_eq!(runtime_fit_status_line("hello world", 5), "hello");
+        assert_eq!(runtime_fit_status_line("ab", 5), "ab   ");
+    }
+
+    /// Verifies that fitting fullwidth text counts display columns, not Unicode
+    /// scalar values, so wide characters do not overflow the target width.
+    #[test]
+    fn fits_fullwidth_text_by_display_width() {
+        let result = runtime_fit_status_line("ＡＢＣＤＥＦ", 6);
+        assert_eq!(terminal_text_width(&result), 6);
+        assert_eq!(result.chars().count(), 3);
+    }
+
+    /// Verifies that fitting text with mixed fullwidth and narrow characters
+    /// truncates at the display-width boundary.
+    #[test]
+    fn fits_mixed_width_text_by_display_width() {
+        let result = runtime_fit_status_line("ＡbcＤ", 4);
+        // Ａ = 2, b = 1, c = 1 → fits in 4 cols
+        // Ｄ would be another 2 → 6 > 4, dropped
+        assert_eq!(terminal_text_width(&result), 4);
+        assert!(result.starts_with('Ａ'));
+    }
+
+    /// Verifies that fitting with zero width returns an empty string.
+    #[test]
+    fn fits_zero_width_returns_empty() {
+        assert_eq!(runtime_fit_status_line("hello", 0), "");
+        assert_eq!(runtime_fit_status_line("ＡＢ", 0), "");
+    }
+
+    /// Verifies that narrow characters pad to the exact display width while
+    /// fullwidth characters are not truncated mid-grapheme.
+    #[test]
+    fn fits_narrow_pads_and_wide_truncates_cleanly() {
+        let narrow = runtime_fit_status_line("x", 4);
+        assert_eq!(terminal_text_width(&narrow), 4);
+
+        let wide = runtime_fit_status_line("Ａ", 1);
+        // 'Ａ' is 2 cols wide, 2 > 1, so it is dropped entirely
+        assert_eq!(terminal_text_width(&wide), 1);
+        assert_eq!(wide, " ");
+    }
 }

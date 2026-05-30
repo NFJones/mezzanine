@@ -6,7 +6,7 @@
 //! same clipping behavior.
 
 use super::super::runtime_fit_status_line;
-use crate::terminal::TerminalStyleSpan;
+use crate::terminal::{TerminalStyleSpan, terminal_grapheme_width, terminal_graphemes};
 
 /// Replaces a fixed-width terminal-cell range with text.
 ///
@@ -21,16 +21,47 @@ pub(super) fn overlay_text_cells(
     columns: usize,
     text: &str,
 ) {
-    let mut cells = row.chars().collect::<Vec<_>>();
-    let required = column_start.saturating_add(columns);
-    while cells.len() < required {
-        cells.push(' ');
+    if columns == 0 {
+        return;
     }
+    let target_end = column_start.saturating_add(columns);
     let fitted = runtime_fit_status_line(text, columns);
-    for (offset, ch) in fitted.chars().take(columns).enumerate() {
-        cells[column_start.saturating_add(offset)] = ch;
+
+    let mut output = String::new();
+    let mut current_column = 0usize;
+    let mut inserted = false;
+
+    for grapheme in terminal_graphemes(row) {
+        let grapheme_width = terminal_grapheme_width(grapheme);
+        let next_column = current_column.saturating_add(grapheme_width);
+
+        if next_column <= column_start {
+            output.push_str(grapheme);
+        } else if !inserted {
+            let reached = crate::terminal::terminal_text_width(&output);
+            if reached < column_start {
+                output.push_str(&" ".repeat(column_start.saturating_sub(reached)));
+            }
+            output.push_str(&fitted);
+            inserted = true;
+        }
+
+        if current_column >= target_end {
+            output.push_str(grapheme);
+        }
+
+        current_column = next_column;
     }
-    *row = cells.into_iter().collect();
+
+    if !inserted {
+        let reached = crate::terminal::terminal_text_width(&output);
+        if reached < column_start {
+            output.push_str(&" ".repeat(column_start.saturating_sub(reached)));
+        }
+        output.push_str(&fitted);
+    }
+
+    *row = output;
 }
 
 /// Removes style spans that overlap a fixed-width terminal-cell range.
@@ -80,4 +111,67 @@ pub(super) fn range_overlap_u16(
     first_end
         .min(second_end)
         .saturating_sub(first_start.max(second_start))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::terminal::terminal_text_width;
+
+    use super::overlay_text_cells;
+
+    /// Verifies that overlay with only single-width characters preserves the
+    /// correct column alignment when wide characters exist before the target.
+    #[test]
+    fn overlay_preserves_wide_chars_before_target() {
+        let mut row = String::from("ＡＢＣ"); // 3 fullwidth chars = 6 display cols
+        overlay_text_cells(&mut row, 4, 2, "XY");
+        // A at cols 0-2, B at 2-4, C at 4-6
+        // Replace cols 4-6 with "XY" (2 single-width = 2 display cols)
+        // Result: A(0-2) + B(2-4) + "XY"(4-6) = "ＡＢXY"
+        assert_eq!(row, "ＡＢXY");
+        assert_eq!(terminal_text_width(&row), 6);
+    }
+
+    /// Verifies that overlay correctly replaces content when no wide characters
+    /// are present, using display-column positions for both input and output.
+    #[test]
+    fn overlay_replaces_single_width_content() {
+        let mut row = String::from("hello world");
+        overlay_text_cells(&mut row, 6, 5, "there");
+        assert_eq!(row, "hello there");
+        assert_eq!(terminal_text_width(&row), 11);
+    }
+
+    /// Verifies that an overlay spanning zero columns is a no-op even when the
+    /// input contains wide characters.
+    #[test]
+    fn overlay_zero_columns_is_noop() {
+        let mut row = String::from("ＡＢ");
+        overlay_text_cells(&mut row, 0, 0, "X");
+        assert_eq!(row, "ＡＢ");
+        assert_eq!(terminal_text_width(&row), 4);
+    }
+
+    /// Verifies that overlay replaces a full-width character range and pads the
+    /// replacement to maintain the original total display width.
+    #[test]
+    fn overlay_replaces_wide_chars_with_narrow_text() {
+        // 3 fullwidth chars = 6 display cols
+        let mut row = String::from("ＡＢＣ");
+        overlay_text_cells(&mut row, 0, 6, "ab");
+        // "ab" (2 display cols) fitted to 6 → "ab    " (4 padding spaces)
+        assert_eq!(terminal_text_width(&row), 6);
+        assert!(row.starts_with("ab"));
+    }
+
+    /// Verifies that overlay at the end of a row with wide characters positions
+    /// correctly when the target starts after all existing content.
+    #[test]
+    fn overlay_after_row_end_pads_correctly() {
+        let mut row = String::from("Ａ"); // 2 display cols
+        overlay_text_cells(&mut row, 4, 2, "XY");
+        // A at 0-2, then pad 2 spaces to reach col 4, then "XY"
+        assert!(row.starts_with('Ａ'));
+        assert_eq!(terminal_text_width(&row), 6);
+    }
 }
