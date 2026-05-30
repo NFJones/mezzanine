@@ -9,7 +9,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::error::{MezError, Result};
 use crate::layout::Size;
-use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
+use crate::terminal::{CopyPosition, GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
 /// Internal marker for cells occupied by the continuation half of a wide glyph.
 const TERMINAL_WIDE_CONTINUATION_CELL: char = '\0';
@@ -121,6 +121,51 @@ pub(in crate::terminal) fn blank_row(columns: u16) -> Vec<char> {
 /// Converts a cell row into trimmed terminal text.
 pub(in crate::terminal) fn trim_row(row: &[char]) -> String {
     row.iter().collect::<String>().trim_end().to_string()
+}
+
+/// Collects screen cells into terminal text, omitting wide-character continuation
+/// cells.
+///
+/// The terminal screen stores wide characters as a leading glyph followed by
+/// `' '` continuation cells with the same rendition. These continuation
+/// cells inflate display-width measurements and produce unwanted extra
+/// spacing in rendered output. This function detects continuation cells by
+/// inspecting both cell characters and renditions, stripping them from the
+/// output so downstream measurement and rendering operate on semantic content
+/// widths.
+///
+/// When `trim_trailing_whitespace` is true, trailing whitespace is removed
+/// from the output. This is appropriate for plain-text rendering where blank
+/// trailing cells carry no meaning. Styled outputs should pass `false` so
+/// that trailing cells with non-default graphic renditions are preserved.
+pub(in crate::terminal) fn collect_screen_cells(
+    cells: &[char],
+    renditions: &[GraphicRendition],
+    trim_trailing_whitespace: bool,
+) -> String {
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < cells.len() {
+        let ch = cells[index];
+        if ch == ' '
+            && index > 0
+            && terminal_char_width(cells[index.saturating_sub(1)]) > 1
+            && renditions.get(index).copied().unwrap_or_default()
+                == renditions
+                    .get(index.saturating_sub(1))
+                    .copied()
+                    .unwrap_or_default()
+        {
+            index = index.saturating_add(1);
+            continue;
+        }
+        output.push(ch);
+        index = index.saturating_add(1);
+    }
+    if trim_trailing_whitespace {
+        output = output.trim_end().to_string();
+    }
+    output
 }
 
 /// Fits terminal text to an exact display width, padding with spaces if needed.

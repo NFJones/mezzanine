@@ -4452,7 +4452,7 @@ fn apply_copy_mode_selection_spans(
         let selection_end = if line_index == end.line {
             end.column
         } else {
-            line.text.chars().count()
+            terminal_text_width(&line.text)
         };
         if selection_end <= selection_start {
             continue;

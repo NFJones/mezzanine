@@ -6,8 +6,8 @@
 
 use super::{
     BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, MAX_OSC_STRING_BYTES, Result, Size,
-    blank_cells, blank_row, terminal_char_width, terminal_grapheme_width, terminal_graphemes,
-    terminal_text_width, trim_row,
+    blank_cells, blank_row, collect_screen_cells, terminal_char_width, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width, trim_row,
 };
 
 // Terminal screen parser, OSC events, and alternate-screen state.
@@ -2701,37 +2701,81 @@ fn styled_line_from_row_with_copy_text(
         .rposition(|(ch, rendition)| *ch != ' ' || *rendition != GraphicRendition::default())
         .map(|index| index.saturating_add(1))
         .unwrap_or_default();
-    let text = cells.iter().take(visible_columns).collect::<String>();
+    let limited_cells = &cells[..visible_columns.min(cells.len())];
+    let limited_renditions = &renditions[..visible_columns.min(renditions.len())];
+    let text = collect_screen_cells(limited_cells, limited_renditions, false);
     let mut style_spans = Vec::new();
-    let mut column = 0usize;
-    while column < visible_columns {
-        let rendition = renditions
-            .get(column)
+    let mut cell = 0usize;
+    let mut display_column = 0usize;
+
+    while cell < limited_cells.len() {
+        let rendition = limited_renditions
+            .get(cell)
             .copied()
             .unwrap_or_else(GraphicRendition::default);
-        let start = column;
-        while column < visible_columns
-            && renditions
-                .get(column)
+
+        // Skip continuation cells for span calculations.
+        if is_continuation_cell(limited_cells, limited_renditions, cell) {
+            cell = cell.saturating_add(1);
+            continue;
+        }
+
+        let span_start = display_column;
+        let mut span_width = terminal_char_width(limited_cells[cell]);
+        cell = cell.saturating_add(1);
+
+        // Extend the span over consecutive cells with the same rendition,
+        // skipping continuation cells and accumulating their display widths.
+        while cell < limited_cells.len()
+            && limited_renditions
+                .get(cell)
                 .copied()
                 .unwrap_or_else(GraphicRendition::default)
                 == rendition
         {
-            column = column.saturating_add(1);
+            if is_continuation_cell(limited_cells, limited_renditions, cell) {
+                cell = cell.saturating_add(1);
+                continue;
+            }
+            span_width = span_width.saturating_add(terminal_char_width(limited_cells[cell]));
+            cell = cell.saturating_add(1);
         }
+
         if rendition != GraphicRendition::default() {
             style_spans.push(TerminalStyleSpan {
-                start,
-                length: column.saturating_sub(start),
+                start: span_start,
+                length: span_width,
                 rendition,
             });
         }
+
+        display_column = display_column.saturating_add(span_width);
     }
+
     TerminalStyledLine {
         text,
         style_spans,
         copy_text,
     }
+}
+
+/// Returns whether a screen cell is a wide-character continuation.
+///
+/// Continuation cells are `' '` cells that follow a wide character and carry
+/// the same graphic rendition. The terminal parser writes them as placeholders
+/// that occupy the second column of a two-cell glyph.
+fn is_continuation_cell(cells: &[char], renditions: &[GraphicRendition], index: usize) -> bool {
+    if index == 0 || cells[index] != ' ' {
+        return false;
+    }
+    if terminal_char_width(cells[index.saturating_sub(1)]) <= 1 {
+        return false;
+    }
+    renditions.get(index).copied().unwrap_or_default()
+        == renditions
+            .get(index.saturating_sub(1))
+            .copied()
+            .unwrap_or_default()
 }
 
 /// Runs the write styled line to row operation for this subsystem.
