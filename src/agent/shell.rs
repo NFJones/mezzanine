@@ -1935,7 +1935,8 @@ fn tool_probe_from_structured_line(line: &str) -> Option<ToolProbe> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn optional_tool_field(value: &str) -> Option<String> {
-    (!value.is_empty()).then(|| value.to_string())
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Runs the optional i32 field operation for this subsystem.
@@ -1958,6 +1959,38 @@ fn optional_u64_field(value: &str) -> Option<u64> {
     (!value.is_empty())
         .then(|| value.parse::<u64>().ok())
         .flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{optional_tool_field, tool_probe_from_structured_line};
+
+    /// Verifies whitespace-only optional tool metadata normalizes to `None`
+    /// so the discovery cache does not preserve meaningless placeholder text.
+    #[test]
+    fn optional_tool_field_rejects_whitespace_only_values() {
+        assert_eq!(optional_tool_field("   \t  "), None);
+    }
+
+    /// Verifies structured tool probe parsing trims blank optional fields to
+    /// `None` while preserving the required probe metadata.
+    #[test]
+    fn tool_probe_from_structured_line_normalizes_blank_optional_fields() {
+        let probe = tool_probe_from_structured_line(
+            "tool\trg\t0\t \t \tcommand -v rg\t127\t \t\t1710000000",
+        )
+        .expect("tool probe line should parse");
+
+        assert_eq!(probe.name, "rg");
+        assert!(!probe.available);
+        assert_eq!(probe.path, None);
+        assert_eq!(probe.version, None);
+        assert_eq!(probe.lookup_command, "command -v rg");
+        assert_eq!(probe.lookup_exit_status, Some(127));
+        assert_eq!(probe.version_command, None);
+        assert_eq!(probe.version_exit_status, None);
+        assert_eq!(probe.discovered_at_unix_seconds, Some(1710000000));
+    }
 }
 
 /// Carries Tool Discovery Cache state for this subsystem.
