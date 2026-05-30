@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::semantic::apply_patch_touched_paths;
+use super::semantic::{apply_patch_touched_paths, try_convert_unified_diff_to_mez_patch};
 use super::shell::validate_agent_authored_shell_command;
 use super::{AgentCapability, AgentTurnRecord, BTreeSet, McpPromptTool, MezError, Result};
 
@@ -1001,10 +1001,13 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
             stateful: optional_bool(object, "stateful")?.unwrap_or(false),
             timeout_ms: optional_nullable_u64(object, "timeout_ms")?,
         },
-        "apply_patch" => AgentActionPayload::ApplyPatch {
-            patch: required_string(object, "patch")?.to_string(),
-            strip: optional_nullable_u64(object, "strip")?,
-        },
+        "apply_patch" => {
+            let patch = required_string(object, "patch")?.to_string();
+            AgentActionPayload::ApplyPatch {
+                patch: try_convert_unified_diff_to_mez_patch(&patch).unwrap_or(patch),
+                strip: optional_nullable_u64(object, "strip")?,
+            }
+        }
         "web_search" => AgentActionPayload::WebSearch {
             query: required_string(object, "query")?.to_string(),
             domains: optional_string_array(object, "domains")?,

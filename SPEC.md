@@ -3597,8 +3597,10 @@ The baseline action types are:
 - `shell_command`: Send shell input to the pane for local filesystem
   inspection, discovery, validation, process execution, and non-content path
   operations.
-- `apply_patch`: Apply a Mezzanine patch block. The first nonblank line MUST
-  be `*** Begin Patch` and the last nonblank line MUST be `*** End Patch`.
+- `apply_patch`: Apply a Mezzanine patch block. After optional provider-interop
+  normalization (which MAY auto-convert raw unified diffs), the first nonblank
+  line MUST be `*** Begin Patch` and the last nonblank line MUST be
+  `*** End Patch`.
   Between those delimiters, the patch MUST contain one or more file operations:
   - add: `*** Add File: <relative-path>` followed by zero or more content lines,
     each beginning with `+`;
@@ -3659,9 +3661,15 @@ The baseline action types are:
   whether the replacement block or distinctive added lines are already present
   in the relevant target scope so the model can reconcile current file state
   instead of retrying a stale hunk.
-  Raw unified diffs MUST NOT be accepted by this semantic action; agents that
-  truly need a raw unified diff MUST use `shell_command` with an explicit tool
-  such as `git apply`.
+   For provider-interop reliability (especially with models trained to emit
+   unified-diff output), implementations MAY accept raw unified diffs with
+   `---` and `+++` file headers and `@@` hunk markers. When accepted in this
+   format, the implementation MUST auto-convert the payload into canonical
+   Mezzanine patch form before validation and planning, using the `+++` (or
+   `---` when the new path is `/dev/null`) file path as the operation target.
+   Agents that need entirely non-Mezzanine diff application (such as applying
+   patches through a different internal grammar) MUST use `shell_command`
+   with an explicit tool such as `git apply`.
   Canonical paths in Mezzanine patch headers MUST be relative to the pane
   current working directory and MUST NOT be empty, absolute, contain empty path
   segments, or contain `..` traversal segments. Models SHOULD omit `./`,
@@ -6098,7 +6106,9 @@ forbid asking the user to perform manual file edits until the model is
 concretely blocked by missing permissions, missing external input, or an
 exhausted bounded retry policy. It MUST tell the model to skip or adapt stale hunks when equivalent
 behavior or the intended replacement is already present. It MUST state that raw
-unified diffs belong in an explicit shell command such as `git apply`.
+unified diffs are accepted by `apply_patch` and will be auto-converted to
+Mezzanine patch format; agents that need entirely non-Mezzanine diff
+application MUST use an explicit shell command such as `git apply`.
 It MUST state that `apply_patch` path headers are relative to the pane current
 working directory and cannot use absolute paths or `..`, while other semantic
 file actions MAY still use valid absolute paths when policy permits. For other

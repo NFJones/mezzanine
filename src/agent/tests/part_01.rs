@@ -47,6 +47,7 @@ use super::{
     provider_error_is_output_limit_exceeded, provider_quota_usage_from_headers, readiness_decision,
     readiness_probe_command_for_classification, select_model_profile, set_project_guidance_context,
     shell_quote, tool_discovery_script, transcript_entries_for_execution,
+    try_convert_unified_diff_to_mez_patch,
 };
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::instructions::DiscoveredInstructionFile;

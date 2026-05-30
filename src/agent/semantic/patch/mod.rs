@@ -17,6 +17,7 @@ mod snapshot;
 mod transaction;
 
 use matcher::apply_patch_hunks_to_file;
+pub use parser::try_convert_unified_diff_to_mez_patch;
 use parser::{MezPatch, MezPatchOperation, parse_mez_patch};
 use snapshot::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchTextFile,
@@ -114,9 +115,11 @@ pub fn apply_patch_error_plan(message: &str) -> LocalActionPlan {
 }
 
 pub(super) fn apply_patch_plan(patch: &str, strip: Option<u64>) -> Result<LocalActionPlan> {
-    validate_apply_patch_payload(patch)?;
-    debug_assert!(is_mez_patch_payload(patch));
-    mez_apply_patch_read_plan(patch, strip)
+    let effective =
+        try_convert_unified_diff_to_mez_patch(patch).unwrap_or_else(|| patch.to_string());
+    validate_apply_patch_payload(&effective)?;
+    debug_assert!(is_mez_patch_payload(&effective));
+    mez_apply_patch_read_plan(&effective, strip)
 }
 
 fn mez_apply_patch_read_plan(patch: &str, strip: Option<u64>) -> Result<LocalActionPlan> {

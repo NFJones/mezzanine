@@ -354,7 +354,37 @@ fn deepseek_maap_action_batch_schema(
         required.retain(|field| field.as_str() != Some("thought"));
     }
     deepseek_prune_unsupported_schema_keywords(&mut schema);
+    deepseek_replace_apply_patch_description(&mut schema);
     schema
+}
+
+/// Replaces the shared long-form apply_patch `patch` field description with a
+/// shorter, more explicit DeepSeek-optimized version. DeepSeek models parse
+/// compact schema descriptions more reliably than long paragraphs.
+fn deepseek_replace_apply_patch_description(schema: &mut serde_json::Value) {
+    let Some(actions) = schema
+        .pointer_mut("/properties/actions/items/anyOf")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for action in actions {
+        let Some(props) = action
+            .pointer("/properties/type/enum/0")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if props != "apply_patch" {
+            continue;
+        }
+        if let Some(patch_desc) = action.pointer_mut("/properties/patch/description") {
+            *patch_desc = serde_json::json!(
+                "Mezzanine patch text. Must start with \"*** Begin Patch\" and end with \"*** End Patch\". File directives: \"*** Update File: <path>\", \"*** Add File: <path>\", \"*** Delete File: <path>\". Use relative paths only (no absolute, no ..). Hunks begin with \"@@\" headers, optionally with anchors like \"@@ fn name\". Hunk lines use exact prefixes: space for context, - for removed, + for added. Copy old/context lines verbatim from current file content; never infer code. Example valid patch: *** Begin Patch\\n*** Update File: src/lib.rs\\n@@ fn main\\n let x = 1;\\n+let y = 2;\\n*** End Patch\\n. WRONG: --- a/file or +++ b/file headers, diff --git format, or raw unified diffs."
+            );
+        }
+        break;
+    }
 }
 
 /// Removes JSON Schema hints that DeepSeek documents as unsupported by strict

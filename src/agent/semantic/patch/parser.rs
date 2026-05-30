@@ -198,8 +198,197 @@ pub(super) fn parse_mez_patch(text: &str) -> Result<MezPatch> {
     Ok(MezPatch { operations })
 }
 
+pub fn try_convert_unified_diff_to_mez_patch(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let lines: Vec<&str> = trimmed.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let has_diff_header = lines
+        .iter()
+        .any(|line| line.starts_with("--- ") || *line == "---")
+        && lines
+            .iter()
+            .any(|line| line.starts_with("+++ ") || *line == "+++");
+    let has_hunk = lines.iter().any(|line| line.starts_with("@@"));
+    if !has_diff_header || !has_hunk {
+        return None;
+    }
+    if trimmed.contains("*** Begin Patch") || trimmed.contains("*** Update File") {
+        return None;
+    }
+    let sections = split_unified_diff_into_file_sections(&lines);
+    if sections.is_empty() || sections.iter().all(|section| section.hunks.is_empty()) {
+        return None;
+    }
+    let mut result = String::from("*** Begin Patch\n");
+    for section in &sections {
+        let path = if let Some(path) = &section.path {
+            path.clone()
+        } else {
+            continue;
+        };
+        match section.operation {
+            UnifiedDiffFileOperation::Add => {
+                result.push_str("*** Add File: ");
+                result.push_str(&path);
+                result.push('\n');
+                for hunk in &section.hunks {
+                    for line in hunk {
+                        if let Some(content) = line.strip_prefix('+') {
+                            result.push('+');
+                            result.push_str(content);
+                            result.push('\n');
+                        }
+                    }
+                }
+            }
+            UnifiedDiffFileOperation::Delete => {
+                result.push_str("*** Delete File: ");
+                result.push_str(&path);
+                result.push('\n');
+            }
+            UnifiedDiffFileOperation::Update => {
+                result.push_str("*** Update File: ");
+                result.push_str(&path);
+                result.push('\n');
+                for hunk in &section.hunks {
+                    for line in hunk {
+                        result.push_str(line);
+                        result.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    result.push_str("*** End Patch\n");
+    if result.lines().count() <= 3 {
+        return None;
+    }
+    Some(result)
+}
+
+#[derive(Debug)]
+struct UnifiedDiffFileSection {
+    path: Option<String>,
+    operation: UnifiedDiffFileOperation,
+    hunks: Vec<Vec<String>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UnifiedDiffFileOperation {
+    Add,
+    Delete,
+    Update,
+}
+
+fn split_unified_diff_into_file_sections(lines: &[&str]) -> Vec<UnifiedDiffFileSection> {
+    let mut sections = Vec::new();
+    let mut index = 0usize;
+    while index < lines.len() {
+        while index < lines.len()
+            && !lines[index].starts_with("--- ")
+            && lines[index] != "---"
+            && !lines[index].starts_with("diff --git ")
+        {
+            index += 1;
+        }
+        if index >= lines.len() {
+            break;
+        }
+        let section_start = index;
+        while index < lines.len() && !lines[index].starts_with("@@") {
+            index += 1;
+        }
+        if index >= lines.len() {
+            index = section_start + 1;
+            continue;
+        }
+        let header_lines = &lines[section_start..index];
+        let (path, operation) = parse_unified_diff_file_header(header_lines);
+        let hunk_start = index;
+        while index < lines.len() {
+            let line = lines[index];
+            if line.starts_with("--- ") || line == "---" || line.starts_with("diff --git ") {
+                break;
+            }
+            index += 1;
+        }
+        let hunks = split_into_unified_hunk_blocks(&lines[hunk_start..index]);
+        if !hunks.is_empty() {
+            sections.push(UnifiedDiffFileSection {
+                path,
+                operation,
+                hunks,
+            });
+        }
+    }
+    sections
+}
+
+fn parse_unified_diff_file_header(
+    header_lines: &[&str],
+) -> (Option<String>, UnifiedDiffFileOperation) {
+    let mut path: Option<String> = None;
+    let mut operation = UnifiedDiffFileOperation::Update;
+    for line in header_lines {
+        if line.starts_with("new file") {
+            operation = UnifiedDiffFileOperation::Add;
+        } else if line.starts_with("deleted file") {
+            operation = UnifiedDiffFileOperation::Delete;
+        } else if let Some(rest) = line.strip_prefix("+++ ") {
+            let raw = if let Some(stripped) = rest.trim().strip_prefix("b/") {
+                stripped
+            } else if let Some(stripped) = rest.trim().strip_prefix("a/") {
+                stripped
+            } else {
+                rest.trim()
+            };
+            if raw != "/dev/null" {
+                path = Some(raw.to_string());
+            }
+        } else if path.is_none()
+            && let Some(rest) = line.strip_prefix("--- ")
+        {
+            let raw = if let Some(stripped) = rest.trim().strip_prefix("a/") {
+                stripped
+            } else if let Some(stripped) = rest.trim().strip_prefix("b/") {
+                stripped
+            } else {
+                rest.trim()
+            };
+            if raw != "/dev/null" {
+                path = Some(raw.to_string());
+            }
+        }
+    }
+    (path, operation)
+}
+
+fn split_into_unified_hunk_blocks(lines: &[&str]) -> Vec<Vec<String>> {
+    let mut hunks = Vec::new();
+    let mut current = Vec::new();
+    for line in lines {
+        if line.starts_with("@@") {
+            if !current.is_empty() {
+                hunks.push(std::mem::take(&mut current));
+            }
+            current.push((*line).to_string());
+        } else if !current.is_empty() {
+            current.push((*line).to_string());
+        }
+    }
+    if !current.is_empty() {
+        hunks.push(current);
+    }
+    hunks
+}
+
 fn normalize_mez_patch_text(text: &str) -> Cow<'_, str> {
     let trimmed = text.trim();
+    if let Some(converted) = try_convert_unified_diff_to_mez_patch(trimmed) {
+        return Cow::Owned(converted);
+    }
     if let Some(fenced) = mez_patch_fenced_body(trimmed) {
         if let Some(heredoc) = mez_patch_heredoc_body(&fenced) {
             return Cow::Owned(dedent_mez_patch_text(&heredoc).into_owned());

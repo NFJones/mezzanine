@@ -2505,13 +2505,14 @@ fn semantic_apply_patch_trim_end_match_reports_ambiguity() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
-/// Verifies semantic patch lowering rejects raw unified diffs.
+/// Verifies semantic patch lowering auto-converts raw unified diffs.
 ///
-/// `apply_patch` has a single Mezzanine contract. Agents that truly need raw
-/// unified diffs can still use `shell_command` with `git apply`, but semantic
-/// action validation should reject mixed-format patch payloads before planning.
+/// `apply_patch` accepts both Mezzanine `*** Begin Patch` blocks and raw
+/// unified diffs (with `---`/`+++`/`@@` markers). Raw unified diffs are
+/// auto-converted to Mezzanine format before planning so that models which
+/// naturally emit unified diff output can still produce valid patches.
 #[test]
-fn semantic_apply_patch_plan_rejects_unified_diff_payloads() {
+fn semantic_apply_patch_plan_accepts_unified_diff_payloads() {
     let action = AgentAction {
         id: "patch-unified".to_string(),
         rationale: String::new(),
@@ -2522,13 +2523,66 @@ fn semantic_apply_patch_plan_rejects_unified_diff_payloads() {
         },
     };
 
-    let error = local_action_plan(&action).unwrap_err();
+    let plan = local_action_plan(&action).unwrap().unwrap();
 
-    assert!(
-        error.message().contains("Mezzanine patch blocks"),
-        "{}",
-        error.message()
-    );
+    assert_eq!(plan.summary, "I\u{2019}ll apply a patch.");
+    assert_eq!(plan.policy_command, "apply_patch");
+    assert!(!plan.interactive);
+}
+
+/// Verifies unified diff conversion produces valid Mezzanine patch blocks
+/// that can be parsed and planned successfully.
+#[test]
+fn unified_diff_conversion_produces_valid_mez_patch() {
+    let diff = "--- a/foo.rs\n+++ b/foo.rs\n@@ -1,3 +1,3 @@\n old line\n+new line\n context\n";
+
+    let converted = try_convert_unified_diff_to_mez_patch(diff).unwrap();
+
+    assert!(converted.starts_with("*** Begin Patch"));
+    assert!(converted.ends_with("*** End Patch\n"));
+    assert!(converted.contains("*** Update File: foo.rs"));
+    assert!(converted.contains("old line"));
+    assert!(converted.contains("+new line"));
+    assert!(converted.contains(" context"));
+}
+
+/// Verifies unified diff conversion returns None for already-valid Mezzanine
+/// patches so that no double-conversion occurs.
+#[test]
+fn unified_diff_conversion_noop_for_mez_patch_format() {
+    let mez = "*** Begin Patch\n*** Update File: lib.rs\n@@\n old\n+new\n*** End Patch\n";
+
+    assert!(try_convert_unified_diff_to_mez_patch(mez).is_none());
+}
+
+/// Verifies unified diff conversion returns None for non-diff, non-patch text.
+#[test]
+fn unified_diff_conversion_rejects_non_diff_text() {
+    assert!(try_convert_unified_diff_to_mez_patch("just some text").is_none());
+    assert!(try_convert_unified_diff_to_mez_patch("").is_none());
+}
+
+/// Verifies unified diff conversion handles the case where path prefixes
+/// are stripped from `a/` and `b/` diff prefixes.
+#[test]
+fn unified_diff_conversion_strips_path_prefixes() {
+    let diff = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+
+    let converted = try_convert_unified_diff_to_mez_patch(diff).unwrap();
+
+    assert!(converted.contains("*** Update File: src/lib.rs"));
+}
+
+/// Verifies that a plain unified diff (without diff --git header) is also
+/// accepted and converted.
+#[test]
+fn unified_diff_conversion_accepts_minimal_unified_diff() {
+    let diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new\n";
+
+    let converted = try_convert_unified_diff_to_mez_patch(diff).unwrap();
+
+    assert!(converted.starts_with("*** Begin Patch"));
+    assert!(converted.contains("*** Update File: file.txt"));
 }
 
 /// Verifies semantic patch lowering accepts related multi-file patch batches.
