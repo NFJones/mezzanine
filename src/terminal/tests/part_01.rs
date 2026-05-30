@@ -760,6 +760,16 @@ fn parses_key_binding_notation_for_default_surface() {
     );
 }
 
+/// Verifies empty key-chord input is rejected without indexing past the slice.
+///
+/// This regression scenario protects the parser entry point against empty input
+/// so callers can treat a missing byte stream as an ordinary parse miss rather
+/// than a panic hazard.
+#[test]
+fn rejects_empty_key_chord_input() {
+    assert_eq!(super::parse_key_chord_bytes(b""), None);
+}
+
 /// Verifies classifies default direct mux key bindings.
 ///
 /// This regression scenario documents the behavior being protected so a

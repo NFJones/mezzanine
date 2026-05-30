@@ -941,7 +941,10 @@ pub(super) fn parse_key_code_notation(rest: &str, ctrl: bool) -> Result<KeyCode>
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn parse_key_chord_bytes(input: &[u8]) -> Option<(KeyChord, usize)> {
-    let first = *input.first()?;
+    if input.is_empty() {
+        return None;
+    }
+    let first = input[0];
     match first {
         0x01..=0x1a => Some((
             KeyChord::ctrl(KeyCode::Char(char::from(b'a' + first - 1))),
