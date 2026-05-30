@@ -251,14 +251,13 @@ fn deepseek_thinking_enabled_for_request(request: &ModelRequest) -> bool {
 
 /// Returns the DeepSeek stream flag after accounting for MAAP tool strategy.
 ///
-/// DeepSeek streaming tool-call parsing is not implemented in this adapter, so
-/// MAAP tool requests use unary JSON even when the provider object was created
-/// with streaming enabled.
+/// The streaming parser now accumulates tool-call argument deltas, so MAAP
+/// tool requests can use streaming when the provider object has it enabled.
 pub(super) fn deepseek_effective_stream(
     stream: bool,
-    strategy: DeepSeekMaapRequestStrategy,
+    _strategy: DeepSeekMaapRequestStrategy,
 ) -> bool {
-    stream && strategy == DeepSeekMaapRequestStrategy::NoTool
+    stream
 }
 
 /// Reports whether a DeepSeek thinking request should retry strict MAAP.
@@ -384,17 +383,10 @@ pub(super) fn parse_deepseek_chat_completions_http_response(
 ) -> Result<ModelResponse> {
     let ProviderHttpResponse { headers, body, .. } = response;
     if stream {
-        let actions = parse_deepseek_chat_completions_stream_body(&body, request)?;
-        return Ok(ModelResponse {
-            provider: provider_id.to_string(),
-            model: request.model.clone(),
-            raw_text: actions,
-            usage: Default::default(),
-            latest_request_usage: None,
-            quota_usage: provider_quota_usage_from_headers(&headers),
-            action_batch: None,
-            provider_transcript_events: Vec::new(),
-        });
+        let mut parsed = parse_deepseek_chat_completions_stream_body(&body, request)?;
+        parsed.provider = provider_id.to_string();
+        parsed.quota_usage = provider_quota_usage_from_headers(&headers);
+        return Ok(parsed);
     }
     let mut parsed = parse_deepseek_chat_completions_response_body(&body, request)?;
     parsed.provider = provider_id.to_string();
@@ -437,7 +429,9 @@ fn parse_deepseek_chat_completions_response_body(
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .unwrap_or_default();
-    let raw_text = if request.model.to_ascii_lowercase().contains("r1") {
+    let raw_text = if deepseek_thinking_enabled_for_request(request)
+        || request.model.to_ascii_lowercase().contains("r1")
+    {
         strip_think_tags(&raw_text)
     } else {
         raw_text
@@ -448,13 +442,11 @@ fn parse_deepseek_chat_completions_response_body(
         .filter(|text| !text.is_empty())
         .map(str::to_string);
     let raw_text = if raw_text.is_empty() {
-        reasoning_content.clone().unwrap_or_else(|| {
-            if message.get("tool_calls").is_some() {
-                "executing".to_string()
-            } else {
-                "(empty)".to_string()
-            }
-        })
+        if message.get("tool_calls").is_some() {
+            "executing".to_string()
+        } else {
+            "(empty)".to_string()
+        }
     } else {
         raw_text
     };
@@ -659,17 +651,32 @@ fn deepseek_reasoning_tokens_from_usage(usage: &serde_json::Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// Accumulates one DeepSeek streaming tool-call delta across SSE events.
+#[derive(Debug, Default)]
+struct DeepSeekStreamToolCall {
+    id: String,
+    function_name: String,
+    arguments: String,
+}
+
 /// Parses a DeepSeek Chat Completions streaming (SSE) response body.
 ///
-/// R1 reasoning models may emit `<think>...</think>` tags inside streamed
-/// content deltas. The parser strips these tags so accumulated text stays
-/// clean for downstream MAAP / auto-sizing routing.
+/// Accumulates content text, reasoning content, and tool-call argument
+/// deltas across SSE events. When the stream includes a MAAP function
+/// call the accumulated arguments are parsed into an action batch.
 fn parse_deepseek_chat_completions_stream_body(
     body: &str,
     request: &ModelRequest,
-) -> Result<String> {
-    let is_r1 = request.model.to_ascii_lowercase().contains("r1");
+) -> Result<ModelResponse> {
+    let strip_think = deepseek_thinking_enabled_for_request(request)
+        || request.model.to_ascii_lowercase().contains("r1");
     let mut text_content = String::new();
+    let mut reasoning_content = String::new();
+    let mut tool_calls: BTreeMap<u64, DeepSeekStreamToolCall> = BTreeMap::new();
+    let mut model: Option<String> = None;
+    let mut usage = ModelTokenUsage::default();
+    let mut finish_reason: Option<String> = None;
+
     for line in body.lines() {
         let data = line.strip_prefix("data: ").unwrap_or(line);
         if data == "[DONE]" || data.is_empty() {
@@ -678,20 +685,148 @@ fn parse_deepseek_chat_completions_stream_body(
         let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
             continue;
         };
-        if let Some(choices) = event.get("choices").and_then(serde_json::Value::as_array) {
-            for choice in choices {
-                if let Some(delta) = choice.get("delta")
-                    && let Some(content) = delta.get("content").and_then(serde_json::Value::as_str)
-                {
-                    text_content.push_str(content);
+
+        if model.is_none() {
+            model = event
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if let Some(u) = event.get("usage") {
+            usage = parse_deepseek_usage(u);
+        }
+
+        let Some(choices) = event.get("choices").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for choice in choices {
+            if let Some(reason) = choice
+                .get("finish_reason")
+                .and_then(serde_json::Value::as_str)
+            {
+                finish_reason = Some(reason.to_string());
+            }
+            let Some(delta) = choice.get("delta") else {
+                continue;
+            };
+            if let Some(content) = delta.get("content").and_then(serde_json::Value::as_str) {
+                text_content.push_str(content);
+            }
+            if let Some(reasoning) = delta
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str)
+            {
+                reasoning_content.push_str(reasoning);
+            }
+            if let Some(tool_deltas) = delta
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+            {
+                for tool_delta in tool_deltas {
+                    let index = tool_delta
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    let acc = tool_calls.entry(index).or_default();
+                    if let Some(id) = tool_delta.get("id").and_then(serde_json::Value::as_str) {
+                        acc.id = id.to_string();
+                    }
+                    if let Some(func) = tool_delta.get("function") {
+                        if let Some(name) = func.get("name").and_then(serde_json::Value::as_str) {
+                            acc.function_name = name.to_string();
+                        }
+                        if let Some(args) =
+                            func.get("arguments").and_then(serde_json::Value::as_str)
+                        {
+                            acc.arguments.push_str(args);
+                        }
+                    }
                 }
             }
         }
     }
-    if is_r1 {
+
+    if strip_think {
         text_content = strip_think_tags(&text_content);
     }
-    Ok(text_content)
+
+    let model = model.unwrap_or_else(|| request.model.clone());
+
+    let raw_text = if text_content.is_empty() {
+        if !tool_calls.is_empty() {
+            "executing".to_string()
+        } else {
+            "(empty)".to_string()
+        }
+    } else {
+        text_content.clone()
+    };
+
+    let tool_calls_json: Vec<serde_json::Value> = tool_calls
+        .values()
+        .map(|tc| {
+            serde_json::json!({
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function_name,
+                    "arguments": tc.arguments
+                }
+            })
+        })
+        .collect();
+
+    let message = serde_json::json!({
+        "content": text_content,
+        "tool_calls": tool_calls_json
+    });
+
+    let reasoning = if reasoning_content.is_empty() {
+        None
+    } else {
+        Some(reasoning_content)
+    };
+    let provider_transcript_events =
+        deepseek_provider_transcript_events_for_message(&message, reasoning);
+
+    let action_batch = if deepseek_request_requires_maap(request) {
+        match parse_deepseek_maap_action_batch(&message, &raw_text, request) {
+            Ok(action_batch) => action_batch,
+            Err(error) => {
+                return Err(deepseek_completion_finish_reason_error(
+                    finish_reason.as_deref(),
+                    &raw_text,
+                    Some(&error),
+                    request,
+                )
+                .unwrap_or(error));
+            }
+        }
+    } else {
+        None
+    };
+
+    if action_batch.is_none()
+        && let Some(error) = deepseek_completion_finish_reason_error(
+            finish_reason.as_deref(),
+            &raw_text,
+            None,
+            request,
+        )
+    {
+        return Err(error);
+    }
+
+    Ok(ModelResponse {
+        provider: request.provider.clone(),
+        model,
+        raw_text,
+        usage,
+        latest_request_usage: None,
+        quota_usage: Vec::new(),
+        action_batch,
+        provider_transcript_events,
+    })
 }
 
 /// Strips `<think>...</think>` tags and their content from a response string.
@@ -872,7 +1007,7 @@ mod tests {
         .unwrap();
         let body: serde_json::Value = serde_json::from_str(&http.body).unwrap();
 
-        assert_eq!(body["stream"], false);
+        assert_eq!(body["stream"], true);
         assert_eq!(body["thinking"]["type"], "disabled");
         assert_eq!(
             body["tool_choice"]["function"]["name"],
@@ -1175,7 +1310,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&http.body).unwrap();
         let messages = body["messages"].as_array().unwrap();
 
-        assert_eq!(body["stream"], false);
+        assert_eq!(body["stream"], true);
         assert_eq!(body["thinking"]["type"], "enabled");
         assert!(body.get("tool_choice").is_none());
         assert!(!http.body.contains(PROVIDER_TRANSCRIPT_EVENT_MARKER.trim()));
