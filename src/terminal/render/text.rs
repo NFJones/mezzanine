@@ -390,6 +390,10 @@ pub(in crate::terminal) fn line_slice(line: &str, start: usize, end: usize) -> S
             column = next;
             continue;
         }
+        if column < start && next > start {
+            column = next;
+            continue;
+        }
         if column >= end || next > end {
             break;
         }

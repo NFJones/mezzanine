@@ -6,7 +6,8 @@
 
 use super::{
     MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
-    normalize_selection, search_backward, search_forward, validate_copy_position,
+    normalize_selection, search_backward, search_forward, terminal_grapheme_width,
+    terminal_graphemes, validate_copy_position,
 };
 use crate::readline::readline_word_column_range;
 
@@ -373,7 +374,17 @@ impl CopyMode {
     /// cursor is already at the beginning of the current line.
     fn move_cursor_left_one(&mut self) {
         if self.cursor.column > 0 {
-            self.cursor.column = self.cursor.column.saturating_sub(1);
+            if let Some(line) = self.lines.get(self.cursor.line) {
+                if let Some((start, _)) =
+                    grapheme_at_column(line, self.cursor.column.saturating_sub(1))
+                {
+                    self.cursor.column = start;
+                } else {
+                    self.cursor.column = self.cursor.column.saturating_sub(1);
+                }
+            } else {
+                self.cursor.column = self.cursor.column.saturating_sub(1);
+            }
         } else if self.cursor.line > 0 {
             self.cursor.line = self.cursor.line.saturating_sub(1);
             self.cursor.column = self.line_width(self.cursor.line);
@@ -385,7 +396,15 @@ impl CopyMode {
     fn move_cursor_right_one(&mut self) {
         let line_width = self.line_width(self.cursor.line);
         if self.cursor.column < line_width {
-            self.cursor.column = self.cursor.column.saturating_add(1);
+            if let Some(line) = self.lines.get(self.cursor.line) {
+                if let Some((start, width)) = grapheme_at_column(line, self.cursor.column) {
+                    self.cursor.column = start.saturating_add(width);
+                } else {
+                    self.cursor.column = self.cursor.column.saturating_add(1);
+                }
+            } else {
+                self.cursor.column = self.cursor.column.saturating_add(1);
+            }
         } else if self.cursor.line.saturating_add(1) < self.lines.len() {
             self.cursor.line = self.cursor.line.saturating_add(1);
             self.cursor.column = 0;
@@ -627,6 +646,21 @@ impl CopyMode {
     }
 }
 
+/// Finds the grapheme cluster covering a display column and returns its
+/// starting display column and total cell width.
+fn grapheme_at_column(line: &str, target: usize) -> Option<(usize, usize)> {
+    let mut col = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let width = terminal_grapheme_width(grapheme);
+        let next = col.saturating_add(width);
+        if target >= col && target < next {
+            return Some((col, width));
+        }
+        col = next;
+    }
+    None
+}
+
 /// Computes the initial copy-mode viewport and keyboard cursor from a pane
 /// screen. Copy mode opens over the live terminal view, so the keyboard cursor
 /// should begin at the same cell as the pane cursor rather than the first
@@ -674,26 +708,62 @@ fn initial_copy_mode_view(
     )
 }
 
+/// Converts a display-column position on a line into its corresponding
+/// Unicode scalar index so `readline_word_column_range` can operate on it.
+fn display_column_to_scalar_index(line: &str, target_column: usize) -> usize {
+    let mut col = 0usize;
+    let mut scalar = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let width = terminal_grapheme_width(grapheme);
+        let next = col.saturating_add(width);
+        if target_column < next {
+            return scalar;
+        }
+        scalar += grapheme.chars().count();
+        col = next;
+    }
+    scalar
+}
+
+/// Converts a Unicode scalar index on a line back to its corresponding
+/// display column.
+fn scalar_index_to_display_column(line: &str, target_scalar: usize) -> usize {
+    let mut col = 0usize;
+    let mut scalar = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        if scalar >= target_scalar {
+            break;
+        }
+        scalar += grapheme.chars().count();
+        col = col.saturating_add(terminal_grapheme_width(grapheme));
+    }
+    col
+}
+
 /// Returns the current line column reached by moving backward by one
 /// word-like segment.
 fn previous_word_column(line: &str, column: usize) -> usize {
     let chars = line.chars().collect::<Vec<_>>();
-    let mut index = column.min(chars.len());
+    let scalar = display_column_to_scalar_index(line, column);
+    let mut index = scalar.min(chars.len());
     while index > 0 && chars[index.saturating_sub(1)].is_whitespace() {
         index = index.saturating_sub(1);
     }
-    readline_word_column_range(line, index.saturating_sub(1)).0
+    let word_start = readline_word_column_range(line, index.saturating_sub(1)).0;
+    scalar_index_to_display_column(line, word_start)
 }
 
 /// Returns the current line column reached by moving forward by one word-like
 /// segment.
 fn next_word_column(line: &str, column: usize) -> usize {
     let chars = line.chars().collect::<Vec<_>>();
-    let mut index = column.min(chars.len());
+    let scalar = display_column_to_scalar_index(line, column);
+    let mut index = scalar.min(chars.len());
     while index < chars.len() && chars[index].is_whitespace() {
         index = index.saturating_add(1);
     }
-    readline_word_column_range(line, index).1
+    let word_end = readline_word_column_range(line, index).1;
+    scalar_index_to_display_column(line, word_end)
 }
 
 /// Formats copied selection lines by removing display-only agent gutters.
