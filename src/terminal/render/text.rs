@@ -419,6 +419,10 @@ pub(in crate::terminal) fn terminal_char_width(ch: char) -> usize {
 
 /// Returns the display width of one Unicode grapheme cluster.
 ///
+/// Terminal renderers display each grapheme cluster in a single cell span of
+/// zero, one, or two columns even when a multi-scalar cluster contains emoji
+/// or combining scalars whose Unicode widths would sum to a larger number.
+///
 /// # Parameters
 /// - `grapheme`: The extended grapheme cluster to measure.
 pub(crate) fn terminal_grapheme_width(grapheme: &str) -> usize {
@@ -428,7 +432,7 @@ pub(crate) fn terminal_grapheme_width(grapheme: &str) -> usize {
     {
         return terminal_char_width(ch);
     }
-    UnicodeWidthStr::width(grapheme)
+    UnicodeWidthStr::width(grapheme).min(2)
 }
 
 /// Returns the display width of one complete terminal string.
@@ -507,6 +511,25 @@ mod tests {
 
         assert_eq!(wrapped, vec!["✅✅", "✅"]);
         assert!(wrapped.iter().all(|line| terminal_text_width(line) <= 4));
+    }
+
+    /// Verifies multi-scalar terminal emoji grapheme clusters keep their
+    /// rendered two-cell width so pane row accounting does not overcount
+    /// modifier and regional-indicator sequences.
+    #[test]
+    fn terminal_text_width_keeps_terminal_emoji_clusters_at_two_cells() {
+        for grapheme in ["👍🏻", "👍🏼", "👍🏽", "👍🏾", "🇪🇺", "🇯🇵", "🇧🇷", "🇨🇦"]
+        {
+            assert_eq!(super::terminal_grapheme_width(grapheme), 2, "{grapheme}");
+            assert_eq!(terminal_text_width(grapheme), 2, "{grapheme}");
+        }
+    }
+
+    /// Verifies mixed fullwidth text and multi-scalar emoji clusters still sum
+    /// to the correct terminal row width after cluster widths are normalized.
+    #[test]
+    fn terminal_text_width_counts_mixed_fullwidth_text_and_emoji_clusters() {
+        assert_eq!(terminal_text_width("ｓ 👍🏻 🇪🇺"), 8);
     }
 
     /// Verifies the 120-column cap is applied even when the active pane is
