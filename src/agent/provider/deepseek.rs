@@ -289,14 +289,15 @@ fn deepseek_maap_tool_choice() -> serde_json::Value {
 /// strategy still lives outside this shared prompt text.
 fn chat_completions_maap_tool_description(request: &ModelRequest) -> String {
     let capability_map = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; respond_only=final text only.";
-    let anti_examples = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
+    let anti_examples = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: say(blocked, \"Shell capability is absent\") or say describing what is missing. Right: request_capability for the missing capability immediately. Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
+    let routing_rule = "CRITICAL ROUTING RULE: When request_capability is in the allowed action types and an executable action type is needed but absent, request_capability is the ONLY correct response. Never emit a say action describing, diagnosing, or lamenting the absence of a capability. request_capability IS how you obtain the missing capability within the same turn; emit it immediately without any preceding say.";
     if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
         return format!(
-            "Submit exactly one MAAP/1 capability routing batch through this function. Return a function call, not prose. Current allowed action types: say,request_capability. If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Use final say only when no external action capability is needed. {capability_map} {anti_examples}"
+            "Submit exactly one MAAP/1 capability routing batch through this function. Return a function call, not prose. Current allowed action types: say,request_capability. {routing_rule} If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Use final say only when no external action capability is needed. {capability_map} {anti_examples}"
         );
     }
     format!(
-        "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
+        "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
         request.allowed_actions.action_type_names().join(","),
     )
 }
