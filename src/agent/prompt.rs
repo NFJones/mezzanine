@@ -35,6 +35,11 @@ pub struct AgentPromptProfile {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub pane_id: String,
+    /// Stores the provider kind for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub provider: Option<String>,
     /// Stores the cooperation mode value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -67,6 +72,7 @@ impl AgentPromptProfile {
         Self {
             agent_id: agent_id.into(),
             pane_id: pane_id.into(),
+            provider: None,
             cooperation_mode: None,
             read_scopes: Vec::new(),
             write_scopes: Vec::new(),
@@ -75,6 +81,12 @@ impl AgentPromptProfile {
                 unavailable_servers: Vec::new(),
             },
         }
+    }
+
+    /// Sets the provider kind on this profile.
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
+        self
     }
 }
 
@@ -120,7 +132,25 @@ pub fn build_agent_system_prompt_with_repository_instructions(
     push_section(&mut prompt, "12. Communication", communication_prompt());
     push_section(&mut prompt, "13. Format", format_prompt());
     push_section(&mut prompt, "MCP", &mcp_prompt(profile));
+    if profile.provider.as_deref() == Some("deepseek") {
+        push_section(
+            &mut prompt,
+            "DeepSeek Provider",
+            deepseek_provider_guidance(),
+        );
+    }
     Ok(prompt)
+}
+
+/// Provider-specific guidance appended for DeepSeek to address its distinct
+/// system-prompt sensitivity and tool-calling behaviour.
+///
+/// DeepSeek models weight system prompts less strongly than user messages.
+/// This section reinforces the most critical behavioural rules and makes the
+/// single-shot MAAP tool-calling contract explicit so the model does not
+/// attempt sequential function calls or treat system rules as advisory.
+fn deepseek_provider_guidance() -> &'static str {
+    "You are communicating through the DeepSeek Chat Completions API. The MAAP protocol exposes exactly one function per turn (submit_maap_action_batch) which carries ALL intended actions for this turn in one call. Pack every action into that single function call. Do not make multiple sequential function calls. The entire system prompt above contains authoritative behavioural rules, not advisory suggestions: treat every numbered section as a binding constraint on your behaviour. When thinking mode is active, place your internal reasoning in <think>...</think> tags and emit your final response (function call or say content) AFTER the closing </think> tag. Parallel action batching is supported: you may include multiple shell_command, apply_patch, or other independent actions in the same batch."
 }
 
 /// Builds the persona and scope section of the provider-facing system prompt.

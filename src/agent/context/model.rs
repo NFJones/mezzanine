@@ -178,6 +178,13 @@ impl ModelProfile {
             })
     }
 
+    /// Returns the configured sampling temperature, if present.
+    pub fn temperature(&self) -> Option<f64> {
+        self.provider_options
+            .get("temperature")
+            .and_then(|v| v.parse::<f64>().ok())
+    }
+
     /// Returns the output-token cap to use after a provider output-limit
     /// failure.
     pub fn output_limit_retry_tokens(&self) -> usize {
@@ -436,6 +443,11 @@ pub struct ModelRequest {
     /// Provider output-token cap, when configured or temporarily escalated for
     /// an output-limit retry.
     pub max_output_tokens: Option<usize>,
+    /// Provider sampling temperature, when configured.
+    ///
+    /// DeepSeek providers default to 0.5 for structured-output reliability.
+    /// Other providers leave this unset to use their own default.
+    pub temperature: Option<String>,
     /// Live Mezzanine session identifier used for cache diagnostics and
     /// runtime-origin tracking without coupling routing to provider or model
     /// names.
@@ -476,6 +488,11 @@ pub struct ModelRequest {
     /// The provider adapter uses this set to generate a strict per-request
     /// schema rather than exposing every MAAP action on every turn.
     pub allowed_actions: AllowedActionSet,
+    /// Provider stop sequences for this request, when configured.
+    ///
+    /// DeepSeek providers default to a trailing newline-brace sequence
+    /// to prevent trailing text after JSON tool calls.
+    pub stop: Option<Vec<String>>,
     /// Stores the messages value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

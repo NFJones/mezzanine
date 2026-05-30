@@ -428,6 +428,8 @@ pub(super) fn runtime_model_compaction_request(
         prompt_cache_retention: profile.provider_options.get("prompt_cache_retention").cloned(),
         latency_preference: profile.latency_preference.clone(),
         max_output_tokens: profile.max_output_tokens(),
+        temperature: None,
+        stop: None,
         prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
         turn_id,

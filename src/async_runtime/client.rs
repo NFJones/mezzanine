@@ -1825,6 +1825,8 @@ mod tests {
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
             prompt_cache_lineage_id: None,
             turn_id: "compact-conversation".to_string(),

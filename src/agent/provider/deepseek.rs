@@ -125,6 +125,17 @@ fn deepseek_chat_completions_request_body_with_strategy(
     if request.interaction_kind == ModelInteractionKind::AutoSizing {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
+    if let Some(temperature) = request
+        .temperature
+        .as_deref()
+        .and_then(|t| t.parse::<f64>().ok())
+        .filter(|t| t.is_finite())
+    {
+        body["temperature"] = serde_json::json!(temperature);
+    }
+    if let Some(stop) = request.stop.as_ref().filter(|s| !s.is_empty()) {
+        body["stop"] = serde_json::json!(stop);
+    }
     if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking
         || request.thinking_enabled == Some(false)
     {
@@ -426,6 +437,11 @@ fn parse_deepseek_chat_completions_response_body(
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .unwrap_or_default();
+    let raw_text = if request.model.to_ascii_lowercase().contains("r1") {
+        strip_think_tags(&raw_text)
+    } else {
+        raw_text
+    };
     let reasoning_content = message
         .get("reasoning_content")
         .and_then(serde_json::Value::as_str)
@@ -644,10 +660,15 @@ fn deepseek_reasoning_tokens_from_usage(usage: &serde_json::Value) -> u64 {
 }
 
 /// Parses a DeepSeek Chat Completions streaming (SSE) response body.
+///
+/// R1 reasoning models may emit `<think>...</think>` tags inside streamed
+/// content deltas. The parser strips these tags so accumulated text stays
+/// clean for downstream MAAP / auto-sizing routing.
 fn parse_deepseek_chat_completions_stream_body(
     body: &str,
-    _request: &ModelRequest,
+    request: &ModelRequest,
 ) -> Result<String> {
+    let is_r1 = request.model.to_ascii_lowercase().contains("r1");
     let mut text_content = String::new();
     for line in body.lines() {
         let data = line.strip_prefix("data: ").unwrap_or(line);
@@ -667,7 +688,43 @@ fn parse_deepseek_chat_completions_stream_body(
             }
         }
     }
+    if is_r1 {
+        text_content = strip_think_tags(&text_content);
+    }
     Ok(text_content)
+}
+
+/// Strips `<think>...</think>` tags and their content from a response string.
+///
+/// R1 reasoning variants wrap internal chain-of-thought in these tags. The
+/// content between them is useful for verbose-mode logging but must not
+/// appear in raw_text that feeds MAAP parsing or auto-sizing routing.
+fn strip_think_tags(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut depth = 0u32;
+    let mut tag_buf = String::new();
+    for ch in text.chars() {
+        tag_buf.push(ch);
+        if depth > 0 {
+            if tag_buf.ends_with("</think>") {
+                depth = depth.saturating_sub(1);
+                tag_buf.clear();
+            }
+        } else {
+            if tag_buf.ends_with("<think>") {
+                result.push_str(&tag_buf[..tag_buf.len() - "<think>".len()]);
+                tag_buf.clear();
+                depth = 1;
+            } else if tag_buf.len() > 32 {
+                result.push_str(&tag_buf);
+                tag_buf.clear();
+            }
+        }
+    }
+    if depth == 0 {
+        result.push_str(&tag_buf);
+    }
+    result
 }
 
 /// Builds a DeepSeek models listing HTTP request.
@@ -711,6 +768,7 @@ mod tests {
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,
+            temperature: None,
             prompt_cache_session_id: None,
             prompt_cache_lineage_id: None,
             turn_id: "turn-1".to_string(),
@@ -718,6 +776,7 @@ mod tests {
             available_mcp_tools: Vec::new(),
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::action_execution_base(),
+            stop: None,
             messages,
         }
     }

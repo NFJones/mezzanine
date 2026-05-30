@@ -443,6 +443,8 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
@@ -700,6 +702,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     .get("prompt_cache_retention")
                     .cloned(),
                 max_output_tokens: task.model_profile.max_output_tokens(),
+                temperature: None,
+                stop: None,
                 prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
                 turn_id: task.turn_id.clone(),
@@ -839,6 +843,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     .get("prompt_cache_retention")
                     .cloned(),
                 max_output_tokens: next_task.model_profile.max_output_tokens(),
+                temperature: None,
+                stop: None,
                 prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
                 turn_id: next_task.turn_id.clone(),
@@ -1010,6 +1016,8 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
@@ -1184,6 +1192,8 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
@@ -1310,6 +1320,8 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             latency_preference: None,
             prompt_cache_retention: None,
             max_output_tokens: None,
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: turn.turn_id.clone(),

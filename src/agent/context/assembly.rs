@@ -56,13 +56,20 @@ pub fn assemble_model_request_with_retained_tail_percent(
         .filter(|block| block.source == ContextSourceKind::ProjectGuidance)
         .map(|block| block.content.clone())
         .collect::<Vec<_>>();
+    let is_deepseek = profile.provider.as_str() == "deepseek";
+    let repo_instructions_for_prompt = if is_deepseek {
+        Vec::new()
+    } else {
+        repository_instruction_blocks.clone()
+    };
     let mut messages = Vec::with_capacity(context.blocks.len() + 1);
     messages.push(ModelMessage {
         role: ModelMessageRole::System,
         source: ContextSourceKind::System,
         content: build_agent_system_prompt_with_repository_instructions(
-            &AgentPromptProfile::default_for(&turn.agent_id, &turn.pane_id),
-            &repository_instruction_blocks,
+            &AgentPromptProfile::default_for(&turn.agent_id, &turn.pane_id)
+                .with_provider(&profile.provider),
+            &repo_instructions_for_prompt,
         )?,
     });
     for block in &blocks {
@@ -91,6 +98,12 @@ pub fn assemble_model_request_with_retained_tail_percent(
             content: format!("{}{}", model_context_block_header(block), block.content),
         });
     }
+    if is_deepseek && !repository_instruction_blocks.is_empty() {
+        prepend_repository_instructions_to_first_user_message(
+            &mut messages,
+            &repository_instruction_blocks,
+        );
+    }
 
     let mut request = ModelRequest {
         provider: profile.provider.clone(),
@@ -107,6 +120,13 @@ pub fn assemble_model_request_with_retained_tail_percent(
             .get("prompt_cache_retention")
             .cloned(),
         max_output_tokens: profile.max_output_tokens(),
+        temperature: profile.temperature().map(|t| t.to_string()).or_else(|| {
+            if is_deepseek {
+                Some("0.5".to_string())
+            } else {
+                None
+            }
+        }),
         prompt_cache_session_id: prompt_cache_session_id_from_blocks(&blocks),
         prompt_cache_lineage_id: prompt_cache_lineage_id_from_blocks(&blocks),
         turn_id: turn.turn_id.clone(),
@@ -114,6 +134,11 @@ pub fn assemble_model_request_with_retained_tail_percent(
         available_mcp_tools: Vec::new(),
         interaction_kind: ModelInteractionKind::CapabilityDecision,
         allowed_actions: AllowedActionSet::capability_decision(),
+        stop: if is_deepseek {
+            Some(vec!["\n}".to_string()])
+        } else {
+            None
+        },
         messages,
     };
     constrain_skill_actions_for_loaded_context(&mut request);
@@ -148,4 +173,31 @@ fn prompt_cache_lineage_id_from_blocks(blocks: &[ContextBlock]) -> Option<String
         .map(|block| block.content.trim())
         .filter(|lineage_id| !lineage_id.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Prepends discovered repository instruction content to the first user message.
+///
+/// DeepSeek models weight user messages more strongly than system prompts.
+/// Moving repository guidance into the first user turn places it where the
+/// model's attention is strongest, improving instruction adherence without
+/// altering the contract for other providers.
+fn prepend_repository_instructions_to_first_user_message(
+    messages: &mut [ModelMessage],
+    repository_instruction_blocks: &[String],
+) {
+    let Some(first_user) = messages
+        .iter_mut()
+        .find(|m| m.role == ModelMessageRole::User)
+    else {
+        return;
+    };
+    let mut new_content = String::new();
+    new_content.push_str("Active repository instructions:\n\n");
+    for block in repository_instruction_blocks {
+        new_content.push_str(block);
+        new_content.push_str("\n\n");
+    }
+    new_content.push_str("---\n\n");
+    new_content.push_str(&first_user.content);
+    first_user.content = new_content;
 }

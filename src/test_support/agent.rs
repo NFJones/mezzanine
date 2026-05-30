@@ -101,6 +101,8 @@ impl ModelRequestBuilder {
                 latency_preference: None,
                 prompt_cache_retention: None,
                 max_output_tokens: None,
+                temperature: None,
+                stop: None,
                 prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
                 turn_id: "turn-1".to_string(),

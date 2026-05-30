@@ -4126,6 +4126,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile {
         agent_id: "agent-1".to_string(),
         pane_id: "%1".to_string(),
+        provider: None,
         cooperation_mode: Some("isolated".to_string()),
         read_scopes: vec!["src".to_string()],
         write_scopes: vec!["src/agent.rs".to_string()],

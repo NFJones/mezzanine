@@ -3611,6 +3611,8 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
@@ -3760,6 +3762,8 @@ async fn async_actor_applies_agent_provider_completion_events() {
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
@@ -3931,6 +3935,8 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
                 .get("prompt_cache_retention")
                 .cloned(),
             max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
             prompt_cache_session_id: None,
                 prompt_cache_lineage_id: None,
             turn_id: task.turn_id.clone(),
