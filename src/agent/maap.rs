@@ -490,11 +490,11 @@ impl ActionContentBlock {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn to_json(&self) -> String {
-        format!(
-            r#"{{"type":"{}","text":"{}"}}"#,
-            json_escape(self.block_type),
-            json_escape(&self.text)
-        )
+        let json = serde_json::json!({
+            "type": self.block_type,
+            "text": self.text,
+        });
+        json.to_string()
     }
 }
 
@@ -586,6 +586,21 @@ impl MaapBatch {
         if self.actions.is_empty() && !self.final_turn {
             return Err(MezError::invalid_args(
                 "agent action batch must include actions unless it is final",
+            ));
+        }
+        let non_say_count = self
+            .actions
+            .iter()
+            .filter(|a| !matches!(a.payload, AgentActionPayload::Say { .. }))
+            .count();
+        let say_count = self
+            .actions
+            .iter()
+            .filter(|a| matches!(&a.payload, AgentActionPayload::Say { text, .. } if !text.trim().is_empty()))
+            .count();
+        if non_say_count == 0 && say_count == 0 && !self.final_turn {
+            return Err(MezError::invalid_args(
+                "agent action batch must include at least one non-empty action unless it is final",
             ));
         }
 
@@ -946,12 +961,12 @@ fn parse_maap_action_batch_value(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn parse_maap_action_value(index: usize, value: &serde_json::Value) -> Result<AgentAction> {
+fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<AgentAction> {
     let object = value
         .as_object()
         .ok_or_else(|| MezError::invalid_args("maap action must be a JSON object"))?;
     let action_type = required_string(object, "type")?;
-    let id = synthesized_action_id(index);
+    let id = String::new();
     let rationale = optional_string(object, "rationale")?
         .unwrap_or("")
         .to_string();
@@ -1063,6 +1078,7 @@ fn infer_final_turn(actions: &[AgentAction]) -> bool {
                 status: SayStatus::Final | SayStatus::Blocked,
                 ..
             } | AgentActionPayload::Complete
+                | AgentActionPayload::Abort { .. }
         )
     })
 }
@@ -1111,11 +1127,11 @@ fn synthesized_action_id(index: usize) -> String {
 /// on duplicated control-flow logic.
 fn shell_command_summary(
     object: &serde_json::Map<String, serde_json::Value>,
-    rationale: &str,
+    action_rationale: &str,
 ) -> Result<String> {
     Ok(optional_string(object, "summary")?
         .map(str::to_string)
-        .unwrap_or_else(|| rationale.to_string()))
+        .unwrap_or_else(|| action_rationale.to_string()))
 }
 
 /// Runs the required value operation for this subsystem.
@@ -1141,9 +1157,14 @@ fn required_string<'a>(
     object: &'a serde_json::Map<String, serde_json::Value>,
     field: &str,
 ) -> Result<&'a str> {
-    required_value(object, field)?
-        .as_str()
-        .ok_or_else(|| MezError::invalid_args(format!("maap field {field} must be a string")))
+    match required_value(object, field)? {
+        serde_json::Value::Null => Err(MezError::invalid_args(format!(
+            "maap field {field} must be a string, not null"
+        ))),
+        value => value
+            .as_str()
+            .ok_or_else(|| MezError::invalid_args(format!("maap field {field} must be a string"))),
+    }
 }
 
 /// Runs the optional string operation for this subsystem.
@@ -1183,11 +1204,12 @@ fn optional_bool(
     }
 }
 
-/// Runs the nullable u64 operation for this subsystem.
+/// Requires the field to be present (absent → error) and returns `None`
+/// when the value is JSON null, or `Some(u64)` for a valid u64 number.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// For optional fields that may be absent altogether, use
+/// [`optional_nullable_u64`] instead — it treats an absent key as `None`
+/// without erroring.
 fn nullable_u64(
     object: &serde_json::Map<String, serde_json::Value>,
     field: &str,
@@ -1229,9 +1251,14 @@ fn required_object<'a>(
     object: &'a serde_json::Map<String, serde_json::Value>,
     field: &str,
 ) -> Result<&'a serde_json::Map<String, serde_json::Value>> {
-    required_value(object, field)?
-        .as_object()
-        .ok_or_else(|| MezError::invalid_args(format!("maap field {field} must be an object")))
+    match required_value(object, field)? {
+        serde_json::Value::Null => Err(MezError::invalid_args(format!(
+            "maap field {field} must be an object, not null"
+        ))),
+        value => value
+            .as_object()
+            .ok_or_else(|| MezError::invalid_args(format!("maap field {field} must be an object"))),
+    }
 }
 
 /// Runs the required array operation for this subsystem.
@@ -1243,9 +1270,14 @@ fn required_array<'a>(
     object: &'a serde_json::Map<String, serde_json::Value>,
     field: &str,
 ) -> Result<&'a Vec<serde_json::Value>> {
-    required_value(object, field)?
-        .as_array()
-        .ok_or_else(|| MezError::invalid_args(format!("maap field {field} must be an array")))
+    match required_value(object, field)? {
+        serde_json::Value::Null => Err(MezError::invalid_args(format!(
+            "maap field {field} must be an array, not null"
+        ))),
+        value => value
+            .as_array()
+            .ok_or_else(|| MezError::invalid_args(format!("maap field {field} must be an array"))),
+    }
 }
 
 /// Runs the required string array operation for this subsystem.
@@ -1319,6 +1351,10 @@ fn fetch_url_file_path(url: &str) -> Result<Option<String>> {
     let mut path = &trimmed["file://".len()..];
     if path.to_ascii_lowercase().starts_with("localhost/") {
         path = &path["localhost".len()..];
+    } else if path.eq_ignore_ascii_case("localhost") {
+        return Err(MezError::invalid_args(
+            "file URL fetch must include a local path; use shell_command for local filesystem inspection",
+        ));
     }
     if path.is_empty() {
         return Err(MezError::invalid_args(
@@ -1675,7 +1711,9 @@ pub(super) fn json_escape(value: &str) -> String {
             '\n' => escaped.push_str("\\n"),
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
-            ch if ch.is_control() => escaped.push(' '),
+            ch if ch.is_control() => {
+                escaped.push_str(&format!("\\u{:04x}", ch as u32));
+            }
             _ => escaped.push(ch),
         }
     }

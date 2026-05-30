@@ -195,17 +195,21 @@ impl AllowedActionSet {
 
     /// Builds a response-only action surface.
     pub fn respond_only() -> Self {
-        Self::from_actions([AllowedAction::Say])
+        Self::from_actions([AllowedAction::Say, AllowedAction::Abort])
     }
 
     /// Builds the non-effecting base surface for action-execution requests.
     pub fn action_execution_base() -> Self {
-        Self::from_actions([AllowedAction::Say, AllowedAction::RequestCapability])
+        Self::from_actions([
+            AllowedAction::Say,
+            AllowedAction::RequestCapability,
+            AllowedAction::Abort,
+        ])
     }
 
     /// Builds an action surface that can only emit user-facing text.
     pub fn say_only() -> Self {
-        Self::from_actions([AllowedAction::Say])
+        Self::from_actions([AllowedAction::Say, AllowedAction::Abort])
     }
 
     /// Builds the executable action surface exposed after a capability grant.
