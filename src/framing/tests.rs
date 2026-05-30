@@ -115,7 +115,7 @@ fn frame_template_elides_to_width() {
 
     let rendered = render_frame_template("#{window.name}", &context, 6, FrameOverflow::Elide);
 
-    assert_eq!(rendered, "012...");
+    assert_eq!(rendered, "01234\u{2026}");
 }
 
 /// Verifies that pending observer labels are rendered in a compact frame-safe

@@ -1320,6 +1320,11 @@ fn encode_safe_changed_row_span_update(
     let start_cell = current_cells
         .iter()
         .position(|cell| cell.column_end > start_column)?;
+    // When start_column falls inside a wide glyph continuation cell,
+    // the position above skips the leading cell. Align start_column
+    // back to the leading cell's start so that clipped style spans
+    // match the segment text byte offsets.
+    let start_column = start_column.min(current_cells[start_cell].column_start);
     let end_cell = current_cells
         .iter()
         .rposition(|cell| cell.column_start < end_column)?;
@@ -1391,6 +1396,10 @@ fn terminal_row_cells<'a>(line: &'a str, spans: &[TerminalStyleSpan]) -> Vec<Ter
     let mut column = 0usize;
     for grapheme in terminal_graphemes(line) {
         let Some(relative_start) = line[search_offset..].find(grapheme) else {
+            debug_assert!(
+                false,
+                "terminal_graphemes produced a grapheme not findable in line at offset {search_offset}"
+            );
             return Vec::new();
         };
         let byte_start = search_offset.saturating_add(relative_start);
@@ -1548,11 +1557,13 @@ fn encode_styled_terminal_line(line: &str, style_spans: &[TerminalStyleSpan]) ->
     encoded
 }
 
-/// Runs the rendition at column operation for this subsystem.
+/// Returns the active rendition at a display column.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Spans must be in composition order (later spans override earlier ones).
+/// This function iterates in reverse, picking the last-applied span that
+/// covers the column. Callers must ensure spans are either from
+/// [`terminal_styled_lines_from_canvas`] or from canvas-composed sources
+/// where later spans represent later composition layers.
 fn rendition_at_column(
     style_spans: &[TerminalStyleSpan],
     column: usize,

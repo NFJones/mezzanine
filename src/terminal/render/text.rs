@@ -29,12 +29,23 @@ pub(super) fn write_single_width_cell(row: &mut [char], column: usize, glyph: ch
     }
     if row[column] == TERMINAL_WIDE_CONTINUATION_CELL && column > 0 {
         row[column - 1] = ' ';
+        // Clear additional continuation cells to the left for emoji ZWJ
+        // sequences wider than 2 cells.
+        let mut left = column.saturating_sub(2);
+        while left > 0 && row[left] == TERMINAL_WIDE_CONTINUATION_CELL {
+            row[left - 1] = ' ';
+            left = left.saturating_sub(1);
+            if left == 0 {
+                break;
+            }
+            left = left.saturating_sub(1);
+        }
     }
-    if row
-        .get(column.saturating_add(1))
-        .is_some_and(|next| *next == TERMINAL_WIDE_CONTINUATION_CELL)
-    {
-        row[column.saturating_add(1)] = ' ';
+    // Clear all continuation cells to the right.
+    let mut right = column.saturating_add(1);
+    while right < row.len() && row[right] == TERMINAL_WIDE_CONTINUATION_CELL {
+        row[right] = ' ';
+        right = right.saturating_add(1);
     }
     row[column] = glyph;
 }

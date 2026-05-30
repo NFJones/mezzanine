@@ -152,7 +152,7 @@ fn unit_float_to_u8(value: f32) -> u8 {
 }
 
 /// Returns RGB components for true-color values.
-fn terminal_color_rgb(color: TerminalColor) -> Option<(u8, u8, u8)> {
+pub(in crate::terminal) fn terminal_color_rgb(color: TerminalColor) -> Option<(u8, u8, u8)> {
     match color {
         TerminalColor::Rgb(red, green, blue) => Some((red, green, blue)),
         TerminalColor::Indexed(_) => None,
@@ -166,7 +166,7 @@ pub(super) fn terminal_color_luminance(color: TerminalColor) -> Option<u32> {
 }
 
 /// Returns WCAG-style contrast ratio for two true-color values.
-pub(super) fn terminal_color_contrast_ratio(
+pub(in crate::terminal) fn terminal_color_contrast_ratio(
     foreground: TerminalColor,
     background: TerminalColor,
 ) -> Option<f64> {
@@ -178,7 +178,7 @@ pub(super) fn terminal_color_contrast_ratio(
 }
 
 /// Returns the relative luminance of a true-color value.
-pub(super) fn terminal_color_relative_luminance(color: TerminalColor) -> Option<f64> {
+pub(in crate::terminal) fn terminal_color_relative_luminance(color: TerminalColor) -> Option<f64> {
     let (red, green, blue) = terminal_color_rgb(color)?;
     Some(
         0.2126 * srgb_channel_to_linear(red)
@@ -188,7 +188,7 @@ pub(super) fn terminal_color_relative_luminance(color: TerminalColor) -> Option<
 }
 
 /// Converts one sRGB channel to linear-light space.
-fn srgb_channel_to_linear(channel: u8) -> f64 {
+pub(in crate::terminal) fn srgb_channel_to_linear(channel: u8) -> f64 {
     let normalized = f64::from(channel) / 255.0;
     if normalized <= 0.03928 {
         normalized / 12.92
@@ -233,7 +233,7 @@ pub(super) fn neutral_surface_step(surface: TerminalColor) -> TerminalColor {
         return surface;
     };
     let luminance = terminal_color_luminance(surface).unwrap_or(0);
-    let shift: i16 = if luminance >= 140 { -28 } else { 34 };
+    let shift: i32 = if luminance >= 140 { -28 } else { 34 };
     TerminalColor::Rgb(
         shifted_channel(red, shift),
         shifted_channel(green, shift),
@@ -242,8 +242,8 @@ pub(super) fn neutral_surface_step(surface: TerminalColor) -> TerminalColor {
 }
 
 /// Shifts a color channel by a signed amount.
-fn shifted_channel(value: u8, shift: i16) -> u8 {
-    (i16::from(value) + shift).clamp(0, 255) as u8
+pub(in crate::terminal) fn shifted_channel(value: u8, shift: i32) -> u8 {
+    (i32::from(value) + shift).clamp(0, 255) as u8
 }
 
 /// Linearly blends one color channel with integer arithmetic.

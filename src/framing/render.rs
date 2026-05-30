@@ -84,12 +84,18 @@ fn apply_overflow(value: String, width: usize, overflow: FrameOverflow) -> Strin
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn elide(value: String, width: usize) -> String {
-    if width <= 3 {
-        return ".".repeat(width);
+    if width == 0 {
+        return String::new();
     }
-    let keep = width - 3;
+    if width == 1 {
+        return "\u{2026}".to_string();
+    }
+    if width == 2 {
+        return "\u{2026} ".to_string();
+    }
+    let keep = width - 1;
     let mut output = value.chars().take(keep).collect::<String>();
-    output.push_str("...");
+    output.push('\u{2026}');
     output
 }
 

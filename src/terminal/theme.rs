@@ -5,7 +5,13 @@
 //! frames, pane dividers, transcript presentation, command and display overlays,
 //! and copy selection.
 
-use super::{BTreeMap, GraphicRendition, MezError, Result, TerminalColor};
+use super::{
+    BTreeMap, GraphicRendition, MezError, Result, TerminalColor,
+    render::{
+        shifted_channel, terminal_color_contrast_ratio, terminal_color_relative_luminance,
+        terminal_color_rgb,
+    },
+};
 
 /// User-configurable color slots for Mezzanine-owned UI components.
 pub const UI_COLOR_SLOT_NAMES: &[&str] = &[
@@ -985,51 +991,6 @@ fn visible_thinking_palette_hex(foreground: &str, background: &str) -> String {
         }
     }
     managed
-}
-
-/// Returns RGB components for true-color values.
-fn terminal_color_rgb(color: TerminalColor) -> Option<(u8, u8, u8)> {
-    match color {
-        TerminalColor::Rgb(red, green, blue) => Some((red, green, blue)),
-        TerminalColor::Indexed(_) => None,
-    }
-}
-
-/// Returns WCAG-style contrast ratio for two true-color values.
-fn terminal_color_contrast_ratio(
-    foreground: TerminalColor,
-    background: TerminalColor,
-) -> Option<f64> {
-    let foreground_luminance = terminal_color_relative_luminance(foreground)?;
-    let background_luminance = terminal_color_relative_luminance(background)?;
-    let lighter = foreground_luminance.max(background_luminance);
-    let darker = foreground_luminance.min(background_luminance);
-    Some((lighter + 0.05) / (darker + 0.05))
-}
-
-/// Returns the relative luminance of a true-color value.
-fn terminal_color_relative_luminance(color: TerminalColor) -> Option<f64> {
-    let (red, green, blue) = terminal_color_rgb(color)?;
-    Some(
-        0.2126 * srgb_channel_to_linear(red)
-            + 0.7152 * srgb_channel_to_linear(green)
-            + 0.0722 * srgb_channel_to_linear(blue),
-    )
-}
-
-/// Converts one sRGB channel to linear-light space.
-fn srgb_channel_to_linear(channel: u8) -> f64 {
-    let normalized = f64::from(channel) / 255.0;
-    if normalized <= 0.03928 {
-        normalized / 12.92
-    } else {
-        ((normalized + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Shifts a color channel by a signed amount.
-fn shifted_channel(value: u8, shift: i32) -> u8 {
-    (i32::from(value) + shift).clamp(0, 255) as u8
 }
 
 /// Renders one true-color value as a six-digit lowercase hex string.
