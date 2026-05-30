@@ -215,6 +215,12 @@ fn deepseek_provider_transcript_event_message(
 /// itself. When reasoning is configured, Mezzanine therefore exposes the MAAP
 /// tool without forcing `tool_choice` and falls back to strict non-thinking
 /// mode only if DeepSeek returns prose instead of a MAAP batch.
+///
+/// Repair retries inherit the original request's thinking strategy. If the
+/// original turn used thinking, the first repair attempt also uses thinking
+/// so the model can reason about the validation error and emit a corrected
+/// batch. The provider's internal `AutoToolThinking`→`ForcedToolNonThinking`
+/// fallback still catches prose responses that decline the tool call.
 pub(super) fn deepseek_maap_request_strategy(
     request: &ModelRequest,
 ) -> DeepSeekMaapRequestStrategy {
@@ -224,7 +230,6 @@ pub(super) fn deepseek_maap_request_strategy(
         return DeepSeekMaapRequestStrategy::NoTool;
     }
     if request.interaction_kind == ModelInteractionKind::CapabilityDecision
-        || request.interaction_kind == ModelInteractionKind::Repair
         || request.allowed_actions == AllowedActionSet::say_only()
     {
         return DeepSeekMaapRequestStrategy::ForcedToolNonThinking;
@@ -984,16 +989,15 @@ mod tests {
         assert_eq!(flat.reasoning_tokens, 3);
     }
 
-    /// Verifies DeepSeek repair retries prioritize MAAP tool compliance over
-    /// thinking-mode continuity.
+    /// Verifies DeepSeek repair retries inherit the original request's thinking
+    /// strategy so the model can reason about validation errors.
     ///
-    /// Initial DeepSeek requests with reasoning still use thinking mode, but
-    /// MAAP repair requests are corrective control-plane retries. For those
-    /// requests the provider must disable thinking and force the MAAP tool so
-    /// a malformed or missing action batch does not loop through another
-    /// thinking response that can decline the tool call.
+    /// When the original action-execution turn used thinking, the repair
+    /// retry keeps thinking enabled and does not force `tool_choice`. The
+    /// provider's internal `AutoToolThinking`→`ForcedToolNonThinking` fallback
+    /// still catches a prose response that declines the tool call.
     #[test]
-    fn deepseek_repair_request_forces_tool_without_thinking() {
+    fn deepseek_repair_request_inherits_thinking_strategy() {
         let mut request = deepseek_test_request(Vec::new());
         request.interaction_kind = ModelInteractionKind::Repair;
 
@@ -1008,6 +1012,34 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&http.body).unwrap();
 
         assert_eq!(body["stream"], true);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body.get("tool_choice").is_none());
+        assert!(
+            body["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.len() == 1)
+        );
+    }
+
+    /// Verifies DeepSeek repair retries disable thinking when the original
+    /// request did not use it.
+    #[test]
+    fn deepseek_repair_request_without_thinking_stays_disabled() {
+        let mut request = deepseek_test_request(Vec::new());
+        request.reasoning_effort = None;
+        request.thinking_enabled = Some(false);
+        request.interaction_kind = ModelInteractionKind::Repair;
+
+        let http = build_deepseek_chat_completions_http_request(
+            &request,
+            "deepseek-key",
+            "https://api.deepseek.com/chat/completions",
+            true,
+            1000,
+        )
+        .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&http.body).unwrap();
+
         assert_eq!(body["thinking"]["type"], "disabled");
         assert_eq!(
             body["tool_choice"]["function"]["name"],

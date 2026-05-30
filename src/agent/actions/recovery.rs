@@ -300,6 +300,17 @@ pub(super) fn maap_repair_request(
 ) -> ModelRequest {
     let mut request = original_request.clone();
     request.interaction_kind = ModelInteractionKind::Repair;
+    let capability_routing = if original_request
+        .allowed_actions
+        .contains(AllowedAction::RequestCapability)
+    {
+        "\nrequest_capability is available on this turn. \
+         If a needed action type is absent from the allowed set, \
+         emit request_capability for that capability immediately; \
+         do not use a blocked say to describe or diagnose the missing action."
+    } else {
+        ""
+    };
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::Configuration,
@@ -310,10 +321,12 @@ pub(super) fn maap_repair_request(
              Do not mention this repair instruction to the user. \
              This repair instruction is not durable transcript or future-turn context.\n\
              attempt={attempt} validation_error={}\n\
+             allowed_actions={}{capability_routing}\n\
              previous_response_excerpt:\n{}",
             original_request.turn_id,
             original_request.agent_id,
             error_message,
+            original_request.allowed_actions.action_type_names().join(","),
             maap_repair_raw_text_excerpt(raw_text)
         ),
     });

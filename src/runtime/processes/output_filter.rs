@@ -123,7 +123,7 @@ pub(super) fn terminal_escape_sequence_end(bytes: &[u8], escape_index: usize) ->
                 }
                 index += 1;
             }
-            bytes.len()
+            escape_index + 1
         }
         b'[' => {
             let mut index = escape_index + 2;
@@ -133,7 +133,7 @@ pub(super) fn terminal_escape_sequence_end(bytes: &[u8], escape_index: usize) ->
                 }
                 index += 1;
             }
-            bytes.len()
+            escape_index + 1
         }
         _ => (escape_index + 2).min(bytes.len()),
     }

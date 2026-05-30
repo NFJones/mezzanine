@@ -110,10 +110,9 @@ fn compact_model_context_blocks(
         if prepared.len() <= protected_floor {
             break;
         }
-        if let Some(omitted) = prepared.pop() {
-            report.omitted_blocks += 1;
-            report.omitted_original_words += model_context_block_words(&omitted);
-        }
+        let omitted = prepared.remove(protected_floor);
+        report.omitted_blocks += 1;
+        report.omitted_original_words += model_context_block_words(&omitted);
     }
 
     (prepared, report)

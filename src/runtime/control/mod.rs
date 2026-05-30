@@ -97,7 +97,7 @@ const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_TRANSCRIPT_CONTEXT_READ_BYTES: u64 = 1024 * 1024;
+const AGENT_TRANSCRIPT_CONTEXT_READ_BYTES: u64 = 100 * 1024 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
 
 /// Returns the number of transcript entries from the current post-compaction
