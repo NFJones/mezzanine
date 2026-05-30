@@ -261,105 +261,91 @@ pub(super) fn mez_wrapper_filter_bytes_may_contain_boilerplate(bytes: &[u8]) -> 
     .any(|marker| text.contains(marker) || promptless.contains(marker))
 }
 
+/// Marker substrings that identify Mezzanine wrapper echo text.
+///
+/// Each marker is checked against both the normalized line and its
+/// prompt-stripped variant so a single update here covers both branches.
+const WRAPPER_MARKERS: &[&str] = &[
+    "MEZ_MARKER_TOKEN",
+    "MEZ_TURN",
+    "MEZ_AGENT",
+    "MEZ_PANE",
+    "MEZ_STATUS",
+    "MEZ_RESTORE_ERREXIT",
+    "MEZ_RESTORE_NOUNSET",
+    "MEZ_RESTORE_HISTORY",
+    "MEZ_HISTORY_",
+    "MEZ_COMMAND_FILE",
+    "MEZ_COMMAND_B64",
+    "MEZ_COMMAND_",
+    "MEZ_OUTPUT_FILE",
+    "MEZ_WRITE_STATUS",
+    "HISTFILE=/dev/null",
+    "set +o history",
+    "set -o history",
+    "history -d",
+    "fish_private_mode",
+    "history delete --",
+    "case $- in *e*)",
+    "mez_marker=",
+    "printf '\\033]133;C;mez_marker",
+    "printf '\\033]133;D;%s;mez_marker",
+    "env -u MEZ_MARKER_TOKEN -u MEZ_TURN -u MEZ_AGENT -u MEZ_PANE",
+    "cat > \"$MEZ_COMMAND_FILE\"",
+    "if command -v",
+    "elif command -v",
+    "setsid(); exec @ARGV",
+    "os.setsid()",
+    "</dev/null",
+    "unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS",
+    "set -l MEZ_STATUS $status",
+    "set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS",
+];
+
+/// Exact-match tokens for wrapper text (case-sensitive).
+const WRAPPER_EXACT_TOKENS: &[&str] = &["else", "fi", ">", "$", "begin", "end", "{", "}"];
+
+/// Prefix patterns that identify wrapper lines.
+const WRAPPER_PREFIXES: &[&str] = &["if [ \"$M", "eval "];
+
 /// Runs the mez wrapper echo text is hidden operation for this subsystem.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Checks a normalized (trimmed, control-stripped) line against known
+/// Mezzanine wrapper markers, exact tokens, and prefixes. Both the raw
+/// line and a prompt-stripped variant are checked against each marker so
+/// the definition only lives in one place.
 pub(super) fn mez_wrapper_echo_text_is_hidden(normalized: &str, command_lines: &[String]) -> bool {
     let promptless = mez_wrapper_echo_text_without_inline_prompts(normalized);
-    if normalized.starts_with("if [ \"$M")
-        || promptless.starts_with("if [ \"$M")
-        || normalized.contains("MEZ_MARKER_TOKEN")
-        || promptless.contains("MEZ_MARKER_TOKEN")
-        || normalized.contains("MEZ_TURN")
-        || promptless.contains("MEZ_TURN")
-        || normalized.contains("MEZ_AGENT")
-        || promptless.contains("MEZ_AGENT")
-        || normalized.contains("MEZ_PANE")
-        || promptless.contains("MEZ_PANE")
-        || normalized.contains("MEZ_STATUS")
-        || promptless.contains("MEZ_STATUS")
-        || normalized.contains("MEZ_RESTORE_ERREXIT")
-        || promptless.contains("MEZ_RESTORE_ERREXIT")
-        || normalized.contains("MEZ_RESTORE_NOUNSET")
-        || promptless.contains("MEZ_RESTORE_NOUNSET")
-        || normalized.contains("MEZ_RESTORE_HISTORY")
-        || promptless.contains("MEZ_RESTORE_HISTORY")
-        || normalized.contains("MEZ_HISTORY_")
-        || promptless.contains("MEZ_HISTORY_")
-        || normalized.contains("MEZ_COMMAND_FILE")
-        || promptless.contains("MEZ_COMMAND_FILE")
-        || normalized.contains("MEZ_COMMAND_B64")
-        || promptless.contains("MEZ_COMMAND_B64")
-        || normalized.contains("MEZ_OUTPUT_FILE")
-        || promptless.contains("MEZ_OUTPUT_FILE")
-        || normalized.contains("MEZ_WRITE_STATUS")
-        || promptless.contains("MEZ_WRITE_STATUS")
-        || normalized.contains("HISTFILE=/dev/null")
-        || promptless.contains("HISTFILE=/dev/null")
-        || normalized.contains("set +o history")
-        || promptless.contains("set +o history")
-        || normalized.contains("set -o history")
-        || promptless.contains("set -o history")
-        || normalized.contains("history -d")
-        || promptless.contains("history -d")
-        || normalized.contains("fish_private_mode")
-        || promptless.contains("fish_private_mode")
-        || normalized.contains("history delete --")
-        || promptless.contains("history delete --")
-        || normalized.contains("MEZ_COMMAND_")
-        || promptless.contains("MEZ_COMMAND_")
-        || normalized.contains("case $- in *e*)")
-        || promptless.contains("case $- in *e*)")
-        || normalized.contains("mez_marker=")
-        || promptless.contains("mez_marker=")
-        || normalized.contains("printf '\\033]133;C;mez_marker")
-        || promptless.contains("printf '\\033]133;C;mez_marker")
-        || normalized.contains("printf '\\033]133;D;%s;mez_marker")
-        || promptless.contains("printf '\\033]133;D;%s;mez_marker")
-        || ((normalized.contains("printf '%s\\n'") || normalized.contains("printf '\\n%s\\n'"))
-            && normalized.contains("__MEZ_SHELL_OUTPUT_BASE64_"))
-        || ((promptless.contains("printf '%s\\n'") || promptless.contains("printf '\\n%s\\n'"))
-            && promptless.contains("__MEZ_SHELL_OUTPUT_BASE64_"))
-        || normalized.contains("env -u MEZ_MARKER_TOKEN -u MEZ_TURN -u MEZ_AGENT -u MEZ_PANE")
-        || promptless.contains("env -u MEZ_MARKER_TOKEN -u MEZ_TURN -u MEZ_AGENT -u MEZ_PANE")
-        || normalized.contains("cat > \"$MEZ_COMMAND_FILE\"")
-        || promptless.contains("cat > \"$MEZ_COMMAND_FILE\"")
-        || matches!(normalized, "else" | "fi")
-        || matches!(promptless.as_str(), "else" | "fi")
-        || normalized.starts_with("if command -v")
-        || promptless.starts_with("if command -v")
-        || normalized.starts_with("elif command -v")
-        || promptless.starts_with("elif command -v")
-        || normalized.contains("setsid(); exec @ARGV")
-        || promptless.contains("setsid(); exec @ARGV")
-        || normalized.contains("os.setsid()")
-        || promptless.contains("os.setsid()")
-        || normalized.contains("</dev/null")
-        || promptless.contains("</dev/null")
-        || normalized.contains("unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS")
-        || promptless.contains("unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS")
-        || normalized.contains("set -l MEZ_STATUS $status")
-        || promptless.contains("set -l MEZ_STATUS $status")
-        || normalized.contains("set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS")
-        || promptless.contains("set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS")
-        || normalized == ">"
-        || normalized == "$"
-        || promptless == ">"
-        || promptless == "$"
-        || normalized == "begin"
-        || normalized == "end"
-        || normalized == "{"
-        || normalized == "}"
-        || (normalized.starts_with("command ") && normalized.contains(" -c "))
-        || normalized.starts_with("eval ")
+    if WRAPPER_MARKERS
+        .iter()
+        .any(|m| normalized.contains(m) || promptless.contains(m))
+        || WRAPPER_EXACT_TOKENS
+            .iter()
+            .any(|t| normalized == *t || promptless == *t)
+        || WRAPPER_PREFIXES
+            .iter()
+            .any(|p| normalized.starts_with(p) || promptless.starts_with(p))
+    {
+        return true;
+    }
+    if (normalized.starts_with("command ") && normalized.contains(" -c "))
+        || (promptless.starts_with("command ") && promptless.contains(" -c "))
     {
         return true;
     }
     if normalized
         .split_whitespace()
         .all(|token| matches!(token, "$" | ">" | "#"))
+    {
+        return true;
+    }
+    // Only hide base64 markers when they appear in a printf wrapper command,
+    // not the marker output lines themselves. The marker output lines must
+    // survive so decode_shell_output_transport can find and strip them.
+    if ((normalized.contains("printf '%s\\n'") || normalized.contains("printf '\\n%s\\n'"))
+        && normalized.contains("__MEZ_SHELL_OUTPUT_BASE64_"))
+        || ((promptless.contains("printf '%s\\n'") || promptless.contains("printf '\\n%s\\n'"))
+            && promptless.contains("__MEZ_SHELL_OUTPUT_BASE64_"))
     {
         return true;
     }
@@ -469,8 +455,7 @@ pub(super) fn shell_observation_line_has_common_prompt_suffix(trimmed: &str) -> 
         && (prefix.starts_with('~')
             || prefix.starts_with('/')
             || prefix.contains('@')
-            || prefix.contains(':')
-            || prefix.contains("repo"))
+            || prefix.contains(':'))
 }
 
 /// Produces model-visible command output for an agent shell transaction.
@@ -479,12 +464,18 @@ pub(super) fn shell_observation_line_has_common_prompt_suffix(trimmed: &str) -> 
 /// state, but the model only needs command stdout/stderr. This removes
 /// Mezzanine wrapper echo, shell prompt repaint, and terminal styling while
 /// preserving the actual command output that should feed follow-up reasoning.
+///
+/// Command echo (the interactive shell echoing the command input) is only
+/// hidden on the first occurrence before any real output appears. After
+/// the first legitimate output line, matching lines are treated as
+/// legitimate command output rather than shell echo.
 pub(super) fn agent_shell_transaction_observation_bytes(bytes: &[u8], command: &str) -> Vec<u8> {
     let stripped = shell_observation_without_terminal_controls(bytes);
     let text = String::from_utf8_lossy(&stripped);
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let command_lines = vec![command.to_string()];
     let mut output = String::new();
+    let mut found_output = false;
     for line in normalized.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -493,13 +484,19 @@ pub(super) fn agent_shell_transaction_observation_bytes(bytes: &[u8], command: &
             }
             continue;
         }
-        if mez_wrapper_echo_text_is_hidden(trimmed, &command_lines) {
+        if !found_output && mez_wrapper_echo_text_is_hidden(trimmed, &command_lines) {
             continue;
         }
         let cleaned = mez_wrapper_echo_text_without_leading_prompts(line);
         if cleaned.trim().is_empty() || shell_observation_line_looks_like_prompt(&cleaned) {
+            if !found_output {
+                continue;
+            }
+            output.push_str(cleaned.trim_end());
+            output.push('\n');
             continue;
         }
+        found_output = true;
         output.push_str(cleaned.trim_end());
         output.push('\n');
     }
@@ -684,5 +681,143 @@ pub(super) fn mez_wrapper_echo_text_without_leading_prompts(value: &str) -> Stri
             continue;
         }
         return trimmed.to_string();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that known Mezzanine wrapper echo text is correctly hidden.
+    #[test]
+    fn wrapper_echo_text_filtering_hides_known_markers() {
+        let hidden_lines = [
+            "MEZ_MARKER_TOKEN=t1 MEZ_TURN=1 MEZ_AGENT=a1 MEZ_PANE=%1",
+            "MEZ_STATUS=0",
+            "MEZ_RESTORE_ERREXIT=''",
+            "MEZ_RESTORE_NOUNSET=''",
+            "MEZ_RESTORE_HISTORY=''",
+            "MEZ_HISTORY_STATE=''",
+            "MEZ_COMMAND_FILE=/tmp/mez-XXXXXX",
+            "MEZ_COMMAND_B64=AAAA",
+            "MEZ_OUTPUT_FILE=/tmp/mez-output",
+            "MEZ_WRITE_STATUS=0",
+            "HISTFILE=/dev/null",
+            "set +o history",
+            "set -o history",
+            "history -d 1",
+            "fish_private_mode on",
+            "history delete --prefix mez",
+            "case $- in *e*)",
+            "mez_marker=abc123",
+            "printf '\\033]133;C;mez_marker=abc;mez_turn=t1'",
+            "printf '\\033]133;D;%s;mez_marker=abc'",
+            "printf '%s\\n' __MEZ_SHELL_OUTPUT_BASE64_BEGIN__",
+            "printf '\\n%s\\n' __MEZ_SHELL_OUTPUT_BASE64_END__",
+            "env -u MEZ_MARKER_TOKEN -u MEZ_TURN -u MEZ_AGENT -u MEZ_PANE",
+            "cat > \"$MEZ_COMMAND_FILE\" <<\\MEZ_CMD",
+            "else",
+            "fi",
+            ">",
+            "$",
+            "begin",
+            "end",
+            "{",
+            "}",
+            "if command -v bash",
+            "elif command -v zsh",
+            "setsid(); exec @ARGV",
+            "os.setsid()",
+            "</dev/null",
+            "unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS",
+            "set -l MEZ_STATUS $status",
+            "set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS",
+        ];
+        let empty_commands: Vec<String> = Vec::new();
+        for line in &hidden_lines {
+            assert!(
+                mez_wrapper_echo_text_is_hidden(line, &empty_commands),
+                "line should be hidden: {line}"
+            );
+        }
+    }
+
+    /// Verifies that legitimate command output is NOT incorrectly hidden.
+    #[test]
+    fn wrapper_echo_text_filtering_preserves_legitimate_output() {
+        let visible_lines = [
+            "hello world",
+            "total 42",
+            "file.txt",
+            "error: compilation failed",
+            "   Compiling mezzanine v0.1.0",
+            "test result: ok. 42 passed; 0 failed",
+            "Permission denied",
+            "MEZ_ is not a real variable",
+        ];
+        let empty_commands: Vec<String> = Vec::new();
+        for line in &visible_lines {
+            assert!(
+                !mez_wrapper_echo_text_is_hidden(line, &empty_commands),
+                "line should be visible: {line}"
+            );
+        }
+    }
+
+    /// Verifies command echo is only hidden on the first occurrence, not
+    /// on subsequent lines that happen to end with the same command text.
+    #[test]
+    fn agent_shell_transaction_observation_hides_command_echo_only_once() {
+        let output = agent_shell_transaction_observation_bytes(
+            b"echo hello world\r\nhello world\r\nsome other output\r\necho hello world\r\n",
+            "echo hello world",
+        );
+        let text = String::from_utf8_lossy(&output);
+        // The first occurrence (command echo) should be hidden.
+        // The second occurrence is legitimate output that should remain.
+        assert!(text.contains("hello world"), "output should remain: {text}");
+        assert!(
+            text.contains("some other output"),
+            "all output should remain: {text}"
+        );
+        assert!(
+            text.contains("echo hello world"),
+            "second echo hello world is legitimate output: {text}"
+        );
+        // Count occurrences: should be exactly one "echo hello world".
+        assert_eq!(
+            text.match_indices("echo hello world").count(),
+            1,
+            "exactly one echo hello world should remain: {text}"
+        );
+    }
+
+    /// Verifies prompt detection correctly identifies common prompt patterns.
+    #[test]
+    fn prompt_detection_identifies_common_prompts() {
+        assert!(shell_observation_line_looks_like_prompt("~ $ "));
+        assert!(shell_observation_line_looks_like_prompt("/tmp $ "));
+        assert!(shell_observation_line_looks_like_prompt("user@host:~ $ "));
+        assert!(shell_observation_line_looks_like_prompt(
+            "~/projects:main $ "
+        ));
+        assert!(shell_observation_line_looks_like_prompt("$"));
+        assert!(shell_observation_line_looks_like_prompt(">"));
+        assert!(shell_observation_line_looks_like_prompt("#"));
+    }
+
+    /// Verifies that legitimate command output is not mistaken for a prompt.
+    #[test]
+    fn prompt_detection_does_not_match_legitimate_output() {
+        assert!(!shell_observation_line_looks_like_prompt("hello world"));
+        assert!(!shell_observation_line_looks_like_prompt("total 42"));
+        assert!(!shell_observation_line_looks_like_prompt(
+            "compilation successful"
+        ));
+        assert!(!shell_observation_line_looks_like_prompt("   $12.99   "));
+        assert!(!shell_observation_line_looks_like_prompt(
+            "path/to/repo/file.rs"
+        ));
+        assert!(!shell_observation_line_looks_like_prompt(""));
     }
 }
