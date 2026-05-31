@@ -30,7 +30,7 @@ use crate::registry::{RegistrySessionState, SessionRecord};
 use crate::runtime::{MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, default_socket_directory};
 use crate::runtime::{
     RuntimeSessionService, bind_control_socket, effective_uid_for_tests,
-    serve_runtime_control_connection, serve_runtime_control_connection_with_state,
+    serve_runtime_control_connection_with_state,
 };
 use crate::session::Session;
 use crate::shell::resolve_shell;
@@ -131,6 +131,73 @@ where
         .build()
         .unwrap()
         .block_on(future)
+}
+
+/// Spawns one bounded runtime control server for CLI attach tests.
+///
+/// The helper accepts exactly one client connection, serves attach requests until
+/// the client disconnects, and applies short socket deadlines so a stalled client
+/// cannot hang the entire test binary indefinitely.
+fn spawn_attach_test_runtime_server(
+    listener: std::os::unix::net::UnixListener,
+    service_socket: PathBuf,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        listener.set_nonblocking(true).unwrap();
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(stream) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for attach test client connection"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+
+        let session = Session::new_default(
+            resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
+            Size::new(80, 24).unwrap(),
+        );
+        let mut service = RuntimeSessionService::new(session, service_socket, 100).unwrap();
+        let mut connection = ControlConnectionState::new(true, true);
+        loop {
+            match serve_runtime_control_connection_with_state(
+                &mut stream,
+                4096,
+                &mut service,
+                &mut connection,
+            ) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.io_kind(),
+                        Some(
+                            std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::WouldBlock
+                        )
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+    })
 }
 
 /// Runs the with json output operation for this subsystem.
@@ -1505,36 +1572,7 @@ fn attach_uses_selected_control_socket() {
         }
         Err(error) => panic!("{error}"),
     };
-    let service_socket = socket.clone();
-    let server = thread::spawn(move || {
-        let session = Session::new_default(
-            resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
-            Size::new(80, 24).unwrap(),
-        );
-        let mut service = RuntimeSessionService::new(session, service_socket, 100).unwrap();
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut connection = ControlConnectionState::new(true, true);
-        loop {
-            match serve_runtime_control_connection_with_state(
-                &mut stream,
-                4096,
-                &mut service,
-                &mut connection,
-            ) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.io_kind(),
-                        Some(std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset)
-                    ) =>
-                {
-                    break;
-                }
-                Err(error) => panic!("{error}"),
-            }
-        }
-    });
+    let server = spawn_attach_test_runtime_server(listener, socket.clone());
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -1582,16 +1620,7 @@ fn attach_observer_requests_pending_observer_without_session_data() {
         }
         Err(error) => panic!("{error}"),
     };
-    let service_socket = socket.clone();
-    let server = thread::spawn(move || {
-        let session = Session::new_default(
-            resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
-            Size::new(80, 24).unwrap(),
-        );
-        let mut service = RuntimeSessionService::new(session, service_socket, 100).unwrap();
-        serve_runtime_control_connection(&mut listener.accept().unwrap().0, 4096, &mut service)
-            .unwrap();
-    });
+    let server = spawn_attach_test_runtime_server(listener, socket.clone());
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
