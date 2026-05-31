@@ -30,7 +30,7 @@ use crate::registry::{RegistrySessionState, SessionRecord};
 use crate::runtime::{MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, default_socket_directory};
 use crate::runtime::{
     RuntimeSessionService, bind_control_socket, effective_uid_for_tests,
-    serve_runtime_control_connection,
+    serve_runtime_control_connection, serve_runtime_control_connection_with_state,
 };
 use crate::session::Session;
 use crate::shell::resolve_shell;
@@ -67,25 +67,6 @@ fn test_env(name: &str) -> (CliEnv, PathBuf) {
         },
         home,
     )
-}
-
-/// Runs the complete control frame count operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn complete_control_frame_count(input: &[u8], max_content_length: usize) -> usize {
-    let mut offset = 0usize;
-    let mut frames = 0usize;
-    while offset < input.len() {
-        let Ok((_body, consumed)) = decode_control_frame(&input[offset..], max_content_length)
-        else {
-            break;
-        };
-        frames += 1;
-        offset += consumed;
-    }
-    frames
 }
 
 /// Builds one framed JSON-RPC event notification for attach-loop tests.
@@ -1532,21 +1513,27 @@ fn attach_uses_selected_control_socket() {
         );
         let mut service = RuntimeSessionService::new(session, service_socket, 100).unwrap();
         let (mut stream, _) = listener.accept().unwrap();
-        let mut input = Vec::new();
-        while complete_control_frame_count(&input, 4096) < 2 {
-            let mut chunk = [0u8; 4096];
-            let read = stream.read(&mut chunk).unwrap();
-            if read == 0 {
-                break;
-            }
-            input.extend_from_slice(&chunk[..read]);
-        }
         let mut connection = ControlConnectionState::new(true, true);
-        let (output, _) = service
-            .handle_control_input_for_connection(&input, 4096, &mut connection)
-            .unwrap();
-        stream.write_all(&output).unwrap();
-        stream.flush().unwrap();
+        loop {
+            match serve_runtime_control_connection_with_state(
+                &mut stream,
+                4096,
+                &mut service,
+                &mut connection,
+            ) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.io_kind(),
+                        Some(std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset)
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
     });
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();

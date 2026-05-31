@@ -921,7 +921,12 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         );
     };
 
-    let ((), supervisor_report, mut actor_exit) = tokio::join!(client, pane_worker, actor.run());
+    let ((), supervisor_report, mut actor_exit) = tokio::time::timeout(
+        Duration::from_secs(30),
+        async { tokio::join!(client, pane_worker, actor.run()) },
+    )
+    .await
+    .expect("async pane worker shell liveness test should not hang indefinitely");
     assert_eq!(
         actor_exit.service.lifecycle_state(),
         RuntimeLifecycleState::Running

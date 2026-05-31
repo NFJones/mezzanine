@@ -160,10 +160,17 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
         started.elapsed()
     );
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !copy_path.exists() && Instant::now() < deadline {
+    let mut copied = String::new();
+    while Instant::now() < deadline {
+        if let Ok(content) = fs::read_to_string(&copy_path) {
+            copied = content;
+            if copied == "configured-copy" {
+                break;
+            }
+        }
         thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(fs::read_to_string(&copy_path).unwrap(), "configured-copy");
+    assert_eq!(copied, "configured-copy");
     assert_eq!(
         service.host_clipboard.read(),
         Some("configured-paste".to_string())
