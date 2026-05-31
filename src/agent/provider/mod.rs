@@ -18,9 +18,11 @@ use std::pin::Pin;
 
 mod cache;
 mod catalog;
+mod chat_completions;
 mod deepseek;
 mod errors;
 mod http;
+mod openai_chat_completions;
 mod openai_request;
 mod quota;
 mod response;
@@ -34,13 +36,9 @@ pub use catalog::{
     openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
     parse_openai_models_http_body,
 };
+pub use chat_completions::ChatCompletionsProvider;
+use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
-use deepseek::{
-    build_deepseek_chat_completions_http_request_with_strategy, build_deepseek_models_http_request,
-    deepseek_chat_completions_endpoint_for_base_url, deepseek_effective_stream,
-    deepseek_maap_request_strategy, deepseek_should_retry_with_forced_maap,
-    parse_deepseek_chat_completions_http_response,
-};
 use errors::{
     openai_provider_error_detail, openai_provider_failure_json, provider_maap_parse_error,
 };
@@ -54,6 +52,7 @@ pub use http::{
     AsyncProviderHttpTransport, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS,
     ProviderHttpRequest, ProviderHttpResponse, ReqwestProviderHttpTransport,
 };
+use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;
 use openai_request::openai_responses_request_body_with_stream;
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
@@ -154,17 +153,6 @@ pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderA
         }),
     }
 }
-/// DeepSeek request strategy for provider-native MAAP transport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeepSeekMaapRequestStrategy {
-    /// No MAAP tool is needed for this provider request.
-    NoTool,
-    /// Use DeepSeek thinking mode and let the model choose the MAAP tool.
-    AutoToolThinking,
-    /// Disable thinking and force the MAAP tool with `tool_choice`.
-    ForcedToolNonThinking,
-}
-
 /// Stable provider/model identity for token-cost accounting.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModelTokenUsageKey {
@@ -756,327 +744,13 @@ pub fn openai_provider_from_auth_store_with_options<T>(
     )
 }
 
-/// Carries generic OpenAI-compatible Chat Completions Provider state.
-///
 /// Alias for the shared Chat Completions provider when used for DeepSeek.
-pub type DeepSeekChatCompletionsProvider<T> = ChatCompletionsProvider<T>;
+pub type DeepSeekChatCompletionsProvider<T> =
+    ChatCompletionsProvider<T, DeepSeekChatCompletionsDialect>;
 /// Alias for the shared Chat Completions provider when used for named
 /// OpenAI-compatible backends.
-pub type OpenAiCompatibleChatCompletionsProvider<T> = ChatCompletionsProvider<T>;
-/// Carries shared Chat Completions provider state.
-#[derive(Debug, Clone)]
-pub struct ChatCompletionsProvider<T> {
-    pub(super) api_key: Option<SecretString>,
-    pub(super) provider_id: String,
-    pub(super) endpoint: String,
-    pub(super) stream: bool,
-    pub(super) timeout_ms: u64,
-    pub(super) transport: T,
-}
-impl<T> ChatCompletionsProvider<T> {
-    /// Creates a new Chat Completions provider with the given API key.
-    pub fn new(api_key: impl Into<SecretString>, transport: T) -> Result<Self> {
-        let api_key = api_key.into();
-        validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
-        Self::with_optional_auth(Some(api_key), transport)
-    }
-
-    /// Creates a Chat Completions provider without bearer authentication.
-    pub fn without_auth(transport: T) -> Result<Self> {
-        Self::with_optional_auth(None, transport)
-    }
-
-    /// Creates a Chat Completions provider with optional bearer authentication.
-    pub fn with_optional_auth(api_key: Option<SecretString>, transport: T) -> Result<Self> {
-        if let Some(api_key) = api_key.as_ref() {
-            validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
-        }
-        Ok(Self {
-            api_key,
-            provider_id: "deepseek".to_string(),
-            endpoint: DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT.to_string(),
-            stream: false,
-            timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
-            transport,
-        })
-    }
-
-    /// Returns the configured provider id guarded by this provider instance.
-    pub fn provider_id(&self) -> &str {
-        &self.provider_id
-    }
-
-    /// Overrides the runtime provider identity accepted by request guards.
-    pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Result<Self> {
-        let provider_id = provider_id.into();
-        validate_non_empty("provider id", &provider_id)?;
-        self.provider_id = provider_id;
-        Ok(self)
-    }
-
-    /// Enables or disables streaming for this provider.
-    pub fn with_stream(mut self, stream: bool) -> Self {
-        self.stream = stream;
-        self
-    }
-
-    /// Overrides the default endpoint URL for this provider.
-    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
-        self.endpoint = endpoint.into();
-        self
-    }
-
-    /// Sets the request timeout in milliseconds.
-    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout_ms = timeout_ms;
-        self
-    }
-}
-
-/// Returns whether a DeepSeek request must produce a structured MAAP batch.
-fn deepseek_response_requires_maap(request: &ModelRequest) -> bool {
-    request.interaction_kind != ModelInteractionKind::AutoSizing
-        && !request.allowed_actions.actions.is_empty()
-}
-
-/// Converts a successful DeepSeek response without required MAAP into a
-/// repairable malformed-output provider error.
-fn deepseek_required_maap_response(
-    response: ModelResponse,
-    request: &ModelRequest,
-) -> Result<ModelResponse> {
-    if response.action_batch.is_some() || !deepseek_response_requires_maap(request) {
-        return Ok(response);
-    }
-    Err(provider_maap_parse_error(
-        MezError::invalid_args(format!(
-            "DeepSeek response did not call a Mezzanine DeepSeek shim tool ({DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME}, {DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME}, or {DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME}) or return a MAAP JSON object"
-        )),
-        &response.raw_text,
-    ))
-}
-
-#[cfg(test)]
-impl<T: ProviderHttpTransport> ModelProvider for ChatCompletionsProvider<T> {
-    fn provider_id(&self) -> &str {
-        &self.provider_id
-    }
-
-    fn list_models(&self) -> Result<ProviderModelCatalog> {
-        let http_request = build_deepseek_models_http_request(
-            self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-            &self.endpoint,
-            self.timeout_ms,
-        )?;
-        let response = self.transport.send(&http_request)?;
-        if !(200..300).contains(&response.status_code) {
-            return Err(MezError::invalid_state(format!(
-                "DeepSeek Models API returned status {}: {}",
-                response.status_code,
-                openai_provider_error_detail(&response.body)
-            ))
-            .with_provider_failure_json(openai_provider_failure_json(
-                Some(response.status_code),
-                &response.body,
-            )));
-        }
-        let models = parse_openai_models_http_body(&response.body)?;
-        let reasoning_levels = provider_catalog_reasoning_levels(&models);
-        let quota_usage = provider_quota_usage_from_headers(&response.headers);
-        Ok(ProviderModelCatalog {
-            provider: ModelProvider::provider_id(self).to_string(),
-            source: "provider".to_string(),
-            models,
-            reasoning_levels,
-            quota_usage,
-        })
-    }
-
-    fn send_request(&self, request: &ModelRequest) -> Result<ModelResponse> {
-        if request.provider != ModelProvider::provider_id(self) {
-            return Err(MezError::invalid_args(
-                "DeepSeek provider received a request for a different provider",
-            ));
-        }
-        let strategy = deepseek_maap_request_strategy(request);
-        let http_request = build_deepseek_chat_completions_http_request_with_strategy(
-            request,
-            self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-            &self.endpoint,
-            self.stream,
-            self.timeout_ms,
-            strategy,
-        )?;
-        let response = self.transport.send(&http_request)?;
-        if !(200..300).contains(&response.status_code) {
-            return Err(MezError::invalid_state(format!(
-                "DeepSeek Chat Completions API returned status {}: {}",
-                response.status_code,
-                openai_provider_error_detail(&response.body)
-            ))
-            .with_provider_failure_json(openai_provider_failure_json(
-                Some(response.status_code),
-                &response.body,
-            )));
-        }
-        let mut parsed = parse_deepseek_chat_completions_http_response(
-            response,
-            request,
-            ModelProvider::provider_id(self),
-            deepseek_effective_stream(self.stream, strategy),
-        )?;
-        if deepseek_should_retry_with_forced_maap(request, strategy, &parsed) {
-            let fallback_request = build_deepseek_chat_completions_http_request_with_strategy(
-                request,
-                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-                &self.endpoint,
-                self.stream,
-                self.timeout_ms,
-                DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
-            )?;
-            let fallback_response = self.transport.send(&fallback_request)?;
-            if !(200..300).contains(&fallback_response.status_code) {
-                return Err(MezError::invalid_state(format!(
-                    "DeepSeek Chat Completions API returned status {}: {}",
-                    fallback_response.status_code,
-                    openai_provider_error_detail(&fallback_response.body)
-                ))
-                .with_provider_failure_json(openai_provider_failure_json(
-                    Some(fallback_response.status_code),
-                    &fallback_response.body,
-                )));
-            }
-            let mut fallback = parse_deepseek_chat_completions_http_response(
-                fallback_response,
-                request,
-                ModelProvider::provider_id(self),
-                false,
-            )?;
-            fallback.latest_request_usage = Some(fallback.usage);
-            fallback.usage.add_assign(parsed.usage);
-            if fallback.quota_usage.is_empty() {
-                fallback.quota_usage = parsed.quota_usage;
-            }
-            parsed = fallback;
-        }
-        deepseek_required_maap_response(parsed, request)
-    }
-}
-
-impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletionsProvider<T> {
-    fn provider_id(&self) -> &str {
-        &self.provider_id
-    }
-
-    fn list_models_async<'a>(
-        &'a self,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderModelCatalog>> + Send + 'a>> {
-        Box::pin(async move {
-            let http_request = build_deepseek_models_http_request(
-                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-                &self.endpoint,
-                self.timeout_ms,
-            )?;
-            let response = self.transport.send_async(&http_request).await?;
-            if !(200..300).contains(&response.status_code) {
-                return Err(MezError::invalid_state(format!(
-                    "DeepSeek Models API returned status {}: {}",
-                    response.status_code,
-                    openai_provider_error_detail(&response.body)
-                ))
-                .with_provider_failure_json(openai_provider_failure_json(
-                    Some(response.status_code),
-                    &response.body,
-                )));
-            }
-            let models = parse_openai_models_http_body(&response.body)?;
-            let reasoning_levels = provider_catalog_reasoning_levels(&models);
-            let quota_usage = provider_quota_usage_from_headers(&response.headers);
-            Ok(ProviderModelCatalog {
-                provider: AsyncModelProvider::provider_id(self).to_string(),
-                source: "provider".to_string(),
-                models,
-                reasoning_levels,
-                quota_usage,
-            })
-        })
-    }
-
-    fn send_request_async<'a>(
-        &'a self,
-        request: &'a ModelRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
-        Box::pin(async move {
-            if request.provider != AsyncModelProvider::provider_id(self) {
-                return Err(MezError::invalid_args(
-                    "DeepSeek provider received a request for a different provider",
-                ));
-            }
-            let strategy = deepseek_maap_request_strategy(request);
-            let http_request = build_deepseek_chat_completions_http_request_with_strategy(
-                request,
-                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-                &self.endpoint,
-                self.stream,
-                self.timeout_ms,
-                strategy,
-            )?;
-            let response = self.transport.send_async(&http_request).await?;
-            if !(200..300).contains(&response.status_code) {
-                return Err(MezError::invalid_state(format!(
-                    "DeepSeek Chat Completions API returned status {}: {}",
-                    response.status_code,
-                    openai_provider_error_detail(&response.body)
-                ))
-                .with_provider_failure_json(openai_provider_failure_json(
-                    Some(response.status_code),
-                    &response.body,
-                )));
-            }
-            let mut parsed = parse_deepseek_chat_completions_http_response(
-                response,
-                request,
-                AsyncModelProvider::provider_id(self),
-                deepseek_effective_stream(self.stream, strategy),
-            )?;
-            if deepseek_should_retry_with_forced_maap(request, strategy, &parsed) {
-                let fallback_request = build_deepseek_chat_completions_http_request_with_strategy(
-                    request,
-                    self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
-                    &self.endpoint,
-                    self.stream,
-                    self.timeout_ms,
-                    DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
-                )?;
-                let fallback_response = self.transport.send_async(&fallback_request).await?;
-                if !(200..300).contains(&fallback_response.status_code) {
-                    return Err(MezError::invalid_state(format!(
-                        "DeepSeek Chat Completions API returned status {}: {}",
-                        fallback_response.status_code,
-                        openai_provider_error_detail(&fallback_response.body)
-                    ))
-                    .with_provider_failure_json(openai_provider_failure_json(
-                        Some(fallback_response.status_code),
-                        &fallback_response.body,
-                    )));
-                }
-                let mut fallback = parse_deepseek_chat_completions_http_response(
-                    fallback_response,
-                    request,
-                    AsyncModelProvider::provider_id(self),
-                    false,
-                )?;
-                fallback.latest_request_usage = Some(fallback.usage);
-                fallback.usage.add_assign(parsed.usage);
-                if fallback.quota_usage.is_empty() {
-                    fallback.quota_usage = parsed.quota_usage;
-                }
-                parsed = fallback;
-            }
-            deepseek_required_maap_response(parsed, request)
-        })
-    }
-}
+pub type OpenAiCompatibleChatCompletionsProvider<T> =
+    ChatCompletionsProvider<T, OpenAiChatCompletionsDialect>;
 
 /// Builds an OpenAI provider from auth metadata plus non-secret provider options.
 ///
@@ -1205,14 +879,14 @@ pub fn deepseek_chat_completions_provider_from_auth_store_with_provider_options<
         .is_some()
     {
         let credential = auth_store.provider_secret(provider_name)?;
-        ChatCompletionsProvider::new(credential, transport)?
+        DeepSeekChatCompletionsProvider::new(credential, transport)?
     } else {
-        ChatCompletionsProvider::without_auth(transport)?
+        DeepSeekChatCompletionsProvider::without_auth(transport)?
     }
     .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
-        provider =
-            provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
+        let endpoint = provider.chat_endpoint_for_base_url(base_url)?;
+        provider = provider.with_endpoint(endpoint);
     }
     provider = provider.with_timeout(timeout_ms);
     Ok(provider)
@@ -1236,14 +910,14 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
         .is_some()
     {
         let credential = auth_store.provider_secret(provider_name)?;
-        ChatCompletionsProvider::new(credential, transport)?
+        OpenAiCompatibleChatCompletionsProvider::new(credential, transport)?
     } else {
-        ChatCompletionsProvider::without_auth(transport)?
+        OpenAiCompatibleChatCompletionsProvider::without_auth(transport)?
     }
     .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
-        provider =
-            provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
+        let endpoint = provider.chat_endpoint_for_base_url(base_url)?;
+        provider = provider.with_endpoint(endpoint);
     }
     provider = provider.with_timeout(timeout_ms);
     Ok(provider)

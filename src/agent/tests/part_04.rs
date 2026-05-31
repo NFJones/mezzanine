@@ -181,6 +181,128 @@ fn chat_completions_compatible_providers_omit_auth_when_metadata_is_absent() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies generic OpenAI-compatible Chat Completions providers do not inherit
+/// DeepSeek-only request fields or shim tool names.
+///
+/// The compatible adapter must expose the standard OpenAI-style function tool
+/// surface so local OpenAI-compatible servers are not forced through DeepSeek's
+/// thinking-mode, `reasoning_content`, or three-shim MAAP contract. This
+/// regression sends a normal action request through the configured compatible
+/// provider and checks both the outgoing request body and parsed tool-call
+/// response.
+#[test]
+fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "generic compatible provider returned structured output",
+        "thought": null,
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "arguments": arguments
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 7,
+                    "completion_tokens": 3,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 2
+                    }
+                }
+            })
+            .to_string(),
+        },
+    };
+
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(response.provider, "local-openai-chat");
+    assert_eq!(response.usage.input_tokens, 7);
+    assert_eq!(response.usage.output_tokens, 3);
+    assert_eq!(response.usage.cached_input_tokens, Some(2));
+    assert_eq!(
+        response.action_batch.unwrap().rationale,
+        "generic compatible provider returned structured output"
+    );
+    let sent = provider.transport.requests.borrow();
+    assert_eq!(sent[0].url, "http://localhost:1234/v1/chat/completions");
+    assert_eq!(sent[0].headers.get("Authorization"), None);
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    let body_text = sent[0].body.as_str();
+    assert_eq!(body["tool_choice"]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
+    assert_eq!(body["tools"][0]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
+    assert!(body.get("thinking").is_none());
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(!body_text.contains(DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME));
+    assert!(!body_text.contains(DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME));
+    assert!(!body_text.contains(DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that the OpenAI provider adapter can parse the provider's model
 /// catalog shape and carry provider-supplied reasoning metadata when it is
 /// present. The parser also fills known OpenAI reasoning defaults for model

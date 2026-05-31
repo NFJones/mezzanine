@@ -91,7 +91,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
             .to_string(),
         },
     ]);
-    let provider = crate::agent::ChatCompletionsProvider::new("deepseek-key", transport)
+    let provider = crate::agent::DeepSeekChatCompletionsProvider::new("deepseek-key", transport)
         .unwrap();
 
     let response = provider.send_request(&request).unwrap();
@@ -190,7 +190,7 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         })
         .to_string(),
     }]);
-    let provider = crate::agent::ChatCompletionsProvider::new("compatible-key", transport)
+    let provider = crate::agent::DeepSeekChatCompletionsProvider::new("compatible-key", transport)
         .unwrap()
         .with_provider_id("deepseek_compatible")
         .unwrap();
@@ -292,7 +292,7 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
             .to_string(),
         },
     ]);
-    let provider = crate::agent::ChatCompletionsProvider::new("deepseek-key", transport)
+    let provider = crate::agent::DeepSeekChatCompletionsProvider::new("deepseek-key", transport)
         .unwrap();
 
     let error = provider.send_request(&request).unwrap_err();

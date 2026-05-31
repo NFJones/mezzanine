@@ -411,6 +411,9 @@ brand/defaults. Use `openai-responses` for Responses-compatible backends,
 one provider entry per backend, set `base_url` to the backend API base such as
 `https://api.example.com/v1`, and provide `models` plus `default_model` unless
 the backend's `/models` endpoint is sufficient for live catalog refresh.
+The generic `openai-chat-completions` adapter uses the canonical OpenAI-style
+function-tool surface and does not send DeepSeek thinking fields,
+`reasoning_content`, or DeepSeek MAAP shim function names.
 
 ### `model_profiles.<name>`
 

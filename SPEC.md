@@ -2586,6 +2586,11 @@ base URL; Mezzanine MUST derive the documented `/chat/completions` request
 endpoint and `/models` catalog endpoint from that base. Compatible providers
 MUST use the named provider entry as the configuration boundary so each backend
 can declare its own base URL, auth profile, model list, and default model. Chat
+The `openai-chat-completions` adapter MUST use a provider-neutral OpenAI-style
+Chat Completions dialect and MUST NOT emit DeepSeek thinking fields,
+`reasoning_content`, DeepSeek MAAP shim function names, or DeepSeek fallback
+retry policy. The `deepseek-chat-completions` adapter MUST keep those DeepSeek
+wire-format and policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider
 auth metadata as an unauthenticated backend and MUST omit the `Authorization`
 header in that state instead of failing before the request. When credential

@@ -5,18 +5,149 @@
 //! Provider dispatch remains in the parent module so shared trait wiring stays
 //! centralized.
 
+use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsRetry};
 use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
     AgentCapability, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_MODELS_ENDPOINT,
-    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, DeepSeekMaapRequestStrategy, MaapBatch,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse,
-    ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
+    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpPromptTool, MezError,
+    ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
+    OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
     ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
 use std::collections::BTreeMap;
+
+/// DeepSeek request strategy for provider-native MAAP transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DeepSeekMaapRequestStrategy {
+    /// No MAAP tool is needed for this provider request.
+    NoTool,
+    /// Use DeepSeek thinking mode and let the model choose the MAAP tool.
+    AutoToolThinking,
+    /// Disable thinking and force the MAAP tool with `tool_choice`.
+    ForcedToolNonThinking,
+}
+
+/// Chat Completions dialect implementation for DeepSeek's native API shape.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeepSeekChatCompletionsDialect;
+
+impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
+    fn default_provider_id(&self) -> &'static str {
+        "deepseek"
+    }
+
+    fn default_chat_endpoint(&self) -> &'static str {
+        super::DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
+    }
+
+    fn provider_label(&self) -> &'static str {
+        "DeepSeek"
+    }
+
+    fn credential_label(&self) -> &'static str {
+        "DeepSeek API key"
+    }
+
+    fn chat_endpoint_for_base_url(&self, base_url: &str) -> Result<String> {
+        deepseek_chat_completions_endpoint_for_base_url(base_url)
+    }
+
+    fn build_chat_request(
+        &self,
+        request: &ModelRequest,
+        api_key: Option<&str>,
+        endpoint: &str,
+        stream: bool,
+        timeout_ms: u64,
+    ) -> Result<ProviderHttpRequest> {
+        build_deepseek_chat_completions_http_request_with_strategy(
+            request,
+            api_key,
+            endpoint,
+            stream,
+            timeout_ms,
+            deepseek_maap_request_strategy(request),
+        )
+    }
+
+    fn parse_chat_response(
+        &self,
+        response: ProviderHttpResponse,
+        request: &ModelRequest,
+        provider_id: &str,
+        stream: bool,
+    ) -> Result<ModelResponse> {
+        parse_deepseek_chat_completions_http_response(response, request, provider_id, stream)
+    }
+
+    fn effective_stream(&self, request: &ModelRequest, stream: bool) -> bool {
+        deepseek_effective_stream(stream, deepseek_maap_request_strategy(request))
+    }
+
+    fn build_retry_chat_request(
+        &self,
+        request: &ModelRequest,
+        api_key: Option<&str>,
+        endpoint: &str,
+        stream: bool,
+        timeout_ms: u64,
+        previous_response: &ModelResponse,
+    ) -> Result<Option<ChatCompletionsRetry>> {
+        let strategy = deepseek_maap_request_strategy(request);
+        if !deepseek_should_retry_with_forced_maap(request, strategy, previous_response) {
+            return Ok(None);
+        }
+        let request = build_deepseek_chat_completions_http_request_with_strategy(
+            request,
+            api_key,
+            endpoint,
+            stream,
+            timeout_ms,
+            DeepSeekMaapRequestStrategy::ForcedToolNonThinking,
+        )?;
+        Ok(Some(ChatCompletionsRetry {
+            request,
+            stream: false,
+        }))
+    }
+
+    fn build_models_request(
+        &self,
+        api_key: Option<&str>,
+        chat_endpoint: &str,
+        timeout_ms: u64,
+    ) -> Result<ProviderHttpRequest> {
+        build_deepseek_models_http_request(api_key, chat_endpoint, timeout_ms)
+    }
+
+    fn require_action_batch(
+        &self,
+        response: ModelResponse,
+        request: &ModelRequest,
+    ) -> Result<ModelResponse> {
+        deepseek_required_maap_response(response, request)
+    }
+}
+
+/// Converts a successful DeepSeek response without required MAAP into a
+/// repairable malformed-output provider error.
+fn deepseek_required_maap_response(
+    response: ModelResponse,
+    request: &ModelRequest,
+) -> Result<ModelResponse> {
+    if response.action_batch.is_some() || !deepseek_request_requires_maap(request) {
+        return Ok(response);
+    }
+    Err(provider_maap_parse_error(
+        MezError::invalid_args(format!(
+            "DeepSeek response did not call a Mezzanine DeepSeek shim tool ({DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME}, {DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME}, or {DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME}) or return a MAAP JSON object"
+        )),
+        &response.raw_text,
+    ))
+}
 
 /// DeepSeek-facing MAAP shim function selected for one provider request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
