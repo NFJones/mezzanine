@@ -95,6 +95,38 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
+/// Verifies pasted provider diagnostics remain normal prompt text.
+///
+/// Users often paste the previous terminal failure back into the agent shell for
+/// diagnosis. That text can contain JSON error payloads, wrapped words, and the
+/// provider_error marker, but it is still user-authored prompt content. The
+/// runtime should render it through the agent transcript presentation path
+/// without surfacing a secondary terminal presentation failure.
+#[test]
+fn runtime_agent_user_prompt_renders_pasted_provider_error_without_terminal_failure() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 12).unwrap(), 120).unwrap(),
+    );
+    let prompt = "provider_error: InvalidState: OpenAI Responses-compatible provider `lmstudio` is not authenticated\nInvalidState: terminal step failed: {\"code\":-32004,\n\"data\":{\"mezzanine_code\":\"invalid_state\"},\"message\":\"agent terminal presentation feed panicked while appending styled agent\n lines\"}";
+
+    service
+        .append_agent_user_prompt_to_terminal_buffer("%1", prompt)
+        .unwrap();
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("provider_error: InvalidState"), "{pane_text}");
+    assert!(pane_text.contains("terminal step failed"), "{pane_text}");
+}
+
 /// Verifies model-authored diff output uses the diff content renderer.
 ///
 /// Diffs are a structured text media type rather than prose. The runtime should

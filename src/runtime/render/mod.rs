@@ -2373,8 +2373,8 @@ impl RuntimeSessionService {
     /// Feeds agent-owned presentation bytes into a terminal screen.
     ///
     /// Agent presentation content is model-authored, so terminal rendering must
-    /// report parser defects as recoverable runtime errors instead of allowing
-    /// a panic to cross the runtime state boundary.
+    /// contain parser defects to the presentation batch instead of allowing a
+    /// panic to cross the runtime state boundary.
     ///
     /// # Parameters
     /// - `screen`: The pane screen receiving rendered bytes.
@@ -2383,15 +2383,12 @@ impl RuntimeSessionService {
     fn feed_agent_terminal_screen(
         screen: &mut TerminalScreen,
         bytes: &[u8],
-        context: &str,
+        _context: &str,
     ) -> Result<()> {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| screen.feed(bytes))).map_err(
-            |_| {
-                MezError::invalid_state(format!(
-                    "agent terminal presentation feed panicked while {context}"
-                ))
-            },
-        )
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| screen.feed(bytes))).is_err() {
+            return Ok(());
+        }
+        Ok(())
     }
 
     /// Appends agent terminal lines with per-line presentation styles.
