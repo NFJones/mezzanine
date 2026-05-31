@@ -2792,10 +2792,11 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
-            stdout: "/repo\n".to_string(),
+            stdout: framed_shell_output("/repo\n"),
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3215,6 +3216,7 @@ fn shell_action_executor_result_includes_marker_in_terminal_observation() {
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3249,6 +3251,7 @@ fn shell_action_executor_infers_signal_from_high_exit_code() {
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3283,6 +3286,7 @@ fn shell_action_executor_reports_sigint_for_interrupted_action() {
             stderr: String::new(),
             timed_out: false,
             interrupted: true,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3316,6 +3320,7 @@ fn shell_action_executor_reports_null_signal_for_normal_exit() {
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };

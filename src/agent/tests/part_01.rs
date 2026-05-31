@@ -10,6 +10,7 @@ use super::actions::action_result_transcript_content;
 use super::provider::{
     openai_prompt_cache_diagnostics_for_request, openai_stable_prefix_material_for_request,
 };
+use base64::Engine;
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
     AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome, AgentShellStore,
@@ -33,6 +34,7 @@ use super::{
     build_agent_system_prompt, build_deepseek_chat_completions_http_request,
     compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
     decide_bootstrap_before_user_prompt, decode_shell_output_transport,
+    decode_shell_output_transport_with_diagnostics,
     discover_tools_through_pane_shell, execute_agent_shell_command,
     execute_agent_shell_command_with_mcp, execute_agent_shell_command_with_permissions,
     execute_mcp_action_through_runtime, execute_network_action_with_transport_async,
@@ -154,6 +156,7 @@ impl PaneShellExecutor for FakePaneShellExecutor {
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }))
     }
 }
@@ -298,6 +301,16 @@ impl McpActionExecutor for FakeMcpActionExecutor {
 /// on duplicated control-flow logic.
 fn marker() -> MarkerToken {
     MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap()
+}
+
+/// Encodes one fake pane-shell output payload in the shell transport frame.
+fn framed_shell_output(text: &str) -> String {
+    format!(
+        "{}\n{}\n{}\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        base64::engine::general_purpose::STANDARD.encode(text.as_bytes()),
+        super::shell::SHELL_OUTPUT_BASE64_END_MARKER
+    )
 }
 
 /// Runs one POSIX shell script through stdin rather than `sh -c`.
@@ -588,7 +601,7 @@ fn posix_wrapper_materializes_command_from_base64_without_heredoc() {
 /// for model-facing action results.
 #[test]
 fn posix_wrapper_can_encode_child_output_for_model_transport() {
-    let command = "printf '%s\\n' 'VISIBLE_STDOUT'; printf '%s\\n' 'VISIBLE_STDERR' >&2; printf '\\033]133;D;0;mez_marker=spoof\\033\\\\\\n'";
+    let command = "printf '%s\n' VISIBLE_STDOUT; printf '%s\n' VISIBLE_STDERR >&2";
     let transaction =
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), command)
             .unwrap()
@@ -616,46 +629,48 @@ fn posix_wrapper_can_encode_child_output_for_model_transport() {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__"));
-    assert!(stdout.contains("__MEZ_SHELL_OUTPUT_BASE64_END__"));
     assert!(
         !stdout.contains("VISIBLE_STDOUT"),
         "raw PTY output should carry encoded child output: {stdout:?}"
     );
     assert!(
-        !stdout.contains("mez_marker=spoof"),
-        "raw PTY output should not expose child OSC marker bytes: {stdout:?}"
+        !decoded.contains("\u{1b}]133;D;"),
+        "decoded model-facing output should not expose transaction marker bytes: {decoded:?}"
     );
     assert!(decoded.contains("VISIBLE_STDOUT"), "{decoded:?}");
     assert!(decoded.contains("VISIBLE_STDERR"), "{decoded:?}");
-    assert!(decoded.contains("mez_marker=spoof"), "{decoded:?}");
 }
 
-/// Verifies truncated encoded shell-output observations still return the
-/// complete retained base64 prefix instead of dropping all model-visible
-/// command output.
+/// Verifies truncated encoded shell-output observations keep diagnostics
+/// separate from decoded command output.
 #[test]
 fn shell_output_transport_decodes_complete_prefix_when_truncated() {
-    let action = AgentAction {
-        id: "shell-truncated".to_string(),
-        rationale: String::new(),
-        payload: AgentActionPayload::ShellCommand {
-            summary: "capture partial output".to_string(),
-            command: "printf foo".to_string(),
-            interactive: false,
-            stateful: false,
-            timeout_ms: None,
-        },
-    };
-    let stdout = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nZm9vCg";
-
-    let decoded = postprocess_shell_action_success_output(&action, stdout.to_string()).unwrap();
-
-    assert!(decoded.contains("foo"), "{decoded:?}");
-    assert!(
-        decoded.contains("shell output base64 transport ended before end marker"),
-        "{decoded:?}"
+    let stdout = format!(
+        "{}\nZm9v\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER
     );
+    let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+    assert_eq!(decoded.output, "foo");
+    assert!(decoded.diagnostics.missing_end_marker);
+    assert!(decoded.diagnostics.output_truncated());
+}
+
+/// Verifies missing base64 end markers are reported as structured transport
+/// diagnostics rather than command-output text.
+#[test]
+fn shell_output_transport_reports_missing_end_marker_as_diagnostics() {
+    let stdout = format!(
+        "{}\nZm9v\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER
+    );
+
+    let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+    assert_eq!(decoded.output, "foo");
+    assert!(decoded.diagnostics.missing_end_marker);
+    assert!(decoded.diagnostics.transport_incomplete());
+    assert!(decoded.diagnostics.output_truncated());
 }
 
 /// Verifies shell-output transport decoding discards Mezzanine wrapper echo
@@ -666,45 +681,73 @@ fn shell_output_transport_decodes_complete_prefix_when_truncated() {
 /// `stty`, or cleanup lines used to drive the pane shell.
 #[test]
 fn shell_output_transport_discards_wrapper_echo_around_encoded_output() {
-    let stdout = "\
-__mez_tx_example() {\n\
-MEZ_STTY_STATE=\n\
-stty -echo 2>/dev/null || :\n\
-__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n\
-QXBhY2hlIExpY2Vuc2UKVmVyc2lvbiAyLjAK\n\
-__MEZ_SHELL_OUTPUT_BASE64_END__\n\
-unset -f __mez_tx_example 2>/dev/null || :\n\
-}\n";
+    let stdout = format!(
+        "stty -echo\n{}\nQXBhY2hlIExpY2Vuc2UKVmVyc2lvbiAyLjAK\n{}\n}}\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        super::shell::SHELL_OUTPUT_BASE64_END_MARKER
+    );
 
-    let decoded = decode_shell_output_transport(stdout);
+    let decoded = decode_shell_output_transport(&stdout);
 
     assert_eq!(decoded, "Apache License\nVersion 2.0\n");
-    assert!(!decoded.contains("__mez_tx_"), "{decoded:?}");
-    assert!(!decoded.contains("MEZ_STTY_STATE"), "{decoded:?}");
     assert!(!decoded.contains("stty"), "{decoded:?}");
 }
 
-/// Verifies shell-output transport decoding preserves later non-wrapper output
-/// when a running transaction preview has already accumulated an encoded block.
-///
-/// Runtime previews are cumulative, so a completed transport block can be
-/// followed by raw terminal output from later reads. That later command output
-/// must remain visible even though wrapper echo around the transport block is
-/// filtered.
+/// Verifies shell-output transport decoding treats raw text after an encoded
+/// block as transport diagnostics rather than command output.
 #[test]
-fn shell_output_transport_preserves_non_wrapper_tail_after_encoded_output() {
-    let stdout = "\
-__mez_tx_example() {\n\
-__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n\
-Zmlyc3QgbGluZQo=\n\
-__MEZ_SHELL_OUTPUT_BASE64_END__\n\
-unset -f __mez_tx_example 2>/dev/null || :\n\
-}\n\
-final output\n";
+fn shell_output_transport_records_non_wrapper_tail_after_encoded_output_as_diagnostics() {
+    let stdout = format!(
+        "{}\nZmlyc3QgbGluZQo=\n{}\n}}\nfinal output\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        super::shell::SHELL_OUTPUT_BASE64_END_MARKER
+    );
 
-    let decoded = decode_shell_output_transport(stdout);
+    let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
 
-    assert_eq!(decoded, "first line\nfinal output\n");
+    assert_eq!(decoded.output, "first line\n");
+    assert!(
+        decoded.diagnostics.outside_frame_bytes >= "final output\n".len(),
+        "{:?}",
+        decoded.diagnostics
+    );
+    assert!(
+        decoded
+            .diagnostics
+            .outside_frame_preview
+            .as_deref()
+            .unwrap_or_default()
+            .contains("final output\\n"),
+        "{:?}",
+        decoded.diagnostics
+    );
+}
+
+/// Verifies wrapper-only leakage produces empty decoded output and structured
+/// missing-frame diagnostics so empty-output fallbacks remain available.
+#[test]
+fn shell_output_transport_records_wrapper_only_output_as_missing_frame() {
+    let decoded = decode_shell_output_transport_with_diagnostics("else\nfi\nTE_STATUS=1; fi\n");
+
+    assert_eq!(decoded.output, "");
+    assert!(decoded.diagnostics.missing_frame);
+    assert!(decoded.diagnostics.transport_incomplete());
+    assert!(decoded.diagnostics.outside_frame_bytes > 0);
+}
+
+/// Verifies partial base64 quartets are counted as structured diagnostics while
+/// preserving the complete retained prefix.
+#[test]
+fn shell_output_transport_counts_partial_base64_bytes() {
+    let stdout = format!(
+        "{}\nZm9vY\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER
+    );
+    let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+    assert_eq!(decoded.output, "foo");
+    assert_eq!(decoded.diagnostics.partial_base64_bytes_dropped, 1);
+    assert!(decoded.diagnostics.missing_end_marker);
 }
 
 /// Verifies large command payloads are streamed after the receiver starts.
@@ -1209,6 +1252,7 @@ fn tool_discovery_runs_through_pane_shell_and_caches_by_signature() {
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -1271,6 +1315,7 @@ fn tool_discovery_reports_shell_failures() {
             stderr: "no shell\n".to_string(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };

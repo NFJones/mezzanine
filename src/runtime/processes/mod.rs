@@ -20,7 +20,7 @@ use super::{
     RuntimeShellTransactionTimerRef, SessionSnapshotPayload, ShellClassification, ShellTransaction,
     Size, SplitDirection, StoppedPanePipe, TerminalOscEvent, TerminalScreen, WindowId,
     action_result_context_content, current_unix_millis, current_unix_seconds,
-    decode_shell_output_transport, focused_shell_pre_action_timeout_result,
+    decode_shell_output_transport_with_diagnostics, focused_shell_pre_action_timeout_result,
     hook_execution_audit_record, json_escape, local_action_plan, optional_i32_json,
     pane_content_size_for_geometry, pane_environment_with_term,
     postprocess_shell_action_success_output, rendered_window_body_size,

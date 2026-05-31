@@ -1388,10 +1388,11 @@ fn shell_action_executor_receives_transaction_wrapper_and_succeeds() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
-            stdout: "ok\n".to_string(),
+            stdout: framed_shell_output("ok\n"),
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -1452,6 +1453,7 @@ fn shell_action_executor_decodes_encoded_transport_on_nonzero_exit() {
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3149,10 +3151,11 @@ fn semantic_apply_patch_result_elides_generated_command_content() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
-            stdout: "diff -- apply patch\n".to_string(),
+            stdout: framed_shell_output("diff -- apply patch\n"),
             stderr: String::new(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3654,6 +3657,7 @@ fn shell_action_executor_maps_timeout_interrupt_and_nonzero_exit() {
             stderr: String::new(),
             timed_out: true,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3674,6 +3678,7 @@ fn shell_action_executor_maps_timeout_interrupt_and_nonzero_exit() {
             stderr: String::new(),
             timed_out: false,
             interrupted: true,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };
@@ -3694,6 +3699,7 @@ fn shell_action_executor_maps_timeout_interrupt_and_nonzero_exit() {
             stderr: "no\n".to_string(),
             timed_out: false,
             interrupted: false,
+            transport_diagnostics: Default::default(),
         }),
         ..FakePaneShellExecutor::default()
     };

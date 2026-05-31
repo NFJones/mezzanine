@@ -637,7 +637,20 @@ pub(super) fn trailing_mez_osc_prefix_fragment(bytes: &[u8]) -> Vec<u8> {
 
 /// Returns the latest non-empty model-visible shell output line.
 pub(super) fn latest_agent_shell_transaction_output_line(output: &str) -> Option<String> {
-    decode_shell_output_transport(output)
+    let raw_output = output;
+    let decoded = decode_shell_output_transport_with_diagnostics(output);
+    let output = if decoded.diagnostics.saw_begin_marker {
+        let mut output = decoded.output;
+        if let Some((_before, tail)) = raw_output.rsplit_once("__MEZ_SHELL_OUTPUT_BASE64_END__")
+            && !tail.trim().is_empty()
+        {
+            output.push_str(tail);
+        }
+        output
+    } else {
+        output.to_string()
+    };
+    output
         .replace("\r\n", "\n")
         .replace('\r', "\n")
         .lines()

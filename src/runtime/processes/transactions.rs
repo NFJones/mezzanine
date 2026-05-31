@@ -1232,16 +1232,24 @@ impl RuntimeSessionService {
                     "shell transaction does not match shell-backed action payload",
                 ));
             };
-            transaction_ref.observed_output_preview =
-                decode_shell_output_transport(&transaction_ref.observed_output_preview);
+            let raw_output_preview = transaction_ref.observed_output_preview.clone();
+            let decoded_transport =
+                decode_shell_output_transport_with_diagnostics(&raw_output_preview);
+            let transport_diagnostics = decoded_transport.diagnostics.clone();
+            transaction_ref.observed_output_preview = if transport_diagnostics.saw_begin_marker {
+                decoded_transport.output
+            } else {
+                raw_output_preview.clone()
+            };
             transaction_ref.observed_output_bytes = transaction_ref.observed_output_preview.len();
             if exit_code == 0 {
-                transaction_ref.observed_output_preview = postprocess_shell_action_success_output(
-                    &action,
-                    transaction_ref.observed_output_preview.clone(),
-                )?;
-                transaction_ref.observed_output_bytes =
-                    transaction_ref.observed_output_preview.len();
+                let processed_output =
+                    postprocess_shell_action_success_output(&action, raw_output_preview)?;
+                if transport_diagnostics.saw_begin_marker || !processed_output.trim().is_empty() {
+                    transaction_ref.observed_output_preview = processed_output;
+                    transaction_ref.observed_output_bytes =
+                        transaction_ref.observed_output_preview.len();
+                }
             }
             let signal: Option<i32> = if exit_code > 128 && exit_code < 256 {
                 Some(exit_code - 128)
@@ -1263,7 +1271,9 @@ impl RuntimeSessionService {
                     "combined_output_bytes": transaction_ref.observed_output_bytes,
                     "combined_output_preview": transaction_ref.observed_output_preview,
                     "boundary_state": "end-marker-observed",
-                    "output_truncated": transaction_ref.observed_output_truncated
+                    "output_truncated": transaction_ref.observed_output_truncated || transport_diagnostics.output_truncated(),
+                    "transport_incomplete": transport_diagnostics.transport_incomplete(),
+                    "transport_diagnostics": transport_diagnostics.to_json()
                 }),
             )?;
             let plain_shell_command =

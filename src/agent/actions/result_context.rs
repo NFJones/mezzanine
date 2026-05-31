@@ -199,6 +199,11 @@ fn append_shell_action_result_context(result: &ActionResult, lines: &mut Vec<Str
             "output_truncated",
             observation.get("output_truncated"),
         );
+        append_true_bool_line(
+            lines,
+            "transport_incomplete",
+            observation.get("transport_incomplete"),
+        );
     }
     let output = shell_action_result_output_for_context(result, terminal_observation);
     if !output.trim().is_empty() {
@@ -230,6 +235,7 @@ fn append_read_observation_lines(lines: &mut Vec<String>, observations: &[ShellR
 
 /// Returns true when a line is known Mezzanine wrapper traffic rather than user
 /// command output.
+#[allow(dead_code)]
 pub(super) fn shell_output_line_is_mezzanine_wrapper(trimmed: &str) -> bool {
     [
         "MEZ_MARKER_TOKEN",

@@ -12,7 +12,10 @@ use super::super::{
     ToolDiscoveryCache, ToolInventory, action_content_blocks_from_json_or_text,
     action_text_content_blocks, json_escape, local_action_plan, tool_discovery_script,
 };
-use super::{decode_shell_output_transport, shell_command_structured_content_json};
+use super::{
+    ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
+    shell_command_structured_content_json,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries shell execution request state for this subsystem.
@@ -48,6 +51,32 @@ pub struct ShellExecutionOutput {
     pub timed_out: bool,
     /// Structured `interrupted` value carried by this API type.
     pub interrupted: bool,
+    /// Structured transport diagnostics kept separate from command output.
+    pub transport_diagnostics: ShellTransportDiagnostics,
+}
+
+impl ShellExecutionOutput {
+    /// Builds shell execution output with no transport diagnostics.
+    ///
+    /// Callers that already provide decoded or non-transported output can use
+    /// this constructor without fabricating empty diagnostic state at each
+    /// call site.
+    pub fn new(
+        exit_code: Option<i32>,
+        stdout: String,
+        stderr: String,
+        timed_out: bool,
+        interrupted: bool,
+    ) -> Self {
+        Self {
+            exit_code,
+            stdout,
+            stderr,
+            timed_out,
+            interrupted,
+            transport_diagnostics: ShellTransportDiagnostics::default(),
+        }
+    }
 }
 
 /// Defines the `PaneShellExecutor` behavior contract for this subsystem.
@@ -138,13 +167,7 @@ pub fn postprocess_shell_action_success_output(
     action: &AgentAction,
     stdout: String,
 ) -> Result<String> {
-    let output = ShellExecutionOutput {
-        exit_code: Some(0),
-        stdout,
-        stderr: String::new(),
-        timed_out: false,
-        interrupted: false,
-    };
+    let output = ShellExecutionOutput::new(Some(0), stdout, String::new(), false, false);
     postprocess_semantic_shell_output(action, output).map(|output| output.stdout)
 }
 
@@ -180,7 +203,9 @@ fn postprocess_semantic_shell_output(
     action: &AgentAction,
     mut output: ShellExecutionOutput,
 ) -> Result<ShellExecutionOutput> {
-    output.stdout = decode_shell_output_transport(&output.stdout);
+    let decoded = decode_shell_output_transport_with_diagnostics(&output.stdout);
+    output.stdout = decoded.output;
+    output.transport_diagnostics = decoded.diagnostics;
     if output.exit_code != Some(0) || output.timed_out || output.interrupted {
         return Ok(output);
     }
@@ -344,6 +369,8 @@ pub(super) fn shell_output_to_action_result(
         ));
     }
     let combined_output_bytes = output.stdout.len().saturating_add(output.stderr.len());
+    let transport_incomplete = output.transport_diagnostics.transport_incomplete();
+    let output_truncated = output.transport_diagnostics.output_truncated();
     let signal: Option<i32> = if output.interrupted {
         Some(2) // SIGINT
     } else if let Some(ec) = output.exit_code {
@@ -369,7 +396,9 @@ pub(super) fn shell_output_to_action_result(
             "timed_out": output.timed_out,
             "interrupted": output.interrupted,
             "combined_output_bytes": combined_output_bytes,
-            "output_truncated": false
+            "output_truncated": output_truncated,
+            "transport_incomplete": transport_incomplete,
+            "transport_diagnostics": output.transport_diagnostics.to_json()
         }),
     )?;
     if output.timed_out {

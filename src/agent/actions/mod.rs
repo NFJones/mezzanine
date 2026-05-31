@@ -31,7 +31,10 @@ pub use read_observation::{
 pub use result_context::action_result_context_content;
 pub(super) use result_context::action_result_transcript_content;
 pub use runner::AgentTurnRunner;
-pub use shell_transport::decode_shell_output_transport;
+pub use shell_transport::{
+    ShellTransportDecodeResult, ShellTransportDiagnostics, decode_shell_output_transport,
+    decode_shell_output_transport_with_diagnostics,
+};
 pub use transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, next_transcript_sequence,
     persist_turn_execution_transcript, transcript_entries_for_execution,
