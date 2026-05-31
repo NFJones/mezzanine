@@ -76,7 +76,7 @@ pub fn build_deepseek_chat_completions_http_request(
 ) -> Result<ProviderHttpRequest> {
     build_deepseek_chat_completions_http_request_with_strategy(
         request,
-        api_key,
+        Some(api_key),
         endpoint,
         stream,
         timeout_ms,
@@ -100,13 +100,15 @@ pub(super) fn deepseek_chat_completions_endpoint_for_base_url(base_url: &str) ->
 /// Builds a DeepSeek Chat Completions HTTP request with an explicit MAAP strategy.
 pub(super) fn build_deepseek_chat_completions_http_request_with_strategy(
     request: &ModelRequest,
-    api_key: &str,
+    api_key: Option<&str>,
     endpoint: &str,
     stream: bool,
     timeout_ms: u64,
     strategy: DeepSeekMaapRequestStrategy,
 ) -> Result<ProviderHttpRequest> {
-    validate_non_empty("DeepSeek provider bearer credential", api_key)?;
+    if let Some(api_key) = api_key {
+        validate_non_empty("DeepSeek provider bearer credential", api_key)?;
+    }
     validate_non_empty("DeepSeek Chat Completions endpoint", endpoint)?;
     if timeout_ms == 0 {
         return Err(MezError::invalid_args(
@@ -125,7 +127,9 @@ pub(super) fn build_deepseek_chat_completions_http_request_with_strategy(
         },
     );
     headers.insert("Content-Type".to_string(), "application/json".to_string());
-    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    if let Some(api_key) = api_key {
+        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    }
     Ok(ProviderHttpRequest {
         method: "POST".to_string(),
         url: endpoint.to_string(),
@@ -1080,16 +1084,20 @@ fn strip_think_tags(text: &str) -> String {
 
 /// Builds a DeepSeek models listing HTTP request.
 pub(super) fn build_deepseek_models_http_request(
-    api_key: &str,
+    api_key: Option<&str>,
     chat_endpoint: &str,
     timeout_ms: u64,
 ) -> Result<ProviderHttpRequest> {
-    validate_non_empty("DeepSeek model listing credential", api_key)?;
+    if let Some(api_key) = api_key {
+        validate_non_empty("DeepSeek model listing credential", api_key)?;
+    }
     let chat_endpoint = deepseek_chat_completions_endpoint_for_base_url(chat_endpoint)?;
     let models_endpoint = chat_endpoint.replace("/chat/completions", "/models");
     let mut headers = BTreeMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
-    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    if let Some(api_key) = api_key {
+        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    }
     Ok(ProviderHttpRequest {
         method: "GET".to_string(),
         url: if models_endpoint == chat_endpoint {
@@ -1162,9 +1170,12 @@ mod tests {
             "https://proxy.example/chat/completions"
         );
 
-        let models =
-            build_deepseek_models_http_request("deepseek-key", "https://api.deepseek.com", 1000)
-                .unwrap();
+        let models = build_deepseek_models_http_request(
+            Some("deepseek-key"),
+            "https://api.deepseek.com",
+            1000,
+        )
+        .unwrap();
         assert_eq!(models.url, "https://api.deepseek.com/models");
     }
 

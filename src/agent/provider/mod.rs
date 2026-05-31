@@ -514,11 +514,11 @@ pub struct OpenAiResponsesProvider<T> {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) provider_id: String,
-    /// Stores the api key value for this data structure.
+    /// Stores the optional bearer credential for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) api_key: SecretString,
+    pub(super) api_key: Option<SecretString>,
     /// Stores the endpoint value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -610,8 +610,8 @@ impl<T> OpenAiResponsesProvider<T> {
     /// Creates a provider with an explicit endpoint and additional headers.
     ///
     /// Additional headers are intended for provider-owned auth routing metadata,
-    /// such as the ChatGPT account id. The bearer credential remains stored in
-    /// the dedicated `Authorization` header.
+    /// such as the ChatGPT account id. When present, the bearer credential
+    /// remains stored in the dedicated `Authorization` header.
     pub fn with_endpoint_and_headers(
         api_key: impl Into<SecretString>,
         endpoint: impl Into<String>,
@@ -642,9 +642,47 @@ impl<T> OpenAiResponsesProvider<T> {
         stream: bool,
         transport: T,
     ) -> Result<Self> {
-        let api_key = api_key.into();
+        Self::with_optional_endpoint_headers_and_stream(
+            Some(api_key.into()),
+            endpoint,
+            timeout_ms,
+            extra_headers,
+            stream,
+            transport,
+        )
+    }
+
+    /// Creates a provider with no bearer credential for compatible local APIs.
+    pub fn without_auth(
+        endpoint: impl Into<String>,
+        timeout_ms: u64,
+        extra_headers: BTreeMap<String, String>,
+        stream: bool,
+        transport: T,
+    ) -> Result<Self> {
+        Self::with_optional_endpoint_headers_and_stream(
+            None,
+            endpoint,
+            timeout_ms,
+            extra_headers,
+            stream,
+            transport,
+        )
+    }
+
+    /// Creates a provider with optional bearer authentication.
+    pub fn with_optional_endpoint_headers_and_stream(
+        api_key: Option<SecretString>,
+        endpoint: impl Into<String>,
+        timeout_ms: u64,
+        extra_headers: BTreeMap<String, String>,
+        stream: bool,
+        transport: T,
+    ) -> Result<Self> {
         let endpoint = endpoint.into();
-        validate_non_empty("OpenAI provider bearer credential", api_key.expose_secret())?;
+        if let Some(api_key) = api_key.as_ref() {
+            validate_non_empty("OpenAI provider bearer credential", api_key.expose_secret())?;
+        }
         validate_non_empty("OpenAI Responses endpoint", &endpoint)?;
         for (name, value) in &extra_headers {
             validate_non_empty("OpenAI provider extra header name", name)?;
@@ -728,7 +766,7 @@ pub type OpenAiCompatibleChatCompletionsProvider<T> = ChatCompletionsProvider<T>
 /// Carries shared Chat Completions provider state.
 #[derive(Debug, Clone)]
 pub struct ChatCompletionsProvider<T> {
-    pub(super) api_key: SecretString,
+    pub(super) api_key: Option<SecretString>,
     pub(super) provider_id: String,
     pub(super) endpoint: String,
     pub(super) stream: bool,
@@ -740,6 +778,19 @@ impl<T> ChatCompletionsProvider<T> {
     pub fn new(api_key: impl Into<SecretString>, transport: T) -> Result<Self> {
         let api_key = api_key.into();
         validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
+        Self::with_optional_auth(Some(api_key), transport)
+    }
+
+    /// Creates a Chat Completions provider without bearer authentication.
+    pub fn without_auth(transport: T) -> Result<Self> {
+        Self::with_optional_auth(None, transport)
+    }
+
+    /// Creates a Chat Completions provider with optional bearer authentication.
+    pub fn with_optional_auth(api_key: Option<SecretString>, transport: T) -> Result<Self> {
+        if let Some(api_key) = api_key.as_ref() {
+            validate_non_empty("DeepSeek API key", api_key.expose_secret())?;
+        }
         Ok(Self {
             api_key,
             provider_id: "deepseek".to_string(),
@@ -813,7 +864,7 @@ impl<T: ProviderHttpTransport> ModelProvider for ChatCompletionsProvider<T> {
 
     fn list_models(&self) -> Result<ProviderModelCatalog> {
         let http_request = build_deepseek_models_http_request(
-            self.api_key.expose_secret(),
+            self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
             &self.endpoint,
             self.timeout_ms,
         )?;
@@ -850,7 +901,7 @@ impl<T: ProviderHttpTransport> ModelProvider for ChatCompletionsProvider<T> {
         let strategy = deepseek_maap_request_strategy(request);
         let http_request = build_deepseek_chat_completions_http_request_with_strategy(
             request,
-            self.api_key.expose_secret(),
+            self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
             &self.endpoint,
             self.stream,
             self.timeout_ms,
@@ -877,7 +928,7 @@ impl<T: ProviderHttpTransport> ModelProvider for ChatCompletionsProvider<T> {
         if deepseek_should_retry_with_forced_maap(request, strategy, &parsed) {
             let fallback_request = build_deepseek_chat_completions_http_request_with_strategy(
                 request,
-                self.api_key.expose_secret(),
+                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                 &self.endpoint,
                 self.stream,
                 self.timeout_ms,
@@ -922,7 +973,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
     ) -> Pin<Box<dyn Future<Output = Result<ProviderModelCatalog>> + Send + 'a>> {
         Box::pin(async move {
             let http_request = build_deepseek_models_http_request(
-                self.api_key.expose_secret(),
+                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                 &self.endpoint,
                 self.timeout_ms,
             )?;
@@ -964,7 +1015,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
             let strategy = deepseek_maap_request_strategy(request);
             let http_request = build_deepseek_chat_completions_http_request_with_strategy(
                 request,
-                self.api_key.expose_secret(),
+                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                 &self.endpoint,
                 self.stream,
                 self.timeout_ms,
@@ -991,7 +1042,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for DeepSeekChatCompletio
             if deepseek_should_retry_with_forced_maap(request, strategy, &parsed) {
                 let fallback_request = build_deepseek_chat_completions_http_request_with_strategy(
                     request,
-                    self.api_key.expose_secret(),
+                    self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                     &self.endpoint,
                     self.stream,
                     self.timeout_ms,
@@ -1062,21 +1113,24 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
     timeout_ms: u64,
     transport: T,
 ) -> Result<OpenAiResponsesProvider<T>> {
-    let metadata = auth_store
-        .read_metadata_for_provider(provider_name)?
-        .ok_or_else(|| {
-            MezError::invalid_state(format!(
-                "OpenAI Responses-compatible provider `{provider_name}` is not authenticated"
-            ))
-        })?;
-    let credential = auth_store.provider_secret(provider_name)?;
+    let endpoint = base_url_override
+        .filter(|endpoint| !endpoint.trim().is_empty())
+        .map(openai_responses_endpoint_for_base_url)
+        .transpose()?
+        .unwrap_or_else(|| OPENAI_RESPONSES_ENDPOINT.to_string());
+    let Some(metadata) = auth_store.read_metadata_for_provider(provider_name)? else {
+        return OpenAiResponsesProvider::without_auth(
+            endpoint,
+            timeout_ms,
+            BTreeMap::new(),
+            false,
+            transport,
+        )
+        .and_then(|provider| provider.with_provider_id(provider_name));
+    };
     match metadata.credential_kind {
         AuthCredentialKind::ApiKey => {
-            let endpoint = base_url_override
-                .filter(|endpoint| !endpoint.trim().is_empty())
-                .map(openai_responses_endpoint_for_base_url)
-                .transpose()?
-                .unwrap_or_else(|| OPENAI_RESPONSES_ENDPOINT.to_string());
+            let credential = auth_store.provider_secret(provider_name)?;
             OpenAiResponsesProvider::with_endpoint_and_headers(
                 credential,
                 endpoint,
@@ -1092,6 +1146,7 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
                     "OpenAI Responses-compatible provider `{provider_name}` cannot use ChatGPT browser credentials"
                 )));
             }
+            let credential = auth_store.provider_secret(provider_name)?;
             let account_id = metadata.account_id.ok_or_else(|| {
                 MezError::invalid_state(
                     "OpenAI ChatGPT login is missing a ChatGPT account id; run `mez auth login` again",
@@ -1145,16 +1200,16 @@ pub fn deepseek_chat_completions_provider_from_auth_store_with_provider_options<
     timeout_ms: u64,
     transport: T,
 ) -> Result<DeepSeekChatCompletionsProvider<T>> {
-    let _metadata = auth_store
+    let mut provider = if auth_store
         .read_metadata_for_provider(provider_name)?
-        .ok_or_else(|| {
-            MezError::invalid_state(format!(
-                "DeepSeek Chat Completions-compatible provider `{provider_name}` is not authenticated"
-            ))
-        })?;
-    let credential = auth_store.provider_secret(provider_name)?;
-    let mut provider =
-        ChatCompletionsProvider::new(credential, transport)?.with_provider_id(provider_name)?;
+        .is_some()
+    {
+        let credential = auth_store.provider_secret(provider_name)?;
+        ChatCompletionsProvider::new(credential, transport)?
+    } else {
+        ChatCompletionsProvider::without_auth(transport)?
+    }
+    .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =
             provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
@@ -1176,16 +1231,16 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     timeout_ms: u64,
     transport: T,
 ) -> Result<OpenAiCompatibleChatCompletionsProvider<T>> {
-    let _metadata = auth_store
+    let mut provider = if auth_store
         .read_metadata_for_provider(provider_name)?
-        .ok_or_else(|| {
-            MezError::invalid_state(format!(
-                "OpenAI-compatible provider `{provider_name}` is not authenticated"
-            ))
-        })?;
-    let credential = auth_store.provider_secret(provider_name)?;
-    let mut provider =
-        ChatCompletionsProvider::new(credential, transport)?.with_provider_id(provider_name)?;
+        .is_some()
+    {
+        let credential = auth_store.provider_secret(provider_name)?;
+        ChatCompletionsProvider::new(credential, transport)?
+    } else {
+        ChatCompletionsProvider::without_auth(transport)?
+    }
+    .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =
             provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
@@ -1257,7 +1312,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
     /// on duplicated control-flow logic.
     fn list_models(&self) -> Result<ProviderModelCatalog> {
         let http_request = build_openai_models_http_request_with_headers(
-            self.api_key.expose_secret(),
+            self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
             &self.endpoint,
             &self.extra_headers,
             self.timeout_ms,
@@ -1299,7 +1354,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
         }
         let http_request = build_openai_responses_http_request_with_headers(
             request,
-            self.api_key.expose_secret(),
+            self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
             &self.endpoint,
             &self.extra_headers,
             self.stream,
@@ -1366,7 +1421,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     ) -> Pin<Box<dyn Future<Output = Result<ProviderModelCatalog>> + Send + 'a>> {
         Box::pin(async move {
             let http_request = build_openai_models_http_request_with_headers(
-                self.api_key.expose_secret(),
+                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                 &self.endpoint,
                 &self.extra_headers,
                 self.timeout_ms,
@@ -1413,7 +1468,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
             }
             let http_request = build_openai_responses_http_request_with_headers(
                 request,
-                self.api_key.expose_secret(),
+                self.api_key.as_ref().map(|api_key| api_key.expose_secret()),
                 &self.endpoint,
                 &self.extra_headers,
                 self.stream,
@@ -1474,7 +1529,7 @@ pub fn build_openai_responses_http_request(
 ) -> Result<ProviderHttpRequest> {
     build_openai_responses_http_request_with_headers(
         request,
-        api_key,
+        Some(api_key),
         endpoint,
         &BTreeMap::new(),
         false,
@@ -1484,17 +1539,19 @@ pub fn build_openai_responses_http_request(
 
 /// Builds an OpenAI Responses request with provider-specific extra headers.
 ///
-/// The caller supplies non-secret routing headers only. The bearer credential is
-/// always placed in the `Authorization` header by this function.
+/// The caller supplies non-secret routing headers only. When a bearer
+/// credential is supplied, it is placed in the `Authorization` header.
 pub fn build_openai_responses_http_request_with_headers(
     request: &ModelRequest,
-    api_key: &str,
+    api_key: Option<&str>,
     endpoint: &str,
     extra_headers: &BTreeMap<String, String>,
     stream: bool,
     timeout_ms: u64,
 ) -> Result<ProviderHttpRequest> {
-    validate_non_empty("OpenAI provider bearer credential", api_key)?;
+    if let Some(api_key) = api_key {
+        validate_non_empty("OpenAI provider bearer credential", api_key)?;
+    }
     validate_non_empty("OpenAI Responses endpoint", endpoint)?;
     for (name, value) in extra_headers {
         validate_non_empty("OpenAI provider extra header name", name)?;
@@ -1516,7 +1573,9 @@ pub fn build_openai_responses_http_request_with_headers(
         },
     );
     headers.insert("Content-Type".to_string(), "application/json".to_string());
-    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    if let Some(api_key) = api_key {
+        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    }
     headers.extend(
         extra_headers
             .iter()
@@ -1543,7 +1602,7 @@ pub fn build_openai_models_http_request(
     timeout_ms: u64,
 ) -> Result<ProviderHttpRequest> {
     build_openai_models_http_request_with_headers(
-        api_key,
+        Some(api_key),
         responses_endpoint,
         &BTreeMap::new(),
         timeout_ms,
@@ -1556,12 +1615,14 @@ pub fn build_openai_models_http_request(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn build_openai_models_http_request_with_headers(
-    api_key: &str,
+    api_key: Option<&str>,
     responses_endpoint: &str,
     extra_headers: &BTreeMap<String, String>,
     timeout_ms: u64,
 ) -> Result<ProviderHttpRequest> {
-    validate_non_empty("OpenAI provider bearer credential", api_key)?;
+    if let Some(api_key) = api_key {
+        validate_non_empty("OpenAI provider bearer credential", api_key)?;
+    }
     validate_non_empty("OpenAI Responses endpoint", responses_endpoint)?;
     for (name, value) in extra_headers {
         validate_non_empty("OpenAI provider extra header name", name)?;
@@ -1574,7 +1635,9 @@ pub fn build_openai_models_http_request_with_headers(
     }
     let mut headers = BTreeMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
-    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    if let Some(api_key) = api_key {
+        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    }
     headers.extend(
         extra_headers
             .iter()

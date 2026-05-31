@@ -2586,6 +2586,11 @@ base URL; Mezzanine MUST derive the documented `/chat/completions` request
 endpoint and `/models` catalog endpoint from that base. Compatible providers
 MUST use the named provider entry as the configuration boundary so each backend
 can declare its own base URL, auth profile, model list, and default model. Chat
+Completions and Responses compatibility adapters MUST treat missing provider
+auth metadata as an unauthenticated backend and MUST omit the `Authorization`
+header in that state instead of failing before the request. When credential
+metadata is present, Mezzanine MUST load the referenced secret and send it as a
+bearer token.
 Completions compatibility adapters MUST NOT inherit OpenAI Responses
 prompt-cache or reasoning-control semantics unless a later provider-specific
 capability explicitly enables them.

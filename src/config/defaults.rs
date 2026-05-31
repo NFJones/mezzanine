@@ -209,6 +209,8 @@ api = "openai-responses"
 auth_profile = "default"
 # Optional API base URL, such as "https://api.openai.com/v1".
 # Mezzanine derives /responses and /models endpoints from this base.
+# Compatible local APIs may omit stored auth; Mezzanine then sends no
+# Authorization header instead of requiring a placeholder key.
 base_url = ""
 # OpenAI model IDs supported by the default coding-agent harness profile.
 models = [

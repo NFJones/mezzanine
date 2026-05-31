@@ -58,6 +58,129 @@ fn openai_provider_from_auth_store_expands_configured_base_url() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies configured OpenAI Responses-compatible providers can run without
+/// stored auth metadata.
+///
+/// Local API servers such as LM Studio commonly accept unauthenticated
+/// OpenAI-compatible requests. Missing metadata must therefore build a provider
+/// that omits `Authorization` instead of failing before the HTTP request.
+#[test]
+fn openai_responses_compatible_provider_omits_auth_when_metadata_is_absent() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-no-auth-responses-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "lmstudio".to_string(),
+            model: "local-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"model":"local-model","output_text":"ok"}"#.to_string(),
+        },
+    };
+
+    let provider = openai_responses_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "lmstudio",
+        Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(response.provider, "lmstudio");
+    assert_eq!(response.raw_text, "ok");
+    let sent = provider.transport.requests.borrow();
+    assert_eq!(sent[0].url, "http://localhost:1234/v1/responses");
+    assert_eq!(sent[0].headers.get("Authorization"), None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies Chat Completions-compatible providers can list models without
+/// stored auth metadata.
+///
+/// OpenAI-compatible and DeepSeek-compatible local backends share the same
+/// optional-auth contract: no configured credential means no bearer header,
+/// not an early authentication failure.
+#[test]
+fn chat_completions_compatible_providers_omit_auth_when_metadata_is_absent() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-no-auth-chat-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let openai_transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"data":[{"id":"local-chat"}]}"#.to_string(),
+        },
+    };
+    let deepseek_transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: r#"{"data":[{"id":"local-deepseek"}]}"#.to_string(),
+        },
+    };
+
+    let openai_provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        120_000,
+        openai_transport,
+    )
+    .unwrap();
+    let deepseek_provider = deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-deepseek-chat",
+        Some("http://localhost:4321/v1"),
+        120_000,
+        deepseek_transport,
+    )
+    .unwrap();
+
+    let openai_catalog = openai_provider.list_models().unwrap();
+    let deepseek_catalog = deepseek_provider.list_models().unwrap();
+
+    assert_eq!(openai_catalog.models[0].id, "local-chat");
+    assert_eq!(deepseek_catalog.models[0].id, "local-deepseek");
+    let openai_sent = openai_provider.transport.requests.borrow();
+    let deepseek_sent = deepseek_provider.transport.requests.borrow();
+    assert_eq!(openai_sent[0].url, "http://localhost:1234/v1/models");
+    assert_eq!(deepseek_sent[0].url, "http://localhost:4321/v1/models");
+    assert_eq!(openai_sent[0].headers.get("Authorization"), None);
+    assert_eq!(deepseek_sent[0].headers.get("Authorization"), None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that the OpenAI provider adapter can parse the provider's model
 /// catalog shape and carry provider-supplied reasoning metadata when it is
 /// present. The parser also fills known OpenAI reasoning defaults for model
