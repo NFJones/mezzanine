@@ -38,10 +38,13 @@ use super::{
 use crate::agent::{
     AgentActionPayload, AllowedActionSet, AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, ProviderCapabilities, ProviderModelCatalog,
-    ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport, append_mcp_context,
-    model_context_text_word_count, openai_default_reasoning_levels_for_model,
-    openai_provider_from_auth_store_with_provider_options,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility, ProviderCapabilities,
+    ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport,
+    append_mcp_context, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    effective_provider_api, model_context_text_word_count,
+    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_default_reasoning_levels_for_model,
+    openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
 use crate::error::MezErrorKind;

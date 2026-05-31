@@ -2324,7 +2324,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 7 is the current configuration schema version for this
+schema version 8 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2568,18 +2568,25 @@ with a minimal `[permissions]` table and `approval_policy = "ask"` when a
 project-scoped mutation needs a file that does not yet exist.
 
 The `providers` table MUST be a map keyed by provider identity. Each provider
-entry MUST support `kind`, `auth_profile`, `base_url` when applicable,
-`models`, `default_model`, and provider-specific options.
-For the built-in OpenAI provider, `base_url` MUST be interpreted as an API base
-URL such as `https://api.openai.com/v1`; Mezzanine MUST derive the documented
-`/responses` request endpoint and `/models` catalog endpoint from that base.
-For named providers whose `kind` is `openai-compatible`, `base_url` MUST be
-interpreted as an OpenAI-compatible API base URL; Mezzanine MUST derive the
-documented `/chat/completions` request endpoint and `/models` catalog endpoint
-from that base. OpenAI-compatible providers MUST use the named provider entry as
-the configuration boundary so each backend can declare its own base URL, auth
-profile, model list, and default model. The compatibility adapter is limited to
-non-streaming Chat Completions behavior and MUST NOT inherit OpenAI Responses
+entry MUST support `kind`, `api`, `auth_profile`, `base_url` when applicable,
+`models`, `default_model`, and provider-specific options. The `kind` field MUST
+identify the provider brand/default profile, while `api` MUST identify the wire
+API compatibility implementation. Supported API compatibility identifiers are
+`openai-responses`, `openai-chat-completions`, and
+`deepseek-chat-completions`. The schema version 7 to version 8 migration MUST
+backfill missing provider `api` values from historical provider-kind defaults:
+`openai` to `openai-responses`, `openai-compatible` to
+`openai-chat-completions`, and `deepseek` to `deepseek-chat-completions`.
+For providers whose `api` is `openai-responses`, `base_url` MUST be interpreted
+as an API base URL such as `https://api.openai.com/v1`; Mezzanine MUST derive
+the documented `/responses` request endpoint and `/models` catalog endpoint
+from that base. For providers whose `api` is `openai-chat-completions` or
+`deepseek-chat-completions`, `base_url` MUST be interpreted as a compatible API
+base URL; Mezzanine MUST derive the documented `/chat/completions` request
+endpoint and `/models` catalog endpoint from that base. Compatible providers
+MUST use the named provider entry as the configuration boundary so each backend
+can declare its own base URL, auth profile, model list, and default model. Chat
+Completions compatibility adapters MUST NOT inherit OpenAI Responses
 prompt-cache or reasoning-control semantics unless a later provider-specific
 capability explicitly enables them.
 When `providers.openai.options.organization_id` or
@@ -2629,10 +2636,11 @@ the user overrides it through provider or model-profile configuration. The
 built-in DeepSeek provider model list SHOULD include `deepseek-v4-pro` and
 `deepseek-v4-flash`, and generated DeepSeek model profiles SHOULD use a
 `1000000` token context window for those V4 model families.
-Named `openai-compatible` providers do not have built-in models. Users SHOULD
-configure `models` and `default_model` for each compatible backend, and a live
-catalog refresh MAY replace or augment those configured model ids when the
-backend supports the OpenAI-compatible `/models` endpoint.
+Custom or non-built-in providers do not have built-in models solely because
+they select a compatible API. Users SHOULD configure `models` and
+`default_model` for each compatible backend, and a live catalog refresh MAY
+replace or augment those configured model ids when the backend supports a
+compatible `/models` endpoint.
 Mezzanine SHOULD attempt live provider model-catalog refresh once during daemon
 startup after configuration and authentication stores are available. After
 startup, live provider catalog refresh MUST be explicit through a user or

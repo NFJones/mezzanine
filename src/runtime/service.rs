@@ -234,6 +234,7 @@ impl RuntimeSessionService {
             mouse_resize_drag_state: None,
             mouse_selection_drag_state: None,
             last_mouse_click_state: None,
+            deferred_word_copy_cleanup: std::cell::RefCell::new(None),
             pressed_window_action: None,
             pane_transcript_refs: BTreeMap::new(),
             terminal_history_limit: DEFAULT_HISTORY_LIMIT,
@@ -818,6 +819,7 @@ impl RuntimeSessionService {
                         RuntimeProviderConfig {
                             provider_id: auth_provider.clone(),
                             kind: auth_provider.clone(),
+                            api: None,
                             auth_profile: "default".to_string(),
                             base_url: None,
                             models: default_models.iter().map(|m| (*m).to_string()).collect(),

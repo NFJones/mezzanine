@@ -142,7 +142,8 @@ fn deepseek_chat_completions_request_body_with_strategy(
     stream: bool,
     strategy: DeepSeekMaapRequestStrategy,
 ) -> Result<String> {
-    let capabilities = ProviderCapabilities::for_kind("deepseek");
+    let capabilities =
+        ProviderCapabilities::for_api(super::ProviderApiCompatibility::DeepSeekChatCompletions);
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
         if let Some(event) = ProviderTranscriptEvent::from_transcript_content(&message.content) {

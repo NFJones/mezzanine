@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 7;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 8;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +80,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             6 => {
                 current_text = migrate_v6_to_v7(format, &current_text)?;
                 current_version = 7;
+            }
+            7 => {
+                current_text = migrate_v7_to_v8(format, &current_text)?;
+                current_version = 8;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -192,6 +196,18 @@ fn migrate_v6_to_v7(format: ConfigFormat, text: &str) -> Result<String> {
     match format {
         ConfigFormat::Toml => migrate_toml_v6_to_v7(text),
         ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v6_to_v7(format, text),
+    }
+}
+
+/// Applies the version 7 to version 8 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v7_to_v8(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v7_to_v8(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v7_to_v8(format, text),
     }
 }
 
@@ -591,6 +607,46 @@ fn migrate_json_compatible_v6_to_v7(format: ConfigFormat, text: &str) -> Result<
     }
 }
 
+/// Applies the version 7 to version 8 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v7_to_v8(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    backfill_toml_provider_api_defaults(&mut document)?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(8))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 7 to version 8 migration to JSON and YAML config files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v7_to_v8(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    backfill_json_provider_api_defaults(&mut document);
+    set_json_path_value(&mut document, "version", serde_json::json!(8))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
 /// Parses a JSON or YAML config file into a JSON value tree.
 ///
 /// # Parameters
@@ -730,6 +786,81 @@ fn set_json_default_usize_if_absent_or_old_default(
         set_json_path_value(document, path, serde_json::json!(new_default))?;
     }
     Ok(())
+}
+
+/// Backfills the API compatibility selector for every TOML provider that still
+/// relies on historical provider-kind defaults.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+fn backfill_toml_provider_api_defaults(document: &mut toml_edit::DocumentMut) -> Result<()> {
+    let segments = split_config_path("providers");
+    let Some(providers) = toml_parent_table_mut(document.as_table_mut(), &segments, false)? else {
+        return Ok(());
+    };
+    for (provider_id, item) in providers.iter_mut() {
+        let Some(table) = item.as_table_mut() else {
+            continue;
+        };
+        if table.contains_key("api") {
+            continue;
+        }
+        let kind = table
+            .get("kind")
+            .and_then(|item| item.as_value())
+            .and_then(|value| value.as_str())
+            .unwrap_or(provider_id.get());
+        if let Some(api) = provider_default_api_for_kind(kind) {
+            table.insert("api", toml_edit::value(api));
+        }
+    }
+    Ok(())
+}
+
+/// Backfills the API compatibility selector for every JSON-compatible provider
+/// that still relies on historical provider-kind defaults.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+fn backfill_json_provider_api_defaults(document: &mut serde_json::Value) {
+    let Some(providers) = json_value_at_mut(document, "providers") else {
+        return;
+    };
+    let Some(providers) = providers.as_object_mut() else {
+        return;
+    };
+    for (provider_id, value) in providers.iter_mut() {
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        if object.contains_key("api") {
+            continue;
+        }
+        let kind = object
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(provider_id);
+        if let Some(api) = provider_default_api_for_kind(kind) {
+            object.insert(
+                "api".to_string(),
+                serde_json::Value::String(api.to_string()),
+            );
+        }
+    }
+}
+
+/// Returns the API compatibility selector historically implied by one provider
+/// kind, when Mezzanine has a built-in default for that kind.
+///
+/// # Parameters
+/// - `kind`: Provider kind string from the legacy provider entry.
+fn provider_default_api_for_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "openai" => Some("openai-responses"),
+        "openai-compatible" => Some("openai-chat-completions"),
+        "deepseek" => Some("deepseek-chat-completions"),
+        _ => None,
+    }
 }
 
 /// Updates a built-in TOML model profile context default without overriding a

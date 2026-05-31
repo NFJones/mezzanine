@@ -30,6 +30,7 @@ use super::{
     runtime_cooperation_mode_name, runtime_json_string_field, runtime_json_value,
     unix_seconds_to_rfc3339, valid_color_alias_name, validate_config_text,
 };
+use crate::agent::effective_provider_api;
 
 // Runtime config parsing and project trust helpers.
 
@@ -2625,6 +2626,7 @@ pub(super) fn runtime_provider_registry_from_config(
             RuntimeProviderConfig {
                 provider_id: "openai".to_string(),
                 kind: "openai".to_string(),
+                api: None,
                 auth_profile: "default".to_string(),
                 base_url: None,
                 models: runtime_default_models_for_provider("openai")?
@@ -2989,6 +2991,8 @@ pub(super) fn runtime_provider_config_from_config(
         )));
     };
     let kind = runtime_json_string(object.get("kind")).unwrap_or(provider_id);
+    let api = runtime_json_string(object.get("api")).map(ToOwned::to_owned);
+    effective_provider_api(kind, api.as_deref())?;
     let models = runtime_json_string_array(object.get("models"))?.unwrap_or_default();
     let default_model = runtime_json_string(object.get("default_model"))
         .filter(|model| !model.is_empty())
@@ -3007,6 +3011,7 @@ pub(super) fn runtime_provider_config_from_config(
     Ok(RuntimeProviderConfig {
         provider_id: provider_id.to_string(),
         kind: kind.to_string(),
+        api,
         auth_profile: runtime_json_string(object.get("auth_profile"))
             .unwrap_or("default")
             .to_string(),

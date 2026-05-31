@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 7
+version = 8
 
 [session]
 detach_behavior = "keep-running"
@@ -205,6 +205,7 @@ fallback_policy = "use-default-profile"
 
 [providers.openai]
 kind = "openai"
+api = "openai-responses"
 auth_profile = "default"
 # Optional API base URL, such as "https://api.openai.com/v1".
 # Mezzanine derives /responses and /models endpoints from this base.
@@ -227,6 +228,7 @@ default_model = "gpt-5.5"
 
 [providers.deepseek]
 kind = "deepseek"
+api = "deepseek-chat-completions"
 auth_profile = "default"
 # Optional API base URL, such as "https://api.deepseek.com".
 # Mezzanine derives /chat/completions and /models endpoints from this base.

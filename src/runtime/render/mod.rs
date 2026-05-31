@@ -3720,15 +3720,22 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         self.session
             .select_pane_global(primary_client_id, pane_id)?;
+        // Ensure a copy mode exists, then take ownership so the selection
+        // highlight persists for one render frame before cleanup.
+        self.ensure_active_copy_mode(pane_id)?;
+        let mut copy_mode = self
+            .active_copy_modes
+            .remove(pane_id)
+            .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))?;
         let copied = {
-            let copy_mode = self.ensure_active_copy_mode(pane_id)?;
-            let position = runtime_copy_position_for_view(copy_mode, position);
+            let position = runtime_copy_position_for_view(&copy_mode, position);
             copy_mode.select_word_at(position)?;
             copy_mode.copy_selection()?
         };
         self.mouse_selection_drag_state = None;
-        self.active_copy_modes.remove(pane_id);
         self.scrollback_copy_mode_panes.remove(pane_id);
+        self.deferred_word_copy_cleanup
+            .replace(Some((pane_id.to_string(), copy_mode)));
         self.copy_text_to_buffer_and_host_clipboard(
             "mouse",
             copied,

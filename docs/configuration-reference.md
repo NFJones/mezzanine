@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `7`. On launch, Mezzanine migrates an
+The current config schema version is `8`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -60,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `7` | Config schema version. Do not change this. |
+| `version` | integer | `8` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -382,7 +382,8 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider implementation kind: `openai`, `deepseek`, or `openai-compatible`. |
+| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider brand/default profile kind. Built-ins include `openai`, `deepseek`, and legacy `openai-compatible`. |
+| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, or `deepseek-chat-completions`. |
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
@@ -403,11 +404,13 @@ Default `providers.deepseek.models`:
 ["deepseek-v4-pro", "deepseek-v4-flash"]
 ```
 
-Named `openai-compatible` providers use the Chat Completions compatibility
-adapter. Configure one provider entry per backend, set `base_url` to the
-backend API base such as `https://api.example.com/v1`, and provide `models` plus
-`default_model` unless the backend's `/models` endpoint is sufficient for live
-catalog refresh.
+Provider `api` selects the reusable wire adapter independently from provider
+brand/defaults. Use `openai-responses` for Responses-compatible backends,
+`openai-chat-completions` for generic Chat Completions-compatible backends, and
+`deepseek-chat-completions` for the DeepSeek Chat Completions dialect. Configure
+one provider entry per backend, set `base_url` to the backend API base such as
+`https://api.example.com/v1`, and provide `models` plus `default_model` unless
+the backend's `/models` endpoint is sufficient for live catalog refresh.
 
 ### `model_profiles.<name>`
 

@@ -735,7 +735,7 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 7"));
+    assert!(plan.text.contains("version = 8"));
     assert!(
         plan.text
             .contains("implementation_pressure_after_shell_actions = 3")
@@ -784,7 +784,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"7".to_string()));
+    assert_eq!(values.get("version"), Some(&"8".to_string()));
     assert_eq!(
         values.get("agents.implementation_pressure_after_shell_actions"),
         Some(&"3".to_string())
@@ -853,7 +853,7 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"7".to_string()));
+    assert_eq!(values.get("version"), Some(&"8".to_string()));
     assert_eq!(
         values.get("model_profiles.deepseek-default.context_window_tokens"),
         Some(&"1000000".to_string())
@@ -893,7 +893,7 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"7".to_string()));
+    assert_eq!(values.get("version"), Some(&"8".to_string()));
     assert_eq!(
         values.get("model_profiles.deepseek-default.context_window_tokens"),
         Some(&"1000000".to_string())

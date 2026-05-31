@@ -281,6 +281,24 @@ impl RuntimeSessionService {
         window: &crate::layout::Window,
         view: &mut RenderedClientView,
     ) -> Result<()> {
+        if let Some((pane_id, copy_mode)) = self.deferred_word_copy_cleanup.take()
+            && let Some(pane_index) = window
+                .panes()
+                .iter()
+                .position(|p| p.id.as_str() == pane_id.as_str())
+            && let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane_index)
+        {
+            let mut lines = copy_mode.visible_styled_lines().to_vec();
+            apply_copy_mode_selection_spans(&copy_mode, &mut lines, &self.ui_theme);
+            overlay_styled_lines(
+                view,
+                row,
+                column,
+                usize::from(size.columns),
+                usize::from(size.rows),
+                &lines,
+            );
+        }
         for pane in window.panes() {
             let Some(copy_mode) = self.active_copy_modes.get(pane.id.as_str()) else {
                 continue;

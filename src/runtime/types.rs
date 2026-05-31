@@ -3015,6 +3015,11 @@ pub struct RuntimeProviderConfig {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub kind: String,
+    /// Stores the optional API compatibility selector for this provider.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub api: Option<String>,
     /// Stores the auth profile value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -3339,11 +3344,11 @@ impl RuntimeAgentProviderDispatchProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn provider_id(&self) -> &'static str {
+    pub fn provider_id(&self) -> &str {
         match self {
-            Self::OpenAi(_) => "openai",
-            Self::DeepSeek(_) => "deepseek",
-            Self::OpenAiCompatible(_) => "openai-compatible",
+            Self::OpenAi(provider) => provider.provider_id(),
+            Self::DeepSeek(provider) => provider.provider_id(),
+            Self::OpenAiCompatible(provider) => provider.provider_id(),
         }
     }
 }
@@ -3671,6 +3676,8 @@ pub struct RuntimeSessionService {
     pub(super) mouse_selection_drag_state: Option<MouseSelectionDragState>,
     /// Last pane content click observed for double-click word selection.
     pub(super) last_mouse_click_state: Option<RuntimeMouseClickState>,
+    /// Deferred double-click word copy cleanup: (pane_id, copy_mode) to clear on next render.
+    pub(super) deferred_word_copy_cleanup: std::cell::RefCell<Option<(String, CopyMode)>>,
     /// Stores the pressed window status-bar action value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

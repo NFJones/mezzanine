@@ -9,6 +9,91 @@
 use super::*;
 
 impl RuntimeSessionService {
+    /// Builds a runtime provider dispatch from one configured provider API.
+    ///
+    /// Provider `kind` describes the brand/defaults, while `api` selects the
+    /// wire compatibility implementation. This helper keeps ordinary turns and
+    /// router turns on the same resolution path so adding a provider that
+    /// speaks an existing API does not duplicate dispatch branches.
+    fn runtime_dispatch_provider_from_config(
+        &mut self,
+        provider_name: &str,
+        provider_config: &RuntimeProviderConfig,
+        audit_scope: &str,
+    ) -> Result<RuntimeAgentProviderDispatchProvider> {
+        let api = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        self.append_credential_access_audit(
+            provider_name,
+            &provider_config.auth_profile,
+            audit_scope,
+            "requested",
+        )?;
+        let provider_result = (|| {
+            let auth_store = self.auth_store.as_ref().ok_or_else(|| {
+                MezError::invalid_state(format!(
+                    "provider `{provider_name}` execution requires an attached auth store"
+                ))
+            })?;
+            let endpoint_override = provider_config
+                .base_url
+                .as_deref()
+                .filter(|endpoint| !endpoint.is_empty());
+            match api {
+                ProviderApiCompatibility::OpenAiResponses => {
+                    openai_responses_provider_from_auth_store_with_provider_options(
+                        auth_store,
+                        provider_name,
+                        endpoint_override,
+                        &provider_config.options,
+                        DEFAULT_PROVIDER_TIMEOUT_MS,
+                        ReqwestProviderHttpTransport,
+                    )
+                    .map(RuntimeAgentProviderDispatchProvider::OpenAi)
+                }
+                ProviderApiCompatibility::OpenAiChatCompletions => {
+                    openai_compatible_provider_from_auth_store_with_provider_options(
+                        auth_store,
+                        provider_name,
+                        endpoint_override,
+                        DEFAULT_PROVIDER_TIMEOUT_MS,
+                        ReqwestProviderHttpTransport,
+                    )
+                    .map(RuntimeAgentProviderDispatchProvider::OpenAiCompatible)
+                }
+                ProviderApiCompatibility::DeepSeekChatCompletions => {
+                    deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+                        auth_store,
+                        provider_name,
+                        endpoint_override,
+                        DEFAULT_PROVIDER_TIMEOUT_MS,
+                        ReqwestProviderHttpTransport,
+                    )
+                    .map(RuntimeAgentProviderDispatchProvider::DeepSeek)
+                }
+            }
+        })();
+        match provider_result {
+            Ok(provider) => {
+                self.append_credential_access_audit(
+                    provider_name,
+                    &provider_config.auth_profile,
+                    audit_scope,
+                    "granted",
+                )?;
+                Ok(provider)
+            }
+            Err(error) => {
+                self.append_credential_access_audit(
+                    provider_name,
+                    &provider_config.auth_profile,
+                    audit_scope,
+                    "denied",
+                )?;
+                Err(error)
+            }
+        }
+    }
+
     /// Claims one configured provider task for execution outside the runtime
     /// actor.
     ///
@@ -90,145 +175,11 @@ impl RuntimeSessionService {
                     model_profile.provider
                 ))
             })?;
-        let provider = match provider_config.kind.as_str() {
-            "openai" => {
-                self.append_credential_access_audit(
-                    "openai",
-                    &provider_config.auth_profile,
-                    "provider_request",
-                    "requested",
-                )?;
-                let auth_store = self.auth_store.as_ref().ok_or_else(|| {
-                    MezError::invalid_state(
-                        "OpenAI provider execution requires an attached auth store",
-                    )
-                })?;
-                let endpoint_override = provider_config
-                    .base_url
-                    .as_deref()
-                    .filter(|endpoint| !endpoint.is_empty());
-                let provider_result = openai_provider_from_auth_store_with_provider_options(
-                    auth_store,
-                    endpoint_override,
-                    &provider_config.options,
-                    DEFAULT_PROVIDER_TIMEOUT_MS,
-                    ReqwestProviderHttpTransport,
-                );
-                match provider_result {
-                    Ok(provider) => {
-                        self.append_credential_access_audit(
-                            "openai",
-                            &provider_config.auth_profile,
-                            "provider_request",
-                            "granted",
-                        )?;
-                        RuntimeAgentProviderDispatchProvider::OpenAi(provider)
-                    }
-                    Err(error) => {
-                        self.append_credential_access_audit(
-                            "openai",
-                            &provider_config.auth_profile,
-                            "provider_request",
-                            "denied",
-                        )?;
-                        return Err(error);
-                    }
-                }
-            }
-            "deepseek" => {
-                self.append_credential_access_audit(
-                    "deepseek",
-                    &provider_config.auth_profile,
-                    "provider_request",
-                    "requested",
-                )?;
-                let auth_store = self.auth_store.as_ref().ok_or_else(|| {
-                    MezError::invalid_state(
-                        "DeepSeek provider execution requires an attached auth store",
-                    )
-                })?;
-                let endpoint_override = provider_config
-                    .base_url
-                    .as_deref()
-                    .filter(|endpoint| !endpoint.is_empty());
-                let provider_result = deepseek_provider_from_auth_store_with_provider_options(
-                    auth_store,
-                    endpoint_override,
-                    DEFAULT_PROVIDER_TIMEOUT_MS,
-                    ReqwestProviderHttpTransport,
-                );
-                match provider_result {
-                    Ok(provider) => {
-                        self.append_credential_access_audit(
-                            "deepseek",
-                            &provider_config.auth_profile,
-                            "provider_request",
-                            "granted",
-                        )?;
-                        RuntimeAgentProviderDispatchProvider::DeepSeek(provider)
-                    }
-                    Err(error) => {
-                        self.append_credential_access_audit(
-                            "deepseek",
-                            &provider_config.auth_profile,
-                            "provider_request",
-                            "denied",
-                        )?;
-                        return Err(error);
-                    }
-                }
-            }
-            "openai-compatible" => {
-                self.append_credential_access_audit(
-                    &model_profile.provider,
-                    &provider_config.auth_profile,
-                    "provider_request",
-                    "requested",
-                )?;
-                let auth_store = self.auth_store.as_ref().ok_or_else(|| {
-                    MezError::invalid_state(
-                        "OpenAI-compatible provider execution requires an attached auth store",
-                    )
-                })?;
-                let endpoint_override = provider_config
-                    .base_url
-                    .as_deref()
-                    .filter(|endpoint| !endpoint.is_empty());
-                let provider_result =
-                    openai_compatible_provider_from_auth_store_with_provider_options(
-                        auth_store,
-                        &model_profile.provider,
-                        endpoint_override,
-                        DEFAULT_PROVIDER_TIMEOUT_MS,
-                        ReqwestProviderHttpTransport,
-                    );
-                match provider_result {
-                    Ok(provider) => {
-                        self.append_credential_access_audit(
-                            &model_profile.provider,
-                            &provider_config.auth_profile,
-                            "provider_request",
-                            "granted",
-                        )?;
-                        RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider)
-                    }
-                    Err(error) => {
-                        self.append_credential_access_audit(
-                            &model_profile.provider,
-                            &provider_config.auth_profile,
-                            "provider_request",
-                            "denied",
-                        )?;
-                        return Err(error);
-                    }
-                }
-            }
-            other => {
-                return Err(MezError::config(format!(
-                    "provider kind `{other}` is not supported for runtime execution"
-                )));
-            }
-        };
+        let provider = self.runtime_dispatch_provider_from_config(
+            &model_profile.provider,
+            &provider_config,
+            "provider_request",
+        )?;
 
         self.agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
@@ -274,46 +225,11 @@ impl RuntimeSessionService {
                         auto_sizing.router_profile.provider
                     ))
                 })?;
-            let router_auth_store = self.auth_store.as_ref().ok_or_else(|| {
-                MezError::invalid_state(
-                    "auto-sizing router provider requires an attached auth store",
-                )
-            })?;
-            let endpoint_override = router_provider_config
-                .base_url
-                .as_deref()
-                .filter(|endpoint| !endpoint.is_empty());
-            let result = match router_provider_config.kind.as_str() {
-                "openai" => openai_provider_from_auth_store_with_provider_options(
-                    router_auth_store,
-                    endpoint_override,
-                    &router_provider_config.options,
-                    DEFAULT_PROVIDER_TIMEOUT_MS,
-                    ReqwestProviderHttpTransport,
-                )
-                .map(RuntimeAgentProviderDispatchProvider::OpenAi),
-                "deepseek" => deepseek_provider_from_auth_store_with_provider_options(
-                    router_auth_store,
-                    endpoint_override,
-                    DEFAULT_PROVIDER_TIMEOUT_MS,
-                    ReqwestProviderHttpTransport,
-                )
-                .map(RuntimeAgentProviderDispatchProvider::DeepSeek),
-                "openai-compatible" => {
-                    openai_compatible_provider_from_auth_store_with_provider_options(
-                        router_auth_store,
-                        &auto_sizing.router_profile.provider,
-                        endpoint_override,
-                        DEFAULT_PROVIDER_TIMEOUT_MS,
-                        ReqwestProviderHttpTransport,
-                    )
-                    .map(RuntimeAgentProviderDispatchProvider::OpenAiCompatible)
-                }
-                _ => Err(MezError::config(format!(
-                    "auto-sizing router provider `{}` has unsupported kind `{}`",
-                    auto_sizing.router_profile.provider, router_provider_config.kind
-                ))),
-            };
+            let result = self.runtime_dispatch_provider_from_config(
+                &auto_sizing.router_profile.provider,
+                &router_provider_config,
+                "provider_request",
+            );
             match result {
                 Ok(provider) => Some(provider),
                 Err(error) => {

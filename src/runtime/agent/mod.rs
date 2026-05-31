@@ -20,10 +20,11 @@ use super::{
     RunningShellTransactionRef, RuntimeAgentCopyOutput, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAutoSizingDispatch,
     RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
-    RuntimeMcpActionExecutor, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    SenderIdentity, ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
-    SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
-    TranscriptEntry, TranscriptRole, action_result_context_content, append_mcp_context,
+    RuntimeMcpActionExecutor, RuntimeProviderConfig, RuntimeSessionService,
+    RuntimeShellTransactionActionFailure, SenderIdentity, ShellTransaction,
+    ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
+    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
+    TranscriptRole, action_result_context_content, append_mcp_context,
     assemble_model_request_with_retained_tail_percent,
     compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
     current_unix_seconds, decode_shell_output_transport, discover_project_root,
@@ -49,11 +50,11 @@ use super::{
 #[cfg(test)]
 use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
 use crate::agent::{
-    ApplyPatchTransactionPhase, MaapBatch, apply_patch_error_plan, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output,
-    deepseek_provider_from_auth_store_with_provider_options,
-    openai_compatible_provider_from_auth_store_with_provider_options,
-    openai_provider_from_auth_store_with_provider_options,
+    ApplyPatchTransactionPhase, MaapBatch, ProviderApiCompatibility, apply_patch_error_plan,
+    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::agent::{SayStatus, assistant_context_content_for_execution};
 #[cfg(test)]

@@ -14,7 +14,10 @@ use super::{
     RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile, RuntimeProviderConfig,
     openai_default_reasoning_levels_for_model,
 };
-use crate::agent::{AllowedActionSet, ModelInteractionKind, model_context_text_word_count};
+use crate::agent::{
+    AllowedActionSet, ModelInteractionKind, ProviderApiCompatibility, effective_provider_api,
+    model_context_text_word_count,
+};
 
 /// Fixed word cap for the filtered conversation projection sent to the internal
 /// auto-sizing router.
@@ -138,11 +141,18 @@ pub(crate) fn runtime_auto_sizing_reasoning_levels_for_profile(
                 .or_else(|| provider_config.options.get("reasoning_profile"))
                 .map(|effort| runtime_auto_sizing_canonical_reasoning_effort(effort)),
         );
-        if provider_config.kind == "openai" {
-            levels.extend(openai_default_reasoning_levels_for_model(&profile.model));
-        }
-        if provider_config.kind == "deepseek" {
-            levels.extend(["high".to_string(), "xhigh".to_string()]);
+        if let Ok(provider_api) =
+            effective_provider_api(&provider_config.kind, provider_config.api.as_deref())
+        {
+            match provider_api {
+                ProviderApiCompatibility::OpenAiResponses => {
+                    levels.extend(openai_default_reasoning_levels_for_model(&profile.model));
+                }
+                ProviderApiCompatibility::DeepSeekChatCompletions => {
+                    levels.extend(["high".to_string(), "xhigh".to_string()]);
+                }
+                ProviderApiCompatibility::OpenAiChatCompletions => {}
+            }
         }
     }
     if let Some(reasoning) = profile.reasoning_profile.clone() {
@@ -664,6 +674,7 @@ mod tests {
         let provider = RuntimeProviderConfig {
             provider_id: "deepseek".to_string(),
             kind: "deepseek".to_string(),
+            api: None,
             auth_profile: "default".to_string(),
             base_url: None,
             models: vec!["deepseek-v4-pro".to_string()],

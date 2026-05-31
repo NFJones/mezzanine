@@ -244,21 +244,23 @@ impl RuntimeSessionService {
                     task.model_profile.provider
                 ))
             })?;
-        if provider_config.kind != "openai" {
+        let provider_api =
+            effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        if !matches!(provider_api, ProviderApiCompatibility::OpenAiResponses) {
             return Err(MezError::config(format!(
-                "provider kind `{}` is not supported for model compaction",
-                provider_config.kind
+                "provider API `{}` is not supported for model compaction",
+                provider_api.as_str()
             )));
         }
         self.append_credential_access_audit(
-            "openai",
+            &task.model_profile.provider,
             &provider_config.auth_profile,
             "provider_compact",
             "requested",
         )?;
         let Some(auth_store) = self.auth_store.as_ref() else {
             self.append_credential_access_audit(
-                "openai",
+                &task.model_profile.provider,
                 &provider_config.auth_profile,
                 "provider_compact",
                 "denied",
@@ -271,15 +273,16 @@ impl RuntimeSessionService {
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
-        let provider = openai_provider_from_auth_store_with_provider_options(
+        let provider = openai_responses_provider_from_auth_store_with_provider_options(
             auth_store,
+            &task.model_profile.provider,
             endpoint_override,
             &provider_config.options,
             DEFAULT_PROVIDER_TIMEOUT_MS,
             ReqwestProviderHttpTransport,
         )?;
         self.append_credential_access_audit(
-            "openai",
+            &task.model_profile.provider,
             &provider_config.auth_profile,
             "provider_compact",
             "granted",

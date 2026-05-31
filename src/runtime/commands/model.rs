@@ -295,7 +295,9 @@ impl RuntimeSessionService {
         self.provider_registry
             .provider(&profile.provider)
             .is_some_and(|provider| {
-                ProviderCapabilities::for_kind(&provider.kind).supports_service_tier
+                ProviderCapabilities::for_provider_config(&provider.kind, provider.api.as_deref())
+                    .map(|capabilities| capabilities.supports_service_tier)
+                    .unwrap_or(false)
             })
     }
 
@@ -399,7 +401,9 @@ impl RuntimeSessionService {
         self.provider_registry
             .provider(&profile.provider)
             .is_some_and(|provider| {
-                ProviderCapabilities::for_kind(&provider.kind).supports_thinking_toggle
+                ProviderCapabilities::for_provider_config(&provider.kind, provider.api.as_deref())
+                    .map(|capabilities| capabilities.supports_thinking_toggle)
+                    .unwrap_or(false)
             })
     }
 
@@ -608,9 +612,7 @@ impl RuntimeSessionService {
                     .map(|model| format!("{provider_id}: {}", model.id))
                     .collect();
                 let configured_items: Vec<String> = if provider_config.models.is_empty() {
-                    runtime_default_models_for_provider(&provider_config.kind)
-                        .map(|models| models.iter().map(|m| m.to_string()).collect())
-                        .unwrap_or_default()
+                    runtime_provider_default_models(&provider_config)
                 } else {
                     provider_config.models.clone()
                 }
@@ -912,7 +914,12 @@ impl RuntimeSessionService {
                     .provider_registry
                     .provider(&provider_id)
                     .is_some_and(|provider| {
-                        ProviderCapabilities::for_kind(&provider.kind).supports_service_tier
+                        ProviderCapabilities::for_provider_config(
+                            &provider.kind,
+                            provider.api.as_deref(),
+                        )
+                        .map(|capabilities| capabilities.supports_service_tier)
+                        .unwrap_or(false)
                     });
                 (new_provider_supports_latency
                     && self.model_profile_supports_latency_preference(&active_profile))
@@ -1005,7 +1012,7 @@ impl RuntimeSessionService {
             &self.provider_registry,
         );
         if let Some(provider_error) =
-            self.runtime_cached_model_catalog_miss_reason(&provider_config)
+            self.runtime_cached_model_catalog_miss_reason(provider_id, &provider_config)
         {
             return Ok(RuntimeModelCatalog {
                 provider: fallback.provider,
@@ -1016,9 +1023,13 @@ impl RuntimeSessionService {
                 quota_usage: fallback.quota_usage,
             });
         }
-        if provider_config.kind.as_str() == "openai" && fallback.models.is_empty() {
+        if matches!(
+            effective_provider_api(&provider_config.kind, provider_config.api.as_deref()),
+            Ok(ProviderApiCompatibility::OpenAiResponses)
+        ) && fallback.models.is_empty()
+        {
             return Err(MezError::invalid_state(
-                "OpenAI model listing requires cached provider information or configured fallback models",
+                "OpenAI Responses model listing requires cached provider information or configured fallback models",
             ));
         }
         Ok(fallback)
@@ -1048,9 +1059,11 @@ impl RuntimeSessionService {
             &provider_config,
             &self.provider_registry,
         );
-        match provider_config.kind.as_str() {
-            "openai" => match self
-                .runtime_openai_model_catalog_async(&provider_config)
+        match effective_provider_api(&provider_config.kind, provider_config.api.as_deref())? {
+            ProviderApiCompatibility::OpenAiResponses
+            | ProviderApiCompatibility::OpenAiChatCompletions
+            | ProviderApiCompatibility::DeepSeekChatCompletions => match self
+                .runtime_api_model_catalog_async(provider_id, &provider_config)
                 .await
             {
                 Ok(catalog) => {
@@ -1069,7 +1082,6 @@ impl RuntimeSessionService {
                     quota_usage: Vec::new(),
                 }),
             },
-            _ => Ok(fallback),
         }
     }
 
@@ -1077,20 +1089,29 @@ impl RuntimeSessionService {
     /// without attempting network provider discovery.
     fn runtime_cached_model_catalog_miss_reason(
         &self,
+        provider_id: &str,
         provider_config: &crate::runtime::RuntimeProviderConfig,
     ) -> Option<String> {
-        if provider_config.kind.as_str() != "openai" {
+        let Ok(api) = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())
+        else {
+            return None;
+        };
+        if !matches!(api, ProviderApiCompatibility::OpenAiResponses) {
             return None;
         }
         let Some(auth_store) = self.auth_store.as_ref() else {
-            return Some("OpenAI model listing requires an attached auth store".to_string());
+            return Some(
+                "OpenAI Responses model listing requires an attached auth store".to_string(),
+            );
         };
-        let metadata = match auth_store.read_metadata_for_provider("openai") {
+        let metadata = match auth_store.read_metadata_for_provider(provider_id) {
             Ok(metadata) => metadata,
             Err(error) => return Some(error.message().to_string()),
         };
         let Some(metadata) = metadata else {
-            return Some("OpenAI model listing requires an authenticated provider".to_string());
+            return Some(format!(
+                "OpenAI Responses provider `{provider_id}` requires an authenticated provider"
+            ));
         };
         if metadata.credential_kind == AuthCredentialKind::ChatGpt {
             return Some(
@@ -1181,40 +1202,44 @@ impl RuntimeSessionService {
         );
     }
 
-    /// Runs the runtime openai model catalog async operation for this subsystem.
+    /// Runs the runtime API model catalog async operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    async fn runtime_openai_model_catalog_async(
+    async fn runtime_api_model_catalog_async(
         &mut self,
+        provider_id: &str,
         provider_config: &crate::runtime::RuntimeProviderConfig,
     ) -> Result<ProviderModelCatalog> {
+        let api = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
         self.append_credential_access_audit(
-            "openai",
+            provider_id,
             &provider_config.auth_profile,
             "provider_model_list",
             "requested",
         )?;
         let Some(auth_store) = self.auth_store.as_ref() else {
             self.append_credential_access_audit(
-                "openai",
+                provider_id,
                 &provider_config.auth_profile,
                 "provider_model_list",
                 "denied",
             )?;
             return Err(MezError::invalid_state(
-                "OpenAI model listing requires an attached auth store",
+                "provider model listing requires an attached auth store",
             ));
         };
         let metadata = auth_store
-            .read_metadata_for_provider("openai")?
+            .read_metadata_for_provider(provider_id)?
             .ok_or_else(|| {
-                MezError::invalid_state("OpenAI model listing requires an authenticated provider")
+                MezError::invalid_state(format!(
+                    "provider `{provider_id}` model listing requires an authenticated provider"
+                ))
             })?;
         if metadata.credential_kind == AuthCredentialKind::ChatGpt {
             self.append_credential_access_audit(
-                "openai",
+                provider_id,
                 &provider_config.auth_profile,
                 "provider_model_list",
                 "unsupported",
@@ -1227,17 +1252,43 @@ impl RuntimeSessionService {
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
-        let provider_result = openai_provider_from_auth_store_with_provider_options(
-            auth_store,
-            endpoint_override,
-            &provider_config.options,
-            DEFAULT_PROVIDER_TIMEOUT_MS,
-            ReqwestProviderHttpTransport,
-        );
+        let provider_result: Result<Box<dyn AsyncModelProvider>> = match api {
+            ProviderApiCompatibility::OpenAiResponses => {
+                openai_responses_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    provider_id,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::OpenAiChatCompletions => {
+                openai_compatible_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    provider_id,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::DeepSeekChatCompletions => {
+                deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    provider_id,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+        };
         let provider = match provider_result {
             Ok(provider) => {
                 self.append_credential_access_audit(
-                    "openai",
+                    provider_id,
                     &provider_config.auth_profile,
                     "provider_model_list",
                     "granted",
@@ -1246,7 +1297,7 @@ impl RuntimeSessionService {
             }
             Err(error) => {
                 self.append_credential_access_audit(
-                    "openai",
+                    provider_id,
                     &provider_config.auth_profile,
                     "provider_model_list",
                     "denied",
@@ -1592,16 +1643,17 @@ fn runtime_configured_model_catalog(
         .filter(|model| !model.is_empty())
         .collect::<Vec<_>>();
     let default_models = if configured_models.is_empty() {
-        runtime_default_models_for_provider(&provider_config.kind)
-            .map(|models| models.to_vec())
-            .unwrap_or_default()
+        runtime_provider_default_models(provider_config)
     } else {
         Vec::new()
     };
     let provider_models = if configured_models.is_empty() {
-        default_models.as_slice()
+        default_models
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
     } else {
-        configured_models.as_slice()
+        configured_models
     };
     for model in provider_models {
         runtime_insert_catalog_model(
@@ -1623,7 +1675,7 @@ fn runtime_configured_model_catalog(
         runtime_insert_catalog_model(&mut models, &profile.model, reasoning_levels);
     }
     if models.is_empty()
-        && let Ok(recommended_model) = runtime_recommended_model_for_provider(&provider_config.kind)
+        && let Some(recommended_model) = runtime_provider_recommended_model(provider_config)
     {
         runtime_insert_catalog_model(
             &mut models,
@@ -1693,13 +1745,60 @@ fn runtime_configured_reasoning_levels_for_model(
         .into_iter()
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
-    if provider_config.kind == "openai" {
-        levels.extend(openai_default_reasoning_levels_for_model(model));
-    }
-    if provider_config.kind == "deepseek" {
-        levels.extend(deepseek_default_reasoning_effort_levels());
+    if let Ok(provider_api) =
+        effective_provider_api(&provider_config.kind, provider_config.api.as_deref())
+    {
+        match provider_api {
+            ProviderApiCompatibility::OpenAiResponses => {
+                levels.extend(openai_default_reasoning_levels_for_model(model));
+            }
+            ProviderApiCompatibility::DeepSeekChatCompletions => {
+                levels.extend(deepseek_default_reasoning_effort_levels());
+            }
+            ProviderApiCompatibility::OpenAiChatCompletions => {}
+        }
     }
     dedupe_runtime_strings(levels)
+}
+
+/// Returns built-in default models only when the provider's selected API keeps
+/// the provider's built-in model catalog semantics.
+fn runtime_provider_default_models(
+    provider_config: &crate::runtime::RuntimeProviderConfig,
+) -> Vec<String> {
+    match effective_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
+        Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
+            runtime_default_models_for_provider(&provider_config.kind)
+                .map(|models| models.iter().map(|model| (*model).to_string()).collect())
+                .unwrap_or_default()
+        }
+        Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
+            if provider_config.kind == "deepseek" =>
+        {
+            runtime_default_models_for_provider(&provider_config.kind)
+                .map(|models| models.iter().map(|model| (*model).to_string()).collect())
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Returns a built-in recommended model only when the provider and API share
+/// the built-in provider's catalog contract.
+fn runtime_provider_recommended_model(
+    provider_config: &crate::runtime::RuntimeProviderConfig,
+) -> Option<&'static str> {
+    match effective_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
+        Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
+            runtime_recommended_model_for_provider(&provider_config.kind).ok()
+        }
+        Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
+            if provider_config.kind == "deepseek" =>
+        {
+            runtime_recommended_model_for_provider(&provider_config.kind).ok()
+        }
+        _ => None,
+    }
 }
 
 /// Returns the reasoning effort levels supported by DeepSeek providers.

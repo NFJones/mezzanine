@@ -89,6 +89,71 @@ pub const DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME: &str = "mez_decide_capabi
 pub const DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME: &str = "mez_respond";
 /// DeepSeek shim function tool name used for executable action turns.
 pub const DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME: &str = "mez_take_actions";
+
+/// API compatibility id for providers that speak the OpenAI Responses API.
+pub const OPENAI_RESPONSES_API: &str = "openai-responses";
+/// API compatibility id for providers that speak OpenAI-style Chat Completions.
+pub const OPENAI_CHAT_COMPLETIONS_API: &str = "openai-chat-completions";
+/// API compatibility id for the DeepSeek Chat Completions dialect.
+pub const DEEPSEEK_CHAT_COMPLETIONS_API: &str = "deepseek-chat-completions";
+
+/// Wire API compatibility selected for one configured provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderApiCompatibility {
+    /// OpenAI Responses request, response, model-catalog, and MAAP tool shape.
+    OpenAiResponses,
+    /// OpenAI-compatible Chat Completions request and response shape.
+    OpenAiChatCompletions,
+    /// DeepSeek Chat Completions dialect with native thinking and shim tools.
+    DeepSeekChatCompletions,
+}
+
+impl ProviderApiCompatibility {
+    /// Returns the stable configuration identifier for this compatibility.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => OPENAI_RESPONSES_API,
+            Self::OpenAiChatCompletions => OPENAI_CHAT_COMPLETIONS_API,
+            Self::DeepSeekChatCompletions => DEEPSEEK_CHAT_COMPLETIONS_API,
+        }
+    }
+
+    /// Parses a stable API compatibility identifier.
+    pub fn from_id(api: &str) -> Option<Self> {
+        match api {
+            OPENAI_RESPONSES_API => Some(Self::OpenAiResponses),
+            OPENAI_CHAT_COMPLETIONS_API => Some(Self::OpenAiChatCompletions),
+            DEEPSEEK_CHAT_COMPLETIONS_API => Some(Self::DeepSeekChatCompletions),
+            _ => None,
+        }
+    }
+
+    /// Returns the compatibility historically implied by one provider kind.
+    pub fn default_for_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "openai" => Some(Self::OpenAiResponses),
+            "openai-compatible" => Some(Self::OpenAiChatCompletions),
+            "deepseek" => Some(Self::DeepSeekChatCompletions),
+            _ => None,
+        }
+    }
+}
+
+/// Resolves an optional configured API id against one provider kind.
+pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderApiCompatibility> {
+    match api.map(str::trim).filter(|api| !api.is_empty()) {
+        Some(api) => ProviderApiCompatibility::from_id(api).ok_or_else(|| {
+            MezError::config(format!(
+                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, or {DEEPSEEK_CHAT_COMPLETIONS_API}"
+            ))
+        }),
+        None => ProviderApiCompatibility::default_for_kind(kind).ok_or_else(|| {
+            MezError::config(format!(
+                "providers using kind `{kind}` must configure an api compatibility id"
+            ))
+        }),
+    }
+}
 /// DeepSeek request strategy for provider-native MAAP transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeepSeekMaapRequestStrategy {
@@ -371,10 +436,10 @@ pub struct ProviderCapabilities {
 }
 
 impl ProviderCapabilities {
-    /// Returns the capabilities for a known provider kind string.
-    pub fn for_kind(kind: &str) -> Self {
-        match kind {
-            "openai" => Self {
+    /// Returns the capabilities for one API compatibility implementation.
+    pub fn for_api(api: ProviderApiCompatibility) -> Self {
+        match api {
+            ProviderApiCompatibility::OpenAiResponses => Self {
                 supports_responses_api: true,
                 supports_max_output_tokens: true,
                 supports_reasoning_controls: true,
@@ -385,7 +450,7 @@ impl ProviderCapabilities {
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: true,
             },
-            "deepseek" => Self {
+            ProviderApiCompatibility::DeepSeekChatCompletions => Self {
                 supports_responses_api: false,
                 supports_max_output_tokens: true,
                 supports_reasoning_controls: true,
@@ -396,7 +461,7 @@ impl ProviderCapabilities {
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: false,
             },
-            "openai-compatible" => Self {
+            ProviderApiCompatibility::OpenAiChatCompletions => Self {
                 supports_responses_api: false,
                 supports_max_output_tokens: true,
                 supports_reasoning_controls: false,
@@ -407,17 +472,33 @@ impl ProviderCapabilities {
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: false,
             },
-            _ => Self {
-                supports_responses_api: false,
-                supports_max_output_tokens: false,
-                supports_reasoning_controls: false,
-                supports_thinking_toggle: false,
-                supports_service_tier: false,
-                supports_prompt_cache_retention: false,
-                supports_streaming: false,
-                supports_tool_calls: false,
-                supports_parallel_tool_calls: false,
-            },
+        }
+    }
+
+    /// Returns the capabilities historically implied by one provider kind.
+    pub fn for_kind(kind: &str) -> Self {
+        ProviderApiCompatibility::default_for_kind(kind)
+            .map(Self::for_api)
+            .unwrap_or_else(Self::unsupported)
+    }
+
+    /// Returns capabilities for a provider kind plus optional API id.
+    pub fn for_provider_config(kind: &str, api: Option<&str>) -> Result<Self> {
+        effective_provider_api(kind, api).map(Self::for_api)
+    }
+
+    /// Returns a capability set that advertises no provider features.
+    fn unsupported() -> Self {
+        Self {
+            supports_responses_api: false,
+            supports_max_output_tokens: false,
+            supports_reasoning_controls: false,
+            supports_thinking_toggle: false,
+            supports_service_tier: false,
+            supports_prompt_cache_retention: false,
+            supports_streaming: false,
+            supports_tool_calls: false,
+            supports_parallel_tool_calls: false,
         }
     }
 }
@@ -428,6 +509,11 @@ impl ProviderCapabilities {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone)]
 pub struct OpenAiResponsesProvider<T> {
+    /// Stores the configured provider id value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) provider_id: String,
     /// Stores the api key value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -570,6 +656,7 @@ impl<T> OpenAiResponsesProvider<T> {
             ));
         }
         Ok(Self {
+            provider_id: "openai".to_string(),
             api_key,
             endpoint,
             extra_headers,
@@ -577,6 +664,19 @@ impl<T> OpenAiResponsesProvider<T> {
             timeout_ms,
             transport,
         })
+    }
+
+    /// Returns the configured provider id guarded by this provider instance.
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Overrides the runtime provider identity accepted by request guards.
+    pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Result<Self> {
+        let provider_id = provider_id.into();
+        validate_non_empty("provider id", &provider_id)?;
+        self.provider_id = provider_id;
+        Ok(self)
     }
 }
 
@@ -649,6 +749,12 @@ impl<T> ChatCompletionsProvider<T> {
             transport,
         })
     }
+
+    /// Returns the configured provider id guarded by this provider instance.
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
     /// Overrides the runtime provider identity accepted by request guards.
     pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Result<Self> {
         let provider_id = provider_id.into();
@@ -934,10 +1040,36 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
     timeout_ms: u64,
     transport: T,
 ) -> Result<OpenAiResponsesProvider<T>> {
+    openai_responses_provider_from_auth_store_with_provider_options(
+        auth_store,
+        "openai",
+        base_url_override,
+        provider_options,
+        timeout_ms,
+        transport,
+    )
+}
+
+/// Builds an OpenAI Responses-compatible provider from auth metadata.
+///
+/// The configured provider name scopes credentials and request guards, while
+/// the compatibility layer reuses the OpenAI Responses wire implementation.
+pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
+    auth_store: &AuthStore,
+    provider_name: &str,
+    base_url_override: Option<&str>,
+    provider_options: &BTreeMap<String, String>,
+    timeout_ms: u64,
+    transport: T,
+) -> Result<OpenAiResponsesProvider<T>> {
     let metadata = auth_store
-        .read_metadata_for_provider("openai")?
-        .ok_or_else(|| MezError::invalid_state("OpenAI provider is not authenticated"))?;
-    let credential = auth_store.provider_secret("openai")?;
+        .read_metadata_for_provider(provider_name)?
+        .ok_or_else(|| {
+            MezError::invalid_state(format!(
+                "OpenAI Responses-compatible provider `{provider_name}` is not authenticated"
+            ))
+        })?;
+    let credential = auth_store.provider_secret(provider_name)?;
     match metadata.credential_kind {
         AuthCredentialKind::ApiKey => {
             let endpoint = base_url_override
@@ -952,8 +1084,14 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
                 openai_direct_api_extra_headers(&metadata, provider_options),
                 transport,
             )
+            .and_then(|provider| provider.with_provider_id(provider_name))
         }
         AuthCredentialKind::ChatGpt => {
+            if provider_name != "openai" {
+                return Err(MezError::invalid_state(format!(
+                    "OpenAI Responses-compatible provider `{provider_name}` cannot use ChatGPT browser credentials"
+                )));
+            }
             let account_id = metadata.account_id.ok_or_else(|| {
                 MezError::invalid_state(
                     "OpenAI ChatGPT login is missing a ChatGPT account id; run `mez auth login` again",
@@ -972,6 +1110,7 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
                 true,
                 transport,
             )
+            .and_then(|provider| provider.with_provider_id(provider_name))
         }
     }
 }
@@ -986,11 +1125,36 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
     timeout_ms: u64,
     transport: T,
 ) -> Result<DeepSeekChatCompletionsProvider<T>> {
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+        auth_store,
+        "deepseek",
+        base_url_override,
+        timeout_ms,
+        transport,
+    )
+}
+
+/// Builds a DeepSeek Chat Completions-compatible provider from auth metadata.
+///
+/// The configured provider name scopes credentials and request guards, while
+/// the compatibility layer reuses the DeepSeek Chat Completions wire dialect.
+pub fn deepseek_chat_completions_provider_from_auth_store_with_provider_options<T>(
+    auth_store: &AuthStore,
+    provider_name: &str,
+    base_url_override: Option<&str>,
+    timeout_ms: u64,
+    transport: T,
+) -> Result<DeepSeekChatCompletionsProvider<T>> {
     let _metadata = auth_store
-        .read_metadata_for_provider("deepseek")?
-        .ok_or_else(|| MezError::invalid_state("DeepSeek provider is not authenticated"))?;
-    let credential = auth_store.provider_secret("deepseek")?;
-    let mut provider = ChatCompletionsProvider::new(credential, transport)?;
+        .read_metadata_for_provider(provider_name)?
+        .ok_or_else(|| {
+            MezError::invalid_state(format!(
+                "DeepSeek Chat Completions-compatible provider `{provider_name}` is not authenticated"
+            ))
+        })?;
+    let credential = auth_store.provider_secret(provider_name)?;
+    let mut provider =
+        ChatCompletionsProvider::new(credential, transport)?.with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         provider =
             provider.with_endpoint(deepseek_chat_completions_endpoint_for_base_url(base_url)?);
@@ -1083,7 +1247,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str {
-        "openai"
+        self.provider_id()
     }
 
     /// Runs the list models operation for this subsystem.
@@ -1189,7 +1353,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn provider_id(&self) -> &str {
-        "openai"
+        self.provider_id()
     }
 
     /// Runs the list models async operation for this subsystem.

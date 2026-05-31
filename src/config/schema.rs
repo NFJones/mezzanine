@@ -491,6 +491,7 @@ pub(super) const AGENT_AUTO_SIZING_KEYS: &[&str] = &[
 /// boundary and avoids relying on call-site inference.
 pub(super) const PROVIDER_KEYS: &[&str] = &[
     "kind",
+    "api",
     "auth_profile",
     "base_url",
     "models",
