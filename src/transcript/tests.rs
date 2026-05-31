@@ -1,11 +1,27 @@
 //! Tests for transcript persistence, forking, and TSV escaping.
 
-use std::{collections::BTreeMap, fs};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use super::{
     AgentPresentationEntry, AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry,
     TranscriptRole,
 };
+
+/// Builds a per-test temporary root that is unique within the current process.
+fn temp_root(name: &str) -> PathBuf {
+    static NEXT_TEMP_ROOT_ID: AtomicU64 = AtomicU64::new(0);
+
+    let unique = NEXT_TEMP_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "mez-transcript-{name}-{}-{unique}",
+        std::process::id()
+    ))
+}
 
 /// Runs the entry operation for this subsystem.
 ///
@@ -55,7 +71,7 @@ fn large_presentation(conversation_id: &str, sequence: u64) -> AgentPresentation
 /// conversation using the durable TSV representation.
 #[test]
 fn transcript_store_appends_lists_inspects_and_deletes_conversations() {
-    let root = std::env::temp_dir().join(format!("mez-transcript-{}", std::process::id()));
+    let root = temp_root("basic");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     store
@@ -85,10 +101,7 @@ fn transcript_store_appends_lists_inspects_and_deletes_conversations() {
 /// frames while later cleartext appends remain replayable after them.
 #[test]
 fn transcript_store_compacts_presentation_tail_into_zstd_history() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-presentation-zstd-{}",
-        std::process::id()
-    ));
+    let root = temp_root("presentation-zstd");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let first = large_presentation("conv1", 1);
@@ -122,10 +135,7 @@ fn transcript_store_compacts_presentation_tail_into_zstd_history() {
 /// recorded pane width so replay does not depend on terminal soft wrapping.
 #[test]
 fn transcript_store_wraps_presentation_rows_to_recorded_terminal_width() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-presentation-wrap-{}",
-        std::process::id()
-    ));
+    let root = temp_root("presentation-wrap");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let mut entry = presentation("conv1", 1);
@@ -149,10 +159,7 @@ fn transcript_store_wraps_presentation_rows_to_recorded_terminal_width() {
 /// columns, matching the agent-mode log rendering contract.
 #[test]
 fn transcript_store_caps_presentation_rows_at_120_columns() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-presentation-cap-{}",
-        std::process::id()
-    ));
+    let root = temp_root("presentation-cap");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let mut entry = presentation("conv1", 1);
@@ -176,8 +183,7 @@ fn transcript_store_caps_presentation_rows_at_120_columns() {
 /// while reporting encoded bytes for async persistence diagnostics.
 #[test]
 fn transcript_store_append_many_reports_written_bytes() {
-    let root =
-        std::env::temp_dir().join(format!("mez-transcript-append-many-{}", std::process::id()));
+    let root = temp_root("append-many");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let entries = vec![
@@ -197,10 +203,7 @@ fn transcript_store_append_many_reports_written_bytes() {
 /// model-facing transcript entries while retaining multiline copy text.
 #[test]
 fn transcript_store_appends_and_inspects_presentation_entries() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-presentation-{}",
-        std::process::id()
-    ));
+    let root = temp_root("presentation");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let first = presentation("conv1", 1);
@@ -226,8 +229,7 @@ fn transcript_store_appends_and_inspects_presentation_entries() {
 /// transcript cannot be copied into memory just to find the latest entries.
 #[test]
 fn transcript_store_inspects_recent_entries_and_next_sequence_from_tail() {
-    let root =
-        std::env::temp_dir().join(format!("mez-transcript-recent-tail-{}", std::process::id()));
+    let root = temp_root("recent-tail");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     for sequence in 1..=12 {
@@ -250,7 +252,7 @@ fn transcript_store_inspects_recent_entries_and_next_sequence_from_tail() {
 /// the same durable layout and decoding behavior as the synchronous store API.
 #[tokio::test]
 async fn transcript_store_async_appends_entries_and_prompt_history() {
-    let root = std::env::temp_dir().join(format!("mez-transcript-async-{}", std::process::id()));
+    let root = temp_root("async");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let entries = vec![
@@ -290,7 +292,7 @@ async fn transcript_store_async_appends_entries_and_prompt_history() {
 /// entries and a replacement creation time.
 #[test]
 fn transcript_store_forks_conversation_to_fresh_identity() {
-    let root = std::env::temp_dir().join(format!("mez-transcript-fork-{}", std::process::id()));
+    let root = temp_root("fork");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     store
@@ -319,8 +321,7 @@ fn transcript_store_forks_conversation_to_fresh_identity() {
 /// directory with one child directory per conversation id.
 #[test]
 fn transcript_store_under_config_root_uses_session_directories() {
-    let config_root =
-        std::env::temp_dir().join(format!("mez-transcript-config-root-{}", std::process::id()));
+    let config_root = temp_root("config-root");
     let _ = fs::remove_dir_all(&config_root);
     let store = AgentTranscriptStore::under_config_root(config_root.clone());
 
@@ -349,10 +350,7 @@ fn transcript_store_under_config_root_uses_session_directories() {
 /// into forked conversation directories.
 #[test]
 fn transcript_store_persists_prompt_history_in_shared_file() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-prompt-history-{}",
-        std::process::id()
-    ));
+    let root = temp_root("prompt-history");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     store
@@ -394,10 +392,7 @@ fn transcript_store_persists_prompt_history_in_shared_file() {
 /// agent prompt history while using the same shared, bounded reload behavior.
 #[test]
 fn transcript_store_persists_command_prompt_history_in_shared_file() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-command-history-{}",
-        std::process::id()
-    ));
+    let root = temp_root("command-history");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     assert!(
@@ -426,10 +421,7 @@ fn transcript_store_persists_command_prompt_history_in_shared_file() {
 /// session while preserving rows for unrelated sessions.
 #[test]
 fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-transcript-agent-session-metadata-{}",
-        std::process::id()
-    ));
+    let root = temp_root("agent-session-metadata");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let owned_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-fast");
