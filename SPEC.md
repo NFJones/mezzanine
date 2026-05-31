@@ -7143,11 +7143,13 @@ active-profile columns, and MUST mark the active model and active reasoning
 level with a visible star indicator in their cells. It MUST NOT append a usage
 example below the catalog. When provider credentials and metadata endpoints are available,
 Mezzanine SHOULD use the live provider catalog and SHOULD retain the successful
-catalog in a session-local cache for later model-selection UI. When a live
-catalog cannot be queried, Mezzanine MAY fall back to explicitly configured
-provider models, but the display MUST identify that the source is configuration
-rather than provider metadata and SHOULD expose the provider error in non-secret
-form.
+catalog in a session-local cache for later model-selection UI. Provider catalog
+refresh is best effort: startup refreshes, `refresh-provider-info`, `/model
+list`, and pane-frame selectors MUST NOT present catalog refresh failures to
+the user when fallback model information is available or an empty fallback can
+be shown. When a live catalog cannot be queried, Mezzanine MAY fall back to
+explicitly configured or built-in provider models, but the display MUST identify
+that the source is configuration rather than provider metadata.
 
 Provider-backed browser authentication does not imply that the provider exposes
 the same model-catalog endpoint as API-key authentication. Mezzanine MUST NOT

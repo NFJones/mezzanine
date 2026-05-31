@@ -1011,27 +1011,6 @@ impl RuntimeSessionService {
             &provider_config,
             &self.provider_registry,
         );
-        if let Some(provider_error) =
-            self.runtime_cached_model_catalog_miss_reason(provider_id, &provider_config)
-        {
-            return Ok(RuntimeModelCatalog {
-                provider: fallback.provider,
-                source: fallback.source,
-                provider_error: Some(provider_error),
-                models: fallback.models,
-                reasoning_levels: fallback.reasoning_levels,
-                quota_usage: fallback.quota_usage,
-            });
-        }
-        if matches!(
-            effective_provider_api(&provider_config.kind, provider_config.api.as_deref()),
-            Ok(ProviderApiCompatibility::OpenAiResponses)
-        ) && fallback.models.is_empty()
-        {
-            return Err(MezError::invalid_state(
-                "OpenAI Responses model listing requires cached provider information or configured fallback models",
-            ));
-        }
         Ok(fallback)
     }
 
@@ -1072,54 +1051,17 @@ impl RuntimeSessionService {
                         .insert(provider_id.to_string(), catalog.clone());
                     Ok(catalog)
                 }
-                Err(error) if fallback.models.is_empty() => Err(error),
-                Err(error) => Ok(RuntimeModelCatalog {
+                Err(_error) if fallback.models.is_empty() => Ok(fallback),
+                Err(_error) => Ok(RuntimeModelCatalog {
                     provider: fallback.provider,
                     source: "config".to_string(),
-                    provider_error: Some(error.message().to_string()),
+                    provider_error: None,
                     models: fallback.models,
                     reasoning_levels: fallback.reasoning_levels,
                     quota_usage: Vec::new(),
                 }),
             },
         }
-    }
-
-    /// Explains why a cached provider catalog is not currently available
-    /// without attempting network provider discovery.
-    fn runtime_cached_model_catalog_miss_reason(
-        &self,
-        provider_id: &str,
-        provider_config: &crate::runtime::RuntimeProviderConfig,
-    ) -> Option<String> {
-        let Ok(api) = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())
-        else {
-            return None;
-        };
-        if !matches!(api, ProviderApiCompatibility::OpenAiResponses) {
-            return None;
-        }
-        let Some(auth_store) = self.auth_store.as_ref() else {
-            return Some(
-                "OpenAI Responses model listing requires an attached auth store".to_string(),
-            );
-        };
-        let metadata = match auth_store.read_metadata_for_provider(provider_id) {
-            Ok(metadata) => metadata,
-            Err(error) => return Some(error.message().to_string()),
-        };
-        let Some(metadata) = metadata else {
-            return Some(format!(
-                "OpenAI Responses provider `{provider_id}` requires an authenticated provider"
-            ));
-        };
-        if metadata.credential_kind == AuthCredentialKind::ChatGpt {
-            return Some(
-                "ChatGPT browser credentials do not expose an OpenAI-compatible model catalog"
-                    .to_string(),
-            );
-        }
-        Some("OpenAI model catalog has not been refreshed; run :refresh-provider-info".to_string())
     }
 
     /// Refreshes cached provider information for every configured provider.

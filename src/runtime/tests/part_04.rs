@@ -4584,10 +4584,7 @@ async fn runtime_agent_shell_model_list_displays_provider_model_catalog() {
     assert!(model_list.contains("## Model Catalog"), "{model_list}");
     assert!(!model_list.contains("### Active Selection"), "{model_list}");
     assert!(!model_list.contains("### Available Models"), "{model_list}");
-    assert!(
-        model_list.contains("**Provider catalog unavailable:** `auth-unavailable`"),
-        "{model_list}"
-    );
+    assert!(!model_list.contains("Provider catalog unavailable"), "{model_list}");
     assert!(
         model_list.contains(
             "| Provider | Model | Reasoning levels | Context limit | Source | Active profile |"

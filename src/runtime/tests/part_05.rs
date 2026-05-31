@@ -141,10 +141,7 @@ async fn runtime_agent_shell_model_list_skips_browser_auth_catalog_request() {
         .unwrap();
 
     assert!(model_list.contains(r#""kind":"display""#), "{model_list}");
-    assert!(
-        model_list.contains("**Provider catalog unavailable:** `browser-auth-catalog-unsupported`"),
-        "{model_list}"
-    );
+    assert!(!model_list.contains("Provider catalog unavailable"), "{model_list}");
     assert!(!model_list.contains("status 400"), "{model_list}");
     assert!(!model_list.contains("Models API returned"), "{model_list}");
     assert!(
