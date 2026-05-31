@@ -22,16 +22,13 @@ use super::{
 };
 use crate::async_runtime::AsyncFakeAttachedTerminalIo;
 use crate::config::{DEFAULT_CONFIG_TOML, compose_effective_config};
-use crate::control::{ControlConnectionState, decode_control_frame, encode_control_body};
+use crate::control::{decode_control_frame, encode_control_body};
 use crate::layout::Size;
 use crate::project::{ProjectTrustStore, TrustDecision};
 use crate::registry::SessionRegistry;
 use crate::registry::{RegistrySessionState, SessionRecord};
 use crate::runtime::{MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, default_socket_directory};
-use crate::runtime::{
-    RuntimeSessionService, bind_control_socket, effective_uid_for_tests,
-    serve_runtime_control_connection_with_state,
-};
+use crate::runtime::{bind_control_socket, effective_uid_for_tests};
 use crate::session::Session;
 use crate::shell::resolve_shell;
 use crate::snapshot::{SnapshotKind, SnapshotRepository};
@@ -133,69 +130,45 @@ where
         .block_on(future)
 }
 
-/// Spawns one bounded runtime control server for CLI attach tests.
+/// Spawns one deterministic noninteractive attach control stub.
 ///
-/// The helper accepts exactly one client connection, serves attach requests until
-/// the client disconnects, and applies short socket deadlines so a stalled client
-/// cannot hang the entire test binary indefinitely.
-fn spawn_attach_test_runtime_server(
+/// The helper reads exactly the `control/initialize` and follow-up request
+/// frames emitted by `mez attach` when stdout is not a terminal, then returns
+/// prebuilt responses without depending on runtime session service state.
+fn spawn_noninteractive_attach_stub_server(
     listener: std::os::unix::net::UnixListener,
-    service_socket: PathBuf,
+    expected_follow_up_method: Option<&'static str>,
+    initialize_result: &'static str,
+    follow_up_result: Option<&'static str>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        listener.set_nonblocking(true).unwrap();
-        let (mut stream, _) = loop {
-            match listener.accept() {
-                Ok(stream) => break stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "timed out waiting for attach test client connection"
-                    );
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("{error}"),
-            }
-        };
-        stream.set_nonblocking(false).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-
-        let session = Session::new_default(
-            resolve_shell(Some(OsString::from("/bin/sh"))).unwrap(),
-            Size::new(80, 24).unwrap(),
+        let (mut stream, _addr) = listener.accept().unwrap();
+        let request = read_control_response_frames(
+            &mut stream,
+            4096,
+            if expected_follow_up_method.is_some() {
+                2
+            } else {
+                1
+            },
+        )
+        .unwrap();
+        let (initialize, consumed) = decode_control_frame(&request, 4096).unwrap();
+        assert!(
+            initialize.contains(r#""method":"control/initialize""#),
+            "{initialize}"
         );
-        let mut service = RuntimeSessionService::new(session, service_socket, 100).unwrap();
-        let mut connection = ControlConnectionState::new(true, true);
-        loop {
-            match serve_runtime_control_connection_with_state(
-                &mut stream,
-                4096,
-                &mut service,
-                &mut connection,
-            ) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.io_kind(),
-                        Some(
-                            std::io::ErrorKind::BrokenPipe
-                                | std::io::ErrorKind::ConnectionReset
-                                | std::io::ErrorKind::TimedOut
-                                | std::io::ErrorKind::WouldBlock
-                        )
-                    ) =>
-                {
-                    break;
-                }
-                Err(error) => panic!("{error}"),
-            }
+        stream
+            .write_all(&encode_control_body(initialize_result))
+            .unwrap();
+        if let Some(expected_follow_up_method) = expected_follow_up_method {
+            let (follow_up, _) = decode_control_frame(&request[consumed..], 4096).unwrap();
+            assert!(follow_up.contains(expected_follow_up_method), "{follow_up}");
+            stream
+                .write_all(&encode_control_body(
+                    follow_up_result.expect("follow-up response is required"),
+                ))
+                .unwrap();
         }
     })
 }
@@ -1572,7 +1545,12 @@ fn attach_uses_selected_control_socket() {
         }
         Err(error) => panic!("{error}"),
     };
-    let server = spawn_attach_test_runtime_server(listener, socket.clone());
+    let server = spawn_noninteractive_attach_stub_server(
+        listener,
+        Some(r#""method":"session/get""#),
+        r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary","client_id":"c1"}}"#,
+        Some(r#"{"jsonrpc":"2.0","id":"cli","result":{"session":{"session_id":"$1"}}}"#),
+    );
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -1620,7 +1598,12 @@ fn attach_observer_requests_pending_observer_without_session_data() {
         }
         Err(error) => panic!("{error}"),
     };
-    let server = spawn_attach_test_runtime_server(listener, socket.clone());
+    let server = spawn_noninteractive_attach_stub_server(
+        listener,
+        None,
+        r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"pending_observer","approval_pending":true,"session":null}}"#,
+        None,
+    );
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
