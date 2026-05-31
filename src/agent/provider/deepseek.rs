@@ -8,13 +8,63 @@
 use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
-    AllowedActionSet, DEEPSEEK_MODELS_ENDPOINT, DeepSeekMaapRequestStrategy, MaapBatch,
+    AgentCapability, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
+    DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_MODELS_ENDPOINT,
+    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, DeepSeekMaapRequestStrategy, MaapBatch,
     McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse,
     ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
     ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
 use std::collections::BTreeMap;
+
+/// DeepSeek-facing MAAP shim function selected for one provider request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeepSeekMaapShimKind {
+    /// Capability-routing function with direct capability fields.
+    CapabilityDecision,
+    /// Response-only function with direct say fields.
+    RespondOnly,
+    /// Executable/action function carrying a canonical MAAP batch.
+    ActionDispatch,
+}
+
+impl DeepSeekMaapShimKind {
+    /// Selects the DeepSeek-facing shim surface for the active request.
+    fn for_request(request: &ModelRequest) -> Self {
+        if request.allowed_actions == AllowedActionSet::capability_decision() {
+            return Self::CapabilityDecision;
+        }
+        if request.allowed_actions == AllowedActionSet::say_only()
+            || request.allowed_actions
+                == AllowedActionSet::for_capability(AgentCapability::RespondOnly)
+        {
+            return Self::RespondOnly;
+        }
+        Self::ActionDispatch
+    }
+
+    /// Returns the provider-facing function name for this shim surface.
+    fn tool_name(self) -> &'static str {
+        match self {
+            Self::CapabilityDecision => DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
+            Self::RespondOnly => DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+            Self::ActionDispatch => DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
+        }
+    }
+
+    /// Parses a DeepSeek provider-facing function name into a shim surface.
+    fn from_tool_name(name: &str) -> Option<Self> {
+        match name {
+            DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME => Some(Self::CapabilityDecision),
+            DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME => Some(Self::RespondOnly),
+            DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME | OPENAI_MAAP_FUNCTION_TOOL_NAME => {
+                Some(Self::ActionDispatch)
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Builds a DeepSeek Chat Completions HTTP request.
 pub fn build_deepseek_chat_completions_http_request(
@@ -152,18 +202,16 @@ fn deepseek_chat_completions_request_body_with_strategy(
         }
     }
     if capabilities.supports_tool_calls && strategy != DeepSeekMaapRequestStrategy::NoTool {
+        let shim_kind = DeepSeekMaapShimKind::for_request(request);
         if strategy == DeepSeekMaapRequestStrategy::ForcedToolNonThinking {
-            body["tool_choice"] = deepseek_maap_tool_choice();
+            body["tool_choice"] = deepseek_maap_tool_choice(shim_kind);
         }
         let maap_tool = serde_json::json!({
             "type": "function",
             "function": {
-                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-                "description": chat_completions_maap_tool_description(request),
-                "parameters": deepseek_maap_action_batch_schema(
-                    &request.allowed_actions,
-                    &request.available_mcp_tools
-                ),
+                "name": shim_kind.tool_name(),
+                "description": chat_completions_maap_tool_description(request, shim_kind),
+                "parameters": deepseek_maap_tool_schema(request, shim_kind),
                 "strict": false
             }
         });
@@ -286,11 +334,11 @@ pub(super) fn deepseek_should_retry_with_forced_maap(
 /// provider turn. This helper is therefore reserved for strict fallback
 /// requests with thinking disabled; thinking-mode MAAP requests omit
 /// `tool_choice` and let DeepSeek choose the advertised MAAP tool.
-fn deepseek_maap_tool_choice() -> serde_json::Value {
+fn deepseek_maap_tool_choice(shim_kind: DeepSeekMaapShimKind) -> serde_json::Value {
     serde_json::json!({
         "type": "function",
         "function": {
-            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+            "name": shim_kind.tool_name()
         }
     })
 }
@@ -302,19 +350,93 @@ fn deepseek_maap_tool_choice() -> serde_json::Value {
 /// function-call discipline, capability-routing guidance, and anti-pattern
 /// corrections. Provider-specific behavior such as thinking-mode tool-choice
 /// strategy still lives outside this shared prompt text.
-fn chat_completions_maap_tool_description(request: &ModelRequest) -> String {
+fn chat_completions_maap_tool_description(
+    request: &ModelRequest,
+    shim_kind: DeepSeekMaapShimKind,
+) -> String {
     let capability_map = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; respond_only=final text only.";
     let anti_examples = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: say(blocked, \"Shell capability is absent\") or say describing what is missing. Right: request_capability for the missing capability immediately. Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
     let routing_rule = "CRITICAL ROUTING RULE: When request_capability is in the allowed action types and an executable action type is needed but absent, request_capability is the ONLY correct response. Never emit a say action describing, diagnosing, or lamenting the absence of a capability. request_capability IS how you obtain the missing capability within the same turn; emit it immediately without any preceding say.";
-    if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
-        return format!(
-            "Submit exactly one MAAP/1 capability routing batch through this function. Return a function call, not prose. Current allowed action types: say,request_capability. {routing_rule} If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Use final say only when no external action capability is needed. {capability_map} {anti_examples}"
-        );
+    match shim_kind {
+        DeepSeekMaapShimKind::CapabilityDecision => format!(
+            "Decide the next Mezzanine capability through this function. Return a function call, not prose. The arguments are translated into one internal MAAP/1 request_capability batch unless no external action capability is needed. {routing_rule} If any local or external action would help, choose request_capability via the capability and reason fields only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. {capability_map} {anti_examples}"
+        ),
+        DeepSeekMaapShimKind::RespondOnly => {
+            "Submit one user-facing response through this function. Return a function call, not prose. The arguments are translated into one internal MAAP/1 say action. Only progress, final, or blocked say text is valid; do not request tools or capabilities from this response-only surface.".to_string()
+        }
+        DeepSeekMaapShimKind::ActionDispatch => format!(
+            "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
+            request.allowed_actions.action_type_names().join(","),
+        ),
     }
-    format!(
-        "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
-        request.allowed_actions.action_type_names().join(","),
-    )
+}
+
+/// Builds the DeepSeek shim argument schema for the selected function.
+fn deepseek_maap_tool_schema(
+    request: &ModelRequest,
+    shim_kind: DeepSeekMaapShimKind,
+) -> serde_json::Value {
+    match shim_kind {
+        DeepSeekMaapShimKind::CapabilityDecision => deepseek_capability_decision_schema(),
+        DeepSeekMaapShimKind::RespondOnly => deepseek_respond_schema(),
+        DeepSeekMaapShimKind::ActionDispatch => deepseek_maap_action_batch_schema(
+            &request.allowed_actions,
+            &request.available_mcp_tools,
+        ),
+    }
+}
+
+/// Builds the compact DeepSeek capability-decision shim schema.
+fn deepseek_capability_decision_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "rationale": {
+                "type": "string",
+                "description": "Terse reason this capability decision is next."
+            },
+            "capability": {
+                "type": "string",
+                "enum": AgentCapability::all_names(),
+                "description": "Coarse Mezzanine capability to expose next. Use shell for local files, commands, builds, tests, and apply_patch; respond_only only for final text."
+            },
+            "reason": {
+                "type": "string",
+                "description": "Brief task-specific reason naming the next concrete action or evidence needed."
+            }
+        },
+        "required": ["rationale", "capability", "reason"],
+        "additionalProperties": false
+    })
+}
+
+/// Builds the compact DeepSeek respond-only shim schema.
+fn deepseek_respond_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "rationale": {
+                "type": "string",
+                "description": "Terse reason this visible response is next."
+            },
+            "status": {
+                "type": "string",
+                "enum": ["progress", "final", "blocked"],
+                "description": "progress for nonterminal updates, final when complete, blocked when user or external input is required."
+            },
+            "content_type": {
+                "type": "string",
+                "enum": ["text/plain; charset=utf-8", "text/markdown; charset=utf-8", "text/x-diff; charset=utf-8"],
+                "description": "HTTP-style media type for text."
+            },
+            "text": {
+                "type": "string",
+                "description": "User-visible text. Commands and patch blocks here are display-only."
+            }
+        },
+        "required": ["rationale", "status", "text"],
+        "additionalProperties": false
+    })
 }
 
 /// Maps Mezzanine reasoning effort levels to DeepSeek-supported values.
@@ -551,10 +673,15 @@ fn parse_deepseek_maap_tool_calls(
     tool_calls: &[serde_json::Value],
     request: &ModelRequest,
 ) -> Result<Option<MaapBatch>> {
-    let Some(maap_call) = tool_calls.iter().find(|call| {
-        call.pointer("/function/name")
-            .and_then(serde_json::Value::as_str)
-            == Some(OPENAI_MAAP_FUNCTION_TOOL_NAME)
+    let Some((maap_call, shim_kind, tool_name)) = tool_calls.iter().find_map(|call| {
+        let tool_name = call
+            .pointer("/function/name")
+            .and_then(serde_json::Value::as_str)?;
+        Some((
+            call,
+            DeepSeekMaapShimKind::from_tool_name(tool_name)?,
+            tool_name,
+        ))
     }) else {
         return Ok(None);
     };
@@ -566,14 +693,67 @@ fn parse_deepseek_maap_tool_calls(
         .ok_or_else(|| {
             provider_maap_parse_error(
                 MezError::invalid_args(format!(
-                    "DeepSeek tool call {OPENAI_MAAP_FUNCTION_TOOL_NAME} did not include JSON arguments"
+                    "DeepSeek tool call {tool_name} did not include JSON arguments"
                 )),
                 &missing_arguments_raw_text,
             )
         })?;
-    parse_maap_action_batch_json_for_turn(arguments, &request.turn_id, &request.agent_id)
+    let batch_json = deepseek_shim_arguments_to_maap_json(arguments, shim_kind)
+        .map_err(|error| provider_maap_parse_error(error, arguments))?;
+    parse_maap_action_batch_json_for_turn(&batch_json, &request.turn_id, &request.agent_id)
         .map(Some)
-        .map_err(|error| provider_maap_parse_error(error, arguments))
+        .map_err(|error| provider_maap_parse_error(error, &batch_json))
+}
+
+/// Translates DeepSeek shim arguments into canonical compact MAAP batch JSON.
+fn deepseek_shim_arguments_to_maap_json(
+    arguments: &str,
+    shim_kind: DeepSeekMaapShimKind,
+) -> Result<String> {
+    if shim_kind == DeepSeekMaapShimKind::ActionDispatch {
+        return Ok(arguments.to_string());
+    }
+    let value = serde_json::from_str::<serde_json::Value>(arguments).map_err(|error| {
+        MezError::invalid_args(format!("DeepSeek shim arguments are invalid JSON: {error}"))
+    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| MezError::invalid_args("DeepSeek shim arguments must be a JSON object"))?;
+    let rationale = required_deepseek_shim_string(object, "rationale")?;
+    let action = match shim_kind {
+        DeepSeekMaapShimKind::CapabilityDecision => serde_json::json!({
+            "type": "request_capability",
+            "capability": required_deepseek_shim_string(object, "capability")?,
+            "reason": required_deepseek_shim_string(object, "reason")?
+        }),
+        DeepSeekMaapShimKind::RespondOnly => serde_json::json!({
+            "type": "say",
+            "status": required_deepseek_shim_string(object, "status")?,
+            "content_type": object
+                .get("content_type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("text/plain; charset=utf-8"),
+            "text": required_deepseek_shim_string(object, "text")?
+        }),
+        DeepSeekMaapShimKind::ActionDispatch => unreachable!("handled above"),
+    };
+    Ok(serde_json::json!({
+        "rationale": rationale,
+        "actions": [action]
+    })
+    .to_string())
+}
+
+/// Returns one required DeepSeek shim string argument.
+fn required_deepseek_shim_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<&'a str> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| MezError::invalid_args(format!("DeepSeek shim field {field} is required")))
 }
 
 /// Parses a DeepSeek content fallback when no MAAP tool call is present.
@@ -1073,7 +1253,7 @@ mod tests {
         assert_eq!(body["thinking"]["type"], "disabled");
         assert_eq!(
             body["tool_choice"]["function"]["name"],
-            OPENAI_MAAP_FUNCTION_TOOL_NAME
+            DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
         );
     }
 

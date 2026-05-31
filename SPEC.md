@@ -3470,6 +3470,17 @@ tool call, Mezzanine MAY retry the same provider turn once with a stricter
 provider-specific fallback, such as disabling thinking mode and forcing the
 MAAP function when the provider supports that combination.
 
+For DeepSeek Chat Completions requests, Mezzanine MAY expose provider-facing
+shim functions whose argument schemas are simpler than the canonical MAAP batch
+schema. Each DeepSeek shim response MUST translate into exactly one internal
+`maap/1` action batch before validation, permission checks, audit, transcript
+persistence, and action-result generation. The DeepSeek shim MUST remain scoped
+to the DeepSeek provider path and MUST NOT change OpenAI Responses tool names,
+strict schema stability, or forced-tool behavior. Compatibility parsers MAY
+accept the legacy DeepSeek `submit_maap_action_batch` call shape during rollout,
+but legacy calls MUST still lower into the same internal `maap/1` validation
+path.
+
 Provider-native structured action schemas MUST NOT require the model to emit
 runtime-owned identity or bookkeeping fields such as `protocol`, `turn_id`,
 `agent_id`, `final`, or action identifiers. Mezzanine MUST stamp those fields

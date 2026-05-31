@@ -4123,17 +4123,24 @@ fn openai_tool_action_types(tool: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// Finds the single MAAP function tool in a DeepSeek Chat Completions request.
+/// Finds the single Mezzanine function tool in a DeepSeek Chat Completions request.
 fn deepseek_maap_function_tool(body: &serde_json::Value) -> &serde_json::Value {
     body["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("DeepSeek request body does not contain tools: {body}"))
         .iter()
-        .find(|tool| tool["function"]["name"].as_str() == Some(OPENAI_MAAP_FUNCTION_TOOL_NAME))
-        .unwrap_or_else(|| panic!("DeepSeek request body does not contain MAAP tool: {body}"))
+        .find(|tool| {
+            matches!(
+                tool["function"]["name"].as_str(),
+                Some(DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME)
+                    | Some(DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME)
+                    | Some(DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME)
+            )
+        })
+        .unwrap_or_else(|| panic!("DeepSeek request body does not contain Mezzanine tool: {body}"))
 }
 
-/// Returns the MAAP action type names advertised by one DeepSeek function tool.
+/// Returns the MAAP action type names advertised by one DeepSeek action tool.
 fn deepseek_tool_action_types(tool: &serde_json::Value) -> Vec<String> {
     tool["function"]["parameters"]["properties"]["actions"]["items"]["anyOf"]
         .as_array()
@@ -4190,7 +4197,6 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     .unwrap();
     let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
     let tool = deepseek_maap_function_tool(&value);
-    let action_types = deepseek_tool_action_types(tool);
 
     assert_eq!(
         value["thinking"],
@@ -4204,16 +4210,13 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+                "name": DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME
             }
         })
     );
     assert_eq!(value["tools"].as_array().unwrap().len(), 1);
-    assert!(action_types.contains(&"say".to_string()));
-    assert!(action_types.contains(&"request_capability".to_string()));
-    assert!(!action_types.contains(&"spawn_agent".to_string()));
     let description = tool["function"]["description"].as_str().unwrap();
-    assert!(description.contains("capability routing batch"));
+    assert!(description.contains("Decide the next Mezzanine capability"));
     assert!(description.contains("Return a function call, not prose"));
     assert!(description.contains("Capability map: shell=local files"));
     assert!(description.contains("Wrong: say(blocked"));
@@ -4223,14 +4226,9 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(description.contains("Wrong: inferred apply_patch old context"));
     assert!(description.contains("copy old/context lines verbatim from read file evidence"));
     let parameters = &tool["function"]["parameters"];
-    assert!(parameters["properties"].get("thought").is_none());
-    assert!(
-        !parameters["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|field| field.as_str() == Some("thought"))
-    );
+    assert!(parameters["properties"].get("capability").is_some());
+    assert!(parameters["properties"].get("reason").is_some());
+    assert!(parameters["properties"].get("actions").is_none());
     let parameters_text = serde_json::to_string(parameters).unwrap();
     assert!(!parameters_text.contains("minLength"));
     assert!(!parameters_text.contains("minItems"));
@@ -4295,7 +4293,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+                "name": DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
             }
         })
     );
@@ -4437,7 +4435,7 @@ fn deepseek_chat_completions_request_body_disables_thinking_when_profile_toggle_
         serde_json::json!({
             "type": "function",
             "function": {
-                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+                "name": DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
             }
         })
     );

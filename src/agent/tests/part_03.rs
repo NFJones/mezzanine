@@ -31,13 +31,8 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
         crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "fallback produced structured output",
-        "actions": [
-            {
-                "type": "say",
-                "status": "final",
-                "text": "hello"
-            }
-        ]
+        "status": "final",
+        "text": "hello"
     })
     .to_string();
     let transport = SequencedFakeProviderHttpTransport::new(vec![
@@ -79,7 +74,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
                                     "id": "call_1",
                                     "type": "function",
                                     "function": {
-                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "name": DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
                                         "arguments": arguments
                                     }
                                 }
@@ -110,7 +105,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
     assert_eq!(second_body["thinking"]["type"], "disabled");
     assert_eq!(
         second_body["tool_choice"]["function"]["name"],
-        OPENAI_MAAP_FUNCTION_TOOL_NAME
+        DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
     );
     assert_eq!(response.usage.input_tokens, 22);
     assert_eq!(response.usage.output_tokens, 10);
@@ -161,13 +156,8 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
     .unwrap();
     let arguments = serde_json::json!({
         "rationale": "compatible provider returned structured output",
-        "actions": [
-            {
-                "type": "say",
-                "status": "final",
-                "text": "hello"
-            }
-        ]
+        "status": "final",
+        "text": "hello"
     })
     .to_string();
     let transport = SequencedFakeProviderHttpTransport::new(vec![ProviderHttpResponse {
@@ -185,7 +175,7 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
                                 "id": "call_1",
                                 "type": "function",
                                 "function": {
-                                    "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                    "name": DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
                                     "arguments": arguments
                                 }
                             }
@@ -313,14 +303,14 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
     assert_eq!(second_body["thinking"]["type"], "disabled");
     assert_eq!(
         second_body["tool_choice"]["function"]["name"],
-        OPENAI_MAAP_FUNCTION_TOOL_NAME
+        DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME
     );
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
     assert_eq!(error.provider_raw_text(), Some("Still no tool call."));
     assert!(
         error
             .message()
-            .contains("DeepSeek response did not call the submit_maap_action_batch tool"),
+            .contains("DeepSeek response did not call a Mezzanine DeepSeek shim tool"),
         "{}",
         error.message()
     );

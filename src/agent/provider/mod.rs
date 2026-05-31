@@ -83,6 +83,12 @@ pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/co
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 /// OpenAI function tool name used to carry one validated MAAP action batch.
 pub const OPENAI_MAAP_FUNCTION_TOOL_NAME: &str = "submit_maap_action_batch";
+/// DeepSeek shim function tool name used for capability routing turns.
+pub const DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME: &str = "mez_decide_capability";
+/// DeepSeek shim function tool name used for response-only turns.
+pub const DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME: &str = "mez_respond";
+/// DeepSeek shim function tool name used for executable action turns.
+pub const DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME: &str = "mez_take_actions";
 /// DeepSeek request strategy for provider-native MAAP transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeepSeekMaapRequestStrategy {
@@ -687,7 +693,7 @@ fn deepseek_required_maap_response(
     }
     Err(provider_maap_parse_error(
         MezError::invalid_args(format!(
-            "DeepSeek response did not call the {OPENAI_MAAP_FUNCTION_TOOL_NAME} tool or return a MAAP JSON object"
+            "DeepSeek response did not call a Mezzanine DeepSeek shim tool ({DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME}, {DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME}, or {DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME}) or return a MAAP JSON object"
         )),
         &response.raw_text,
     ))
