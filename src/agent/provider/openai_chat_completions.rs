@@ -631,8 +631,51 @@ fn parse_openai_chat_completions_maap_action_batch(
             .map(Some)
             .map_err(|error| provider_maap_parse_error(error, raw_text));
     }
-    parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
-        .map_err(|error| provider_maap_parse_error(error, raw_text))
+    if let Some(batch) =
+        parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
+            .map_err(|error| provider_maap_parse_error(error, raw_text))?
+    {
+        return Ok(Some(batch));
+    }
+    if trimmed.is_empty()
+        && let Some(reasoning_content) = openai_chat_completions_reasoning_content(message)
+    {
+        let trimmed_reasoning = reasoning_content.trim();
+        if trimmed_reasoning.starts_with('{') {
+            return parse_maap_action_batch_json_for_turn(
+                trimmed_reasoning,
+                &request.turn_id,
+                &request.agent_id,
+            )
+            .map(Some)
+            .map_err(|error| provider_maap_parse_error(error, reasoning_content));
+        }
+        return parse_fenced_maap_action_batch_for_turn(
+            reasoning_content,
+            &request.turn_id,
+            &request.agent_id,
+        )
+        .map_err(|error| provider_maap_parse_error(error, reasoning_content));
+    }
+    Ok(None)
+}
+
+/// Returns provider-supplied reasoning content only for empty visible-content
+/// responses so structured-output recovery stays narrowly scoped.
+fn openai_chat_completions_reasoning_content(message: &serde_json::Value) -> Option<&str> {
+    let content = message
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !content.is_empty() {
+        return None;
+    }
+    message
+        .get("reasoning_content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
 }
 
 /// Extracts canonical MAAP function arguments from OpenAI-style tool calls.

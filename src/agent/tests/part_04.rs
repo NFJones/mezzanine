@@ -421,6 +421,100 @@ fn openai_compatible_chat_completions_provider_supports_structured_maap_output()
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies that generic OpenAI-compatible Chat Completions can recover a
+/// structured MAAP batch when an LM Studio-class backend serializes the JSON in
+/// `reasoning_content` instead of `message.content` or native `tool_calls`.
+///
+/// Some local Qwen-backed integrations emit an empty assistant `content`
+/// string, leave `tool_calls` empty, and place the valid MAAP batch JSON in a
+/// provider-specific reasoning field. This regression keeps the compatibility
+/// fallback narrowly scoped to empty visible-content responses.
+#[test]
+fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_reasoning_content() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-reasoning-structured-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let reasoning_content = serde_json::json!({
+        "rationale": "generic compatible provider returned structured JSON in reasoning_content",
+        "thought": null,
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": reasoning_content,
+                            "tool_calls": []
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    };
+    let mut provider_options = std::collections::BTreeMap::new();
+    provider_options.insert("maap_output".to_string(), "structured_json".to_string());
+    provider_options.insert("structured_output".to_string(), "json_schema".to_string());
+
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &provider_options,
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(
+        response.action_batch.unwrap().rationale,
+        "generic compatible provider returned structured JSON in reasoning_content"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies generic OpenAI-compatible Chat Completions provider options tune
 /// MAAP request shape without importing DeepSeek shims.
 ///
