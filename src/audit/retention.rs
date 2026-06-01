@@ -13,6 +13,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::Result;
 
+use super::json::insert_hash_field;
+use super::log::chained_hash;
 use super::time::{record_timestamp_seconds, unix_seconds};
 use super::types::{AuditRetentionPolicy, AuditRetentionReport};
 
@@ -72,10 +74,14 @@ impl AuditRetentionPolicy {
 
         let data = fs::read_to_string(path)?;
         let retained = self.retained_jsonl_lines(data.as_str(), now);
-        let retained_data = retained.retained_data();
+        let mut retained_data = retained.retained_data();
+        let should_rewrite = retained.should_rewrite(retained_data.len() as u64);
+        if should_rewrite {
+            retained_data = rehash_retained_hash_chain_lines(&retained_data);
+        }
         let report = retained.report(retained_data.len() as u64);
 
-        if report.pruned_records > 0 || report.retained_bytes != report.original_bytes {
+        if should_rewrite {
             let mut file = OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -111,10 +117,14 @@ impl AuditRetentionPolicy {
             Err(error) => return Err(error.into()),
         };
         let retained = self.retained_jsonl_lines(data.as_str(), now);
-        let retained_data = retained.retained_data();
+        let mut retained_data = retained.retained_data();
+        let should_rewrite = retained.should_rewrite(retained_data.len() as u64);
+        if should_rewrite {
+            retained_data = rehash_retained_hash_chain_lines(&retained_data);
+        }
         let report = retained.report(retained_data.len() as u64);
 
-        if report.pruned_records > 0 || report.retained_bytes != report.original_bytes {
+        if should_rewrite {
             let mut file = tokio::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -214,6 +224,12 @@ impl RetainedAuditJsonl {
         }
     }
 
+    /// Returns whether the retained data differs from the original file.
+    fn should_rewrite(&self, retained_bytes: u64) -> bool {
+        self.original_records.saturating_sub(self.lines.len()) > 0
+            || retained_bytes != self.original_bytes
+    }
+
     /// Runs the report operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -228,4 +244,46 @@ impl RetainedAuditJsonl {
             retained_bytes,
         }
     }
+}
+
+/// Rebuilds retained hash chains from the first retained record.
+fn rehash_retained_hash_chain_lines(data: &str) -> String {
+    let mut previous_hash = None;
+    let mut lines = Vec::new();
+
+    for line in data.lines() {
+        let Some(base_line) = audit_line_without_trailing_hash(line) else {
+            previous_hash = None;
+            lines.push(line.to_string());
+            continue;
+        };
+        let hash = chained_hash(previous_hash.as_deref(), &base_line);
+        lines.push(insert_hash_field(base_line, &hash));
+        previous_hash = Some(hash);
+    }
+
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
+}
+
+/// Removes the terminal audit hash field while preserving record field order.
+fn audit_line_without_trailing_hash(line: &str) -> Option<String> {
+    let marker = ",\"hash\":\"";
+    let start = line.rfind(marker)?;
+    if !line.ends_with("\"}") {
+        return None;
+    }
+    let hash = &line[start + marker.len()..line.len().saturating_sub(2)];
+    if !is_audit_hash_value(hash) {
+        return None;
+    }
+    Some(format!("{}}}", &line[..start]))
+}
+
+/// Returns whether text is a non-empty hexadecimal audit hash.
+fn is_audit_hash_value(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

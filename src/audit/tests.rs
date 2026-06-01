@@ -346,7 +346,9 @@ fn retention_policy_preserves_surviving_hash_chain_records() {
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-    assert_eq!(retained_lines, original_lines[1..]);
+    assert_ne!(retained_lines, original_lines[1..]);
+    assert!(retained_lines[0].contains(r#""event_id":2"#));
+    assert!(retained_lines[1].contains(r#""event_id":3"#));
     assert!(
         retained_lines
             .iter()

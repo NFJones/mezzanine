@@ -4,12 +4,13 @@
 //! increasing event identifiers. Callers provide already-classified records.
 
 use std::fs::{self, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::error::{MezError, Result};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::json::{insert_hash_field, record_json};
 use super::time::current_timestamp;
@@ -75,7 +76,7 @@ impl AuditLog {
         };
         line.push('\n');
 
-        let write = AuditWrite {
+        let mut write = AuditWrite {
             event_id: self.next_event_id,
             hash,
         };
@@ -102,6 +103,11 @@ impl AuditLog {
         file.sync_all()?;
         fs::set_permissions(&self.config.path, fs::Permissions::from_mode(0o600))?;
         self.retention.enforce_jsonl(&self.config.path)?;
+        if self.config.hash_chain {
+            let state = audit_hash_state_from_file(&self.config.path, self.next_event_id)?;
+            self.previous_hash = state.last_hash;
+            write.hash = state.event_hash;
+        }
 
         self.next_event_id += 1;
         Ok(Some(write))
@@ -132,9 +138,46 @@ impl AuditLog {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn chained_hash(previous_hash: Option<&str>, line: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    previous_hash.hash(&mut hasher);
-    line.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+pub(super) fn chained_hash(previous_hash: Option<&str>, line: &str) -> String {
+    let mut hasher = Sha256::new();
+    if let Some(previous_hash) = previous_hash {
+        hasher.update(previous_hash.as_bytes());
+    }
+    hasher.update(b"\0");
+    hasher.update(line.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Hash state recovered from a retained audit JSONL file.
+struct AuditHashFileState {
+    /// Last retained hash in file order.
+    last_hash: Option<String>,
+    /// Retained hash for the event that triggered the write, if still present.
+    event_hash: Option<String>,
+}
+
+/// Reads retained audit hash state after synchronous retention enforcement.
+fn audit_hash_state_from_file(path: &Path, event_id: u64) -> Result<AuditHashFileState> {
+    let data = fs::read_to_string(path)?;
+    let mut state = AuditHashFileState {
+        last_hash: None,
+        event_hash: None,
+    };
+    for line in data.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(hash) = value.get("hash").and_then(Value::as_str) else {
+            continue;
+        };
+        state.last_hash = Some(hash.to_string());
+        if value.get("event_id").and_then(Value::as_u64) == Some(event_id) {
+            state.event_hash = Some(hash.to_string());
+        }
+    }
+    Ok(state)
 }
