@@ -13,7 +13,8 @@ use zeroize::Zeroizing;
 use crate::error::{MezError, Result};
 
 use super::fs::{
-    ensure_private_dir, path_is_under_directory, set_private_file, validate_safe_name,
+    ensure_private_dir, path_is_under_directory, reject_existing_symlink_components,
+    set_private_file, validate_safe_name,
 };
 use super::types::{CredentialStore, CredentialStoreKind};
 
@@ -102,13 +103,22 @@ impl CredentialStore for PrivateFileCredentialStore {
 
         ensure_private_dir(&self.directory)?;
         let path = self.secret_path(provider)?;
+        reject_existing_symlink_components(&path)?;
+        let temp_path =
+            path.with_file_name(format!(".{provider}.secret.tmp-{}", std::process::id()));
+        reject_existing_symlink_components(&temp_path)?;
+        if temp_path.exists() {
+            fs::remove_file(&temp_path)?;
+        }
         let mut file = OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
+            .create_new(true)
+            .open(&temp_path)?;
         file.write_all(secret.expose_secret().as_bytes())?;
         file.sync_all()?;
+        drop(file);
+        set_private_file(&temp_path)?;
+        fs::rename(&temp_path, &path)?;
         set_private_file(&path)?;
         Ok(format!(
             "{}{}",
@@ -126,6 +136,27 @@ impl CredentialStore for PrivateFileCredentialStore {
         let Some(path) = self.path_from_reference(reference)? else {
             return Ok(None);
         };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(MezError::forbidden(
+                "auth secret path must not contain symlinks",
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(MezError::invalid_state(
+                "auth secret reference does not point to a regular file",
+            ));
+        }
+        reject_existing_symlink_components(&path)?;
+        if !path_is_under_directory(&path, &self.directory) {
+            return Err(MezError::forbidden(
+                "auth secret reference points outside the auth secret directory",
+            ));
+        }
         if !path.exists() {
             return Ok(None);
         }
@@ -143,6 +174,22 @@ impl CredentialStore for PrivateFileCredentialStore {
         let Some(path) = self.path_from_reference(reference)? else {
             return Ok(false);
         };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(MezError::forbidden(
+                "auth secret path must not contain symlinks",
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(MezError::invalid_state(
+                "auth secret reference does not point to a regular file",
+            ));
+        }
+        reject_existing_symlink_components(&path)?;
         if path.exists() {
             fs::remove_file(path)?;
             Ok(true)

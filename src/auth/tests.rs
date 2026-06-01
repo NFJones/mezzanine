@@ -316,6 +316,47 @@ fn private_file_credential_store_stores_loads_and_deletes_secret() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies private file credential store rejects symlinked roots and files.
+///
+/// Private fallback credentials must stay inside the configured auth-secret
+/// directory. Symlinked directories or pre-existing symlink secret files could
+/// otherwise redirect writes or reads outside that private directory.
+#[cfg(unix)]
+#[test]
+fn private_file_credential_store_rejects_symlink_secret_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-credential-symlink-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let secrets = root.join("secrets");
+    let outside = root.join("outside");
+    fs::create_dir_all(&secrets).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+
+    let symlinked_root_store = PrivateFileCredentialStore::new(root.join("linked-secrets"));
+    std::os::unix::fs::symlink(&outside, symlinked_root_store.directory()).unwrap();
+    let root_error = (&symlinked_root_store as &dyn CredentialStore)
+        .store_secret("openai", &test_secret("sk-test-secret"))
+        .unwrap_err();
+    assert_eq!(root_error.kind(), crate::error::MezErrorKind::Forbidden);
+
+    let leak = outside.join("leak.secret");
+    fs::write(&leak, "outside").unwrap();
+    std::os::unix::fs::symlink(&leak, secrets.join("openai.secret")).unwrap();
+    let store = PrivateFileCredentialStore::new(secrets);
+    let credential_store: &dyn CredentialStore = &store;
+
+    let file_error = credential_store
+        .store_secret("openai", &test_secret("sk-new-secret"))
+        .unwrap_err();
+
+    assert_eq!(file_error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(fs::read_to_string(leak).unwrap(), "outside");
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies command backed credential store uses runner without real keychain.
 ///
 /// This regression scenario documents the behavior being protected so a

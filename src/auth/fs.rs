@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -18,7 +18,15 @@ use crate::error::{MezError, Result};
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn ensure_private_dir(path: &Path) -> Result<()> {
+    reject_existing_symlink_components(path)?;
     fs::create_dir_all(path)?;
+    reject_existing_symlink_components(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Err(MezError::invalid_state(
+            "private auth path is not a directory",
+        ));
+    }
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
@@ -29,6 +37,13 @@ pub(super) fn ensure_private_dir(path: &Path) -> Result<()> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn set_private_file(path: &Path) -> Result<()> {
+    reject_existing_symlink_components(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() {
+        return Err(MezError::invalid_state(
+            "private auth path is not a regular file",
+        ));
+    }
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
@@ -50,12 +65,51 @@ pub(super) fn is_executable_file(path: &Path) -> bool {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn path_is_under_directory(path: &Path, directory: &Path) -> bool {
-    !path.components().any(|component| {
+    if path.components().any(|component| {
         matches!(
             component,
             std::path::Component::ParentDir | std::path::Component::Prefix(_)
         )
-    }) && path.starts_with(directory)
+    }) {
+        return false;
+    }
+    if reject_existing_symlink_components(directory).is_err()
+        || reject_existing_symlink_components(path).is_err()
+    {
+        return false;
+    }
+    let directory =
+        canonicalize_existing_or_parent(directory).unwrap_or_else(|| directory.to_path_buf());
+    let path = canonicalize_existing_or_parent(path).unwrap_or_else(|| path.to_path_buf());
+    path.starts_with(directory)
+}
+
+/// Rejects auth-secret paths whose existing components are symlinks.
+pub(super) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(MezError::forbidden(
+                    "auth secret path must not contain symlinks",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalizes a path or reconstructs it under the nearest existing parent.
+fn canonicalize_existing_or_parent(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = path.canonicalize() {
+        return Some(canonical);
+    }
+    let parent = path.parent()?;
+    let parent = parent.canonicalize().ok()?;
+    let file_name = path.file_name()?;
+    Some(parent.join(file_name))
 }
 
 /// Runs the validate safe name operation for this subsystem.
