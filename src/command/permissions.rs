@@ -8,6 +8,7 @@ use super::{
     AuditActor, AuditRecord, ClientId, CommandInvocation, CredentialStoreKind, MezError,
     PaneReadinessState, Result, Session, positional_args,
 };
+use crate::identifiers::is_ascii_identifier_segment;
 
 // Permission and approval-bypass command helpers.
 
@@ -146,11 +147,7 @@ pub(super) fn repeated_flag_values(args: &[String], flag: &str) -> Vec<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn validate_command_identifier(value: &str, label: &str) -> Result<()> {
-    if value.is_empty()
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
+    if !is_ascii_identifier_segment(value) {
         return Err(MezError::invalid_args(format!(
             "{label} must contain only ASCII letters, digits, '_' or '-'"
         )));

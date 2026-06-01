@@ -7,8 +7,8 @@ use super::{
     IdFactory, LayoutNode, LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, Pane,
     PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, ResizeAxis,
     ResizeDirection, RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId,
-    WindowNameSource, even_grid_dimensions, pane_matches_target, split_dimension_evenly,
-    split_size, split_size_with_spec,
+    WindowNameSource, even_grid_dimensions, pane_matches_target, range_overlap_u16,
+    split_dimension_evenly, split_size, split_size_with_spec,
 };
 
 impl Window {
@@ -1370,7 +1370,7 @@ fn directional_candidate(
     let (in_direction, overlap, distance, center_delta) = match direction {
         PaneNavigationDirection::Up => (
             candidate.bottom() <= active.row,
-            range_overlap(
+            range_overlap_u16(
                 candidate.column,
                 candidate.right(),
                 active.column,
@@ -1384,7 +1384,7 @@ fn directional_candidate(
         ),
         PaneNavigationDirection::Down => (
             candidate.row >= active.bottom(),
-            range_overlap(
+            range_overlap_u16(
                 candidate.column,
                 candidate.right(),
                 active.column,
@@ -1398,7 +1398,7 @@ fn directional_candidate(
         ),
         PaneNavigationDirection::Left => (
             candidate.right() <= active.column,
-            range_overlap(
+            range_overlap_u16(
                 candidate.row,
                 candidate.bottom(),
                 active.row,
@@ -1409,7 +1409,7 @@ fn directional_candidate(
         ),
         PaneNavigationDirection::Right => (
             candidate.column >= active.right(),
-            range_overlap(
+            range_overlap_u16(
                 candidate.row,
                 candidate.bottom(),
                 active.row,
@@ -1442,7 +1442,7 @@ fn wrapped_directional_candidate(
 ) -> Option<WrappedDirectionalCandidate> {
     let (overlap, edge_distance, center_delta) = match direction {
         PaneNavigationDirection::Up => (
-            range_overlap(
+            range_overlap_u16(
                 candidate.column,
                 candidate.right(),
                 active.column,
@@ -1455,7 +1455,7 @@ fn wrapped_directional_candidate(
             ),
         ),
         PaneNavigationDirection::Down => (
-            range_overlap(
+            range_overlap_u16(
                 candidate.column,
                 candidate.right(),
                 active.column,
@@ -1468,7 +1468,7 @@ fn wrapped_directional_candidate(
             ),
         ),
         PaneNavigationDirection::Left => (
-            range_overlap(
+            range_overlap_u16(
                 candidate.row,
                 candidate.bottom(),
                 active.row,
@@ -1478,7 +1478,7 @@ fn wrapped_directional_candidate(
             abs_delta(candidate.center_row_twice(), active.center_row_twice()),
         ),
         PaneNavigationDirection::Right => (
-            range_overlap(
+            range_overlap_u16(
                 candidate.row,
                 candidate.bottom(),
                 active.row,
@@ -1497,17 +1497,6 @@ fn wrapped_directional_candidate(
         center_delta,
         index: candidate.index,
     })
-}
-
-/// Runs the range overlap operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn range_overlap(first_start: u16, first_end: u16, second_start: u16, second_end: u16) -> u16 {
-    first_end
-        .min(second_end)
-        .saturating_sub(first_start.max(second_start))
 }
 
 /// Runs the abs delta operation for this subsystem.

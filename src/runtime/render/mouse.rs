@@ -4,7 +4,7 @@
 //! Higher-level runtime methods still decide when mouse input is active; this
 //! module converts pane geometry and drag state into concrete resize updates.
 
-use super::geometry::range_overlap_u16;
+use crate::layout::range_overlap_u16;
 use crate::runtime::{MIN_PANE_COLUMNS, MIN_PANE_ROWS, MouseResizeDragState, PaneGeometry};
 
 /// Carries the pane geometry update produced by one mouse resize drag step.

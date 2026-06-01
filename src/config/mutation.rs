@@ -9,6 +9,7 @@ use super::{
     clean_key_segment, extract_config_values, extract_json_paths, extract_toml_paths,
     extract_yaml_paths, line_indent,
 };
+use crate::identifiers::is_ascii_identifier_segment;
 
 // TOML, YAML, and JSON mutation logic.
 
@@ -24,11 +25,10 @@ pub(super) fn parse_mutation_path(path: &str) -> Result<Vec<String>> {
             "configuration mutation path must not be empty",
         ));
     }
-    if segments.iter().any(|segment| {
-        !segment
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    }) {
+    if segments
+        .iter()
+        .any(|segment| !is_ascii_identifier_segment(segment))
+    {
         return Err(MezError::config(
             "configuration mutation path segments must be ASCII [A-Za-z0-9_-]",
         ));

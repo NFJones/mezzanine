@@ -19,14 +19,7 @@ pub fn compose_display_overlay_lines(
 ) -> Vec<String> {
     let width = usize::from(client_size.columns);
     let rows = usize::from(client_size.rows);
-    let mut lines = base_lines
-        .iter()
-        .map(|line| fit_width(line, width))
-        .collect::<Vec<_>>();
-    lines.truncate(rows);
-    while lines.len() < rows {
-        lines.push(" ".repeat(width));
-    }
+    let mut lines = normalize_overlay_lines(base_lines, rows, width);
     let start_row = rows.saturating_sub(display_lines.len().max(1));
     for (offset, line) in display_lines.iter().take(rows).enumerate() {
         let row = start_row.saturating_add(offset);
@@ -169,6 +162,50 @@ pub(crate) fn overlay_text_style_width(value: &str, max_width: usize) -> usize {
     fitted_text_width(value.trim_end_matches(' '), max_width)
 }
 
+/// Normalized base text and style-span rows for a terminal overlay canvas.
+///
+/// Callers can mutate `lines` and `line_style_spans` after this normalization
+/// without repeating terminal-size truncation, padding, or span clipping rules.
+pub(crate) struct NormalizedOverlayCanvas {
+    /// Current terminal width in display cells.
+    pub(crate) width: usize,
+    /// Current terminal height in rows.
+    pub(crate) rows: usize,
+    /// Base lines fitted to `width` and padded/truncated to `rows`.
+    pub(crate) lines: Vec<String>,
+    /// Base style spans clipped to `width` and padded/truncated to `rows`.
+    pub(crate) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+}
+
+/// Normalizes base overlay text and style-span rows to the current terminal size.
+pub(crate) fn normalize_overlay_canvas(
+    base_lines: &[String],
+    base_line_style_spans: &[Vec<TerminalStyleSpan>],
+    client_size: Size,
+) -> NormalizedOverlayCanvas {
+    let width = usize::from(client_size.columns);
+    let rows = usize::from(client_size.rows);
+    NormalizedOverlayCanvas {
+        width,
+        rows,
+        lines: normalize_overlay_lines(base_lines, rows, width),
+        line_style_spans: normalize_overlay_style_spans(base_line_style_spans, rows, width),
+    }
+}
+
+/// Fits base overlay text rows to a fixed terminal canvas.
+fn normalize_overlay_lines(base_lines: &[String], rows: usize, width: usize) -> Vec<String> {
+    let mut lines = base_lines
+        .iter()
+        .map(|line| fit_width(line, width))
+        .collect::<Vec<_>>();
+    lines.truncate(rows);
+    while lines.len() < rows {
+        lines.push(" ".repeat(width));
+    }
+    lines
+}
+
 /// Runs the status line rendition operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -205,4 +242,40 @@ pub(crate) fn normalize_overlay_style_spans(
         line_style_spans.push(Vec::new());
     }
     line_style_spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the shared overlay canvas normalizer applies the same terminal
+    /// size to text rows and style-span rows.
+    ///
+    /// Retained base rows are fitted to the current terminal width, missing
+    /// rows are padded with blank text and empty span rows, and oversized spans
+    /// are clipped instead of leaking past the resized overlay canvas.
+    #[test]
+    fn normalize_overlay_canvas_refits_lines_and_spans_to_client_size() {
+        let canvas = normalize_overlay_canvas(
+            &["abcdef".to_string()],
+            &[vec![TerminalStyleSpan {
+                start: 0,
+                length: 99,
+                rendition: GraphicRendition {
+                    inverse: true,
+                    ..GraphicRendition::default()
+                },
+            }]],
+            Size::new(4, 3).unwrap(),
+        );
+
+        assert_eq!(canvas.width, 4);
+        assert_eq!(canvas.rows, 3);
+        assert_eq!(canvas.lines, vec!["abcd", "    ", "    "]);
+        assert_eq!(canvas.line_style_spans.len(), 3);
+        assert_eq!(canvas.line_style_spans[0].len(), 1);
+        assert_eq!(canvas.line_style_spans[0][0].length, 4);
+        assert!(canvas.line_style_spans[1].is_empty());
+        assert!(canvas.line_style_spans[2].is_empty());
+    }
 }

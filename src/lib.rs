@@ -64,6 +64,11 @@ pub mod framing;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod hooks;
+/// Exposes shared identifier validation helpers.
+///
+/// The nested module keeps cross-subsystem identifier predicates isolated while
+/// callers retain subsystem-specific error messages.
+pub(crate) mod identifiers;
 /// Exposes the ids module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

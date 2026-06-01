@@ -53,7 +53,8 @@ pub use overlay::{
     modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
 };
 pub(super) use overlay::{
-    normalize_overlay_style_spans, overlay_text_style_width, status_line_rendition,
+    normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
+    status_line_rendition,
 };
 pub use panes::{
     draw_styled_window_from_screens, draw_window_from_screens, pane_content_size_for_geometry,

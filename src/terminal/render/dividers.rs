@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::layout::{PaneGeometry, Window};
+use crate::layout::{PaneGeometry, Window, range_overlap_u16};
 use crate::terminal::{
     GraphicRendition, MouseBorderCell, TerminalFramePosition, TerminalStyleSpan, UiTheme,
 };
@@ -248,13 +248,6 @@ pub(super) fn geometry_has_right_divider(
                 candidate.row.saturating_add(candidate.rows),
             ) > 0
     })
-}
-
-/// Returns the overlap length between two half-open u16 ranges.
-fn range_overlap_u16(first_start: u16, first_end: u16, second_start: u16, second_end: u16) -> u16 {
-    first_end
-        .min(second_end)
-        .saturating_sub(first_start.max(second_start))
 }
 
 /// Inserts one cell from a vertical divider segment.

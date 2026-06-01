@@ -26,7 +26,8 @@ use super::text::{
 };
 use super::{
     AGENT_STATUS_SCAN_BAND_WIDTH, compose_client_presentation_with_styles,
-    normalize_overlay_style_spans, overlay_text_style_width, pane_agent_prompt_space_reserved,
+    normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
+    pane_agent_prompt_space_reserved,
 };
 
 const MIN_PROMPT_SHADOW_CONTRAST_RATIO: f64 = 4.5;
@@ -121,21 +122,12 @@ pub fn compose_prompt_overlay_lines(
     prompt: &ReadlinePrompt,
     client_size: Size,
 ) -> Vec<String> {
-    let width = usize::from(client_size.columns);
-    let rows = usize::from(client_size.rows);
-    let status_row = render_readline_prompt_status_row(prompt, width);
-    let mut lines = base_lines
-        .iter()
-        .map(|line| fit_width(line, width))
-        .collect::<Vec<_>>();
-    lines.truncate(rows);
-    while lines.len() < rows {
-        lines.push(" ".repeat(width));
+    let mut canvas = normalize_overlay_canvas(base_lines, &[], client_size);
+    let status_row = render_readline_prompt_status_row(prompt, canvas.width);
+    if let Some(last) = canvas.lines.last_mut() {
+        *last = fit_width(&status_row.status.text, canvas.width);
     }
-    if let Some(last) = lines.last_mut() {
-        *last = fit_width(&status_row.status.text, width);
-    }
-    lines
+    canvas.lines
 }
 
 /// Runs the compose prompt overlay presentation operation for this subsystem.
@@ -169,15 +161,15 @@ pub fn compose_prompt_overlay_presentation_with_styles(
     client_size: Size,
     ui_theme: &UiTheme,
 ) -> ReadlinePromptClientPresentation {
-    let width = usize::from(client_size.columns);
-    let rows = usize::from(client_size.rows);
+    let mut canvas = normalize_overlay_canvas(base_lines, base_line_style_spans, client_size);
+    let width = canvas.width;
+    let rows = canvas.rows;
     let status_row = render_readline_prompt_status_row(prompt, width);
-    let lines = compose_prompt_overlay_lines(base_lines, prompt, client_size);
-    let mut line_style_spans = normalize_overlay_style_spans(base_line_style_spans, rows, width);
-    line_style_spans.truncate(rows);
-    while line_style_spans.len() < rows {
-        line_style_spans.push(Vec::new());
+    if let Some(last) = canvas.lines.last_mut() {
+        *last = fit_width(&status_row.status.text, width);
     }
+    let lines = canvas.lines;
+    let mut line_style_spans = canvas.line_style_spans;
     if let Some(last) = line_style_spans.last_mut() {
         last.clear();
         if width > 0 {
@@ -213,21 +205,11 @@ pub fn compose_prompt_region_presentation_with_styles(
     region: ReadlinePromptRegion,
     ui_theme: &UiTheme,
 ) -> ReadlinePromptClientPresentation {
-    let width = usize::from(client_size.columns);
-    let rows = usize::from(client_size.rows);
-    let mut lines = base_lines
-        .iter()
-        .map(|line| fit_width(line, width))
-        .collect::<Vec<_>>();
-    lines.truncate(rows);
-    while lines.len() < rows {
-        lines.push(" ".repeat(width));
-    }
-    let mut line_style_spans = normalize_overlay_style_spans(base_line_style_spans, rows, width);
-    line_style_spans.truncate(rows);
-    while line_style_spans.len() < rows {
-        line_style_spans.push(Vec::new());
-    }
+    let canvas = normalize_overlay_canvas(base_lines, base_line_style_spans, client_size);
+    let width = canvas.width;
+    let rows = canvas.rows;
+    let mut lines = canvas.lines;
+    let mut line_style_spans = canvas.line_style_spans;
 
     let region = clipped_prompt_region(region, width, rows);
     let Some(region) = region else {
@@ -437,16 +419,10 @@ pub fn compose_display_region_overlay_lines(
     client_size: Size,
     region: ReadlinePromptRegion,
 ) -> Vec<String> {
-    let width = usize::from(client_size.columns);
-    let rows = usize::from(client_size.rows);
-    let mut lines = base_lines
-        .iter()
-        .map(|line| fit_width(line, width))
-        .collect::<Vec<_>>();
-    lines.truncate(rows);
-    while lines.len() < rows {
-        lines.push(" ".repeat(width));
-    }
+    let canvas = normalize_overlay_canvas(base_lines, &[], client_size);
+    let width = canvas.width;
+    let rows = canvas.rows;
+    let mut lines = canvas.lines;
     let Some(region) = clipped_prompt_region(region, width, rows) else {
         return lines;
     };

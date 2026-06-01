@@ -2,8 +2,21 @@
 
 use super::{
     IdFactory, LayoutPolicy, Pane, PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec,
-    PaneTitleSource, Size, SplitDirection, Window, WindowId,
+    PaneTitleSource, Size, SplitDirection, Window, WindowId, range_overlap_u16,
 };
+
+/// Verifies half-open range overlap uses terminal-cell geometry semantics.
+///
+/// Pane targeting and divider rendering share this helper so touching endpoints,
+/// empty ranges, and reversed ranges must all produce zero overlap instead of
+/// an off-by-one shared-cell result.
+#[test]
+fn range_overlap_u16_uses_half_open_ranges() {
+    assert_eq!(range_overlap_u16(0, 5, 3, 8), 2);
+    assert_eq!(range_overlap_u16(0, 5, 5, 8), 0);
+    assert_eq!(range_overlap_u16(5, 5, 0, 8), 0);
+    assert_eq!(range_overlap_u16(9, 2, 0, 8), 0);
+}
 /// Verifies first pane occupies window size.
 ///
 /// This regression scenario documents the behavior being protected so a

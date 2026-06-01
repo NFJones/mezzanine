@@ -102,17 +102,6 @@ pub(super) fn clipped_overlay_style_span(
     })
 }
 
-pub(super) fn range_overlap_u16(
-    first_start: u16,
-    first_end: u16,
-    second_start: u16,
-    second_end: u16,
-) -> u16 {
-    first_end
-        .min(second_end)
-        .saturating_sub(first_start.max(second_start))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::terminal::terminal_text_width;
