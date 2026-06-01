@@ -157,7 +157,8 @@ pub fn discover_project_trust_prompt(
     if overlay_files.is_empty() {
         return Ok(None);
     }
-    let record = trust_store.get(&project_root);
+    let git_marker_path = git_marker_path_for_project(&project_root);
+    let record = trust_store.get_for_project(&project_root, git_marker_path.as_deref());
     let state = record
         .map(|record| record.state)
         .unwrap_or(TrustDecision::Pending);
@@ -169,6 +170,12 @@ pub fn discover_project_trust_prompt(
         overlay_files,
         blocks_until_primary_decision,
     }))
+}
+
+/// Returns the repository marker path for a discovered project root.
+fn git_marker_path_for_project(project_root: &Path) -> Option<PathBuf> {
+    let marker = project_root.join(".git");
+    if marker.exists() { Some(marker) } else { None }
 }
 
 /// Runs the discover existing overlays operation for this subsystem.

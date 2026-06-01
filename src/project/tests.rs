@@ -222,6 +222,43 @@ fn trusted_project_prompt_is_informational_not_blocking() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies project trust is bound to the discovered Git marker.
+///
+/// A trusted record for the same canonical project root must not automatically
+/// trust a different repository identity at that path. Requiring the stored Git
+/// marker to match the currently discovered marker makes repository replacement
+/// prompt again before project overlays can expand capabilities.
+#[test]
+fn trusted_project_prompt_reprompts_when_git_marker_changes() {
+    let root = temp_root("trust-prompt-git-marker-mismatch");
+    fs::create_dir(root.join(".git")).unwrap();
+    let overlay_dir = root.join(".mezzanine");
+    fs::create_dir_all(&overlay_dir).unwrap();
+    fs::write(
+        overlay_dir.join("config.toml"),
+        "version = 8\n[providers]\n",
+    )
+    .unwrap();
+    let mut store = ProjectTrustStore::default();
+    store
+        .decide_at(
+            root.clone(),
+            TrustDecision::Trusted,
+            Some(root.join("old-git-marker")),
+            42,
+        )
+        .unwrap();
+
+    let prompt = discover_project_trust_prompt(&store, &root)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(prompt.state, TrustDecision::Pending);
+    assert!(prompt.blocks_until_primary_decision);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies trust store records root decision.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -244,6 +281,10 @@ fn trust_store_records_root_decision() {
     assert_eq!(store.get(&root).unwrap().state, TrustDecision::Trusted);
     assert_eq!(store.get(&root).unwrap().trusted_at_unix_seconds, 42);
     assert_eq!(store.get(&root).unwrap().decided_by_client_id, None);
+    assert_eq!(
+        store.get(&root).unwrap().configuration_schema_version,
+        crate::config::CURRENT_CONFIG_SCHEMA_VERSION as u32
+    );
 }
 
 /// Verifies trust store records deciding client identity.

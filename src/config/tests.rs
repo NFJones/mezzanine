@@ -922,6 +922,40 @@ fn rejects_newer_config_schema_version() {
     }));
 }
 
+/// Verifies project overlays must declare the current schema version.
+///
+/// Primary configs are migrated before validation, but project overlays are not
+/// migrated. Requiring the exact current version keeps stale overlay semantics
+/// from loading as if they already matched the running binary.
+#[test]
+fn rejects_missing_or_old_project_overlay_schema_version() {
+    let missing = validate_config_text(
+        ConfigFormat::Toml,
+        "[providers]\n",
+        ConfigScope::ProjectOverlay,
+    );
+    let old = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 1\n[providers]\n",
+        ConfigScope::ProjectOverlay,
+    );
+    let current = validate_config_text(
+        ConfigFormat::Toml,
+        &format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[providers]\n"),
+        ConfigScope::ProjectOverlay,
+    );
+
+    assert!(!missing.valid);
+    assert!(!old.valid);
+    assert!(missing.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "version" && diagnostic.message.contains("project overlay")
+    }));
+    assert!(old.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "version" && diagnostic.message.contains("project overlay")
+    }));
+    assert!(current.valid, "{:?}", current.diagnostics);
+}
+
 /// Verifies that custom subagent profiles are part of the baseline config
 /// schema, including nested shell environment overrides, while unknown profile
 /// keys remain rejected.

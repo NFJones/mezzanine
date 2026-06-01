@@ -8,6 +8,10 @@ use super::{
     TrustDecision, Write, canonicalize_existing_or_original, fs, parse_record_line,
     set_private_file_permissions, unix_now_seconds,
 };
+use crate::config::CURRENT_CONFIG_SCHEMA_VERSION;
+
+/// Current project trust record policy version.
+const PROJECT_TRUST_POLICY_VERSION: u32 = 1;
 
 impl ProjectTrustStore {
     /// Runs the decide operation for this subsystem.
@@ -97,8 +101,8 @@ impl ProjectTrustStore {
                 git_marker_path,
                 trusted_at_unix_seconds,
                 decided_by_client_id,
-                trust_policy_version: 1,
-                configuration_schema_version: 1,
+                trust_policy_version: PROJECT_TRUST_POLICY_VERSION,
+                configuration_schema_version: CURRENT_CONFIG_SCHEMA_VERSION as u32,
                 vcs_remote: None,
             },
         );
@@ -113,6 +117,27 @@ impl ProjectTrustStore {
     pub fn get(&self, project_root: &Path) -> Option<&ProjectTrustRecord> {
         let canonical = canonicalize_existing_or_original(project_root.to_path_buf());
         self.records.get(&canonical)
+    }
+
+    /// Returns a trust record only when it matches the current project identity.
+    pub fn get_for_project(
+        &self,
+        project_root: &Path,
+        git_marker_path: Option<&Path>,
+    ) -> Option<&ProjectTrustRecord> {
+        let record = self.get(project_root)?;
+        if record.trust_policy_version != PROJECT_TRUST_POLICY_VERSION {
+            return None;
+        }
+        if record.configuration_schema_version != CURRENT_CONFIG_SCHEMA_VERSION as u32 {
+            return None;
+        }
+        let git_marker_path =
+            git_marker_path.map(|path| canonicalize_existing_or_original(path.to_path_buf()));
+        if record.git_marker_path != git_marker_path {
+            return None;
+        }
+        Some(record)
     }
 
     /// Runs the records operation for this subsystem.

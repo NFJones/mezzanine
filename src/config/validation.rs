@@ -168,7 +168,19 @@ pub fn validate_config_text(
     };
     let values = extract_config_values(format, text);
 
-    match parse_config_schema_version(values.get("version").map(String::as_str)) {
+    let raw_schema_version = values.get("version").map(String::as_str);
+    match parse_config_schema_version(raw_schema_version) {
+        Ok(version)
+            if scope == ConfigScope::ProjectOverlay
+                && (raw_schema_version.is_none() || version != CURRENT_CONFIG_SCHEMA_VERSION) =>
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: "version".to_string(),
+                message: format!(
+                    "project overlay configuration must declare current schema version {CURRENT_CONFIG_SCHEMA_VERSION}"
+                ),
+            });
+        }
         Ok(version) if version <= CURRENT_CONFIG_SCHEMA_VERSION => {}
         Ok(version) => diagnostics.push(ConfigDiagnostic {
             path: "version".to_string(),
