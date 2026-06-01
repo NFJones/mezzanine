@@ -4101,6 +4101,65 @@ fn turn_execution_transcript_preserves_visible_say_text() {
     assert!(!assistant.content.contains("say text="));
 }
 
+/// Verifies empty provider text still produces a durable assistant transcript entry.
+///
+/// Some OpenAI-compatible backends can return a response object without visible
+/// text when no tool call or MAAP batch was produced. Transcript persistence
+/// forbids empty content, so the assistant transcript projection must synthesize
+/// a bounded placeholder instead of failing the entire turn cleanup path.
+#[test]
+fn turn_execution_transcript_synthesizes_placeholder_for_empty_assistant_response() {
+    let turn = turn();
+    let execution = AgentTurnExecution {
+        request: assemble_model_request(
+            &ModelProfile {
+                provider: "openai".to_string(),
+                model: "default".to_string(),
+                reasoning_profile: None,
+                latency_preference: None,
+                multimodal_required: false,
+                provider_options: std::collections::BTreeMap::new(),
+                safety_tier: None,
+            },
+            &turn,
+            &AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user prompt".to_string(),
+                content: "respond with a MAAP action batch".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap(),
+        response: ModelResponse {
+            provider: "openai".to_string(),
+            model: "default".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
+    let assistant = entries
+        .iter()
+        .find(|entry| entry.role == TranscriptRole::Assistant)
+        .unwrap();
+
+    assert_eq!(
+        assistant.content,
+        "[assistant response contained no visible content]"
+    );
+    assistant.validate().unwrap();
+}
+
 /// Verifies turn execution persistence appends to durable transcript store.
 ///
 /// This regression scenario documents the behavior being protected so a

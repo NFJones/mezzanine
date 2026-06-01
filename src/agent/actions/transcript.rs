@@ -220,9 +220,16 @@ fn transcript_label_is_expanded_skill(label: &str) -> bool {
 /// "read exact anchors" or "check test lines" that causes future requests to
 /// over-weight investigation churn. Only explicit durable `thought` notes are
 /// persisted as `thinking:` lines.
+const EMPTY_ASSISTANT_TRANSCRIPT_CONTENT: &str =
+    "[assistant response contained no visible content]";
+
 fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
     let Some(batch) = execution.response.action_batch.as_ref() else {
-        return execution.response.raw_text.clone();
+        return if execution.response.raw_text.trim().is_empty() {
+            EMPTY_ASSISTANT_TRANSCRIPT_CONTENT.to_string()
+        } else {
+            execution.response.raw_text.clone()
+        };
     };
     let mut thinking_lines = assistant_transcript_durable_thinking_lines(batch);
     if !execution.response.raw_text.trim().is_empty()
