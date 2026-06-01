@@ -92,7 +92,10 @@ use mutation::{
     mutate_json_text, mutate_toml_text, mutate_yaml_text, parse_mutation_path,
     reject_container_target, reject_unsupported_mutation_path,
 };
-use parsers::{JsonPathParser, JsonValueParser};
+pub(crate) use parsers::parse_config_json_value;
+use parsers::{
+    JsonPathParser, JsonValueParser, parse_config_json_object, parse_config_json_value_best_effort,
+};
 use paths::{format_diagnostics, write_private_config_file, write_private_config_file_async};
 use schema::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,

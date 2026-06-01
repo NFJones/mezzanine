@@ -4,9 +4,59 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{BTreeMap, clean_value};
+use super::{BTreeMap, ConfigFormat, MezError, Result, clean_value};
 
 // JSON path and value parsers used by config validation.
+
+/// Parses supported config text into a JSON-compatible value tree.
+///
+/// TOML and YAML input are normalized through `serde_json::Value` so callers
+/// can share one structured inspection path while keeping format-specific parse
+/// diagnostics at this boundary.
+pub(crate) fn parse_config_json_value(
+    format: ConfigFormat,
+    text: &str,
+) -> Result<serde_json::Value> {
+    match format {
+        ConfigFormat::Toml => {
+            let value = toml::from_str::<toml::Table>(text)
+                .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+            serde_json::to_value(value)
+                .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))
+        }
+        ConfigFormat::Yaml => {
+            let value = serde_norway::from_str::<serde_norway::Value>(text)
+                .map_err(|error| MezError::config(format!("invalid YAML config: {error}")))?;
+            serde_json::to_value(value)
+                .map_err(|error| MezError::config(format!("invalid YAML config: {error}")))
+        }
+        ConfigFormat::Json => serde_json::from_str(text)
+            .map_err(|error| MezError::config(format!("invalid JSON config: {error}"))),
+    }
+}
+
+/// Parses supported config text and requires a JSON object root.
+pub(super) fn parse_config_json_object(
+    format: ConfigFormat,
+    text: &str,
+) -> Result<serde_json::Value> {
+    let value = parse_config_json_value(format, text)?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(MezError::config(
+            "configuration document root must be a mapping",
+        ))
+    }
+}
+
+/// Best-effort config parser used by extraction paths that suppress syntax diagnostics.
+pub(super) fn parse_config_json_value_best_effort(
+    format: ConfigFormat,
+    text: &str,
+) -> Option<serde_json::Value> {
+    parse_config_json_value(format, text).ok()
+}
 
 /// Carries Json Path Parser state for this subsystem.
 ///

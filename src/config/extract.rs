@@ -11,7 +11,7 @@ use super::{
     MCP_SERVER_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS,
     PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS, SHELL_KEYS,
     SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
-    exact_command_sha256, normalize_exact_command_text,
+    exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
 };
 use crate::terminal::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
@@ -974,16 +974,7 @@ pub(super) fn config_text_to_json_value(
     format: ConfigFormat,
     text: &str,
 ) -> Option<serde_json::Value> {
-    match format {
-        ConfigFormat::Toml => text
-            .parse::<toml::Table>()
-            .ok()
-            .and_then(|value| serde_json::to_value(value).ok()),
-        ConfigFormat::Yaml => serde_norway::from_str::<serde_norway::Value>(text)
-            .ok()
-            .and_then(|value| serde_json::to_value(value).ok()),
-        ConfigFormat::Json => serde_json::from_str::<serde_json::Value>(text).ok(),
-    }
+    parse_config_json_value_best_effort(format, text)
 }
 
 /// Runs the command rule pattern value operation for this subsystem.

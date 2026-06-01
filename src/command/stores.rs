@@ -12,6 +12,7 @@ use super::{
     validate_command_identifier,
 };
 use crate::auth::selected_auth_method_from_flags;
+use crate::config::parse_config_json_value;
 use crate::terminal::{
     UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme,
 };
@@ -164,21 +165,7 @@ fn command_theme_definition_from_text(
 
 /// Parses primary config text into a structured JSON value for theme lookup.
 fn command_config_value_from_text(format: ConfigFormat, text: &str) -> Result<Value> {
-    match format {
-        ConfigFormat::Toml => {
-            let value = toml::from_str::<toml::Table>(text)
-                .map_err(|error| MezError::config(error.to_string()))?;
-            serde_json::to_value(value).map_err(|error| MezError::config(error.to_string()))
-        }
-        ConfigFormat::Yaml => {
-            let value = serde_norway::from_str::<serde_norway::Value>(text)
-                .map_err(|error| MezError::config(error.to_string()))?;
-            serde_json::to_value(value).map_err(|error| MezError::config(error.to_string()))
-        }
-        ConfigFormat::Json => {
-            serde_json::from_str(text).map_err(|error| MezError::config(error.to_string()))
-        }
-    }
+    parse_config_json_value(format, text)
 }
 
 /// Extracts a string-based theme definition from structured config JSON.

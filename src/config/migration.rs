@@ -7,7 +7,7 @@
 
 use super::{
     ConfigFormat, DEFAULT_CONFIG_TOML, MezError, Path, Result, extract_config_values, fs,
-    write_private_config_file,
+    parse_config_json_object, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
@@ -653,23 +653,9 @@ fn migrate_json_compatible_v7_to_v8(format: ConfigFormat, text: &str) -> Result<
 /// - `format`: The concrete config file format.
 /// - `text`: The document text to parse.
 fn parse_json_compatible_config(format: ConfigFormat, text: &str) -> Result<serde_json::Value> {
-    let value = match format {
-        ConfigFormat::Json => serde_json::from_str(text)
-            .map_err(|error| MezError::config(format!("invalid JSON config: {error}")))?,
-        ConfigFormat::Yaml => {
-            let value = serde_norway::from_str::<serde_norway::Value>(text)
-                .map_err(|error| MezError::config(format!("invalid YAML config: {error}")))?;
-            serde_json::to_value(value)
-                .map_err(|error| MezError::config(format!("invalid YAML config: {error}")))?
-        }
+    match format {
+        ConfigFormat::Json | ConfigFormat::Yaml => parse_config_json_object(format, text),
         ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
-    };
-    if value.is_object() {
-        Ok(value)
-    } else {
-        Err(MezError::config(
-            "configuration document root must be a mapping",
-        ))
     }
 }
 
