@@ -51,6 +51,29 @@ fn parses_command_with_quotes_and_target_flag() {
     assert_eq!(commands[0].args[2], "work tree");
 }
 
+/// Verifies explicit empty quoted command arguments are preserved.
+///
+/// Empty strings are meaningful command values for commands that clear fields
+/// or intentionally pass an empty payload. The tokenizer must track argument
+/// presence separately from argument content so quoted empty strings do not
+/// disappear while surrounding non-empty arguments remain ordered.
+#[test]
+fn preserves_explicit_empty_quoted_arguments() {
+    let commands = parse_command_sequence("send --body \"\" '' keep").unwrap();
+
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].name, "send");
+    assert_eq!(
+        commands[0].args,
+        vec![
+            String::from("--body"),
+            String::new(),
+            String::new(),
+            String::from("keep"),
+        ]
+    );
+}
+
 /// Verifies splits semicolon sequence outside quotes.
 ///
 /// This regression scenario documents the behavior being protected so a

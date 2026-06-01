@@ -30,6 +30,27 @@ fn rejects_missing_content_length() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
+/// Verifies duplicate content-length headers are rejected consistently.
+///
+/// Streaming and direct frame decoding both depend on the advertised body size.
+/// Duplicate length headers would otherwise let the two paths choose different
+/// body boundaries, so both same-value and conflicting duplicates must fail
+/// before any frame body is accepted.
+#[test]
+fn rejects_duplicate_content_length_headers() {
+    let same_value = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}";
+    let conflicting = b"Content-Length: 2\r\nContent-Length: 3\r\n\r\n{}!";
+
+    let same_error = decode_frame(same_value, 1024).unwrap_err();
+    let conflicting_error = decode_frame(conflicting, 1024).unwrap_err();
+
+    assert_eq!(same_error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(
+        conflicting_error.kind(),
+        crate::error::MezErrorKind::InvalidArgs
+    );
+}
+
 /// Verifies that the configured maximum body size is enforced by direct decode.
 #[test]
 fn rejects_oversized_body() {
@@ -56,6 +77,21 @@ fn codec_decodes_split_frames_without_consuming_partial_input() {
     input.extend_from_slice(&encoded[split_at..]);
     assert_eq!(codec.decode(&mut input).unwrap(), Some(frame));
     assert!(input.is_empty());
+}
+
+/// Verifies streaming decode rejects duplicate content-length headers.
+///
+/// The incremental codec decides whether to wait for more bytes from the header
+/// alone. This regression keeps that decision aligned with full-frame decoding
+/// by rejecting duplicate size declarations before consuming input.
+#[test]
+fn codec_rejects_duplicate_content_length_headers() {
+    let mut codec = ProtocolFrameCodec::new(1024).unwrap();
+    let mut input = BytesMut::from(&b"Content-Length: 2\r\nContent-Length: 3\r\n\r\n{}!"[..]);
+
+    let error = codec.decode(&mut input).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
 /// Verifies that streaming encode writes valid frames and rejects bodies over

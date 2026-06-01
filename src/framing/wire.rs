@@ -45,6 +45,9 @@ pub fn decode_frame(input: &[u8], max_content_length: usize) -> Result<(Protocol
         let value = value.trim();
         match name.as_str() {
             "content-length" => {
+                if content_length.is_some() {
+                    return Err(MezError::invalid_args("duplicate Content-Length header"));
+                }
                 let parsed = value
                     .parse::<usize>()
                     .map_err(|_| MezError::invalid_args("invalid Content-Length header"))?;
@@ -97,16 +100,22 @@ pub(super) fn find_header_end(input: &[u8]) -> Option<usize> {
 pub(super) fn frame_content_length_from_header(header: &[u8]) -> Result<usize> {
     let header = str::from_utf8(header)
         .map_err(|_| MezError::invalid_args("protocol frame headers must be UTF-8"))?;
+    let mut content_length = None;
     for line in header.split("\r\n") {
         let Some((name, value)) = line.split_once(':') else {
             return Err(MezError::invalid_args("malformed protocol frame header"));
         };
         if name.trim().eq_ignore_ascii_case("content-length") {
-            return value
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| MezError::invalid_args("invalid Content-Length header"));
+            if content_length.is_some() {
+                return Err(MezError::invalid_args("duplicate Content-Length header"));
+            }
+            content_length = Some(
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| MezError::invalid_args("invalid Content-Length header"))?,
+            );
         }
     }
-    Err(MezError::invalid_args("missing Content-Length header"))
+    content_length.ok_or_else(|| MezError::invalid_args("missing Content-Length header"))
 }

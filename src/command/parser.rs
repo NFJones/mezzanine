@@ -106,11 +106,13 @@ pub(super) fn tokenize_command(input: &str) -> Result<Vec<String>> {
     let mut current = String::new();
     let mut quote = QuoteState::None;
     let mut escaped = false;
+    let mut token_started = false;
 
     for ch in input.chars() {
         if escaped {
             current.push(ch);
             escaped = false;
+            token_started = true;
             continue;
         }
 
@@ -120,22 +122,28 @@ pub(super) fn tokenize_command(input: &str) -> Result<Vec<String>> {
             }
             '\'' if quote == QuoteState::None => {
                 quote = QuoteState::Single;
+                token_started = true;
             }
             '\'' if quote == QuoteState::Single => {
                 quote = QuoteState::None;
             }
             '"' if quote == QuoteState::None => {
                 quote = QuoteState::Double;
+                token_started = true;
             }
             '"' if quote == QuoteState::Double => {
                 quote = QuoteState::None;
             }
             ch if ch.is_whitespace() && quote == QuoteState::None => {
-                if !current.is_empty() {
+                if token_started {
                     tokens.push(std::mem::take(&mut current));
+                    token_started = false;
                 }
             }
-            _ => current.push(ch),
+            _ => {
+                current.push(ch);
+                token_started = true;
+            }
         }
     }
 
@@ -147,7 +155,7 @@ pub(super) fn tokenize_command(input: &str) -> Result<Vec<String>> {
             "unterminated quoted command argument",
         ));
     }
-    if !current.is_empty() {
+    if token_started {
         tokens.push(current);
     }
 

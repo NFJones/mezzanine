@@ -195,6 +195,9 @@ pub(super) fn parse_mez_patch(text: &str) -> Result<MezPatch> {
     if lines[index..].iter().any(|line| !line.trim().is_empty()) {
         return apply_patch_parse_error("unexpected content after *** End Patch");
     }
+    if operations.is_empty() {
+        return apply_patch_parse_error("Mezzanine patch must contain at least one file operation");
+    }
     Ok(MezPatch { operations })
 }
 

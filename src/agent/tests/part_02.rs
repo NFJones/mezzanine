@@ -1559,6 +1559,33 @@ fn semantic_apply_patch_plan_applies_codex_style_blocks() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
+/// Verifies empty Mezzanine patch blocks are rejected before execution.
+///
+/// An `apply_patch` action with begin/end markers but no file operation should
+/// not proceed into read/write planning because it is indistinguishable from an
+/// accidental no-op. Rejecting it at payload validation keeps recovery focused
+/// on producing a real `Add`, `Update`, or `Delete` operation.
+#[test]
+fn semantic_apply_patch_rejects_empty_patch_blocks() {
+    let action = AgentAction {
+        id: "patch-empty".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** End Patch\n".to_string(),
+            strip: None,
+        },
+    };
+
+    let error = local_action_plan(&action).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error.message().contains("at least one file operation"),
+        "{}",
+        error.message()
+    );
+}
+
 /// Verifies the semantic patch parser accepts the same lenient first-update
 /// forms as Codex while still applying them through Mezzanine's checked
 /// snapshot/write phases.
