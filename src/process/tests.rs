@@ -535,6 +535,52 @@ fn pane_process_manager_terminates_tracked_pane() {
     assert!(manager.is_empty());
 }
 
+/// Verifies pane process manager retains ownership when termination fails.
+///
+/// Teardown may fail while signaling or waiting on the pane process. The
+/// manager must keep the process handle in that case so callers can inspect,
+/// retry, or clean up the pane through the normal lifecycle path instead of
+/// losing ownership of a still-live child.
+#[test]
+fn pane_process_manager_retains_process_when_termination_fails() {
+    let mut manager = PaneProcessManager::new();
+    let pane_id = "%1";
+    let pid = manager
+        .spawn_for_pane(
+            pane_id,
+            &test_shell(),
+            Some("sleep 30"),
+            &test_environment(),
+            Size::new(80, 24).unwrap(),
+        )
+        .unwrap();
+
+    manager
+        .processes
+        .get_mut(pane_id)
+        .unwrap()
+        .process_group_leader = Some(-1);
+    let error = manager
+        .terminate_pane_with_grace(pane_id, Duration::from_millis(10))
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(manager.contains_pane(pane_id));
+    assert_eq!(manager.primary_pid(pane_id), Some(pid));
+
+    manager
+        .processes
+        .get_mut(pane_id)
+        .unwrap()
+        .process_group_leader = None;
+    let terminated = manager
+        .terminate_pane_with_grace(pane_id, Duration::from_millis(50))
+        .unwrap()
+        .unwrap();
+    assert_eq!(terminated.primary_pid, pid);
+    assert!(manager.is_empty());
+}
+
 /// Verifies pane process manager terminate all removes every tracked process.
 ///
 /// This regression scenario documents the behavior being protected so a

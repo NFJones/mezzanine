@@ -17,6 +17,9 @@ pub(super) fn send_signal_to_pane_process_group(
     process_group_leader: i32,
     signal: Signal,
 ) -> Result<()> {
+    if process_group_leader < 0 {
+        return Err(MezError::invalid_state("pane process group id is invalid"));
+    }
     let pid = Pid::from_raw(process_group_leader)
         .ok_or_else(|| MezError::invalid_state("pane process group id is invalid"))?;
     match kill_process_group(pid, signal) {

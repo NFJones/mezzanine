@@ -365,11 +365,12 @@ impl PaneProcessManager {
         pane_id: &str,
         grace: Duration,
     ) -> Result<Option<ExitedPaneProcess>> {
-        let Some(mut process) = self.processes.remove(pane_id) else {
+        let Some(process) = self.processes.get_mut(pane_id) else {
             return Ok(None);
         };
         let primary_pid = process.primary_pid();
         let status = process.terminate(grace)?;
+        self.processes.remove(pane_id);
         Ok(Some(ExitedPaneProcess {
             pane_id: pane_id.to_string(),
             primary_pid,
