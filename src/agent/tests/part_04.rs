@@ -306,6 +306,121 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies that generic OpenAI-compatible Chat Completions can encode MAAP as
+/// a structured JSON response instead of a native tool call.
+///
+/// LM Studio-compatible local models can obey `response_format.json_schema`
+/// while failing to return real OpenAI `tool_calls`. This regression proves the
+/// opt-in mode omits tool request fields, sends the active MAAP schema through
+/// structured output, and parses the assistant content as the same MAAP action
+/// batch payload used by native tools.
+#[test]
+fn openai_compatible_chat_completions_provider_supports_structured_maap_output() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-structured-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let content = serde_json::json!({
+        "rationale": "generic compatible provider returned structured JSON",
+        "thought": null,
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": content,
+                            "tool_calls": []
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    };
+    let mut provider_options = std::collections::BTreeMap::new();
+    provider_options.insert("maap_output".to_string(), "structured_json".to_string());
+    provider_options.insert("structured_output".to_string(), "json_schema".to_string());
+
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &provider_options,
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(
+        response.action_batch.unwrap().rationale,
+        "generic compatible provider returned structured JSON"
+    );
+    let sent = provider.transport.requests.borrow();
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    let body_text = sent[0].body.as_str();
+    assert!(body.get("tools").is_none());
+    assert!(body.get("tool_choice").is_none());
+    assert!(body.get("parallel_tool_calls").is_none());
+    assert_eq!(body["response_format"]["type"], "json_schema");
+    assert_eq!(
+        body["response_format"]["json_schema"]["name"],
+        OPENAI_MAAP_FUNCTION_TOOL_NAME
+    );
+    assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+    assert_eq!(
+        body["response_format"]["json_schema"]["schema"]["properties"]["actions"]
+            ["items"]["anyOf"][0]["properties"]["type"]["enum"][0],
+        "say"
+    );
+    assert!(body.get("thinking").is_none());
+    assert!(body.get("reasoning_effort").is_none());
+    assert!(!body_text.contains(DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME));
+    assert!(!body_text.contains(DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME));
+    assert!(!body_text.contains(DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies generic OpenAI-compatible Chat Completions provider options tune
 /// MAAP request shape without importing DeepSeek shims.
 ///

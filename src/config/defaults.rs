@@ -241,10 +241,11 @@ default_model = "gpt-5.5"
 # default_model = "local-model"
 #
 # [providers.lmstudio.options]
+# maap_output = "structured_json"
+# structured_output = "json_schema"
 # tool_calls = "auto"
-# tool_choice = "required" # default generic setting for string-only tool_choice runtimes
+# tool_choice = "required" # only used when maap_output selects native tools
 # parallel_tool_calls = "disabled"
-# structured_output = "auto"
 # output_token_field = "max_tokens"
 # maap_surface = "canonical_batch"
 #

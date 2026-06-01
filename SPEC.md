@@ -2594,10 +2594,14 @@ Completions providers MUST use the canonical `submit_maap_action_batch` tool by
 default when MAAP actions are required, MUST parse native OpenAI-style tool
 calls plus raw or fenced MAAP JSON content, and MAY be configured with
 provider-level compatibility options for `tool_calls`, `tool_choice`,
-`parallel_tool_calls`, `structured_output`, `output_token_field`, and
-`maap_surface`. When a compatible model catalog reports model capability tags
-such as LM Studio's `tool_use`, Mezzanine MUST preserve those tags in provider
-model metadata and propagate them into runtime-generated model profile options.
+`parallel_tool_calls`, `maap_output`, `structured_output`,
+`output_token_field`, and `maap_surface`. The `maap_output` option MAY select
+native OpenAI tools or structured JSON response-format output; structured JSON
+MUST reuse the same active-surface MAAP action-batch schema used by the
+canonical function tool and MUST be parsed as a MAAP batch from assistant
+content. When a compatible model catalog reports model capability tags such as
+LM Studio's `tool_use`, Mezzanine MUST preserve those tags in provider model
+metadata and propagate them into runtime-generated model profile options.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider

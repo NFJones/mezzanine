@@ -25,6 +25,7 @@ pub struct OpenAiChatCompletionsDialect {
 /// Provider-level compatibility options for generic OpenAI-style chat servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OpenAiChatCompletionsOptions {
+    maap_output: OpenAiMaapOutputMode,
     tool_calls: OpenAiCompatibilitySwitch,
     tool_choice: OpenAiToolChoiceMode,
     parallel_tool_calls: OpenAiCompatibilitySwitch,
@@ -36,6 +37,7 @@ struct OpenAiChatCompletionsOptions {
 impl Default for OpenAiChatCompletionsOptions {
     fn default() -> Self {
         Self {
+            maap_output: OpenAiMaapOutputMode::Auto,
             tool_calls: OpenAiCompatibilitySwitch::Auto,
             tool_choice: OpenAiToolChoiceMode::Required,
             parallel_tool_calls: OpenAiCompatibilitySwitch::Disabled,
@@ -50,6 +52,11 @@ impl OpenAiChatCompletionsOptions {
     /// Parses provider-level compatibility options for local OpenAI-style APIs.
     fn from_provider_options(provider_options: &BTreeMap<String, String>) -> Result<Self> {
         let mut options = Self::default();
+        if let Some(value) =
+            openai_chat_provider_option(provider_options, &["maap_output", "maap_output_mode"])
+        {
+            options.maap_output = OpenAiMaapOutputMode::parse(&value)?;
+        }
         if let Some(value) =
             openai_chat_provider_option(provider_options, &["tool_calls", "supports_tool_calls"])
         {
@@ -89,6 +96,14 @@ enum OpenAiCompatibilitySwitch {
     Auto,
     Enabled,
     Disabled,
+}
+
+/// Provider-neutral MAAP output strategy for generic Chat Completions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiMaapOutputMode {
+    Auto,
+    Tools,
+    StructuredJson,
 }
 
 /// Tool-choice request shape for the generic MAAP tool.
@@ -144,6 +159,22 @@ impl OpenAiCompatibilitySwitch {
     /// Returns true when the switch explicitly enables a feature.
     fn is_enabled(self) -> bool {
         matches!(self, Self::Enabled)
+    }
+}
+
+impl OpenAiMaapOutputMode {
+    /// Parses the MAAP output strategy for generic Chat Completions.
+    fn parse(value: &str) -> Result<Self> {
+        match openai_chat_normalized_option(value).as_str() {
+            "auto" => Ok(Self::Auto),
+            "tools" | "tool" | "tool_calls" | "function_tools" => Ok(Self::Tools),
+            "structured_json" | "structured" | "json_schema" | "response_format" => {
+                Ok(Self::StructuredJson)
+            }
+            _ => Err(MezError::invalid_args(
+                "OpenAI-compatible provider option `maap_output` must be auto, tools, or structured_json",
+            )),
+        }
     }
 }
 
@@ -352,17 +383,18 @@ fn build_openai_chat_completions_http_request(
     if request.interaction_kind == ModelInteractionKind::AutoSizing {
         openai_chat_apply_response_format(&mut body, request, options, false);
     } else if !request.allowed_actions.actions.is_empty() {
-        let use_tools = !options.tool_calls.is_disabled()
-            && options.maap_surface == OpenAiMaapSurfaceMode::CanonicalBatch;
-        if use_tools {
-            body["tools"] = serde_json::json!([openai_chat_completions_maap_tool(request)]);
-            body["parallel_tool_calls"] =
-                serde_json::json!(options.parallel_tool_calls.is_enabled());
-            if let Some(tool_choice) = options.tool_choice.request_value() {
-                body["tool_choice"] = tool_choice;
+        match openai_chat_maap_request_mode(options) {
+            OpenAiMaapRequestMode::Tools => {
+                body["tools"] = serde_json::json!([openai_chat_completions_maap_tool(request)]);
+                body["parallel_tool_calls"] =
+                    serde_json::json!(options.parallel_tool_calls.is_enabled());
+                if let Some(tool_choice) = options.tool_choice.request_value() {
+                    body["tool_choice"] = tool_choice;
+                }
             }
-        } else {
-            openai_chat_apply_response_format(&mut body, request, options, true);
+            OpenAiMaapRequestMode::StructuredJson => {
+                openai_chat_apply_response_format(&mut body, request, options, true);
+            }
         }
     }
     if let Some(temperature) = request
@@ -404,6 +436,30 @@ fn build_openai_chat_completions_http_request(
     })
 }
 
+/// Request encoding selected for the current MAAP turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiMaapRequestMode {
+    Tools,
+    StructuredJson,
+}
+
+/// Selects the provider-neutral MAAP request encoding for generic backends.
+fn openai_chat_maap_request_mode(options: OpenAiChatCompletionsOptions) -> OpenAiMaapRequestMode {
+    match options.maap_output {
+        OpenAiMaapOutputMode::StructuredJson => OpenAiMaapRequestMode::StructuredJson,
+        OpenAiMaapOutputMode::Tools => OpenAiMaapRequestMode::Tools,
+        OpenAiMaapOutputMode::Auto => {
+            if options.tool_calls.is_disabled()
+                || options.maap_surface == OpenAiMaapSurfaceMode::ContentJson
+            {
+                OpenAiMaapRequestMode::StructuredJson
+            } else {
+                OpenAiMaapRequestMode::Tools
+            }
+        }
+    }
+}
+
 /// Applies Chat Completions structured-output controls when the backend allows them.
 fn openai_chat_apply_response_format(
     body: &mut serde_json::Value,
@@ -425,7 +481,8 @@ fn openai_chat_apply_response_format(
             body["response_format"] = serde_json::json!({
                 "type": "json_schema",
                 "json_schema": {
-                    "name": if maap_json { "mezzanine_maap_batch" } else { "mezzanine_json" },
+                    "name": if maap_json { OPENAI_MAAP_FUNCTION_TOOL_NAME } else { "mezzanine_json" },
+                    "strict": true,
                     "schema": schema
                 }
             });

@@ -417,6 +417,7 @@ function-tool surface and does not send DeepSeek thinking fields,
 providers can tune MAAP behavior with provider options such as `tool_calls`
 (`auto`, `enabled`, or `disabled`), `tool_choice` (`named`, `required`, `auto`,
 or `disabled`), `parallel_tool_calls` (`auto`, `enabled`, or `disabled`),
+`maap_output` (`auto`, `tools`, or `structured_json`),
 `structured_output` (`auto`, `json_object`, `json_schema`, or `disabled`),
 `output_token_field` (`max_tokens` or `max_completion_tokens`), and
 `maap_surface` (`canonical_batch` or `content_json`). LM Studio-style model
@@ -425,7 +426,9 @@ metadata and copied into runtime-generated profile options as
 `model_capabilities`. By default Mezzanine sends the canonical
 `submit_maap_action_batch` tool with string `tool_choice = "required"`; use
 `tool_choice = "named"` only for backends that accept object-valued named tool
-selection.
+selection. Set `maap_output = "structured_json"` and
+`structured_output = "json_schema"` for LM Studio/local models that obey JSON
+Schema response formats more reliably than native OpenAI tool-call emission.
 
 Example LM Studio-compatible provider:
 
@@ -439,9 +442,10 @@ models = ["local-model"]
 default_model = "local-model"
 
 [providers.lmstudio.options]
-tool_choice = "required" # default generic setting for runtimes that accept string tool_choice
+maap_output = "structured_json"
+structured_output = "json_schema"
+tool_choice = "required" # only used when maap_output selects native tools
 parallel_tool_calls = "disabled"
-structured_output = "auto"
 ```
 
 ### `model_profiles.<name>`
