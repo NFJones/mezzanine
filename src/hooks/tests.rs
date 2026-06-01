@@ -549,6 +549,39 @@ fn focused_shell_queue_blocks_agent_hook_until_shell_available() {
     assert_eq!(executor.seen_command.as_deref(), Some("printf hook"));
 }
 
+/// Verifies focused shell queue sequence overflow is rejected.
+///
+/// Focused-shell hook sequence numbers identify queued dispatches in traces and
+/// audit output. The queue must fail closed at `u64::MAX` instead of assigning
+/// duplicate saturated sequence numbers to later hooks.
+#[test]
+fn focused_shell_queue_rejects_sequence_overflow() {
+    let hook = HookDefinition {
+        id: "pre".to_string(),
+        event: HookEvent::PreShellCommand,
+        invocation: HookInvocation::FocusedShell {
+            command: "printf hook".to_string(),
+        },
+        enabled: true,
+        required: true,
+        agent_hook: true,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(5000),
+        on_failure: None,
+    };
+    let plan = plan_hook(&hook).unwrap().unwrap();
+    let mut queue = FocusedShellHookQueue {
+        next_sequence: u64::MAX - 1,
+        pending: Default::default(),
+    };
+
+    assert_eq!(queue.enqueue(plan.clone()).unwrap(), u64::MAX);
+    let error = queue.enqueue(plan).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(queue.len(), 1);
+}
+
 /// Verifies focused shell queue runs non agent hook without shell gate.
 ///
 /// This regression scenario documents the behavior being protected so a

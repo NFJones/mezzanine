@@ -23,7 +23,10 @@ impl FocusedShellHookQueue {
                 "focused-shell hook queue accepts only focused-shell hook plans",
             ));
         }
-        let sequence = self.next_sequence.saturating_add(1);
+        let sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("focused-shell hook sequence overflow"))?;
         self.next_sequence = sequence;
         self.pending
             .push_back(FocusedShellHookQueueEntry { sequence, plan });

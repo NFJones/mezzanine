@@ -147,10 +147,10 @@ fn scheduler_can_cancel_queued_or_running_turns() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::NotFound);
 }
 
-/// Verifies that turns blocked on user interaction release global scheduler
-/// capacity while still preventing later work for the same pane from starting.
+/// Verifies that turns blocked on user interaction retain scheduler capacity
+/// and prevent later work from overcommitting the configured concurrency limit.
 #[test]
-fn scheduler_blocked_turns_release_capacity_but_keep_pane_exclusive() {
+fn scheduler_blocked_turns_reserve_capacity_and_keep_pane_exclusive() {
     let mut scheduler = AgentScheduler::new(1).unwrap();
     scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
     scheduler.enqueue(work("t2", "a2", "%1")).unwrap();
@@ -161,14 +161,15 @@ fn scheduler_blocked_turns_release_capacity_but_keep_pane_exclusive() {
 
     assert_eq!(scheduler.snapshot().running, 0);
     assert_eq!(scheduler.snapshot().blocked, 1);
-    assert_eq!(scheduler.start_ready().unwrap().turn_id, "t3");
     assert!(scheduler.start_ready().is_none());
 
-    scheduler.complete("t3").unwrap();
-    scheduler.resume_blocked("t1").unwrap();
+    let resumed = scheduler.resume_blocked("t1").unwrap();
+    assert_eq!(resumed.turn_id, "t1");
     assert_eq!(scheduler.snapshot().running, 1);
     assert_eq!(scheduler.snapshot().blocked, 0);
     assert!(scheduler.start_ready().is_none());
     scheduler.complete("t1").unwrap();
     assert_eq!(scheduler.start_ready().unwrap().turn_id, "t2");
+    scheduler.complete("t2").unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "t3");
 }

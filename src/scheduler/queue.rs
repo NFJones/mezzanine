@@ -91,7 +91,7 @@ impl AgentScheduler {
     /// agent is preferred when available, and pane-conflicted turns are skipped
     /// without preventing later runnable work from starting.
     pub fn start_ready(&mut self) -> Option<RunningWork> {
-        if self.running.len() >= self.max_concurrent_agents {
+        if self.running.len() + self.blocked.len() >= self.max_concurrent_agents {
             return None;
         }
         self.start_ready_candidate(true)
@@ -110,8 +110,8 @@ impl AgentScheduler {
         Ok(self.running.remove(index))
     }
 
-    /// Moves a running turn into blocked state without consuming a global
-    /// concurrency slot.
+    /// Moves a running turn into blocked state while retaining its global
+    /// concurrency reservation.
     ///
     /// Blocked work still participates in agent and pane exclusivity checks so a
     /// waiting turn cannot be bypassed by another shell-capable turn that would
@@ -129,9 +129,9 @@ impl AgentScheduler {
 
     /// Moves a blocked turn back to running state.
     ///
-    /// Approved continuations are resumptions of already-started user work. They
-    /// therefore reclaim a running slot immediately instead of waiting behind new
-    /// work that may have started while the turn was blocked.
+    /// Approved continuations are resumptions of already-started user work. The
+    /// scheduler reserves capacity while work is blocked so resuming cannot
+    /// exceed the configured concurrency limit.
     pub fn resume_blocked(&mut self, turn_id: &str) -> Result<RunningWork> {
         let index = self
             .blocked
