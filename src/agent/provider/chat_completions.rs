@@ -136,7 +136,7 @@ where
     }
 
     /// Creates a Chat Completions provider with an explicit dialect instance.
-    fn with_optional_auth_and_dialect(
+    pub(in crate::agent) fn with_optional_auth_and_dialect(
         api_key: Option<SecretString>,
         transport: T,
         dialect: D,

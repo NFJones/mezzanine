@@ -1211,6 +1211,7 @@ impl RuntimeSessionService {
                     auth_store,
                     provider_id,
                     endpoint_override,
+                    &provider_config.options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
@@ -1300,6 +1301,12 @@ impl RuntimeSessionService {
             provider_options.insert(
                 "context_window_tokens".to_string(),
                 context_window_tokens.to_string(),
+            );
+        }
+        if !model.capabilities.is_empty() {
+            provider_options.insert(
+                "model_capabilities".to_string(),
+                model.capabilities.join(","),
             );
         }
         let latency_preference = latency_preference
@@ -1659,6 +1666,7 @@ fn runtime_insert_catalog_model(
             display_name: None,
             reasoning_levels: Vec::new(),
             context_window_tokens: crate::agent::known_model_context_window_tokens(model),
+            capabilities: Vec::new(),
         });
     entry.reasoning_levels.extend(
         reasoning_levels

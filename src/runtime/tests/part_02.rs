@@ -1057,6 +1057,7 @@ fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible
             display_name: None,
             reasoning_levels: vec!["low".to_string()],
             context_window_tokens: Some(2_000_000),
+            capabilities: Vec::new(),
         }],
         vec!["low".to_string()],
     );

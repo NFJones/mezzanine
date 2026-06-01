@@ -3149,6 +3149,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             display_name: Some("Provider Only".to_string()),
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: Some(777_777),
+            capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -3345,6 +3346,7 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
             display_name: None,
             reasoning_levels: vec!["low".to_string()],
             context_window_tokens: Some(1_050_000),
+            capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -3456,6 +3458,7 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
             display_name: None,
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: Some(1_050_000),
+            capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],
     );
@@ -3889,6 +3892,7 @@ fn runtime_slash_command_latency_displays_and_applies_override() {
             display_name: None,
             reasoning_levels: vec!["high".to_string()],
             context_window_tokens: Some(1_050_000),
+            capabilities: Vec::new(),
         }],
         vec!["high".to_string()],
     );
@@ -4058,6 +4062,7 @@ fn runtime_generated_profile_identity_differs_by_latency_preference() {
             display_name: None,
             reasoning_levels: vec!["high".to_string()],
             context_window_tokens: Some(1_050_000),
+            capabilities: Vec::new(),
         }],
         vec!["high".to_string()],
     );

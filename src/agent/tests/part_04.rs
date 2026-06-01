@@ -154,6 +154,7 @@ fn chat_completions_compatible_providers_omit_auth_when_metadata_is_absent() {
         &auth_store,
         "local-openai-chat",
         Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
         120_000,
         openai_transport,
     )
@@ -274,6 +275,7 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         &auth_store,
         "local-openai-chat",
         Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
         120_000,
         transport,
     )
@@ -295,8 +297,127 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     let body_text = sent[0].body.as_str();
     assert_eq!(body["tool_choice"]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
     assert_eq!(body["tools"][0]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
+    assert_eq!(body["parallel_tool_calls"], false);
     assert!(body.get("thinking").is_none());
     assert!(body.get("reasoning_effort").is_none());
+    assert!(!body_text.contains(DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME));
+    assert!(!body_text.contains(DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME));
+    assert!(!body_text.contains(DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies generic OpenAI-compatible Chat Completions provider options tune
+/// MAAP request shape without importing DeepSeek shims.
+///
+/// LM Studio-class backends vary in their `tool_choice`, parallel-tool, and
+/// output-token field support. This regression proves the provider-level
+/// compatibility options are wired into request construction while preserving
+/// the single canonical `submit_maap_action_batch` tool.
+#[test]
+fn openai_compatible_chat_completions_provider_honors_generic_maap_options() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-options-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut profile_options = std::collections::BTreeMap::new();
+    profile_options.insert("max_output_tokens".to_string(), "64".to_string());
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: profile_options,
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "generic options returned structured output",
+        "thought": null,
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "arguments": arguments
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    };
+    let mut provider_options = std::collections::BTreeMap::new();
+    provider_options.insert("tool_choice".to_string(), "required".to_string());
+    provider_options.insert("parallel_tool_calls".to_string(), "enabled".to_string());
+    provider_options.insert(
+        "output_token_field".to_string(),
+        "max_completion_tokens".to_string(),
+    );
+
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &provider_options,
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(
+        response.action_batch.unwrap().rationale,
+        "generic options returned structured output"
+    );
+    let sent = provider.transport.requests.borrow();
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    let body_text = sent[0].body.as_str();
+    assert_eq!(body["tool_choice"], "required");
+    assert_eq!(body["parallel_tool_calls"], true);
+    assert_eq!(body["max_completion_tokens"], 64);
+    assert!(body.get("max_tokens").is_none());
+    assert_eq!(body["tools"][0]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
     assert!(!body_text.contains(DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME));
     assert!(!body_text.contains(DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME));
     assert!(!body_text.contains(DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME));
@@ -310,11 +431,11 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
 #[test]
 fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
     let models = parse_openai_models_http_body(
-        r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144}]}"#,
+        r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
     )
     .unwrap();
 
-    assert_eq!(models.len(), 2);
+    assert_eq!(models.len(), 3);
     let custom = models
         .iter()
         .find(|model| model.id == "gpt-custom")
@@ -322,6 +443,14 @@ fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
     assert_eq!(custom.display_name.as_deref(), Some("Custom"));
     assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
     assert_eq!(custom.context_window_tokens, Some(262_144));
+    let lmstudio = models
+        .iter()
+        .find(|model| model.id == "lmstudio-local")
+        .unwrap();
+    assert_eq!(
+        lmstudio.capabilities,
+        vec!["tool_use".to_string(), "structured_output".to_string()]
+    );
     let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
     assert_eq!(
         defaulted.reasoning_levels,

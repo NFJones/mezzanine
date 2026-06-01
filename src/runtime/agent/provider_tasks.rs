@@ -55,6 +55,7 @@ impl RuntimeSessionService {
                         auth_store,
                         provider_name,
                         endpoint_override,
+                        &provider_config.options,
                         DEFAULT_PROVIDER_TIMEOUT_MS,
                         ReqwestProviderHttpTransport,
                     )

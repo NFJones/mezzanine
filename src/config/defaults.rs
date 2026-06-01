@@ -228,6 +228,39 @@ default_model = "gpt-5.5"
 # organization_id = "org_..."
 # project_id = "proj_..."
 
+# Example local OpenAI-compatible Chat Completions backend, such as LM Studio.
+# Uncomment and select this provider from a model profile when a local server is
+# listening on the configured base URL. Missing stored auth metadata is allowed;
+# Mezzanine sends no Authorization header in that case.
+# [providers.lmstudio]
+# kind = "openai-compatible"
+# api = "openai-chat-completions"
+# auth_profile = "default"
+# base_url = "http://localhost:1234/v1"
+# models = ["local-model"]
+# default_model = "local-model"
+#
+# [providers.lmstudio.options]
+# tool_calls = "auto"
+# tool_choice = "required"
+# parallel_tool_calls = "disabled"
+# structured_output = "auto"
+# output_token_field = "max_tokens"
+# maap_surface = "canonical_batch"
+#
+# [model_profiles.local-lmstudio]
+# provider = "lmstudio"
+# model = "local-model"
+# reasoning_profile = "medium"
+# latency_preference = "default"
+# multimodal_required = false
+# context_window_tokens = 32768
+# safety_tier = "basic"
+# privacy_tier = "local"
+# residency = "local"
+# approval_policy = "ask"
+# fallback_profiles = []
+
 [providers.deepseek]
 kind = "deepseek"
 api = "deepseek-chat-completions"

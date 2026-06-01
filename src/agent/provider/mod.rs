@@ -902,18 +902,22 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     auth_store: &AuthStore,
     provider_name: &str,
     base_url_override: Option<&str>,
+    provider_options: &BTreeMap<String, String>,
     timeout_ms: u64,
     transport: T,
 ) -> Result<OpenAiCompatibleChatCompletionsProvider<T>> {
-    let mut provider = if auth_store
+    let dialect = OpenAiChatCompletionsDialect::from_provider_options(provider_options)?;
+    let api_key = if auth_store
         .read_metadata_for_provider(provider_name)?
         .is_some()
     {
-        let credential = auth_store.provider_secret(provider_name)?;
-        OpenAiCompatibleChatCompletionsProvider::new(credential, transport)?
+        Some(auth_store.provider_secret(provider_name)?)
     } else {
-        OpenAiCompatibleChatCompletionsProvider::without_auth(transport)?
-    }
+        None
+    };
+    let mut provider = OpenAiCompatibleChatCompletionsProvider::with_optional_auth_and_dialect(
+        api_key, transport, dialect,
+    )?
     .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         let endpoint = provider.chat_endpoint_for_base_url(base_url)?;

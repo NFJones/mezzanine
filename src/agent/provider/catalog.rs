@@ -33,6 +33,9 @@ pub struct ProviderModelInfo {
     pub reasoning_levels: Vec<String>,
     /// Provider-reported or locally documented context-window size in tokens.
     pub context_window_tokens: Option<usize>,
+    /// Provider-reported capability tags for this model, such as LM Studio's
+    /// `tool_use` marker.
+    pub capabilities: Vec<String>,
 }
 
 /// Carries Provider Model Catalog state for this subsystem.
@@ -190,7 +193,49 @@ fn openai_model_info_from_value(value: &serde_json::Value) -> Option<ProviderMod
         reasoning_levels,
         context_window_tokens: provider_context_window_tokens_from_value(value)
             .or_else(|| known_model_context_window_tokens(&id)),
+        capabilities: provider_capabilities_from_value(value),
     })
+}
+
+/// Returns provider-advertised model capability strings when present.
+fn provider_capabilities_from_value(value: &serde_json::Value) -> Vec<String> {
+    let mut capabilities = Vec::new();
+    if let Some(values) = value
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+    {
+        capabilities.extend(
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|capability| !capability.is_empty())
+                .map(str::to_string),
+        );
+    }
+    if let Some(object) = value
+        .get("capabilities")
+        .and_then(serde_json::Value::as_object)
+    {
+        capabilities.extend(
+            object
+                .iter()
+                .filter(|(_, value)| value.as_bool().unwrap_or(false))
+                .map(|(capability, _)| capability.trim())
+                .filter(|capability| !capability.is_empty())
+                .map(str::to_string),
+        );
+    }
+    for field in ["tool_use", "tools", "function_calling", "structured_output"] {
+        if value
+            .get(field)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            capabilities.push(field.to_string());
+        }
+    }
+    dedupe_provider_strings(capabilities)
 }
 
 /// Returns provider-advertised model context-window metadata when present.

@@ -413,7 +413,33 @@ one provider entry per backend, set `base_url` to the backend API base such as
 the backend's `/models` endpoint is sufficient for live catalog refresh.
 The generic `openai-chat-completions` adapter uses the canonical OpenAI-style
 function-tool surface and does not send DeepSeek thinking fields,
-`reasoning_content`, or DeepSeek MAAP shim function names.
+`reasoning_content`, or DeepSeek MAAP shim function names. Generic compatible
+providers can tune MAAP behavior with provider options such as `tool_calls`
+(`auto`, `enabled`, or `disabled`), `tool_choice` (`named`, `required`, `auto`,
+or `disabled`), `parallel_tool_calls` (`auto`, `enabled`, or `disabled`),
+`structured_output` (`auto`, `json_object`, `json_schema`, or `disabled`),
+`output_token_field` (`max_tokens` or `max_completion_tokens`), and
+`maap_surface` (`canonical_batch` or `content_json`). LM Studio-style model
+catalog capability tags such as `tool_use` are retained in provider model
+metadata and copied into runtime-generated profile options as
+`model_capabilities`.
+
+Example LM Studio-compatible provider:
+
+```toml
+[providers.lmstudio]
+kind = "openai-compatible"
+api = "openai-chat-completions"
+auth_profile = "default"
+base_url = "http://localhost:1234/v1"
+models = ["local-model"]
+default_model = "local-model"
+
+[providers.lmstudio.options]
+tool_choice = "required" # use only when the runtime/model supports it
+parallel_tool_calls = "disabled"
+structured_output = "auto"
+```
 
 ### `model_profiles.<name>`
 

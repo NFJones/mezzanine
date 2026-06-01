@@ -2585,12 +2585,21 @@ from that base. For providers whose `api` is `openai-chat-completions` or
 base URL; Mezzanine MUST derive the documented `/chat/completions` request
 endpoint and `/models` catalog endpoint from that base. Compatible providers
 MUST use the named provider entry as the configuration boundary so each backend
-can declare its own base URL, auth profile, model list, and default model. Chat
-The `openai-chat-completions` adapter MUST use a provider-neutral OpenAI-style
-Chat Completions dialect and MUST NOT emit DeepSeek thinking fields,
-`reasoning_content`, DeepSeek MAAP shim function names, or DeepSeek fallback
-retry policy. The `deepseek-chat-completions` adapter MUST keep those DeepSeek
-wire-format and policy behaviors scoped to the DeepSeek dialect.
+can declare its own base URL, auth profile, model list, default model, and
+provider-level compatibility options. The `openai-chat-completions` adapter MUST
+use a provider-neutral OpenAI-style Chat Completions dialect and MUST NOT emit
+DeepSeek thinking fields, `reasoning_content`, DeepSeek MAAP shim function
+names, or DeepSeek fallback retry policy. Generic OpenAI-compatible Chat
+Completions providers MUST use the canonical `submit_maap_action_batch` tool by
+default when MAAP actions are required, MUST parse native OpenAI-style tool
+calls plus raw or fenced MAAP JSON content, and MAY be configured with
+provider-level compatibility options for `tool_calls`, `tool_choice`,
+`parallel_tool_calls`, `structured_output`, `output_token_field`, and
+`maap_surface`. When a compatible model catalog reports model capability tags
+such as LM Studio's `tool_use`, Mezzanine MUST preserve those tags in provider
+model metadata and propagate them into runtime-generated model profile options.
+The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
+policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider
 auth metadata as an unauthenticated backend and MUST omit the `Authorization`
 header in that state instead of failing before the request. When credential
