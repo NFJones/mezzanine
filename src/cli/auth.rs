@@ -5,12 +5,11 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    Args, AuthMethod, AuthPaths, AuthStore, CliEnv, CliOutputFormat, ConfigPaths,
-    CredentialStorePlan, MezError, OpenAiProviderCredential, PathBuf, Result, Serialize,
-    Subcommand, UiTheme, Write, fs, json_escape, load_runtime_config_layers,
-    run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
-    runtime_effective_config_value, runtime_ui_theme_from_config, serialize_json,
-    write_json_or_plain,
+    Args, AuthMethod, AuthPaths, AuthStore, CliEnv, CliOutputFormat, ConfigPaths, MezError,
+    OpenAiProviderCredential, PathBuf, Result, Serialize, Subcommand, UiTheme, Write, fs,
+    json_escape, load_runtime_config_layers, run_openai_browser_login_with_theme_async,
+    run_openai_device_code_login_async, runtime_effective_config_value,
+    runtime_ui_theme_from_config, serialize_json, write_json_or_plain,
 };
 use crate::auth::selected_auth_method_from_flags;
 
@@ -313,26 +312,12 @@ pub(super) fn login_provider_api_key_for_cli(
     secret: &str,
     credential_store: Option<&str>,
 ) -> Result<crate::auth::AuthMetadata> {
-    match credential_store {
-        Some("file") => {
-            let credential_store = store.file_credential_store(provider)?;
-            store.login_provider_api_key(provider, selected_profile, secret, &credential_store)
-        }
-        Some("os") => {
-            store.login_provider_api_key_with_default_os_store(provider, selected_profile, secret)
-        }
-        Some(other) => Err(MezError::invalid_args(format!(
-            "unknown credential store `{other}`"
-        ))),
-        None => match store.credential_store_plan(provider) {
-            CredentialStorePlan::OperatingSystem { .. } => store
-                .login_provider_api_key_with_default_os_store(provider, selected_profile, secret),
-            CredentialStorePlan::PrivateFileFallback { .. } => {
-                let credential_store = store.file_credential_store(provider)?;
-                store.login_provider_api_key(provider, selected_profile, secret, &credential_store)
-            }
-        },
-    }
+    store.login_provider_api_key_with_selected_store(
+        provider,
+        selected_profile,
+        secret,
+        credential_store,
+    )
 }
 
 /// Runs the login openai provider credential for cli operation for this subsystem.
@@ -346,19 +331,11 @@ fn login_openai_provider_credential_for_cli(
     credential_store: Option<&str>,
     credential: OpenAiProviderCredential,
 ) -> Result<crate::auth::AuthMetadata> {
-    match credential_store {
-        Some("file") => {
-            let credential_store = store.file_credential_store("openai")?;
-            store.login_openai_provider_credential(selected_profile, credential, &credential_store)
-        }
-        Some("os") => store
-            .login_openai_provider_credential_with_default_os_store(selected_profile, credential),
-        Some(other) => Err(MezError::invalid_args(format!(
-            "unknown credential store `{other}`"
-        ))),
-        None => store
-            .login_openai_provider_credential_with_preferred_store(selected_profile, credential),
-    }
+    store.login_openai_provider_credential_with_selected_store(
+        selected_profile,
+        credential,
+        credential_store,
+    )
 }
 
 /// Runs the write auth login operation for this subsystem.

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::agent::{PaneReadinessOverrideStore, PaneReadinessState};
 use crate::audit::{AuditActor, AuditLog, AuditRecord};
-use crate::auth::{AuthMethod, AuthStatus, AuthStore, CredentialStoreKind, CredentialStorePlan};
+use crate::auth::{AuthMethod, AuthStatus, AuthStore, CredentialStoreKind};
 use crate::config::{
     ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
     ConfigPaths, ConfigScope, persist_config_mutation, persist_config_text, plan_config_mutation,

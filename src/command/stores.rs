@@ -7,9 +7,9 @@
 use super::{
     AuthMethod, AuthStatus, AuthStore, CommandInvocation, ConfigFormat, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
-    CredentialStorePlan, MezError, Result, credential_store_kind_name, flag_value, fs,
-    persist_config_mutation, persist_config_text, plan_config_mutation, positional_args,
-    repeated_flag_values, validate_command_identifier,
+    MezError, Result, credential_store_kind_name, flag_value, fs, persist_config_mutation,
+    persist_config_text, plan_config_mutation, positional_args, repeated_flag_values,
+    validate_command_identifier,
 };
 use crate::auth::selected_auth_method_from_flags;
 use crate::terminal::{
@@ -417,44 +417,12 @@ pub(super) fn execute_auth_login(
     let api_key = fs::read_to_string(api_key_path)?;
     let api_key = api_key.trim();
 
-    let metadata = match flag_value(&invocation.args, "--credential-store") {
-        Some("file") => {
-            let credential_store = auth_store.file_credential_store(provider)?;
-            auth_store.login_provider_api_key(
-                provider,
-                selected_profile,
-                api_key,
-                &credential_store,
-            )?
-        }
-        Some("os") => auth_store.login_provider_api_key_with_default_os_store(
-            provider,
-            selected_profile,
-            api_key,
-        )?,
-        Some(other) => {
-            return Err(MezError::invalid_args(format!(
-                "unknown credential store `{other}`"
-            )));
-        }
-        None => match auth_store.credential_store_plan(provider) {
-            CredentialStorePlan::OperatingSystem { .. } => auth_store
-                .login_provider_api_key_with_default_os_store(
-                    provider,
-                    selected_profile,
-                    api_key,
-                )?,
-            CredentialStorePlan::PrivateFileFallback { .. } => {
-                let credential_store = auth_store.file_credential_store(provider)?;
-                auth_store.login_provider_api_key(
-                    provider,
-                    selected_profile,
-                    api_key,
-                    &credential_store,
-                )?
-            }
-        },
-    };
+    let metadata = auth_store.login_provider_api_key_with_selected_store(
+        provider,
+        selected_profile,
+        api_key,
+        flag_value(&invocation.args, "--credential-store"),
+    )?;
 
     let credential_store = metadata
         .credential_store_ref

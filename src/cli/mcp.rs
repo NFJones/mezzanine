@@ -13,8 +13,8 @@ use super::{
     json_escape, json_optional, migrate_config_file, persist_config_mutation, write_json_or_plain,
 };
 use crate::auth::{
-    AuthCredentialState, CredentialStorePlan, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
-    NativeSecretServiceCredentialStore, run_mcp_oauth_login_async,
+    AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
+    run_mcp_oauth_login_async,
 };
 use sha2::Digest;
 
@@ -707,29 +707,7 @@ fn login_mcp_oauth_credential_for_cli(
     credential_store: Option<&str>,
     credential: McpOAuthCredential,
 ) -> Result<McpAuthMetadata> {
-    match credential_store {
-        Some("file") => {
-            let file_store = store.file_credential_store(&metadata.server_id)?;
-            store.login_mcp_oauth_credential(metadata, credential, &file_store)
-        }
-        Some("os") => {
-            let os_store = NativeSecretServiceCredentialStore::new();
-            store.login_mcp_oauth_credential(metadata, credential, &os_store)
-        }
-        Some(other) => Err(MezError::invalid_args(format!(
-            "unknown credential store `{other}`"
-        ))),
-        None => match store.credential_store_plan(&metadata.server_id) {
-            CredentialStorePlan::OperatingSystem { .. } => {
-                let os_store = NativeSecretServiceCredentialStore::new();
-                store.login_mcp_oauth_credential(metadata, credential, &os_store)
-            }
-            CredentialStorePlan::PrivateFileFallback { .. } => {
-                let file_store = store.file_credential_store(&metadata.server_id)?;
-                store.login_mcp_oauth_credential(metadata, credential, &file_store)
-            }
-        },
-    }
+    store.login_mcp_oauth_credential_with_selected_store(metadata, credential, credential_store)
 }
 
 /// Renders secret-safe MCP auth status as JSON.

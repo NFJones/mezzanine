@@ -26,7 +26,7 @@ use crate::async_runtime::{
     run_async_attached_terminal_client_service_deferred_pane_io, supervise_async_runtime_services,
 };
 use crate::auth::{
-    AuthMethod, AuthPaths, AuthStore, CredentialStorePlan, OpenAiProviderCredential,
+    AuthMethod, AuthPaths, AuthStore, OpenAiProviderCredential,
     run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
 };
 use crate::config::{

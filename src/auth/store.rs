@@ -255,6 +255,24 @@ impl AuthStore {
         }
     }
 
+    /// Parses an optional command-line credential-store selector.
+    ///
+    /// `None` means callers should use the store's preferred backend. Explicit
+    /// selectors keep the user-facing CLI vocabulary centralized at the auth
+    /// boundary instead of repeating it in provider and MCP callers.
+    fn selected_credential_store_kind(
+        credential_store: Option<&str>,
+    ) -> Result<Option<CredentialStoreKind>> {
+        match credential_store {
+            Some("file") => Ok(Some(CredentialStoreKind::PrivateFileFallback)),
+            Some("os") => Ok(Some(CredentialStoreKind::OperatingSystem)),
+            Some(other) => Err(MezError::invalid_args(format!(
+                "unknown credential store `{other}`"
+            ))),
+            None => Ok(None),
+        }
+    }
+
     /// Runs the file credential store operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -443,6 +461,52 @@ impl AuthStore {
         Ok(metadata)
     }
 
+    /// Stores an MCP OAuth credential through the default OS credential store.
+    pub fn login_mcp_oauth_credential_with_default_os_store(
+        &self,
+        metadata: McpAuthMetadata,
+        credential: McpOAuthCredential,
+    ) -> Result<McpAuthMetadata> {
+        let native_store = NativeSecretServiceCredentialStore::new();
+        if matches!(
+            native_store.availability(),
+            CredentialStoreAvailability::Available
+        ) {
+            return self.login_mcp_oauth_credential(metadata, credential, &native_store);
+        }
+
+        let command_store = CommandBackedCredentialStore::secret_tool();
+        self.login_mcp_oauth_credential(metadata, credential, &command_store)
+    }
+
+    /// Stores an MCP OAuth credential through a selected or preferred store.
+    pub fn login_mcp_oauth_credential_with_selected_store(
+        &self,
+        metadata: McpAuthMetadata,
+        credential: McpOAuthCredential,
+        credential_store: Option<&str>,
+    ) -> Result<McpAuthMetadata> {
+        let server_id = metadata.server_id.clone();
+        match Self::selected_credential_store_kind(credential_store)? {
+            Some(CredentialStoreKind::PrivateFileFallback) => {
+                let file_store = self.file_credential_store(&server_id)?;
+                self.login_mcp_oauth_credential(metadata, credential, &file_store)
+            }
+            Some(CredentialStoreKind::OperatingSystem) => {
+                self.login_mcp_oauth_credential_with_default_os_store(metadata, credential)
+            }
+            None => match self.credential_store_plan(&server_id) {
+                CredentialStorePlan::OperatingSystem { .. } => {
+                    self.login_mcp_oauth_credential_with_default_os_store(metadata, credential)
+                }
+                CredentialStorePlan::PrivateFileFallback { .. } => {
+                    let file_store = self.file_credential_store(&server_id)?;
+                    self.login_mcp_oauth_credential(metadata, credential, &file_store)
+                }
+            },
+        }
+    }
+
     /// Loads the MCP OAuth access token for a configured server.
     pub fn mcp_access_token(&self, server_id: &str) -> Result<SecretString> {
         validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
@@ -588,6 +652,50 @@ impl AuthStore {
         self.login_with_api_key(provider, selected_model_profile, api_key, credential_store)
     }
 
+    /// Stores a provider API key through a selected or preferred credential store.
+    pub fn login_provider_api_key_with_selected_store(
+        &self,
+        provider: &str,
+        selected_model_profile: &str,
+        api_key: &str,
+        credential_store: Option<&str>,
+    ) -> Result<AuthMetadata> {
+        match Self::selected_credential_store_kind(credential_store)? {
+            Some(CredentialStoreKind::PrivateFileFallback) => {
+                let credential_store = self.file_credential_store(provider)?;
+                self.login_provider_api_key(
+                    provider,
+                    selected_model_profile,
+                    api_key,
+                    &credential_store,
+                )
+            }
+            Some(CredentialStoreKind::OperatingSystem) => self
+                .login_provider_api_key_with_default_os_store(
+                    provider,
+                    selected_model_profile,
+                    api_key,
+                ),
+            None => match self.credential_store_plan(provider) {
+                CredentialStorePlan::OperatingSystem { .. } => self
+                    .login_provider_api_key_with_default_os_store(
+                        provider,
+                        selected_model_profile,
+                        api_key,
+                    ),
+                CredentialStorePlan::PrivateFileFallback { .. } => {
+                    let credential_store = self.file_credential_store(provider)?;
+                    self.login_provider_api_key(
+                        provider,
+                        selected_model_profile,
+                        api_key,
+                        &credential_store,
+                    )
+                }
+            },
+        }
+    }
+
     /// Runs the login provider api key with default os store operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -700,6 +808,34 @@ impl AuthStore {
         metadata.token_expires_at = credential.token_expires_at;
         self.write_metadata(&metadata)?;
         Ok(metadata)
+    }
+
+    /// Stores an OpenAI provider credential through a selected or preferred store.
+    pub fn login_openai_provider_credential_with_selected_store(
+        &self,
+        selected_model_profile: &str,
+        credential: OpenAiProviderCredential,
+        credential_store: Option<&str>,
+    ) -> Result<AuthMetadata> {
+        match Self::selected_credential_store_kind(credential_store)? {
+            Some(CredentialStoreKind::PrivateFileFallback) => {
+                let credential_store = self.file_credential_store(OPENAI_PROVIDER)?;
+                self.login_openai_provider_credential(
+                    selected_model_profile,
+                    credential,
+                    &credential_store,
+                )
+            }
+            Some(CredentialStoreKind::OperatingSystem) => self
+                .login_openai_provider_credential_with_default_os_store(
+                    selected_model_profile,
+                    credential,
+                ),
+            None => self.login_openai_provider_credential_with_preferred_store(
+                selected_model_profile,
+                credential,
+            ),
+        }
     }
 
     /// Runs the login openai provider credential with default os store operation for this subsystem.
