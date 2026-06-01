@@ -422,7 +422,10 @@ or `disabled`), `parallel_tool_calls` (`auto`, `enabled`, or `disabled`),
 `maap_surface` (`canonical_batch` or `content_json`). LM Studio-style model
 catalog capability tags such as `tool_use` are retained in provider model
 metadata and copied into runtime-generated profile options as
-`model_capabilities`.
+`model_capabilities`. By default Mezzanine sends the canonical
+`submit_maap_action_batch` tool with string `tool_choice = "required"`; use
+`tool_choice = "named"` only for backends that accept object-valued named tool
+selection.
 
 Example LM Studio-compatible provider:
 
@@ -436,7 +439,7 @@ models = ["local-model"]
 default_model = "local-model"
 
 [providers.lmstudio.options]
-tool_choice = "required" # use only when the runtime/model supports it
+tool_choice = "required" # default generic setting for runtimes that accept string tool_choice
 parallel_tool_calls = "disabled"
 structured_output = "auto"
 ```

@@ -230,7 +230,7 @@ default_model = "gpt-5.5"
 #
 # [providers.lmstudio.options]
 # tool_calls = "auto"
-# tool_choice = "required"
+# tool_choice = "required" # default generic setting for string-only tool_choice runtimes
 # parallel_tool_calls = "disabled"
 # structured_output = "auto"
 # output_token_field = "max_tokens"

@@ -295,7 +295,7 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     assert_eq!(sent[0].headers.get("Authorization"), None);
     let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
     let body_text = sent[0].body.as_str();
-    assert_eq!(body["tool_choice"]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
+    assert_eq!(body["tool_choice"], "required");
     assert_eq!(body["tools"][0]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
     assert_eq!(body["parallel_tool_calls"], false);
     assert!(body.get("thinking").is_none());

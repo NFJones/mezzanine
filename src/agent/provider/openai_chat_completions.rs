@@ -37,7 +37,7 @@ impl Default for OpenAiChatCompletionsOptions {
     fn default() -> Self {
         Self {
             tool_calls: OpenAiCompatibilitySwitch::Auto,
-            tool_choice: OpenAiToolChoiceMode::Named,
+            tool_choice: OpenAiToolChoiceMode::Required,
             parallel_tool_calls: OpenAiCompatibilitySwitch::Disabled,
             structured_output: OpenAiStructuredOutputMode::Auto,
             output_token_field: OpenAiOutputTokenField::MaxTokens,
