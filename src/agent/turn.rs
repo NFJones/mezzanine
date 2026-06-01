@@ -176,6 +176,13 @@ impl AgentTurnLedger {
         validate_non_empty("turn_id", &turn.turn_id)?;
         validate_non_empty("agent_id", &turn.agent_id)?;
         validate_non_empty("pane_id", &turn.pane_id)?;
+        if self
+            .turns
+            .iter()
+            .any(|existing| existing.turn_id == turn.turn_id)
+        {
+            return Err(MezError::conflict("agent turn id already exists"));
+        }
         turn.state = AgentTurnState::Running;
         self.turns.push(turn);
         Ok(())
