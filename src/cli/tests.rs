@@ -741,12 +741,12 @@ fn startup_config_layers_discover_project_overlays_and_apply_trust() {
     fs::create_dir_all(project.join(".mezzanine")).unwrap();
     fs::write(
         project.join(".mezzanine/config.toml"),
-        "[history]\nlines = 7\n",
+        "version = 8\n[history]\nlines = 7\n",
     )
     .unwrap();
     fs::write(
         nested.join(".mezzanine/config.toml"),
-        "[history]\nlines = 11\n",
+        "version = 8\n[history]\nlines = 11\n",
     )
     .unwrap();
 

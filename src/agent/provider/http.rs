@@ -240,6 +240,30 @@ fn provider_http_response_read_error(
     ))
 }
 
+/// Reads one provider response chunk with an explicit inactivity deadline.
+///
+/// Reqwest's client-level read timeout is advisory at the transport boundary,
+/// while this wrapper gives Mezzanine one deterministic stall classification for
+/// every streamed body read. The deadline is restarted for each successful
+/// chunk, so long responses can continue as long as bytes keep arriving.
+async fn provider_http_read_chunk_with_timeout(
+    response: &mut reqwest::Response,
+    timeout_ms: u64,
+) -> Result<std::result::Result<Option<Vec<u8>>, reqwest::Error>> {
+    let timeout = Duration::from_millis(timeout_ms.max(1));
+    let chunk = tokio::time::timeout(timeout, response.chunk())
+        .await
+        .map_err(|_| provider_http_response_stalled_error(timeout_ms))?;
+    Ok(chunk.map(|chunk| chunk.map(|chunk| chunk.to_vec())))
+}
+
+/// Builds the deterministic error used when provider response progress stalls.
+fn provider_http_response_stalled_error(timeout_ms: u64) -> MezError {
+    MezError::invalid_state(format!(
+        "provider HTTP response read stalled for {timeout_ms}ms while waiting for body chunk"
+    ))
+}
+
 /// Returns the lower-level reqwest source chain for provider diagnostics.
 fn provider_http_error_source_chain(error: &reqwest::Error) -> String {
     let mut sources = Vec::new();
@@ -320,21 +344,30 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             let mut body_truncated = false;
             let mut body = Vec::new();
             loop {
-                let chunk = match response.chunk().await {
-                    Ok(Some(chunk)) => chunk,
-                    Ok(None) => break,
-                    Err(error) => {
-                        if expects_event_stream && provider_http_body_has_terminal_sse_event(&body)
-                        {
-                            break;
+                let chunk =
+                    match provider_http_read_chunk_with_timeout(&mut response, request.timeout_ms)
+                        .await?
+                    {
+                        Ok(Some(chunk)) => chunk,
+                        Ok(None) => break,
+                        Err(error) => {
+                            if expects_event_stream
+                                && provider_http_body_has_terminal_sse_event(&body)
+                            {
+                                break;
+                            }
+                            if error.is_timeout() {
+                                return Err(provider_http_response_stalled_error(
+                                    request.timeout_ms,
+                                ));
+                            }
+                            return Err(provider_http_response_read_error(
+                                status_code,
+                                content_encoding,
+                                error,
+                            ));
                         }
-                        return Err(provider_http_response_read_error(
-                            status_code,
-                            content_encoding,
-                            error,
-                        ));
-                    }
-                };
+                    };
                 if body.len().saturating_add(chunk.len()) > response_limit {
                     if request.max_response_bytes.is_none() {
                         return Err(MezError::invalid_state(
@@ -550,6 +583,63 @@ mod provider_transport_tests {
                 .get("x-mez-body-truncated")
                 .map(String::as_str),
             Some("true")
+        );
+    }
+
+    /// Verifies provider body reads fail with a Mezzanine timeout when no body
+    /// chunk arrives inside the per-read inactivity window.
+    ///
+    /// Some provider or proxy failures can send headers and then leave the body
+    /// stream open forever. The transport must classify that condition itself
+    /// instead of relying only on the lower-level HTTP client's read timeout.
+    #[tokio::test]
+    async fn provider_transport_times_out_stalled_body_reads() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response = "HTTP/1.1 200 OK\r\n\
+                            Content-Type: text/plain; charset=utf-8\r\n\
+                            Content-Length: 5\r\n\
+                            Connection: keep-alive\r\n\
+                            \r\n";
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".to_string(),
+            url: format!("http://{address}/stall.txt"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeout_ms: 50,
+            max_response_bytes: None,
+        };
+
+        let error = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap_err();
+        server.abort();
+
+        assert!(
+            error
+                .to_string()
+                .contains("provider HTTP response read stalled")
         );
     }
 

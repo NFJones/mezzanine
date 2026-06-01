@@ -833,6 +833,8 @@ impl RuntimeSessionService {
                 &parent_turn.pane_id,
                 "agent: subagent results received; continuing",
             )?;
+        } else {
+            self.start_ready_agent_turns()?;
         }
         Ok(())
     }

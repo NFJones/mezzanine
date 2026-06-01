@@ -4175,6 +4175,32 @@ fn append_project_command_rule_text(text: &str, rule: &CommandRule) -> Result<St
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| MezError::config(format!("invalid project TOML config: {error}")))?;
+    if document.as_table().get("version").is_some() {
+        document.as_table_mut().insert(
+            "version",
+            toml_edit::value(crate::config::CURRENT_CONFIG_SCHEMA_VERSION as i64),
+        );
+    } else {
+        let text = if text.trim().is_empty() {
+            format!(
+                "version = {}\n",
+                crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+            )
+        } else if text.ends_with('\n') {
+            format!(
+                "version = {}\n{text}",
+                crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+            )
+        } else {
+            format!(
+                "version = {}\n{text}\n",
+                crate::config::CURRENT_CONFIG_SCHEMA_VERSION
+            )
+        };
+        document = text
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| MezError::config(format!("invalid project TOML config: {error}")))?;
+    }
     let root = document.as_table_mut();
     if root.get("permissions").is_none() {
         root.insert(

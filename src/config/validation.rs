@@ -6,14 +6,14 @@
 
 use super::{
     BASELINE_TOP_LEVEL_KEYS, BTreeMap, CURRENT_CONFIG_SCHEMA_VERSION, ConfigDiagnostic,
-    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationPlan, ConfigScope, ConfigValidation,
-    ConfigValue, EffectiveConfig, MezError, Path, Result, contains_secret_material,
-    extract_config_values, extract_json_paths, extract_toml_paths, extract_yaml_paths,
-    format_diagnostics, fs, mutate_json_text, mutate_toml_text, mutate_yaml_text,
-    parse_config_schema_version, parse_mutation_path, reject_container_target,
-    reject_unsupported_mutation_path, validate_command_rule_examples, validate_known_schema_path,
-    validate_mcp_server_path, validate_permission_value, validate_permissions_path,
-    write_private_config_file, write_private_config_file_async,
+    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan,
+    ConfigMutationValue, ConfigScope, ConfigValidation, ConfigValue, EffectiveConfig, MezError,
+    Path, Result, contains_secret_material, extract_config_values, extract_json_paths,
+    extract_toml_paths, extract_yaml_paths, format_diagnostics, fs, mutate_json_text,
+    mutate_toml_text, mutate_yaml_text, parse_config_schema_version, parse_mutation_path,
+    reject_container_target, reject_unsupported_mutation_path, validate_command_rule_examples,
+    validate_known_schema_path, validate_mcp_server_path, validate_permission_value,
+    validate_permissions_path, write_private_config_file, write_private_config_file_async,
 };
 use crate::terminal::{parse_hex_color, valid_color_alias_name};
 
@@ -68,11 +68,14 @@ pub fn plan_config_mutation(
     reject_unsupported_mutation_path(&segments)?;
     reject_container_target(format, text, &segments, &mutation.operation)?;
 
-    let mutated = match format {
+    let mut mutated = match format {
         ConfigFormat::Toml => mutate_toml_text(text, &segments, &mutation.operation)?,
         ConfigFormat::Yaml => mutate_yaml_text(text, &segments, &mutation.operation)?,
         ConfigFormat::Json => mutate_json_text(text, &segments, &mutation.operation)?,
     };
+    if scope == ConfigScope::ProjectOverlay {
+        mutated = materialize_project_overlay_schema_version(format, &mutated)?;
+    }
     let validation = validate_config_text(format, &mutated, scope);
     if !validation.valid {
         return Err(MezError::config(format!(
@@ -119,14 +122,19 @@ pub fn persist_config_mutation(
 /// rejects invalid replacement text before touching disk.
 pub fn persist_config_text(path: &Path, scope: ConfigScope, text: &str) -> Result<()> {
     let format = ConfigFormat::from_path(path)?;
-    let validation = validate_config_text(format, text, scope);
+    let text = if scope == ConfigScope::ProjectOverlay {
+        materialize_project_overlay_schema_version(format, text)?
+    } else {
+        text.to_string()
+    };
+    let validation = validate_config_text(format, &text, scope);
     if !validation.valid {
         return Err(MezError::config(format!(
             "configuration write rejected; proposed config is invalid: {}",
             format_diagnostics(&validation.diagnostics)
         )));
     }
-    write_private_config_file(path, text)
+    write_private_config_file(path, &text)
 }
 
 /// Apply a validated config mutation using Tokio filesystem APIs.
@@ -142,6 +150,85 @@ pub async fn persist_config_mutation_async(
         write_private_config_file_async(path, &plan.text).await?;
     }
     Ok(plan)
+}
+
+/// Ensures project-overlay writes declare the current schema version.
+///
+/// Direct validation still rejects missing or stale overlay versions, but
+/// runtime-owned persistence paths can safely materialize the current version
+/// when creating or extending a project overlay document.
+fn materialize_project_overlay_schema_version(format: ConfigFormat, text: &str) -> Result<String> {
+    let values = extract_config_values(format, text);
+    let raw_schema_version = values.get("version").map(String::as_str);
+    let parsed_schema_version =
+        raw_schema_version.and_then(|value| parse_config_schema_version(Some(value)).ok());
+    if parsed_schema_version == Some(CURRENT_CONFIG_SCHEMA_VERSION) {
+        return Ok(text.to_string());
+    }
+    if raw_schema_version.is_some()
+        && !matches!(parsed_schema_version, Some(version) if version < CURRENT_CONFIG_SCHEMA_VERSION)
+    {
+        return Ok(text.to_string());
+    }
+    let current_version = i64::try_from(CURRENT_CONFIG_SCHEMA_VERSION)
+        .map_err(|_| MezError::config("current config schema version is too large"))?;
+    match format {
+        ConfigFormat::Toml => {
+            let mut document = text
+                .parse::<toml_edit::DocumentMut>()
+                .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+            if raw_schema_version.is_some() {
+                document
+                    .as_table_mut()
+                    .insert("version", toml_edit::value(current_version));
+                Ok(document.to_string())
+            } else if text.trim().is_empty() {
+                Ok(format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n"))
+            } else if text.ends_with('\n') {
+                Ok(format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}\n{text}"))
+            } else {
+                Ok(format!(
+                    "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n{text}\n"
+                ))
+            }
+        }
+        ConfigFormat::Yaml => {
+            if raw_schema_version.is_some() {
+                mutate_yaml_text(
+                    text,
+                    &["version".to_string()],
+                    &ConfigMutationOperation::Set(ConfigMutationValue::Integer(current_version)),
+                )
+            } else if text.trim().is_empty() {
+                Ok(format!("version: {CURRENT_CONFIG_SCHEMA_VERSION}\n"))
+            } else if text.ends_with('\n') {
+                Ok(format!("version: {CURRENT_CONFIG_SCHEMA_VERSION}\n{text}"))
+            } else {
+                Ok(format!(
+                    "version: {CURRENT_CONFIG_SCHEMA_VERSION}\n{text}\n"
+                ))
+            }
+        }
+        ConfigFormat::Json => {
+            let mut root: serde_json::Value = serde_json::from_str(text).map_err(|error| {
+                MezError::config(format!("JSON configuration parse failed: {error}"))
+            })?;
+            let Some(object) = root.as_object_mut() else {
+                return Err(MezError::config(
+                    "JSON project overlay configuration requires an object root",
+                ));
+            };
+            object.insert(
+                "version".to_string(),
+                serde_json::Value::Number(CURRENT_CONFIG_SCHEMA_VERSION.into()),
+            );
+            serde_json::to_string_pretty(&root)
+                .map(|rendered| format!("{rendered}\n"))
+                .map_err(|error| {
+                    MezError::config(format!("JSON configuration render failed: {error}"))
+                })
+        }
+    }
 }
 
 /// Runs the validate config text operation for this subsystem.
@@ -521,6 +608,19 @@ pub fn compose_effective_config(layers: &[ConfigLayer]) -> Result<EffectiveConfi
     let mut skipped_layers = Vec::new();
 
     for layer in layers {
+        if layer.scope == ConfigScope::ProjectOverlay && !layer.trusted {
+            diagnostics.push(ConfigDiagnostic {
+                path: layer
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| layer.name.clone()),
+                message: "project overlay is pending trust and was not applied".to_string(),
+            });
+            skipped_layers.push(layer.name.clone());
+            continue;
+        }
+
         let validation = validate_config_text(layer.format, &layer.text, layer.scope);
         if !validation.valid {
             return Err(MezError::config(format!(
@@ -533,19 +633,6 @@ pub fn compose_effective_config(layers: &[ConfigLayer]) -> Result<EffectiveConfi
                     .collect::<Vec<_>>()
                     .join("; ")
             )));
-        }
-
-        if layer.scope == ConfigScope::ProjectOverlay && !layer.trusted {
-            diagnostics.push(ConfigDiagnostic {
-                path: layer
-                    .path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| layer.name.clone()),
-                message: "project overlay is pending trust and was not applied".to_string(),
-            });
-            skipped_layers.push(layer.name.clone());
-            continue;
         }
 
         for (path, value) in extract_config_values(layer.format, &layer.text) {

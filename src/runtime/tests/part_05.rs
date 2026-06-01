@@ -4739,7 +4739,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
     service.pending_agent_provider_tasks.remove(&parent.turn_id);
     service
         .agent_scheduler_mut()
-        .block_running(&parent.turn_id)
+        .complete(&parent.turn_id)
         .unwrap();
     service
         .agent_turn_ledger

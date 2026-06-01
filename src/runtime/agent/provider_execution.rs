@@ -1062,7 +1062,7 @@ impl RuntimeSessionService {
             if waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
-                let _ = self.agent_scheduler.block_running(turn_id);
+                let _ = self.agent_scheduler.complete(turn_id);
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
@@ -1313,7 +1313,7 @@ impl RuntimeSessionService {
             if waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
-                let _ = self.agent_scheduler.block_running(turn_id);
+                let _ = self.agent_scheduler.complete(turn_id);
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
