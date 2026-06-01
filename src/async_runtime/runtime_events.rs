@@ -627,6 +627,22 @@ impl RuntimeEventBatch {
         self.events.push(event);
     }
 
+    /// Returns events in actor application order while preserving FIFO order
+    /// inside each priority class.
+    ///
+    /// Actor ingress keeps lifecycle-sensitive events ahead of ordinary work,
+    /// moves interactive pane completions before timer maintenance, and leaves
+    /// unrelated event families in their arrival order. This prevents a ready
+    /// PTY output event from sitting behind timer work when both events were
+    /// collected by the same async wakeup.
+    pub fn prioritized_events(self) -> Vec<RuntimeEvent> {
+        let mut indexed_events: Vec<(usize, RuntimeEvent)> =
+            self.events.into_iter().enumerate().collect();
+        indexed_events
+            .sort_by_key(|(index, event)| (runtime_event_application_priority(event), *index));
+        indexed_events.into_iter().map(|(_, event)| event).collect()
+    }
+
     /// Returns stable event-family names in delivery order.
     pub fn families(&self) -> Vec<&'static str> {
         self.events.iter().map(RuntimeEvent::family).collect()
@@ -640,6 +656,23 @@ impl RuntimeEventBatch {
             side_effects: 0,
             families: self.families().into_iter().map(str::to_string).collect(),
         }
+    }
+}
+
+/// Returns the actor application priority for one runtime event.
+const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
+    match event {
+        RuntimeEvent::Shutdown(_) | RuntimeEvent::Process(_) => 0,
+        RuntimeEvent::Pane(PaneEvent::Output { .. })
+        | RuntimeEvent::Pane(PaneEvent::InputWritten { .. })
+        | RuntimeEvent::Pane(PaneEvent::Resized { .. }) => 1,
+        RuntimeEvent::Timer(_) => 3,
+        RuntimeEvent::Client(_)
+        | RuntimeEvent::Pane(_)
+        | RuntimeEvent::AgentProvider(_)
+        | RuntimeEvent::AgentCompaction(_)
+        | RuntimeEvent::Hook(_)
+        | RuntimeEvent::Persistence(_) => 2,
     }
 }
 

@@ -1000,7 +1000,7 @@ impl AsyncRuntimeSessionActor {
         let mut report = batch.ingress_report();
         let mut registry_persistence_queued = false;
         let mut registry_persistence_required = false;
-        for event in batch.events {
+        for event in batch.prioritized_events() {
             let event_requires_registry_persistence =
                 runtime_event_requires_registry_persistence(&event);
             let mut application = self.apply_runtime_event(event).await?;

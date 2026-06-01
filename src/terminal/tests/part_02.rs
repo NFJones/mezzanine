@@ -657,6 +657,46 @@ fn terminal_screen_parses_osc52_clipboard_payloads() {
     assert_eq!(screen.visible_lines()[0], "after");
 }
 
+/// Verifies oversized OSC payloads are dropped instead of dispatched in
+/// truncated form.
+///
+/// OSC 52 clipboard content is base64 encoded, so silently dispatching the
+/// bounded prefix can produce a valid but corrupted clipboard event. The parser
+/// must consume through the terminator, skip dispatch for that payload, and
+/// resume ordinary text parsing afterward.
+#[test]
+fn terminal_screen_drops_truncated_osc52_clipboard_payloads() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+    let oversized_encoded = "A".repeat(4096);
+    let sequence = format!("\x1b]52;;{oversized_encoded}\x07after");
+
+    screen.feed(sequence.as_bytes());
+
+    assert_eq!(screen.drain_osc_events(), Vec::<TerminalOscEvent>::new());
+    assert_eq!(screen.visible_lines()[0], "after");
+}
+
+/// Verifies an OSC payload exactly at the parser byte limit still dispatches.
+///
+/// The truncation guard must reject only payloads that exceed the bounded OSC
+/// buffer. This protects title and clipboard sequences that fit exactly within
+/// the parser limit from being treated as overflow cases.
+#[test]
+fn terminal_screen_dispatches_osc_payload_at_exact_limit() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+    let title = "t".repeat(4094);
+    let sequence = format!("\x1b]2;{title}\x07after");
+
+    screen.feed(sequence.as_bytes());
+
+    assert_eq!(screen.title(), Some(title.as_str()));
+    assert_eq!(
+        screen.drain_osc_events(),
+        vec![TerminalOscEvent::TitleChanged { title }]
+    );
+    assert_eq!(screen.visible_lines()[0], "after");
+}
+
 /// Verifies terminal screen replaces invalid utf8 without breaking layout.
 ///
 /// This regression scenario documents the behavior being protected so a

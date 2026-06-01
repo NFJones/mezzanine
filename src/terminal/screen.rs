@@ -685,6 +685,11 @@ pub struct TerminalScreen {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) osc_buffer: String,
+    /// Whether the current OSC payload exceeded the bounded parser buffer.
+    ///
+    /// Once set, the parser keeps consuming bytes until the OSC terminator but
+    /// drops the whole payload instead of dispatching truncated content.
+    pub(super) osc_buffer_truncated: bool,
     /// Stores the osc events value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -795,6 +800,7 @@ impl TerminalScreen {
             parser_state: ParserState::Ground,
             csi_buffer: String::new(),
             osc_buffer: String::new(),
+            osc_buffer_truncated: false,
             osc_events: Vec::new(),
             title: None,
             graphic_rendition: GraphicRendition::default(),
@@ -1491,6 +1497,7 @@ impl TerminalScreen {
         self.parser_state = ParserState::Ground;
         self.csi_buffer.clear();
         self.osc_buffer.clear();
+        self.osc_buffer_truncated = false;
         self.osc_events.clear();
         self.bracketed_paste_enabled = false;
         self.mouse_tracking_enabled = false;
@@ -1744,6 +1751,7 @@ impl TerminalScreen {
             self.parser_state = ParserState::Csi;
         } else if ch == ']' {
             self.osc_buffer.clear();
+            self.osc_buffer_truncated = false;
             self.parser_state = ParserState::Osc;
         } else if matches!(ch, 'P' | 'X' | '^' | '_') {
             self.parser_state = ParserState::Dcs;
@@ -1826,7 +1834,10 @@ impl TerminalScreen {
     /// on duplicated control-flow logic.
     pub(super) fn finish_osc(&mut self) {
         let payload = std::mem::take(&mut self.osc_buffer);
-        self.dispatch_osc(&payload);
+        let truncated = std::mem::take(&mut self.osc_buffer_truncated);
+        if !truncated {
+            self.dispatch_osc(&payload);
+        }
         self.parser_state = ParserState::Ground;
     }
 
@@ -1838,6 +1849,8 @@ impl TerminalScreen {
     pub(super) fn push_osc_char(&mut self, ch: char) {
         if self.osc_buffer.len().saturating_add(ch.len_utf8()) <= MAX_OSC_STRING_BYTES {
             self.osc_buffer.push(ch);
+        } else {
+            self.osc_buffer_truncated = true;
         }
     }
 
