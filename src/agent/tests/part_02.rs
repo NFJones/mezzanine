@@ -2614,6 +2614,19 @@ fn unified_diff_conversion_accepts_minimal_unified_diff() {
     assert!(converted.contains("*** Update File: file.txt"));
 }
 
+/// Verifies deleted-file unified diffs are not auto-converted.
+///
+/// Raw unified diff deletes carry old-side content expectations that a plain
+/// `*** Delete File` operation cannot represent. Refusing conversion prevents a
+/// stale delete diff from removing a file whose current contents no longer match
+/// the diff's removed lines.
+#[test]
+fn unified_diff_conversion_refuses_deleted_file_sections() {
+    let diff = "diff --git a/file.txt b/file.txt\ndeleted file mode 100644\n--- a/file.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-old\n";
+
+    assert!(try_convert_unified_diff_to_mez_patch(diff).is_none());
+}
+
 /// Verifies semantic patch lowering accepts related multi-file patch batches.
 ///
 /// Mezzanine patch blocks can contain more than one file operation. Mezzanine

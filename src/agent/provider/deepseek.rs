@@ -809,18 +809,30 @@ fn parse_deepseek_maap_tool_calls(
     tool_calls: &[serde_json::Value],
     request: &ModelRequest,
 ) -> Result<Option<MaapBatch>> {
-    let Some((maap_call, shim_kind, tool_name)) = tool_calls.iter().find_map(|call| {
-        let tool_name = call
-            .pointer("/function/name")
-            .and_then(serde_json::Value::as_str)?;
-        Some((
-            call,
-            DeepSeekMaapShimKind::from_tool_name(tool_name)?,
-            tool_name,
-        ))
-    }) else {
+    let recognized_calls = tool_calls
+        .iter()
+        .filter_map(|call| {
+            let tool_name = call
+                .pointer("/function/name")
+                .and_then(serde_json::Value::as_str)?;
+            Some((
+                call,
+                DeepSeekMaapShimKind::from_tool_name(tool_name)?,
+                tool_name,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let Some((maap_call, shim_kind, tool_name)) = recognized_calls.first().copied() else {
         return Ok(None);
     };
+    if recognized_calls.len() != 1 || tool_calls.len() != 1 {
+        return Err(provider_maap_parse_error(
+            MezError::invalid_args(
+                "DeepSeek returned extra tool calls; pack the complete MAAP batch into exactly one active function call",
+            ),
+            &serde_json::Value::Array(tool_calls.to_vec()).to_string(),
+        ));
+    }
     let missing_arguments_raw_text = maap_call.to_string();
     let arguments = maap_call
         .pointer("/function/arguments")
@@ -1559,6 +1571,68 @@ mod tests {
         assert_eq!(
             error.provider_raw_text(),
             Some(malformed_arguments.as_str())
+        );
+    }
+
+    /// Verifies DeepSeek responses cannot smuggle extra tool calls.
+    ///
+    /// Mezzanine exposes exactly one active provider function per turn. If the
+    /// provider returns two calls, accepting the first would silently discard the
+    /// second and leave the transcript inconsistent with the model output.
+    #[test]
+    fn deepseek_response_rejects_extra_maap_tool_calls() {
+        let request = deepseek_test_request(Vec::new());
+        let arguments = serde_json::json!({
+            "rationale": "single batch",
+            "actions": [{
+                "type": "say",
+                "status": "final",
+                "text": "done"
+            }]
+        })
+        .to_string();
+        let body = serde_json::json!({
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                "arguments": arguments
+                            }
+                        },
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {
+                                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                "arguments": arguments
+                            }
+                        }
+                    ]
+                }
+            }]
+        })
+        .to_string();
+
+        let error = parse_deepseek_chat_completions_response_body(&body, &request).unwrap_err();
+
+        assert!(
+            error.message().contains("extra tool calls"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error
+                .provider_raw_text()
+                .is_some_and(|raw| raw.contains("call_2")),
+            "{:?}",
+            error.provider_raw_text()
         );
     }
 

@@ -224,6 +224,12 @@ pub fn try_convert_unified_diff_to_mez_patch(text: &str) -> Option<String> {
     if sections.is_empty() || sections.iter().all(|section| section.hunks.is_empty()) {
         return None;
     }
+    if sections
+        .iter()
+        .any(|section| section.operation == UnifiedDiffFileOperation::Delete)
+    {
+        return None;
+    }
     let mut result = String::from("*** Begin Patch\n");
     for section in &sections {
         let path = if let Some(path) = &section.path {
