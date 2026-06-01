@@ -984,6 +984,22 @@ impl TerminalScreen {
             line_copy_texts[row_index] = self.line_copy_texts.get(source_row).cloned().flatten();
         }
 
+        // Commit dropped rows to history so copy-text annotations are preserved.
+        if new_rows < old_rows && !preserve_bottom && self.alternate.should_record_to_history() {
+            for row in new_rows..old_rows {
+                if self.line_copy_texts.get(row).is_some_and(|ct| ct.is_some()) {
+                    self.history.push_styled_line_with_wrap(
+                        styled_line_from_row_with_copy_text(
+                            &self.cells[row],
+                            &self.renditions[row],
+                            self.line_copy_texts.get(row).cloned().flatten(),
+                        ),
+                        self.line_wraps.get(row).copied().unwrap_or(false),
+                    );
+                }
+            }
+        }
+
         self.size = size;
         self.cells = cells;
         self.renditions = renditions;
