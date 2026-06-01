@@ -10,6 +10,7 @@ use super::{
     mcp_server_id, mcp_transport_target, positional_args, positional_args_before_double_dash,
     repeated_flag_values, shell_command_after_double_dash, shell_command_from_words,
 };
+use crate::auth::selected_auth_method_from_flags;
 
 // Command display helpers and state renderers.
 
@@ -1311,19 +1312,17 @@ pub(super) fn auth_status_display() -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn auth_login_plan_display(invocation: &CommandInvocation) -> String {
-    let method = if invocation.args.iter().any(|arg| arg == "--api-key") {
-        "api-key"
-    } else if invocation.args.iter().any(|arg| arg == "--browser") {
-        "browser"
-    } else if invocation
-        .args
-        .iter()
-        .any(|arg| arg == "--device-code" || arg == "--device-auth")
-    {
-        "device-code"
-    } else {
-        "browser"
-    };
+    let method = selected_auth_method_from_flags(
+        invocation.args.iter().any(|arg| arg == "--api-key"),
+        invocation.args.iter().any(|arg| arg == "--browser"),
+        invocation
+            .args
+            .iter()
+            .any(|arg| arg == "--device-code" || arg == "--device-auth"),
+        "auth-login accepts only one authentication method flag",
+    )
+    .map(|method| method.as_str())
+    .unwrap_or("browser");
     format!("provider=openai method={method} action=plan-only reason=auth-store-not-connected")
 }
 

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
 
-use crate::error::Result;
+use crate::error::{MezError, Result};
 
 /// Defines the OS CREDENTIAL SERVICE const used by this subsystem.
 ///
@@ -300,6 +300,44 @@ pub enum AuthMethod {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     DeviceCode,
+}
+
+impl AuthMethod {
+    /// Returns the stable command-line display name for this auth method.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ApiKey => "api-key",
+            Self::Browser => "browser",
+            Self::DeviceCode => "device-code",
+        }
+    }
+}
+
+/// Selects one auth method from parsed command flags.
+///
+/// Browser login remains the default when no explicit method is selected. The
+/// caller supplies the conflict message so CLI and command-language diagnostics
+/// keep their existing wording.
+pub fn selected_auth_method_from_flags(
+    api_key: bool,
+    browser: bool,
+    device_code: bool,
+    conflict_message: &str,
+) -> Result<AuthMethod> {
+    let selected_methods = [api_key, browser, device_code]
+        .into_iter()
+        .filter(|selected| *selected)
+        .count();
+    if selected_methods > 1 {
+        return Err(MezError::invalid_args(conflict_message));
+    }
+    if api_key {
+        Ok(AuthMethod::ApiKey)
+    } else if device_code {
+        Ok(AuthMethod::DeviceCode)
+    } else {
+        Ok(AuthMethod::Browser)
+    }
 }
 
 /// Carries Credential Store Kind state for this subsystem.

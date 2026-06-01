@@ -68,7 +68,7 @@ pub use types::{
     CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
     FileCredentialFallbackReason, McpAuthMetadata, McpAuthStatus, McpCredentialKind,
     McpOAuthCredential, ProviderBrowserFlowPlan, ProviderEntitlementPersistence,
-    ProviderEntitlementPlan, ProviderEntitlementValidation,
+    ProviderEntitlementPlan, ProviderEntitlementValidation, selected_auth_method_from_flags,
 };
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ use super::{
     persist_config_mutation, persist_config_text, plan_config_mutation, positional_args,
     repeated_flag_values, validate_command_identifier,
 };
+use crate::auth::selected_auth_method_from_flags;
 use crate::terminal::{
     UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme,
 };
@@ -477,22 +478,12 @@ fn auth_login_method(args: &[String]) -> Result<AuthMethod> {
     let device_code = args
         .iter()
         .any(|arg| arg == "--device-code" || arg == "--device-auth");
-    let selected_methods = [api_key, browser, device_code]
-        .into_iter()
-        .filter(|selected| *selected)
-        .count();
-    if selected_methods > 1 {
-        return Err(MezError::invalid_args(
-            "auth-login accepts only one authentication method flag",
-        ));
-    }
-    if api_key {
-        Ok(AuthMethod::ApiKey)
-    } else if device_code {
-        Ok(AuthMethod::DeviceCode)
-    } else {
-        Ok(AuthMethod::Browser)
-    }
+    selected_auth_method_from_flags(
+        api_key,
+        browser,
+        device_code,
+        "auth-login accepts only one authentication method flag",
+    )
 }
 
 /// Runs the auth method display name operation for this subsystem.
@@ -501,11 +492,7 @@ fn auth_login_method(args: &[String]) -> Result<AuthMethod> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn auth_method_display_name(method: AuthMethod) -> &'static str {
-    match method {
-        AuthMethod::ApiKey => "api-key",
-        AuthMethod::Browser => "browser",
-        AuthMethod::DeviceCode => "device-code",
-    }
+    method.as_str()
 }
 
 /// Runs the auth status store display operation for this subsystem.

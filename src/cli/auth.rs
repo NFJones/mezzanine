@@ -12,6 +12,7 @@ use super::{
     runtime_effective_config_value, runtime_ui_theme_from_config, serialize_json,
     write_json_or_plain,
 };
+use crate::auth::selected_auth_method_from_flags;
 
 // Authentication subcommands and output formatting.
 
@@ -220,22 +221,12 @@ pub(super) struct AuthLoginCliArgs {
 impl AuthLoginCliArgs {
     /// Returns the selected authentication method.
     pub(super) fn method(&self) -> Result<AuthMethod> {
-        let selected_methods = [self.api_key, self.browser, self.device_code]
-            .into_iter()
-            .filter(|selected| *selected)
-            .count();
-        if selected_methods > 1 {
-            return Err(MezError::invalid_args(
-                "auth login accepts only one authentication method flag",
-            ));
-        }
-        if self.api_key {
-            Ok(AuthMethod::ApiKey)
-        } else if self.device_code {
-            Ok(AuthMethod::DeviceCode)
-        } else {
-            Ok(AuthMethod::Browser)
-        }
+        selected_auth_method_from_flags(
+            self.api_key,
+            self.browser,
+            self.device_code,
+            "auth login accepts only one authentication method flag",
+        )
     }
 }
 
