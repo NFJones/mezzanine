@@ -499,6 +499,53 @@ pub fn pane_content_size_for_geometry(
     Size::new(render_region.columns, rows)
 }
 
+/// Bounded destination for one rendered pane inside the window body canvas.
+///
+/// Plain and styled renderers share the same geometry, clipping, and divider
+/// reservation rules. Keeping that placement calculation in one structure
+/// prevents their text and style-span pipelines from drifting apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaneCanvasPlacement {
+    /// Pane index used to select the already-rendered pane rows.
+    pane_index: usize,
+    /// First destination row in the window body canvas.
+    row_start: usize,
+    /// First destination column in the window body canvas.
+    column_start: usize,
+    /// Number of pane rows visible in the destination canvas.
+    pane_rows: usize,
+    /// Number of pane columns visible in the destination canvas.
+    pane_columns: usize,
+}
+
+/// Computes the shared pane-to-canvas placements for plain and styled output.
+fn pane_canvas_placements(size: Size, geometries: &[PaneGeometry]) -> Vec<PaneCanvasPlacement> {
+    let rows = usize::from(size.rows);
+    let columns = usize::from(size.columns);
+    let mut placements = Vec::with_capacity(geometries.len());
+    for geometry in geometries {
+        let row_start = usize::from(geometry.row);
+        let column_start = usize::from(geometry.column);
+        if row_start >= rows || column_start >= columns {
+            continue;
+        }
+        let region_size =
+            pane_render_region_size_for_geometry(geometry, geometries).unwrap_or(Size {
+                columns: geometry.columns,
+                rows: geometry.rows,
+            });
+        placements.push(PaneCanvasPlacement {
+            pane_index: geometry.index,
+            row_start,
+            column_start,
+            pane_rows: usize::from(region_size.rows).min(rows.saturating_sub(row_start)),
+            pane_columns: usize::from(region_size.columns)
+                .min(columns.saturating_sub(column_start)),
+        });
+    }
+    placements
+}
+
 /// Runs the render panes by geometry operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -516,29 +563,16 @@ pub(super) fn render_panes_by_geometry(
     let columns = usize::from(size.columns);
     let mut canvas = vec![vec![' '; columns]; rows];
 
-    for geometry in geometries {
-        let Some(pane) = rendered_panes.get(geometry.index) else {
+    for placement in pane_canvas_placements(size, geometries) {
+        let Some(pane) = rendered_panes.get(placement.pane_index) else {
             continue;
         };
-        let row_start = usize::from(geometry.row);
-        let column_start = usize::from(geometry.column);
-        if row_start >= rows || column_start >= columns {
-            continue;
-        }
-        let region_size =
-            pane_render_region_size_for_geometry(geometry, geometries).unwrap_or(Size {
-                columns: geometry.columns,
-                rows: geometry.rows,
-            });
-        let pane_rows = usize::from(region_size.rows).min(rows.saturating_sub(row_start));
-        let pane_columns =
-            usize::from(region_size.columns).min(columns.saturating_sub(column_start));
-        for row_offset in 0..pane_rows {
+        for row_offset in 0..placement.pane_rows {
             if let Some(line) = pane.get(row_offset) {
                 write_text_cells(
-                    &mut canvas[row_start + row_offset],
-                    column_start,
-                    pane_columns,
+                    &mut canvas[placement.row_start + row_offset],
+                    placement.column_start,
+                    placement.pane_columns,
                     line,
                 );
             }
@@ -576,38 +610,25 @@ pub(super) fn render_styled_panes_by_geometry(
     let mut text_canvas = vec![vec![' '; columns]; rows];
     let mut style_canvas = vec![Vec::new(); rows];
 
-    for geometry in geometries {
-        let Some(pane) = rendered_panes.get(geometry.index) else {
+    for placement in pane_canvas_placements(size, geometries) {
+        let Some(pane) = rendered_panes.get(placement.pane_index) else {
             continue;
         };
-        let row_start = usize::from(geometry.row);
-        let column_start = usize::from(geometry.column);
-        if row_start >= rows || column_start >= columns {
-            continue;
-        }
-        let region_size =
-            pane_render_region_size_for_geometry(geometry, geometries).unwrap_or(Size {
-                columns: geometry.columns,
-                rows: geometry.rows,
-            });
-        let pane_rows = usize::from(region_size.rows).min(rows.saturating_sub(row_start));
-        let pane_columns =
-            usize::from(region_size.columns).min(columns.saturating_sub(column_start));
-        for row_offset in 0..pane_rows {
+        for row_offset in 0..placement.pane_rows {
             let Some(line) = pane.get(row_offset) else {
                 continue;
             };
             write_text_cells(
-                &mut text_canvas[row_start + row_offset],
-                column_start,
-                pane_columns,
+                &mut text_canvas[placement.row_start + row_offset],
+                placement.column_start,
+                placement.pane_columns,
                 &line.text,
             );
-            style_canvas[row_start + row_offset].extend(
+            style_canvas[placement.row_start + row_offset].extend(
                 line.style_spans
                     .iter()
-                    .filter_map(|span| clip_style_span(*span, pane_columns))
-                    .map(|span| offset_style_span(span, column_start)),
+                    .filter_map(|span| clip_style_span(*span, placement.pane_columns))
+                    .map(|span| offset_style_span(span, placement.column_start)),
             );
         }
     }
