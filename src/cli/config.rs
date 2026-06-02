@@ -11,7 +11,7 @@ use super::{
     DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, MezError, PathBuf,
     ProjectTrustRecord, ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
     compose_effective_config, default_trust_database_path, diagnostics_json, discover_project_root,
-    fs, json_escape, json_optional, persist_config_mutation, render_cli_help, serialize_json,
+    fs, json_escape, persist_config_mutation, render_cli_help, serialize_json,
     validate_config_file, validate_config_text, write_json_or_plain,
 };
 
@@ -162,15 +162,14 @@ fn run_config_get<W: Write>(
 ) -> Result<()> {
     let layers = load_runtime_config_layers(paths)?;
     let effective = compose_effective_config(&layers)?;
-    let layer_json = cli_config_layers_json(&layers, &effective)?;
+    let layer_values = cli_config_layer_json_values(&layers, &effective)?;
     if let Some(path) = path {
-        let output = format!(
-            r#"{{"path":"{}","value":{},"source":{},"layers":{}}}"#,
-            json_escape(path),
-            cli_config_optional_value_json(effective.get(path)),
-            json_optional(effective.source_for(path)),
-            layer_json
-        );
+        let output = serialize_json(&CliConfigGetPathJson {
+            path,
+            value: cli_config_optional_value(effective.get(path)),
+            source: effective.source_for(path),
+            layers: layer_values,
+        })?;
         write_json_or_plain(stdout, output_format, &output)?;
         return Ok(());
     }
@@ -178,18 +177,36 @@ fn run_config_get<W: Write>(
     let values = effective
         .values()
         .iter()
-        .map(|(path, value)| {
-            format!(
-                r#""{}":{}"#,
-                json_escape(path),
-                cli_config_value_json(&value.value)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let output = format!(r#"{{"value":{{{values}}},"layers":{layer_json}}}"#);
+        .map(|(path, value)| (path.clone(), cli_config_value(&value.value)))
+        .collect::<serde_json::Map<_, _>>();
+    let output = serialize_json(&CliConfigGetAllJson {
+        value: values,
+        layers: layer_values,
+    })?;
     write_json_or_plain(stdout, output_format, &output)?;
     Ok(())
+}
+
+/// Structured JSON payload emitted for one effective config path lookup.
+#[derive(Serialize)]
+struct CliConfigGetPathJson<'a> {
+    /// Effective config path requested by the caller.
+    path: &'a str,
+    /// Effective value at the requested path, or null when unset.
+    value: Option<serde_json::Value>,
+    /// Layer name that supplied the effective value, or null when unset.
+    source: Option<&'a str>,
+    /// Config layers considered while composing the effective value.
+    layers: Vec<CliConfigLayerJson>,
+}
+
+/// Structured JSON payload emitted for the full effective config view.
+#[derive(Serialize)]
+struct CliConfigGetAllJson {
+    /// Effective config values keyed by config path.
+    value: serde_json::Map<String, serde_json::Value>,
+    /// Config layers considered while composing the effective value.
+    layers: Vec<CliConfigLayerJson>,
 }
 
 /// Runs the run config layers operation for this subsystem.
@@ -599,12 +616,24 @@ struct CliConfigMutationTargetJson {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn cli_config_layers_json(layers: &[ConfigLayer], effective: &EffectiveConfig) -> Result<String> {
+    serialize_json(&cli_config_layer_json_values(layers, effective)?)
+}
+
+/// Runs the cli config layer json values operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn cli_config_layer_json_values(
+    layers: &[ConfigLayer],
+    effective: &EffectiveConfig,
+) -> Result<Vec<CliConfigLayerJson>> {
     let layers = layers
         .iter()
         .enumerate()
         .map(|(index, layer)| cli_config_layer_json(index, layer, effective))
         .collect::<Result<Vec<_>>>()?;
-    serialize_json(&layers)
+    Ok(layers)
 }
 
 /// Runs the cli config layer json operation for this subsystem.
@@ -719,28 +748,26 @@ fn cli_config_layer_diagnostics(layer: &ConfigLayer) -> Vec<ConfigDiagnostic> {
     diagnostics
 }
 
-/// Runs the cli config optional value json operation for this subsystem.
+/// Runs the cli config optional value operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn cli_config_optional_value_json(value: Option<&str>) -> String {
-    value
-        .map(cli_config_value_json)
-        .unwrap_or_else(|| "null".to_string())
+fn cli_config_optional_value(value: Option<&str>) -> Option<serde_json::Value> {
+    value.map(cli_config_value)
 }
 
-/// Runs the cli config value json operation for this subsystem.
+/// Runs the cli config value operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn cli_config_value_json(value: &str) -> String {
+fn cli_config_value(value: &str) -> serde_json::Value {
     let trimmed = value.trim();
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        return value.to_string();
+        return value;
     }
-    format!(r#""{}""#, json_escape(value))
+    serde_json::Value::String(value.to_string())
 }
 
 /// Runs the cli config mutation operation name operation for this subsystem.
