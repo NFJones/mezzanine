@@ -12,6 +12,64 @@ use super::{ActionResult, ActionStatus, ShellReadObservation};
 /// block before native truncation metadata is appended.
 const MODEL_ACTION_RESULT_CONTENT_LIMIT_BYTES: u64 = 256 * 1024;
 
+/// Sanitized view of one action result used by model-context and transcript renderers.
+///
+/// The view centralizes status naming, structured payload parsing, and shell
+/// observation detection so terminal presentation and model-context facts share
+/// the same interpretation without reparsing the same payload at each branch.
+struct ActionResultContextView<'a> {
+    /// Result being rendered.
+    result: &'a ActionResult,
+    /// Compact lowercase status label for model-facing output.
+    status_name: &'static str,
+    /// Parsed structured payload, when the action returned one.
+    structured: Option<serde_json::Value>,
+    /// Whether this result carries shell transaction observation fields.
+    is_shell_observation: bool,
+}
+
+impl<'a> ActionResultContextView<'a> {
+    /// Builds one sanitized fact view from an action result.
+    fn new(result: &'a ActionResult) -> Self {
+        let structured = result
+            .structured_content_json
+            .as_deref()
+            .and_then(|data| serde_json::from_str::<serde_json::Value>(data).ok());
+        let is_shell_observation = structured
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|object| {
+                object.contains_key("command") && object.contains_key("terminal_observation")
+            });
+        Self {
+            result,
+            status_name: action_status_context_name(result.status),
+            structured,
+            is_shell_observation,
+        }
+    }
+
+    /// Formats the stable model-facing action-result header line.
+    fn header_line(&self) -> String {
+        format!(
+            "[action_result {} {} {}]",
+            self.result.action_id, self.result.action_type, self.status_name
+        )
+    }
+
+    /// Returns the structured payload as an object when available.
+    fn structured_object(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        self.structured
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+    }
+
+    /// Reports whether the result had structured payload data.
+    fn has_structured_data(&self) -> bool {
+        self.structured.is_some()
+    }
+}
+
 /// Executes the `action_result_transcript_content` operation for the owning subsystem.
 ///
 /// Callers receive a typed result or error with context from the underlying
@@ -107,12 +165,8 @@ fn called_skill_result_transcript_summary(result: &ActionResult) -> Option<Strin
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
 pub fn action_result_context_content(result: &ActionResult) -> String {
-    let mut lines = vec![format!(
-        "[action_result {} {} {}]",
-        result.action_id,
-        result.action_type,
-        action_status_context_name(result.status)
-    )];
+    let facts = ActionResultContextView::new(result);
+    let mut lines = vec![facts.header_line()];
     if let Some(error) = &result.error {
         lines.push(format!("error: {} {}", error.code, error.message));
         if let Some(data) = error
@@ -123,8 +177,8 @@ pub fn action_result_context_content(result: &ActionResult) -> String {
             lines.push(format!("error_data: {data}"));
         }
     }
-    if action_result_has_shell_observation(result) {
-        append_shell_action_result_context(result, &mut lines);
+    if facts.is_shell_observation {
+        append_shell_action_result_context(&facts, &mut lines);
     } else {
         append_action_result_content_text(result, &mut lines);
         if let Some(data) = result
@@ -136,18 +190,6 @@ pub fn action_result_context_content(result: &ActionResult) -> String {
         }
     }
     lines.join("\n")
-}
-
-/// Returns true when a result carries pane shell transaction observation data.
-fn action_result_has_shell_observation(result: &ActionResult) -> bool {
-    result
-        .structured_content_json
-        .as_deref()
-        .and_then(|data| serde_json::from_str::<serde_json::Value>(data).ok())
-        .and_then(|value| value.as_object().cloned())
-        .is_some_and(|object| {
-            object.contains_key("command") && object.contains_key("terminal_observation")
-        })
 }
 
 /// Returns the compact lowercase status name used in model-facing result
@@ -167,12 +209,12 @@ fn action_status_context_name(status: ActionStatus) -> &'static str {
 }
 
 /// Appends compact shell-result context for the next provider turn.
-fn append_shell_action_result_context(result: &ActionResult, lines: &mut Vec<String>) {
-    let structured = result
-        .structured_content_json
-        .as_deref()
-        .and_then(|data| serde_json::from_str::<serde_json::Value>(data).ok());
-    let structured_object = structured.as_ref().and_then(serde_json::Value::as_object);
+fn append_shell_action_result_context(
+    facts: &ActionResultContextView<'_>,
+    lines: &mut Vec<String>,
+) {
+    let result = facts.result;
+    let structured_object = facts.structured_object();
     if let Some(command) = structured_object
         .and_then(|object| object.get("command"))
         .and_then(serde_json::Value::as_str)
@@ -210,7 +252,7 @@ fn append_shell_action_result_context(result: &ActionResult, lines: &mut Vec<Str
         lines.push("output:".to_string());
         lines.push(output);
     }
-    if structured.is_some() {
+    if facts.has_structured_data() {
         return;
     }
     append_action_result_content_text(result, lines);
