@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use crate::error::{MezError, Result};
 
 use super::types::{
-    DEFAULT_MCP_PROTOCOL_VERSION, McpDiscoveredTool, McpInitializeResponse, McpToolCallResponse,
-    McpToolsListResponse,
+    DEFAULT_MCP_PROTOCOL_VERSION, McpDiscoveredTool, McpInitializeResponse, McpToolCallPlan,
+    McpToolCallResponse, McpToolsListResponse,
 };
 
 /// Runs the build mcp initialize request operation for this subsystem.
@@ -87,6 +87,82 @@ pub fn build_mcp_initialized_notification() -> String {
         "params": {},
     })
     .to_string()
+}
+
+/// One MCP JSON-RPC request paired with its response parser.
+///
+/// Transports keep connection-specific exchange policy outside this type while
+/// sharing the request id, serialized body, timeout, and typed response parsing
+/// that make up one protocol operation lifecycle.
+pub(crate) struct McpJsonRpcOperation<T> {
+    id: u64,
+    request_body: String,
+    timeout_ms: u64,
+    parse_response: fn(&str, u64) -> Result<T>,
+}
+
+impl<T> McpJsonRpcOperation<T> {
+    /// Returns the JSON-RPC id that callers should expect in the response.
+    pub(crate) fn request_id(&self) -> u64 {
+        self.id
+    }
+
+    /// Returns the serialized JSON-RPC request body to send over a transport.
+    pub(crate) fn request_body(&self) -> &str {
+        &self.request_body
+    }
+
+    /// Returns the timeout budget associated with this protocol operation.
+    pub(crate) fn timeout_ms(&self) -> u64 {
+        self.timeout_ms
+    }
+
+    /// Parses a transport response body using this operation's expected id.
+    pub(crate) fn parse_response(&self, body: &str) -> Result<T> {
+        (self.parse_response)(body, self.id)
+    }
+}
+
+/// Builds one typed MCP initialize JSON-RPC operation.
+pub(crate) fn mcp_initialize_operation(
+    id: u64,
+    client_name: &str,
+    client_version: &str,
+    timeout_ms: u64,
+) -> McpJsonRpcOperation<McpInitializeResponse> {
+    McpJsonRpcOperation {
+        id,
+        request_body: build_mcp_default_initialize_request(id, client_name, client_version),
+        timeout_ms,
+        parse_response: parse_mcp_initialize_response,
+    }
+}
+
+/// Builds one typed MCP tools/list JSON-RPC operation.
+pub(crate) fn mcp_tools_list_operation(
+    id: u64,
+    cursor: Option<&str>,
+    timeout_ms: u64,
+) -> McpJsonRpcOperation<McpToolsListResponse> {
+    McpJsonRpcOperation {
+        id,
+        request_body: build_mcp_tools_list_request(id, cursor),
+        timeout_ms,
+        parse_response: parse_mcp_tools_list_response,
+    }
+}
+
+/// Builds one typed MCP tools/call JSON-RPC operation.
+pub(crate) fn mcp_tools_call_operation(
+    id: u64,
+    plan: &McpToolCallPlan,
+) -> Result<McpJsonRpcOperation<McpToolCallResponse>> {
+    Ok(McpJsonRpcOperation {
+        id,
+        request_body: plan.json_rpc_request(id)?,
+        timeout_ms: plan.timeout_ms,
+        parse_response: parse_mcp_tools_call_response,
+    })
 }
 
 /// Runs the build mcp tools call request operation for this subsystem.

@@ -41,6 +41,7 @@ pub use audit::{
     McpToolAuditCallContext, call_stdio_mcp_tool_with_audit,
     call_streamable_http_mcp_tool_with_audit,
 };
+pub(crate) use protocol::mcp_tools_call_operation;
 pub use protocol::{
     build_mcp_default_initialize_request, build_mcp_initialize_request,
     build_mcp_initialized_notification, build_mcp_tools_call_request, build_mcp_tools_list_request,

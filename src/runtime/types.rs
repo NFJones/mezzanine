@@ -24,7 +24,7 @@ use super::{
     TerminalFramePosition, TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry,
     UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid,
     encode_control_body, encode_event_notification, encode_mmp_body,
-    execute_streamable_http_exchange, parse_mcp_tools_call_response,
+    execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::mcp::McpPromptTool;
@@ -2887,7 +2887,7 @@ impl RuntimeMcpTransportSet {
             RuntimeMcpTransport::StreamableHttp(state) => {
                 let request_id = state.next_request_id;
                 state.next_request_id = state.next_request_id.saturating_add(1);
-                let request = plan.json_rpc_request(request_id)?;
+                let operation = mcp_tools_call_operation(request_id, plan)?;
                 let oauth_token = match &state.startup_plan.transport {
                     crate::mcp::McpStartupTransportPlan::StreamableHttp {
                         bearer_token_env,
@@ -2900,9 +2900,9 @@ impl RuntimeMcpTransportSet {
                 let response = match execute_streamable_http_exchange(
                     &state.startup_plan,
                     environment,
-                    &request,
-                    Some(request_id),
-                    plan.timeout_ms,
+                    operation.request_body(),
+                    Some(operation.request_id()),
+                    operation.timeout_ms(),
                     state.session_id.as_deref(),
                     oauth_token.as_ref().map(ExposeSecret::expose_secret),
                 )
@@ -2924,9 +2924,9 @@ impl RuntimeMcpTransportSet {
                         execute_streamable_http_exchange(
                             &state.startup_plan,
                             environment,
-                            &request,
-                            Some(request_id),
-                            plan.timeout_ms,
+                            operation.request_body(),
+                            Some(operation.request_id()),
+                            operation.timeout_ms(),
                             state.session_id.as_deref(),
                             Some(refreshed_token.expose_secret()),
                         )
@@ -2937,7 +2937,7 @@ impl RuntimeMcpTransportSet {
                 if response.session_id.is_some() {
                     state.session_id = response.session_id.clone();
                 }
-                parse_mcp_tools_call_response(&response.protocol_body, request_id)
+                operation.parse_response(&response.protocol_body)
             }
         }
     }

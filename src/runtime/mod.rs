@@ -112,7 +112,7 @@ use crate::mcp::{
     McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpStdioConnection,
     McpToolCallPlan, McpToolCallRequest, McpToolCallResponse, McpToolEffects, McpToolState,
     discover_streamable_http_mcp_server_with_auth_token, execute_streamable_http_exchange,
-    parse_mcp_tools_call_response, spawn_stdio_mcp_connection,
+    mcp_tools_call_operation, spawn_stdio_mcp_connection,
 };
 use crate::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
 use crate::message::{

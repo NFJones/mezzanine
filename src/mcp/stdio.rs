@@ -16,9 +16,8 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use crate::error::{MezError, Result};
 
 use super::protocol::{
-    build_mcp_default_initialize_request, build_mcp_initialized_notification,
-    build_mcp_tools_list_request, json_id_matches, parse_mcp_initialize_response,
-    parse_mcp_tools_call_response, parse_mcp_tools_list_response,
+    build_mcp_initialized_notification, json_id_matches, mcp_initialize_operation,
+    mcp_tools_call_operation, mcp_tools_list_operation,
 };
 use super::registry::McpRegistry;
 use super::types::{
@@ -98,10 +97,16 @@ impl McpStdioConnection {
         client_version: &str,
         timeout_ms: u64,
     ) -> Result<McpInitializeResponse> {
-        let id = self.allocate_id();
-        let request = build_mcp_default_initialize_request(id, client_name, client_version);
-        let response = self.send_request(&request, id, timeout_ms).await?;
-        parse_mcp_initialize_response(&response, id)
+        let operation =
+            mcp_initialize_operation(self.allocate_id(), client_name, client_version, timeout_ms);
+        let response = self
+            .send_request(
+                operation.request_body(),
+                operation.request_id(),
+                operation.timeout_ms(),
+            )
+            .await?;
+        operation.parse_response(&response)
     }
 
     /// Runs the send initialized notification operation for this subsystem.
@@ -124,10 +129,15 @@ impl McpStdioConnection {
         cursor: Option<&str>,
         timeout_ms: u64,
     ) -> Result<McpToolsListResponse> {
-        let id = self.allocate_id();
-        let request = build_mcp_tools_list_request(id, cursor);
-        let response = self.send_request(&request, id, timeout_ms).await?;
-        parse_mcp_tools_list_response(&response, id)
+        let operation = mcp_tools_list_operation(self.allocate_id(), cursor, timeout_ms);
+        let response = self
+            .send_request(
+                operation.request_body(),
+                operation.request_id(),
+                operation.timeout_ms(),
+            )
+            .await?;
+        operation.parse_response(&response)
     }
 
     /// Runs the call tool operation for this subsystem.
@@ -136,10 +146,15 @@ impl McpStdioConnection {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn call_tool(&mut self, plan: &McpToolCallPlan) -> Result<McpToolCallResponse> {
-        let id = self.allocate_id();
-        let request = plan.json_rpc_request(id)?;
-        let response = self.send_request(&request, id, plan.timeout_ms).await?;
-        parse_mcp_tools_call_response(&response, id)
+        let operation = mcp_tools_call_operation(self.allocate_id(), plan)?;
+        let response = self
+            .send_request(
+                operation.request_body(),
+                operation.request_id(),
+                operation.timeout_ms(),
+            )
+            .await?;
+        operation.parse_response(&response)
     }
 
     /// Runs the send request operation for this subsystem.

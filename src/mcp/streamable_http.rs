@@ -10,9 +10,8 @@ use crate::error::{MezError, Result};
 use crate::sse::parse_sse_events;
 
 use super::protocol::{
-    build_mcp_default_initialize_request, build_mcp_initialized_notification,
-    build_mcp_tools_list_request, json_id_matches, object_field, parse_mcp_initialize_response,
-    parse_mcp_json, parse_mcp_tools_call_response, parse_mcp_tools_list_response, string_field,
+    build_mcp_initialized_notification, json_id_matches, mcp_initialize_operation,
+    mcp_tools_call_operation, mcp_tools_list_operation, object_field, parse_mcp_json, string_field,
 };
 use super::registry::McpRegistry;
 use super::types::{
@@ -144,19 +143,18 @@ pub async fn initialize_streamable_http_mcp_server_with_auth_token(
     client_version: &str,
     oauth_bearer_token: Option<&str>,
 ) -> Result<(McpInitializeResponse, Option<String>)> {
-    let id = 1;
-    let request = build_mcp_default_initialize_request(id, client_name, client_version);
+    let operation = mcp_initialize_operation(1, client_name, client_version, plan.timeout_ms);
     let response = execute_streamable_http_exchange(
         plan,
         environment,
-        &request,
-        Some(id),
-        plan.timeout_ms,
+        operation.request_body(),
+        Some(operation.request_id()),
+        operation.timeout_ms(),
         None,
         oauth_bearer_token,
     )
     .await?;
-    let initialize = parse_mcp_initialize_response(&response.protocol_body, id)?;
+    let initialize = operation.parse_response(&response.protocol_body)?;
     Ok((initialize, response.session_id))
 }
 
@@ -222,13 +220,14 @@ pub async fn discover_streamable_http_mcp_server_with_auth_token(
         let mut request_id = 2;
         let mut pagination = McpToolListPagination::default();
         loop {
-            let request = build_mcp_tools_list_request(request_id, cursor.as_deref());
+            let operation =
+                mcp_tools_list_operation(request_id, cursor.as_deref(), plan.timeout_ms);
             let response = execute_streamable_http_exchange(
                 plan,
                 environment,
-                &request,
-                Some(request_id),
-                plan.timeout_ms,
+                operation.request_body(),
+                Some(operation.request_id()),
+                operation.timeout_ms(),
                 session_id.as_deref(),
                 oauth_bearer_token,
             )
@@ -236,7 +235,7 @@ pub async fn discover_streamable_http_mcp_server_with_auth_token(
             if response.session_id.is_some() {
                 session_id = response.session_id.clone();
             }
-            let listed = parse_mcp_tools_list_response(&response.protocol_body, request_id)?;
+            let listed = operation.parse_response(&response.protocol_body)?;
             tools.extend(listed.tools);
             let Some(next_cursor) = pagination.advance(&plan.server_id, listed.next_cursor)? else {
                 break;
@@ -292,18 +291,18 @@ pub async fn call_streamable_http_mcp_tool(
     request_id: u64,
     session_id: Option<&str>,
 ) -> Result<McpToolCallResponse> {
-    let request = tool_call.json_rpc_request(request_id)?;
+    let operation = mcp_tools_call_operation(request_id, tool_call)?;
     let response = execute_streamable_http_exchange(
         plan,
         environment,
-        &request,
-        Some(request_id),
-        tool_call.timeout_ms,
+        operation.request_body(),
+        Some(operation.request_id()),
+        operation.timeout_ms(),
         session_id,
         None,
     )
     .await?;
-    parse_mcp_tools_call_response(&response.protocol_body, request_id)
+    operation.parse_response(&response.protocol_body)
 }
 
 /// Runs the execute streamable http post operation for this subsystem.
