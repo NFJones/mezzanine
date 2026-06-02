@@ -3421,6 +3421,60 @@ fn render_agent_working_footer_uses_dark_grayscale_on_light_theme() {
     );
 }
 
+/// Verifies narrow panes keep live-footer state styling even when truncation
+/// removes the trailing interrupt-hint suffix from the visible line.
+#[test]
+fn render_agent_working_footer_keeps_state_styling_when_suffix_is_truncated() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(18, 4).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let mut frame_context = TerminalFrameContext {
+        animation_tick_ms: 320,
+        ..TerminalFrameContext::default()
+    };
+    frame_context.panes.insert(
+        pane_id.clone(),
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_prompt: Some(crate::readline::ReadlinePrompt::new(
+                crate::readline::ReadlinePromptKind::Agent,
+            )),
+            agent_display_lines: vec!["running (5m 40s • esc to interrupt)".to_string()],
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let config = TerminalClientLoopConfig {
+        frame_context,
+        window_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+    let footer_row = view
+        .lines
+        .iter()
+        .position(|line| line.contains("mez> running"))
+        .expect("working footer should be visible");
+    let footer_text = &view.lines[footer_row];
+    let state_start_byte = footer_text.find("running").unwrap();
+    let state_start = UnicodeWidthStr::width(&footer_text[..state_start_byte]);
+
+    assert!(view.line_style_spans[footer_row].iter().any(|span| {
+        span.start >= state_start
+            && span.rendition.foreground.is_some()
+            && span.rendition.background
+                == Some(config.ui_theme.colors.agent_prompt.background)
+    }), "{:?}", view.line_style_spans[footer_row]);
+}
+
 /// Verifies that scrollback position owns the right side of the default pane
 /// header while copy-mode is away from the live bottom.
 #[test]

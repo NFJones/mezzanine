@@ -16,7 +16,7 @@ use super::client_loop::{
     route_client_input_actions_with_host_paste_state,
 };
 use super::fd::duration_to_timespec;
-use super::render::compose_client_presentation_with_styles;
+use super::render::{agent_prompt_input_rendition, compose_client_presentation_with_styles};
 use super::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use super::{
     AlternateScreenState, AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo,
@@ -51,7 +51,7 @@ use super::{
     render_window_with_pane_frame_template, rendered_pane_geometries, resolve_ui_theme,
     route_client_input, route_client_input_actions, run_attached_terminal_client_loop,
     select_installed_terminfo, select_terminfo, terminal_char_width, terminal_profile_named,
-    terminal_text_width, window_frame_action_pillbox_cells,
+    terminal_text_width, window_frame_action_pillbox_cells, UiColorPair,
 };
 use crate::ids::IdFactory;
 use crate::layout::{PaneGeometry, SplitDirection};
@@ -444,6 +444,22 @@ fn builtin_themes_use_binary_agent_prompt_foreground() {
             "{name} agent prompt foreground should be binary contrast"
         );
     }
+}
+
+/// Verifies agent prompt input styling uses the configured prompt foreground
+/// instead of recomputing a separate black-or-white contrast color.
+#[test]
+fn agent_prompt_input_rendition_uses_configured_prompt_foreground() {
+    let mut theme = UiTheme::default();
+    theme.colors.agent_prompt = UiColorPair {
+        foreground: TerminalColor::Rgb(0xff, 0x00, 0x00),
+        background: TerminalColor::Rgb(0x20, 0x20, 0x20),
+    };
+
+    let rendition = agent_prompt_input_rendition(&theme);
+
+    assert_eq!(rendition.foreground, Some(theme.colors.agent_prompt.foreground));
+    assert_eq!(rendition.background, Some(theme.colors.agent_prompt.background));
 }
 
 /// Verifies default history limit matches spec.

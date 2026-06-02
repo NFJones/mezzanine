@@ -16,9 +16,8 @@ use crate::terminal::{
 
 use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 use super::style::{
-    animated_scan_background, contrasting_binary_foreground, gradient_highlight_for_offset,
-    push_or_extend_style_span, terminal_color_contrast_ratio, terminal_color_luminance,
-    terminal_color_relative_luminance,
+    animated_scan_background, gradient_highlight_for_offset, push_or_extend_style_span,
+    terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
 };
 use super::text::{
     char_count, fit_width, offset_style_span, terminal_char_width, terminal_grapheme_width,
@@ -318,12 +317,12 @@ fn agent_prompt_shadow_hint_rendition(ui_theme: &UiTheme) -> GraphicRendition {
     rendition
 }
 
-/// Returns the contrast-managed rendition for pane-local agent prompt input.
-pub(super) fn agent_prompt_input_rendition(ui_theme: &UiTheme) -> GraphicRendition {
-    let background = ui_theme.colors.agent_prompt.background;
+/// Returns the configured rendition for pane-local agent prompt input.
+pub(crate) fn agent_prompt_input_rendition(ui_theme: &UiTheme) -> GraphicRendition {
+    let pair = ui_theme.colors.agent_prompt;
     GraphicRendition {
-        foreground: Some(contrasting_binary_foreground(background)),
-        background: Some(background),
+        foreground: Some(pair.foreground),
+        background: Some(pair.background),
         ..GraphicRendition::default()
     }
 }
@@ -858,6 +857,12 @@ pub(super) struct AgentPromptBlock {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) prompt_shadow_spans: Vec<Vec<PromptShadowSpan>>,
+    /// Stores live-footer suffix metadata for prompt rows that embed active
+    /// agent status after the prompt prefix.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) prompt_live_footer_suffixes: Vec<Option<(usize, String)>>,
     /// Stores the cursor row value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -940,17 +945,21 @@ impl AgentPromptBlock {
                     rendition: agent_prompt_shadow_hint_rendition(ui_theme),
                 });
             }
-            if let Some((footer_start, footer_text)) = agent_prompt_line_live_footer_suffix(line) {
+            if let Some((footer_start, footer_text)) = self
+                .prompt_live_footer_suffixes
+                .get(line_index)
+                .and_then(|suffix| suffix.as_ref())
+            {
                 styled_line.style_spans.extend(
                     agent_live_footer_style_spans(
                         footer_text,
-                        width.saturating_sub(footer_start),
+                        width.saturating_sub(*footer_start),
                         animation_tick_ms,
                         ui_theme,
                         Some(ui_theme.colors.agent_prompt.background),
                     )
                     .into_iter()
-                    .map(|span| offset_style_span(span, footer_start)),
+                    .map(|span| offset_style_span(span, *footer_start)),
                 );
             }
             lines.push(styled_line);
@@ -1006,6 +1015,7 @@ pub(super) fn render_agent_prompt_block(
             display_lines: Vec::new(),
             prompt_lines: Vec::new(),
             prompt_shadow_spans: Vec::new(),
+            prompt_live_footer_suffixes: Vec::new(),
             cursor_row: 0,
             cursor_column: 0,
             cursor_visible: false,
@@ -1025,6 +1035,18 @@ pub(super) fn render_agent_prompt_block(
     } else {
         render_wrapped_prompt_layout(&prompt, width, body_rows.clamp(1, 6))
     };
+    let prompt_live_footer_suffixes = if prompt_can_show_agent_live_footer(&prompt) {
+        live_footer
+            .map(|footer| {
+                vec![Some((
+                    terminal_text_width(&format!("{MEZ_UI_PREFIX}{}", prompt.render())),
+                    footer.to_string(),
+                ))]
+            })
+            .unwrap_or_else(|| vec![None; prompt_layout.lines.len()])
+    } else {
+        vec![None; prompt_layout.lines.len()]
+    };
     let display_capacity = body_rows.saturating_sub(prompt_layout.lines.len());
     let display_count = display_source.len().min(display_capacity);
     let display_start = display_source.len().saturating_sub(display_count);
@@ -1038,6 +1060,7 @@ pub(super) fn render_agent_prompt_block(
         display_lines,
         prompt_lines: prompt_layout.lines,
         prompt_shadow_spans: prompt_layout.shadow_spans,
+        prompt_live_footer_suffixes,
         cursor_row: prompt_layout.cursor_row,
         cursor_column: prompt_layout.cursor_column,
         cursor_visible: prompt_layout.cursor_visible,
@@ -1077,19 +1100,6 @@ fn render_agent_live_footer_prompt_layout(
         cursor_column: clamp_visible_cursor_column(cursor_column, width),
         cursor_visible: cursor_column < width,
     }
-}
-
-/// Finds a live footer suffix embedded after the agent prompt prefix.
-fn agent_prompt_line_live_footer_suffix(line: &str) -> Option<(usize, &str)> {
-    for (byte_index, _) in line.char_indices() {
-        let suffix = &line[byte_index..];
-        if agent_live_footer_state_label(suffix)
-            .is_some_and(|label| !label.contains('>') && !label.contains(MEZ_UI_PREFIX.trim()))
-        {
-            return Some((terminal_text_width(&line[..byte_index]), suffix));
-        }
-    }
-    None
 }
 
 /// Runs the themed full width line operation for this subsystem.
@@ -1163,7 +1173,7 @@ pub(super) fn agent_live_footer_style_spans(
     let text = fit_width(line, width);
     let mut style_spans = Vec::new();
     let visible_width = overlay_text_style_width(&text, width);
-    let state_label_width = agent_live_footer_state_label(&text)
+    let state_label_width = agent_live_footer_state_label(line)
         .map(terminal_text_width)
         .unwrap_or(0);
     if state_label_width == 0 || visible_width == 0 {

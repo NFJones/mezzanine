@@ -404,13 +404,15 @@ pub(super) fn draw_styled_pane_dividers(
             write_single_width_cell(line, column, cell.glyph);
         }
         if let Some(spans) = style_canvas.get_mut(row) {
+            let rendition = if divider_cell_touches_active_pane(cell, geometries, window) {
+                pane_border_rendition(true, ui_theme)
+            } else {
+                pane_divider_rendition(ui_theme)
+            };
             spans.push(TerminalStyleSpan {
                 start: column,
                 length: 1,
-                rendition: pane_border_rendition(
-                    divider_cell_touches_active_pane(cell, geometries, window),
-                    ui_theme,
-                ),
+                rendition,
             });
         }
     }
@@ -440,7 +442,11 @@ pub(super) fn merged_pane_frame_boundary_style_spans(
 /// Returns the stable divider rendition used for merged pane-frame boundary
 /// caps.
 fn pane_divider_rendition(ui_theme: &UiTheme) -> GraphicRendition {
-    pane_border_rendition(false, ui_theme)
+    GraphicRendition {
+        foreground: Some(ui_theme.colors.pane_divider.foreground),
+        background: None,
+        ..GraphicRendition::default()
+    }
 }
 
 /// Returns whether a divider cell acts as a non-vertical boundary cap for a
@@ -575,5 +581,42 @@ mod tests {
                 .all(|span| span.length == 1 && span.rendition == stable)
         );
         assert_eq!(focused_boundary_spans, unfocused_boundary_spans);
+    }
+
+    /// Verifies neutral divider cells honor the dedicated divider palette
+    /// instead of falling back to the inactive pane-border colors.
+    #[test]
+    fn styled_pane_dividers_use_dedicated_divider_palette_for_neutral_cells() {
+        let mut ids = IdFactory::default();
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(28, 6).unwrap());
+        window
+            .split_active(&mut ids, SplitDirection::Vertical)
+            .unwrap();
+        window
+            .split_active(&mut ids, SplitDirection::Horizontal)
+            .unwrap();
+        let geometries = window.pane_geometries();
+        let rows = usize::from(window.size.rows);
+        let columns = usize::from(window.size.columns);
+        let mut text_canvas = vec![vec![' '; columns]; rows];
+        let mut style_canvas = vec![Vec::new(); rows];
+        let ui_theme = UiTheme::default();
+        let divider = pane_divider_rendition(&ui_theme);
+
+        draw_styled_pane_dividers(
+            &mut text_canvas,
+            &mut style_canvas,
+            &geometries,
+            true,
+            &window,
+            &ui_theme,
+        );
+
+        assert!(
+            style_canvas
+                .iter()
+                .flatten()
+                .any(|span| span.rendition == divider)
+        );
     }
 }

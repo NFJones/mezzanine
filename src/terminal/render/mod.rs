@@ -62,10 +62,11 @@ pub use panes::{
     rendered_pane_geometries, rendered_window_body_size,
 };
 use panes::{window_body_size, zoomed_pane_geometry};
+pub(crate) use prompt::agent_prompt_input_rendition;
 use prompt::{
     AgentPromptBlock, agent_live_footer_state_label, agent_live_footer_style_spans,
-    agent_prompt_input_rendition, clipped_prompt_region, display_overlay_text_rendition,
-    render_agent_prompt_block, write_line_segment,
+    clipped_prompt_region, display_overlay_text_rendition, render_agent_prompt_block,
+    write_line_segment,
 };
 pub use prompt::{
     agent_prompt_reserved_line_count, compose_display_region_overlay_line_style_spans,
