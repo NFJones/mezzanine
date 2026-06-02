@@ -210,6 +210,9 @@ impl AgentTurnLedger {
             .iter_mut()
             .find(|turn| turn.turn_id == turn_id)
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        if terminal_turn_state(turn.state) {
+            return Err(MezError::conflict("agent turn is already terminal"));
+        }
         turn.state = state;
         self.enforce_retention();
         Ok(())

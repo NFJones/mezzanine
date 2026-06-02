@@ -446,6 +446,45 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
     assert_eq!(request.available_mcp_tools, tools);
 }
 
+/// Verifies direct turn starts reject duplicate identifiers across all ledger
+/// states so lifecycle recovery cannot create orphaned records. The regression
+/// covers a previously reported defense-in-depth gap where `start_turn` could
+/// have appended a reused turn id while later lifecycle APIs updated only the
+/// first matching record.
+#[test]
+fn agent_turn_ledger_start_turn_rejects_duplicate_turn_id() {
+    let mut ledger = AgentTurnLedger::new(true);
+    let mut duplicate = turn();
+    duplicate.agent_id = "agent-other".to_string();
+
+    ledger.start_turn(turn()).unwrap();
+
+    let error = ledger.start_turn(duplicate).unwrap_err();
+
+    assert_eq!(error.message(), "agent turn id already exists");
+    assert_eq!(ledger.turns().len(), 1);
+}
+
+/// Verifies terminal turn states are immutable once recorded in the ledger. A
+/// failed, completed, or interrupted turn must not later be reclassified by a
+/// duplicate finish path because scheduler, transcript, and metrics callers all
+/// rely on the first terminal result as the authoritative turn outcome.
+#[test]
+fn agent_turn_ledger_rejects_duplicate_terminal_finish() {
+    let mut ledger = AgentTurnLedger::new(false);
+    ledger.start_turn(turn()).unwrap();
+    ledger
+        .finish_turn("turn-1", AgentTurnState::Failed)
+        .unwrap();
+
+    let error = ledger
+        .finish_turn("turn-1", AgentTurnState::Completed)
+        .unwrap_err();
+
+    assert_eq!(error.message(), "agent turn is already terminal");
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Failed);
+}
+
 /// Verifies that executable action surfaces are only exposed after the model
 /// asks for a coarse capability. This protects the state-machine boundary that
 /// keeps a greeting or other simple request from starting with shell, network,
