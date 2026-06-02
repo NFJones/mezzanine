@@ -1690,18 +1690,11 @@ pub fn window_frame_pillbox_cells(
             let WindowFramePillboxTarget::Window(window_index) = segment.target else {
                 return Vec::new();
             };
-            let start = segment.start.min(usize::from(width));
-            let end = segment
-                .start
-                .saturating_add(segment.width)
-                .min(usize::from(width));
-            (start..end)
-                .filter_map(move |column| {
-                    Some(MouseWindowFrameCell {
-                        column: u16::try_from(column).ok()?,
-                        row,
-                        window_index,
-                    })
+            pillbox_segment_hit_columns(&segment, width)
+                .map(move |column| MouseWindowFrameCell {
+                    column,
+                    row,
+                    window_index,
                 })
                 .collect::<Vec<_>>()
         })
@@ -1724,18 +1717,11 @@ pub fn window_frame_action_pillbox_cells(
             let Some(action) = segment.kind.action().cloned() else {
                 return Vec::new();
             };
-            let start = segment.start.min(usize::from(width));
-            let end = segment
-                .start
-                .saturating_add(segment.width)
-                .min(usize::from(width));
-            (start..end)
-                .filter_map(move |column| {
-                    Some(MouseWindowActionFrameCell {
-                        column: u16::try_from(column).ok()?,
-                        row,
-                        action: action.clone(),
-                    })
+            pillbox_status_segment_hit_columns(segment.start, segment.width, width)
+                .map(move |column| MouseWindowActionFrameCell {
+                    column,
+                    row,
+                    action: action.clone(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -1782,9 +1768,7 @@ pub fn pane_frame_agent_status_pillbox_cells(
                     else {
                         return Vec::new();
                     };
-                    let start = segment.start.min(width);
-                    let end = segment.start.saturating_add(segment.width).min(width);
-                    (start..end)
+                    pillbox_segment_local_columns(segment.start, segment.width, width)
                         .filter_map(move |column| {
                             Some(MousePaneAgentStatusCell {
                                 column: geometry.column.checked_add(u16::try_from(column).ok()?)?,
@@ -1858,22 +1842,45 @@ pub fn window_group_frame_pillbox_cells(
             let WindowFramePillboxTarget::Group(group_index) = segment.target else {
                 return Vec::new();
             };
-            let start = segment.start.min(usize::from(width));
-            let end = segment
-                .start
-                .saturating_add(segment.width)
-                .min(usize::from(width));
-            (start..end)
-                .filter_map(move |column| {
-                    Some(MouseWindowGroupFrameCell {
-                        column: u16::try_from(column).ok()?,
-                        row,
-                        group_index,
-                    })
+            pillbox_segment_hit_columns(&segment, width)
+                .map(move |column| MouseWindowGroupFrameCell {
+                    column,
+                    row,
+                    group_index,
                 })
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// Returns clipped local columns occupied by one pillbox segment.
+fn pillbox_segment_local_columns(
+    start: usize,
+    width: usize,
+    frame_width: usize,
+) -> impl Iterator<Item = usize> {
+    let start = start.min(frame_width);
+    let end = start.saturating_add(width).min(frame_width);
+    start..end
+}
+
+/// Returns clipped terminal columns occupied by one window pillbox segment.
+fn pillbox_segment_hit_columns(
+    segment: &WindowFramePillboxSegment,
+    frame_width: u16,
+) -> impl Iterator<Item = u16> {
+    pillbox_segment_local_columns(segment.start, segment.width, usize::from(frame_width))
+        .filter_map(|column| u16::try_from(column).ok())
+}
+
+/// Returns clipped terminal columns occupied by one status pill segment.
+fn pillbox_status_segment_hit_columns(
+    start: usize,
+    width: usize,
+    frame_width: u16,
+) -> impl Iterator<Item = u16> {
+    pillbox_segment_local_columns(start, width, usize::from(frame_width))
+        .filter_map(|column| u16::try_from(column).ok())
 }
 
 /// Carries the target represented by a window-frame pillbox segment.
