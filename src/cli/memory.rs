@@ -6,8 +6,8 @@
 
 use super::{
     Args, CliEnv, CliOutputFormat, MemoryRecord, MemoryScope, MemorySource, MezError,
-    PersistentMemoryStore, Result, Subcommand, Write, current_unix_seconds, json_escape,
-    write_json_or_plain,
+    PersistentMemoryStore, Result, Serialize, Subcommand, Write, current_unix_seconds,
+    serialize_json, write_json_or_plain,
 };
 
 // Memory subcommands and output formatting.
@@ -28,11 +28,11 @@ pub(super) fn run_memory<W: Write>(
 
     match parsed.command.unwrap_or(MemoryCliCommand::List) {
         MemoryCliCommand::List => {
-            let output = memory_records_json(&store.list()?);
+            let output = memory_records_json(&store.list()?)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Inspect { id } => {
-            let output = memory_record_json(&store.inspect(&id)?);
+            let output = memory_record_json(&store.inspect(&id)?)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Add {
@@ -55,7 +55,7 @@ pub(super) fn run_memory<W: Write>(
                 explicit_sensitive_consent: consent,
             };
             store.upsert(record)?;
-            let output = memory_record_json(&store.inspect(&id)?);
+            let output = memory_record_json(&store.inspect(&id)?)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Edit {
@@ -64,12 +64,12 @@ pub(super) fn run_memory<W: Write>(
             consent,
         } => {
             let record = store.edit_content(&id, &content, current_unix_seconds()?, consent)?;
-            let output = memory_record_json(&record);
+            let output = memory_record_json(&record)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Delete { id } => {
             let deleted = store.delete(&id)?;
-            let output = format!(r#"{{"deleted":{deleted}}}"#);
+            let output = serialize_json(&MemoryDeleteJson { deleted })?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Export => {
@@ -138,15 +138,12 @@ enum MemoryCliCommand {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn memory_records_json(records: &[MemoryRecord]) -> String {
-    format!(
-        "[{}]",
-        records
-            .iter()
-            .map(memory_record_json)
-            .collect::<Vec<_>>()
-            .join(",")
-    )
+pub(super) fn memory_records_json(records: &[MemoryRecord]) -> Result<String> {
+    let records = records
+        .iter()
+        .map(MemoryRecordJson::from)
+        .collect::<Vec<_>>();
+    serialize_json(&records)
 }
 
 /// Runs the memory record json operation for this subsystem.
@@ -154,18 +151,51 @@ pub(super) fn memory_records_json(records: &[MemoryRecord]) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn memory_record_json(record: &MemoryRecord) -> String {
-    format!(
-        r#"{{"id":"{}","scope":"{}","created_at_unix_seconds":{},"updated_at_unix_seconds":{},"source":"{}","priority":{},"content":"{}","explicit_sensitive_consent":{}}}"#,
-        json_escape(&record.id),
-        json_escape(&memory_scope_name(&record.scope)),
-        record.created_at_unix_seconds,
-        record.updated_at_unix_seconds,
-        memory_source_name(record.source),
-        record.priority,
-        json_escape(&record.content),
-        record.explicit_sensitive_consent
-    )
+pub(super) fn memory_record_json(record: &MemoryRecord) -> Result<String> {
+    serialize_json(&MemoryRecordJson::from(record))
+}
+
+/// Structured JSON payload emitted for one persistent memory record.
+#[derive(Serialize)]
+struct MemoryRecordJson<'a> {
+    /// Stable memory record identifier.
+    id: &'a str,
+    /// User-facing memory scope label.
+    scope: String,
+    /// Creation time as Unix seconds.
+    created_at_unix_seconds: u64,
+    /// Last update time as Unix seconds.
+    updated_at_unix_seconds: u64,
+    /// Source label for the memory record.
+    source: &'static str,
+    /// Memory priority from 0 to 255.
+    priority: u8,
+    /// Stored memory content.
+    content: &'a str,
+    /// Whether the user explicitly consented to sensitive content storage.
+    explicit_sensitive_consent: bool,
+}
+
+impl<'a> From<&'a MemoryRecord> for MemoryRecordJson<'a> {
+    fn from(record: &'a MemoryRecord) -> Self {
+        Self {
+            id: &record.id,
+            scope: memory_scope_name(&record.scope),
+            created_at_unix_seconds: record.created_at_unix_seconds,
+            updated_at_unix_seconds: record.updated_at_unix_seconds,
+            source: memory_source_name(record.source),
+            priority: record.priority,
+            content: &record.content,
+            explicit_sensitive_consent: record.explicit_sensitive_consent,
+        }
+    }
+}
+
+/// Structured JSON payload emitted when a memory delete command completes.
+#[derive(Serialize)]
+struct MemoryDeleteJson {
+    /// Whether a record was removed.
+    deleted: bool,
 }
 
 /// Runs the memory scope name operation for this subsystem.

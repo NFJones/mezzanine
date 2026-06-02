@@ -15,6 +15,13 @@ use crate::auth::selected_auth_method_from_flags;
 
 // Authentication subcommands and output formatting.
 
+/// Structured JSON payload emitted when `mez auth logout` completes.
+#[derive(Serialize)]
+struct AuthLogoutJson {
+    /// Whether a stored authentication session was removed.
+    logged_out: bool,
+}
+
 /// Runs the run auth operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -164,7 +171,9 @@ pub(super) async fn run_auth<W: Write>(
                 move || store.logout()
             })
             .await?;
-            let output = format!(r#"{{"logged_out":{changed}}}"#);
+            let output = serialize_json(&AuthLogoutJson {
+                logged_out: changed,
+            })?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
     }
