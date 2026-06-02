@@ -941,6 +941,24 @@ fn primary_display_overlay_copy_selection(overlay: &RuntimeDisplayOverlay) -> Op
     Some(copied.join("\n"))
 }
 
+/// Applies a signed scroll delta to a display overlay and clamps the viewport.
+fn apply_display_overlay_scroll_delta(
+    overlay: &mut RuntimeDisplayOverlay,
+    delta: isize,
+    size: Size,
+) -> bool {
+    let previous = overlay.scroll_offset;
+    if delta.is_negative() {
+        overlay.scroll_offset = overlay.scroll_offset.saturating_sub(delta.unsigned_abs());
+    } else {
+        overlay.scroll_offset = overlay
+            .scroll_offset
+            .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
+    }
+    runtime_clamp_display_overlay_scroll(overlay, size);
+    previous != overlay.scroll_offset
+}
+
 /// Returns one display-column slice from a primary display-overlay line.
 fn primary_display_overlay_line_slice(line: &str, start: usize, end: usize) -> String {
     let mut output = String::new();
@@ -1044,16 +1062,11 @@ impl RuntimeSessionService {
         let Some(overlay) = self.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
-        let previous = overlay.scroll_offset;
-        if lines.is_negative() {
-            overlay.scroll_offset = overlay.scroll_offset.saturating_sub(lines.unsigned_abs());
-        } else {
-            overlay.scroll_offset = overlay
-                .scroll_offset
-                .saturating_add(usize::try_from(lines).unwrap_or(usize::MAX));
-        }
-        runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
-        Ok(previous != overlay.scroll_offset)
+        Ok(apply_display_overlay_scroll_delta(
+            overlay,
+            lines,
+            self.session.authoritative_size,
+        ))
     }
 
     /// Runs the apply primary display overlay input operation for this subsystem.
@@ -1131,23 +1144,21 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                let next = overlay.scroll_offset.saturating_sub(delta.unsigned_abs());
-                let changed = next != overlay.scroll_offset;
-                overlay.scroll_offset = next;
-                runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
-                Ok(changed)
+                Ok(apply_display_overlay_scroll_delta(
+                    overlay,
+                    delta,
+                    self.session.authoritative_size,
+                ))
             }
             RuntimeDisplayOverlayInputAction::ScrollBy(delta) => {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                let next = overlay
-                    .scroll_offset
-                    .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
-                let previous = overlay.scroll_offset;
-                overlay.scroll_offset = next;
-                runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
-                Ok(previous != overlay.scroll_offset)
+                Ok(apply_display_overlay_scroll_delta(
+                    overlay,
+                    delta,
+                    self.session.authoritative_size,
+                ))
             }
             RuntimeDisplayOverlayInputAction::Ignore => Ok(false),
         }
@@ -1239,20 +1250,11 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         if overlay.selections.is_empty() {
-            if delta.is_negative() {
-                let next = overlay.scroll_offset.saturating_sub(delta.unsigned_abs());
-                let changed = next != overlay.scroll_offset;
-                overlay.scroll_offset = next;
-                runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
-                return Ok(changed);
-            }
-            let next = overlay
-                .scroll_offset
-                .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
-            let previous = overlay.scroll_offset;
-            overlay.scroll_offset = next;
-            runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
-            return Ok(previous != overlay.scroll_offset);
+            return Ok(apply_display_overlay_scroll_delta(
+                overlay,
+                delta,
+                self.session.authoritative_size,
+            ));
         }
         let previous = overlay.active_selection_index.unwrap_or(0);
         let next = runtime_selector_step_index(previous, overlay.selections.len(), delta);
