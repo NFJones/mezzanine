@@ -5,7 +5,7 @@
 //! avoids DeepSeek thinking fields, DeepSeek shim function names, hidden
 //! reasoning transcript replay, and DeepSeek retry policy.
 
-use super::chat_completions::ChatCompletionsDialect;
+use super::chat_completions::{ChatCompletionsDialect, parse_chat_completions_response_envelope};
 use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
@@ -562,32 +562,9 @@ fn parse_openai_chat_completions_http_response(
             "OpenAI-compatible Chat Completions streaming responses are not yet supported",
         ));
     }
-    let root: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
-        MezError::invalid_state(format!(
-            "OpenAI-compatible Chat Completions response body is invalid JSON: {error}"
-        ))
-    })?;
-    let model = root
-        .get("model")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&request.model)
-        .to_string();
-    let choices = root
-        .get("choices")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            MezError::invalid_state(
-                "OpenAI-compatible Chat Completions response has no choices array",
-            )
-        })?;
-    let first_choice = choices.first().ok_or_else(|| {
-        MezError::invalid_state(
-            "OpenAI-compatible Chat Completions response has empty choices array",
-        )
-    })?;
-    let message = first_choice.get("message").ok_or_else(|| {
-        MezError::invalid_state("OpenAI-compatible Chat Completions choice has no message")
-    })?;
+    let envelope =
+        parse_chat_completions_response_envelope(&body, &request.model, "OpenAI-compatible")?;
+    let message = &envelope.message;
     let raw_text = message
         .get("content")
         .and_then(serde_json::Value::as_str)
@@ -600,9 +577,9 @@ fn parse_openai_chat_completions_http_response(
     };
     Ok(ModelResponse {
         provider: provider_id.to_string(),
-        model,
+        model: envelope.model,
         raw_text,
-        usage: openai_chat_completions_usage(&root),
+        usage: openai_chat_completions_usage(&envelope.root),
         latest_request_usage: None,
         quota_usage: provider_quota_usage_from_headers(&headers),
         action_batch,

@@ -5,7 +5,9 @@
 //! Provider dispatch remains in the parent module so shared trait wiring stays
 //! centralized.
 
-use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsRetry};
+use super::chat_completions::{
+    ChatCompletionsDialect, ChatCompletionsRetry, parse_chat_completions_response_envelope,
+};
 use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
@@ -693,31 +695,9 @@ fn parse_deepseek_chat_completions_response_body(
     body: &str,
     request: &ModelRequest,
 ) -> Result<ModelResponse> {
-    let root: serde_json::Value = serde_json::from_str(body).map_err(|error| {
-        MezError::invalid_state(format!(
-            "DeepSeek Chat Completions response body is invalid JSON: {error}"
-        ))
-    })?;
-    let model = root
-        .get("model")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&request.model)
-        .to_string();
-    let choices = root
-        .get("choices")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            MezError::invalid_state("DeepSeek Chat Completions response has no choices array")
-        })?;
-    let first_choice = choices.first().ok_or_else(|| {
-        MezError::invalid_state("DeepSeek Chat Completions response has empty choices array")
-    })?;
-    let finish_reason = first_choice
-        .get("finish_reason")
-        .and_then(serde_json::Value::as_str);
-    let message = first_choice.get("message").ok_or_else(|| {
-        MezError::invalid_state("DeepSeek Chat Completions choice has no message")
-    })?;
+    let envelope = parse_chat_completions_response_envelope(body, &request.model, "DeepSeek")?;
+    let finish_reason = envelope.finish_reason.as_deref();
+    let message = &envelope.message;
     let raw_text = message
         .get("content")
         .and_then(serde_json::Value::as_str)
@@ -768,13 +748,14 @@ fn parse_deepseek_chat_completions_response_body(
     {
         return Err(error);
     }
-    let usage = root
+    let usage = envelope
+        .root
         .get("usage")
         .map(parse_deepseek_usage)
         .unwrap_or_default();
     Ok(ModelResponse {
         provider: request.provider.clone(),
-        model,
+        model: envelope.model,
         raw_text,
         usage,
         latest_request_usage: None,

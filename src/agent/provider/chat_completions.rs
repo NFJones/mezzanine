@@ -101,6 +101,72 @@ pub struct ChatCompletionsRetry {
     pub stream: bool,
 }
 
+/// Shared Chat Completions response envelope fields.
+///
+/// Provider dialects still own content, tool-call, usage, and finish-reason
+/// policy, but they should agree on the common response root, first choice,
+/// model fallback, and assistant-message extraction rules.
+pub(super) struct ChatCompletionsResponseEnvelope {
+    /// Complete parsed response root for dialect-specific usage extraction.
+    pub(super) root: serde_json::Value,
+    /// Response model id, falling back to the requested model when absent.
+    pub(super) model: String,
+    /// First assistant message from the first response choice.
+    pub(super) message: serde_json::Value,
+    /// First choice finish reason when the provider supplied one.
+    pub(super) finish_reason: Option<String>,
+}
+
+/// Parses the shared Chat Completions JSON envelope.
+///
+/// This helper intentionally stops at the first-choice assistant message.
+/// Provider dialects keep ownership of message content policy, tool-call
+/// parsing, transcript events, and finish-reason recovery.
+pub(super) fn parse_chat_completions_response_envelope(
+    body: &str,
+    fallback_model: &str,
+    provider_label: &str,
+) -> Result<ChatCompletionsResponseEnvelope> {
+    let root: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "{provider_label} Chat Completions response body is invalid JSON: {error}"
+        ))
+    })?;
+    let model = root
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(fallback_model)
+        .to_string();
+    let choices = root
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            MezError::invalid_state(format!(
+                "{provider_label} Chat Completions response has no choices array"
+            ))
+        })?;
+    let first_choice = choices.first().ok_or_else(|| {
+        MezError::invalid_state(format!(
+            "{provider_label} Chat Completions response has empty choices array"
+        ))
+    })?;
+    let finish_reason = first_choice
+        .get("finish_reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let message = first_choice.get("message").cloned().ok_or_else(|| {
+        MezError::invalid_state(format!(
+            "{provider_label} Chat Completions choice has no message"
+        ))
+    })?;
+    Ok(ChatCompletionsResponseEnvelope {
+        root,
+        model,
+        message,
+        finish_reason,
+    })
+}
+
 /// Carries shared Chat Completions provider state.
 #[derive(Debug, Clone)]
 pub struct ChatCompletionsProvider<T, D> {
