@@ -64,24 +64,6 @@ pub(super) fn overlay_text_cells(
     *row = output;
 }
 
-/// Removes style spans that overlap a fixed-width terminal-cell range.
-///
-/// # Parameters
-/// - `spans`: Style spans for one rendered row.
-/// - `column_start`: The first terminal column being replaced.
-/// - `columns`: The number of replaced terminal cells.
-pub(super) fn remove_overlapping_style_spans(
-    spans: &mut Vec<TerminalStyleSpan>,
-    column_start: usize,
-    columns: usize,
-) {
-    let column_end = column_start.saturating_add(columns);
-    spans.retain(|span| {
-        let span_end = span.start.saturating_add(span.length);
-        span_end <= column_start || span.start >= column_end
-    });
-}
-
 /// Clips one style span into a destination overlay range.
 ///
 /// # Parameters

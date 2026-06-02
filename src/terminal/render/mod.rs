@@ -80,8 +80,8 @@ use style::{
     push_or_extend_style_span,
 };
 pub(crate) use text::{
-    agent_log_wrap_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
-    wrap_agent_log_lines,
+    agent_log_wrap_width, overlay_fixed_column_style_spans, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
 };
 pub(super) use text::{
     blank_cells, blank_row, char_count, collect_screen_cells, line_slice, normalize_selection,
@@ -90,7 +90,8 @@ pub(super) use text::{
 
 use text::{
     clip_style_span, collect_text_cells, fit_styled_width, fit_width, fitted_text_width,
-    offset_style_span, write_single_width_cell, write_text_cells,
+    offset_style_span, style_span_overlaps_columns, style_span_segments_outside_range,
+    write_single_width_cell, write_text_cells,
 };
 
 /// Defines the DEFAULT PANE FRAME TEMPLATE const used by this subsystem.
@@ -649,24 +650,7 @@ fn overlay_styled_prompt_line(
     let Some(spans) = line_style_spans.get_mut(row) else {
         return;
     };
-    let region_end = column.saturating_add(width);
-    let mut retained =
-        Vec::with_capacity(spans.len().saturating_add(styled_line.style_spans.len()));
-    for span in std::mem::take(spans) {
-        if style_span_overlaps_columns(span, column, region_end) {
-            retained.extend(style_span_segments_outside_range(span, column, region_end));
-        } else {
-            retained.push(span);
-        }
-    }
-    retained.extend(
-        styled_line
-            .style_spans
-            .iter()
-            .filter_map(|span| clip_style_span(*span, width))
-            .map(|span| offset_style_span(span, column)),
-    );
-    *spans = retained;
+    overlay_fixed_column_style_spans(spans, column, width, &styled_line.style_spans);
 }
 
 /// Chooses active-pane display overlay rows while keeping the live footer at
@@ -715,11 +699,6 @@ fn line_segment_is_blank(line: &str, column: usize, width: usize) -> bool {
         .all(char::is_whitespace)
 }
 
-/// Returns whether a style span touches a half-open column range.
-fn style_span_overlaps_columns(span: TerminalStyleSpan, start: usize, end: usize) -> bool {
-    span.start < end && span.start.saturating_add(span.length) > start
-}
-
 /// Identifies prompt-block styles that should not survive a resize mismatch.
 fn style_span_is_agent_prompt_block(
     span: TerminalStyleSpan,
@@ -727,34 +706,6 @@ fn style_span_is_agent_prompt_block(
     display_rendition: GraphicRendition,
 ) -> bool {
     span.rendition == prompt_rendition || span.rendition == display_rendition
-}
-
-/// Keeps the parts of a style span that fall outside a replaced column range.
-fn style_span_segments_outside_range(
-    span: TerminalStyleSpan,
-    start: usize,
-    end: usize,
-) -> Vec<TerminalStyleSpan> {
-    let span_end = span.start.saturating_add(span.length);
-    let mut segments = Vec::with_capacity(2);
-    if span.start < start {
-        segments.push(TerminalStyleSpan {
-            start: span.start,
-            length: start.saturating_sub(span.start),
-            rendition: span.rendition,
-        });
-    }
-    if span_end > end {
-        segments.push(TerminalStyleSpan {
-            start: end,
-            length: span_end.saturating_sub(end),
-            rendition: span.rendition,
-        });
-    }
-    segments
-        .into_iter()
-        .filter(|segment| segment.length > 0)
-        .collect()
 }
 
 /// Runs the compose client presentation operation for this subsystem.

@@ -300,6 +300,77 @@ pub(super) fn fit_styled_width(line: &TerminalStyledLine, width: usize) -> Termi
     }
 }
 
+/// Replaces one fixed-width column range with source style spans clipped to that range.
+///
+/// Text overlays in terminal and runtime render paths both need the same style
+/// invariant: preexisting spans outside the overlay range survive, overlapping
+/// portions are removed, and source spans are clipped to the overlay width then
+/// shifted into absolute terminal columns.
+pub(crate) fn overlay_fixed_column_style_spans(
+    spans: &mut Vec<TerminalStyleSpan>,
+    column_start: usize,
+    width: usize,
+    source_spans: &[TerminalStyleSpan],
+) {
+    let region_end = column_start.saturating_add(width);
+    let mut retained = Vec::with_capacity(spans.len().saturating_add(source_spans.len()));
+    for span in std::mem::take(spans) {
+        if style_span_overlaps_columns(span, column_start, region_end) {
+            retained.extend(style_span_segments_outside_range(
+                span,
+                column_start,
+                region_end,
+            ));
+        } else {
+            retained.push(span);
+        }
+    }
+    retained.extend(
+        source_spans
+            .iter()
+            .filter_map(|span| clip_style_span(*span, width))
+            .map(|span| offset_style_span(span, column_start)),
+    );
+    *spans = retained;
+}
+
+/// Returns whether a style span touches a half-open column range.
+pub(super) fn style_span_overlaps_columns(
+    span: TerminalStyleSpan,
+    start: usize,
+    end: usize,
+) -> bool {
+    span.start < end && span.start.saturating_add(span.length) > start
+}
+
+/// Keeps the parts of a style span that fall outside a replaced column range.
+pub(super) fn style_span_segments_outside_range(
+    span: TerminalStyleSpan,
+    start: usize,
+    end: usize,
+) -> Vec<TerminalStyleSpan> {
+    let span_end = span.start.saturating_add(span.length);
+    let mut segments = Vec::with_capacity(2);
+    if span.start < start {
+        segments.push(TerminalStyleSpan {
+            start: span.start,
+            length: start.saturating_sub(span.start),
+            rendition: span.rendition,
+        });
+    }
+    if span_end > end {
+        segments.push(TerminalStyleSpan {
+            start: end,
+            length: span_end.saturating_sub(end),
+            rendition: span.rendition,
+        });
+    }
+    segments
+        .into_iter()
+        .filter(|segment| segment.length > 0)
+        .collect()
+}
+
 /// Shifts a style span by a terminal column offset.
 pub(super) fn offset_style_span(
     span: TerminalStyleSpan,

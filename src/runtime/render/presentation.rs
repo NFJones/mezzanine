@@ -9,15 +9,13 @@
 use super::super::{
     MezError, RenderedClientView, ShellClassification, runtime_mezzanine_error_code,
 };
-use super::geometry::{
-    clipped_overlay_style_span, overlay_text_cells, remove_overlapping_style_spans,
-};
+use super::geometry::overlay_text_cells;
 use std::{str::FromStr, sync::LazyLock};
 
 use crate::agent::{AgentAction, AgentActionPayload, apply_patch_touched_paths};
 use crate::terminal::{
     AGENT_COPY_SKIP_LINE, GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
-    UiColorPair, UiTheme, terminal_grapheme_width,
+    UiColorPair, UiTheme, overlay_fixed_column_style_spans, terminal_grapheme_width,
 };
 use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 use syntect::easy::HighlightLines;
@@ -1993,14 +1991,13 @@ pub(super) fn overlay_styled_lines(
         let Some(style_spans) = view.line_style_spans.get_mut(row_index) else {
             continue;
         };
-        remove_overlapping_style_spans(style_spans, column_start, columns);
-        if let Some(line) = line {
-            style_spans.extend(
-                line.style_spans
-                    .iter()
-                    .filter_map(|span| clipped_overlay_style_span(*span, column_start, columns)),
-            );
-        }
+        overlay_fixed_column_style_spans(
+            style_spans,
+            column_start,
+            columns,
+            line.map(|line| line.style_spans.as_slice())
+                .unwrap_or_default(),
+        );
     }
 }
 
