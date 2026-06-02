@@ -1799,16 +1799,6 @@ fn route_mouse_event(
             },
         ));
     }
-    if !config.mouse_pane_agent_selector_cells.is_empty()
-        && matches!(
-            (event.kind, event.button),
-            (super::MouseEventKind::Press, super::MouseButton::Left)
-        )
-    {
-        return Ok(TerminalClientLoopAction::HandleMouse(
-            MouseAction::ClosePaneAgentStatusSelector,
-        ));
-    }
     if let Some(cell) = config
         .mouse_pane_agent_status_cells
         .iter()
@@ -1890,6 +1880,16 @@ fn route_mouse_event(
             MouseAction::FocusWindow {
                 index: cell.window_index,
             },
+        ));
+    }
+    if !config.mouse_pane_agent_selector_cells.is_empty()
+        && matches!(
+            (event.kind, event.button),
+            (super::MouseEventKind::Press, super::MouseButton::Left)
+        )
+    {
+        return Ok(TerminalClientLoopAction::HandleMouse(
+            MouseAction::ClosePaneAgentStatusSelector,
         ));
     }
     policy.over_window_frame |= config

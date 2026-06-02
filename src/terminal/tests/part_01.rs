@@ -1372,6 +1372,29 @@ fn client_loop_routes_input_to_pane_mux_and_mouse_actions() {
         route_client_input(b"\x1b[<0;13;5m", &pane_selector_config).unwrap(),
         TerminalClientLoopAction::HandleMouse(MouseAction::Ignore)
     );
+    let mut selector_with_window_frame_config = pane_selector_config.clone();
+    selector_with_window_frame_config.mouse_window_frame_cells = vec![MouseWindowFrameCell {
+        column: 12,
+        row: 4,
+        window_index: 1,
+    }];
+    assert_eq!(
+        route_client_input(b"\x1b[<0;13;5M", &selector_with_window_frame_config).unwrap(),
+        TerminalClientLoopAction::HandleMouse(MouseAction::FocusWindow { index: 1 })
+    );
+    let mut selector_with_window_action_config = pane_selector_config.clone();
+    selector_with_window_action_config.mouse_window_action_frame_cells =
+        vec![MouseWindowActionFrameCell {
+            column: 12,
+            row: 4,
+            action: WindowFrameAction::NewWindow,
+        }];
+    assert_eq!(
+        route_client_input(b"\x1b[<0;13;5M", &selector_with_window_action_config).unwrap(),
+        TerminalClientLoopAction::HandleMouse(MouseAction::PressWindowAction {
+            action: WindowFrameAction::NewWindow,
+        })
+    );
 
     let mut display_overlay_config = frame_config.clone();
     display_overlay_config.primary_display_overlay_active = true;
