@@ -1657,6 +1657,28 @@ impl EnvironmentSignature {
         }
     }
 
+    /// Reports whether this signature is the unknown sentinel used before the
+    /// runtime can collect real environment details.
+    ///
+    /// Unknown signatures are intentionally treated as uncached bootstrap
+    /// requests so a previously-recorded sentinel cannot suppress discovery for
+    /// later sessions that still lack concrete environment identity.
+    pub fn is_unknown(&self) -> bool {
+        self.os == "unknown"
+            && self.arch == "unknown"
+            && self.host == "unknown"
+            && self.user == "unknown"
+            && self.shell_path == "/bin/sh"
+            && self.shell_classification == ShellClassification::UnknownUnix
+            && self.shell_version.is_none()
+            && self.path.is_none()
+            && self.working_directory == "/"
+            && self.project_root.is_none()
+            && !self.git_repo
+            && self.container.is_none()
+            && self.environment_managers.is_empty()
+    }
+
     /// Runs the known fields operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -2013,7 +2035,7 @@ impl ToolDiscoveryCache {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn requires_bootstrap(&self, signature: &EnvironmentSignature) -> bool {
-        !self.inventories.contains_key(signature)
+        signature.is_unknown() || !self.inventories.contains_key(signature)
     }
 
     /// Runs the record operation for this subsystem.
@@ -2022,6 +2044,9 @@ impl ToolDiscoveryCache {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn record(&mut self, signature: EnvironmentSignature, inventory: ToolInventory) {
+        if signature.is_unknown() {
+            return;
+        }
         self.inventories.insert(signature, inventory);
     }
 

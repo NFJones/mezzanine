@@ -1219,6 +1219,26 @@ fn tool_cache_requires_bootstrap_after_signature_change() {
     assert!(cache.requires_bootstrap(&second));
 }
 
+/// Verifies unknown environment signatures always trigger bootstrap.
+///
+/// The unknown signature is a sentinel used before the runtime captures a real
+/// environment identity. Caching that sentinel must not suppress future tool
+/// discovery for panes that still report only unknown details.
+#[test]
+fn tool_cache_requires_bootstrap_for_unknown_signature_even_if_recorded() {
+    let signature = EnvironmentSignature::unknown();
+    let mut cache = ToolDiscoveryCache::default();
+
+    assert!(cache.requires_bootstrap(&signature));
+    cache.record(
+        signature.clone(),
+        ToolInventory::parse_bootstrap_output("sed=1\ngrep=1\npython=1\nrg=1\n"),
+    );
+
+    assert!(cache.requires_bootstrap(&signature));
+    assert!(cache.get(&signature).is_none());
+}
+
 /// Verifies discovery script uses shell command lookup.
 ///
 /// This regression scenario documents the behavior being protected so a

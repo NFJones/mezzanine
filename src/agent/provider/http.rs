@@ -176,16 +176,44 @@ fn provider_http_body_has_terminal_sse_event(body: &[u8]) -> bool {
     let Ok(body) = std::str::from_utf8(body) else {
         return false;
     };
-    let body = body.replace("\r\n", "\n");
-    let mut remaining = body.as_str();
-    while let Some(separator_index) = remaining.find("\n\n") {
+    let mut remaining = body;
+    while let Some(separator_index) = provider_http_find_sse_block_separator(remaining) {
         let block = &remaining[..separator_index];
         if provider_sse_block_is_terminal(block) {
             return true;
         }
-        remaining = &remaining[separator_index + 2..];
+        remaining = &remaining[separator_index..];
+        if let Some(stripped) = remaining.strip_prefix("\r\n\r\n") {
+            remaining = stripped;
+        } else if let Some(stripped) = remaining.strip_prefix("\n\n") {
+            remaining = stripped;
+        } else {
+            break;
+        }
     }
     false
+}
+
+/// Locates the next complete SSE block separator without allocating a
+/// normalized copy of the buffered provider body.
+fn provider_http_find_sse_block_separator(body: &str) -> Option<usize> {
+    let bytes = body.as_bytes();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        match bytes[index] {
+            b'\n' if bytes[index + 1] == b'\n' => return Some(index),
+            b'\r'
+                if index + 3 < bytes.len()
+                    && bytes[index + 1] == b'\n'
+                    && bytes[index + 2] == b'\r'
+                    && bytes[index + 3] == b'\n' =>
+            {
+                return Some(index);
+            }
+            _ => index += 1,
+        }
+    }
+    None
 }
 
 /// Reports whether one complete SSE event block is terminal.
@@ -683,5 +711,24 @@ mod provider_transport_tests {
         assert!(!provider_http_body_has_terminal_sse_event(
             delimited_but_invalid.as_bytes()
         ));
+    }
+
+    /// Verifies terminal SSE detection accepts CRLF-delimited event blocks
+    /// without allocating a newline-normalized copy of the body.
+    ///
+    /// Some providers emit spec-compliant CRLF separators. The transport must
+    /// still detect terminal events while scanning the buffered response in
+    /// place so per-chunk SSE detection stays allocation-free.
+    #[test]
+    fn provider_transport_detects_terminal_failure_sse_events_with_crlf_blocks() {
+        let body = format!(
+            "event: response.failed\r\ndata: {}\r\n\r\n",
+            serde_json::json!({
+                "type": "response.failed",
+                "response": {"error": {"message": "bad token"}}
+            })
+        );
+
+        assert!(provider_http_body_has_terminal_sse_event(body.as_bytes()));
     }
 }
