@@ -527,21 +527,70 @@ fn cli_config_mutation_result_json(
     target: &CliConfigMutationTarget,
     plan: &ConfigMutationPlan,
 ) -> Result<String> {
-    Ok(format!(
-        r#"{{"applied":{},"persisted":true,"reload_required":{},"diagnostics":{},"plan":{{"operation":"{}","path":"{}","target":{{"scope":"{}","path":"{}"}},"format":"{}","scope":"{}","changed":{},"validated":{},"reload_required":{}}}}}"#,
-        plan.changed,
-        plan.reload_required,
-        diagnostics_json(&plan.validation.diagnostics)?,
-        cli_config_mutation_operation_name(&plan.operation),
-        json_escape(&plan.path),
-        target.scope_name,
-        json_escape(&target.path.to_string_lossy()),
-        cli_config_format_name(plan.format),
-        cli_config_scope_name(plan.scope),
-        plan.changed,
-        plan.validation.valid,
-        plan.reload_required
-    ))
+    serialize_json(&CliConfigMutationResultJson {
+        applied: plan.changed,
+        persisted: true,
+        reload_required: plan.reload_required,
+        diagnostics: cli_config_diagnostic_json_values(&plan.validation.diagnostics),
+        plan: CliConfigMutationPlanJson {
+            operation: cli_config_mutation_operation_name(&plan.operation),
+            path: &plan.path,
+            target: CliConfigMutationTargetJson {
+                scope: target.scope_name,
+                path: target.path.to_string_lossy().into_owned(),
+            },
+            format: cli_config_format_name(plan.format),
+            scope: cli_config_scope_name(plan.scope),
+            changed: plan.changed,
+            validated: plan.validation.valid,
+            reload_required: plan.reload_required,
+        },
+    })
+}
+
+/// Structured JSON payload emitted after a config mutation is persisted.
+#[derive(Serialize)]
+struct CliConfigMutationResultJson<'a> {
+    /// Whether the persisted value changed the target config file.
+    applied: bool,
+    /// Whether the mutation was persisted to disk.
+    persisted: bool,
+    /// Whether the runtime must reload configuration to observe the change.
+    reload_required: bool,
+    /// Validation diagnostics produced for the mutated config file.
+    diagnostics: Vec<CliConfigDiagnosticJson>,
+    /// Detailed mutation plan metadata.
+    plan: CliConfigMutationPlanJson<'a>,
+}
+
+/// Structured JSON payload describing one persisted config mutation plan.
+#[derive(Serialize)]
+struct CliConfigMutationPlanJson<'a> {
+    /// Mutation operation label.
+    operation: &'static str,
+    /// Config path affected by the mutation.
+    path: &'a str,
+    /// Persistence target metadata.
+    target: CliConfigMutationTargetJson,
+    /// Target config file format.
+    format: &'static str,
+    /// Config scope affected by the mutation.
+    scope: &'static str,
+    /// Whether the mutation changed the target config file.
+    changed: bool,
+    /// Whether the resulting config text validated successfully.
+    validated: bool,
+    /// Whether the runtime must reload configuration to observe the change.
+    reload_required: bool,
+}
+
+/// Structured JSON payload describing one config mutation persistence target.
+#[derive(Serialize)]
+struct CliConfigMutationTargetJson {
+    /// Target scope label.
+    scope: &'static str,
+    /// Target config file path.
+    path: String,
 }
 
 /// Runs the cli config layers json operation for this subsystem.
@@ -555,7 +604,7 @@ fn cli_config_layers_json(layers: &[ConfigLayer], effective: &EffectiveConfig) -
         .enumerate()
         .map(|(index, layer)| cli_config_layer_json(index, layer, effective))
         .collect::<Result<Vec<_>>>()?;
-    Ok(format!("[{}]", layers.join(",")))
+    serialize_json(&layers)
 }
 
 /// Runs the cli config layer json operation for this subsystem.
@@ -567,7 +616,7 @@ fn cli_config_layer_json(
     index: usize,
     layer: &ConfigLayer,
     effective: &EffectiveConfig,
-) -> Result<String> {
+) -> Result<CliConfigLayerJson> {
     let state = if effective.applied_layers().contains(&layer.name) {
         "applied"
     } else if effective.skipped_layers().contains(&layer.name) {
@@ -576,26 +625,77 @@ fn cli_config_layer_json(
         "pending"
     };
     let diagnostics = cli_config_layer_diagnostics(layer);
-    Ok(format!(
-        r#"{{"id":"{}","version":1,"name":"{}","layer_type":"{}","precedence":{},"path":{},"format":"{}","scope":"{}","trusted":{},"applied":{},"state":"{}","schema_version":1,"diagnostics":{}}}"#,
-        json_escape(&layer.name),
-        json_escape(&layer.name),
-        cli_config_layer_type_name(layer.scope),
-        index,
-        json_optional(
-            layer
-                .path
-                .as_ref()
-                .map(|path| path.to_string_lossy())
-                .as_deref()
-        ),
-        cli_config_format_name(layer.format),
-        cli_config_scope_name(layer.scope),
-        layer.trusted,
-        state == "applied",
+    Ok(CliConfigLayerJson {
+        id: layer.name.clone(),
+        version: 1,
+        name: layer.name.clone(),
+        layer_type: cli_config_layer_type_name(layer.scope),
+        precedence: index,
+        path: layer
+            .path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        format: cli_config_format_name(layer.format),
+        scope: cli_config_scope_name(layer.scope),
+        trusted: layer.trusted,
+        applied: state == "applied",
         state,
-        diagnostics_json(&diagnostics)?
-    ))
+        schema_version: 1,
+        diagnostics: cli_config_diagnostic_json_values(&diagnostics),
+    })
+}
+
+/// Structured JSON payload emitted for one config layer.
+#[derive(Serialize)]
+struct CliConfigLayerJson {
+    /// Stable layer identifier.
+    id: String,
+    /// Layer JSON schema version.
+    version: u32,
+    /// User-facing layer name.
+    name: String,
+    /// Layer type label.
+    layer_type: &'static str,
+    /// Layer precedence in effective config composition.
+    precedence: usize,
+    /// Config file path when the layer is file-backed.
+    path: Option<String>,
+    /// Config file format label.
+    format: &'static str,
+    /// Config scope label.
+    scope: &'static str,
+    /// Whether the layer is trusted.
+    trusted: bool,
+    /// Whether the layer was applied to effective config.
+    applied: bool,
+    /// User-facing layer state label.
+    state: &'static str,
+    /// Config schema version represented by this layer view.
+    schema_version: u32,
+    /// Validation diagnostics associated with the layer.
+    diagnostics: Vec<CliConfigDiagnosticJson>,
+}
+
+/// Structured JSON payload emitted for one config diagnostic.
+#[derive(Serialize)]
+struct CliConfigDiagnosticJson {
+    /// Diagnostic config path.
+    path: String,
+    /// Diagnostic message.
+    message: String,
+}
+
+/// Converts config diagnostics into typed CLI JSON payload values.
+fn cli_config_diagnostic_json_values(
+    diagnostics: &[ConfigDiagnostic],
+) -> Vec<CliConfigDiagnosticJson> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| CliConfigDiagnosticJson {
+            path: diagnostic.path.clone(),
+            message: diagnostic.message.clone(),
+        })
+        .collect()
 }
 
 /// Runs the cli config layer diagnostics operation for this subsystem.
