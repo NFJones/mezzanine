@@ -270,16 +270,11 @@ pub fn dispatch_control_request_for_client(
     let request = match parse_json_rpc_request(body) {
         Ok(request) => request,
         Err(error) => {
-            return json_rpc_error("null", -32600, error.message(), "invalid_request");
+            return invalid_control_request_response(&error);
         }
     };
     if let Err(error) = authorize_control_request(session, caller_client_id, &request) {
-        return json_rpc_error(
-            &request.id,
-            error_code(error.kind()),
-            error.message(),
-            mezzanine_error_code(error.kind()),
-        );
+        return control_error_response(&request, &error);
     }
     dispatch_parsed_to_response(&request, session, caller_client_id, mcp_registry)
 }
@@ -1192,15 +1187,38 @@ pub(super) fn dispatch_parsed_to_response(
     primary_client_id: &ClientId,
     mcp_registry: Option<&McpRegistry>,
 ) -> String {
-    match dispatch_parsed_request(request, session, primary_client_id, mcp_registry) {
+    control_result_response(
+        request,
+        dispatch_parsed_request(request, session, primary_client_id, mcp_registry),
+    )
+}
+
+/// Converts a parsed control dispatch result into its JSON-RPC envelope.
+///
+/// All control dispatch entry points use the same success and error envelope
+/// shape. Keeping that mapping in one helper prevents wrapper drift while
+/// preserving each entry point's authorization and subsystem-specific dispatch
+/// policy.
+fn control_result_response(request: &JsonRpcRequest, result: Result<String>) -> String {
+    match result {
         Ok(result) => json_rpc_success(&request.id, &result),
-        Err(error) => json_rpc_error(
-            &request.id,
-            error_code(error.kind()),
-            error.message(),
-            mezzanine_error_code(error.kind()),
-        ),
+        Err(error) => control_error_response(request, &error),
     }
+}
+
+/// Converts one parsed control error into a JSON-RPC error envelope.
+fn control_error_response(request: &JsonRpcRequest, error: &MezError) -> String {
+    json_rpc_error(
+        &request.id,
+        error_code(error.kind()),
+        error.message(),
+        mezzanine_error_code(error.kind()),
+    )
+}
+
+/// Converts a malformed control envelope into the standard invalid request response.
+fn invalid_control_request_response(error: &MezError) -> String {
+    json_rpc_error("null", -32600, error.message(), "invalid_request")
 }
 
 /// Runs the dispatch parsed request operation for this subsystem.
