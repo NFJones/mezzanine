@@ -911,10 +911,16 @@ fn parse_maap_action_batch_value(
         .enumerate()
         .map(|(index, value)| parse_maap_action_value(index, value))
         .collect::<Result<Vec<_>>>()?;
-    actions.retain(|action| match &action.payload {
-        AgentActionPayload::Say { text, .. } => !text.trim().is_empty(),
-        _ => true,
-    });
+    for (index, action) in actions.iter().enumerate() {
+        if let AgentActionPayload::Say { text, .. } = &action.payload
+            && text.trim().is_empty()
+        {
+            return Err(MezError::invalid_args(format!(
+                "maap action {} say text must not be empty",
+                synthesized_action_id(index)
+            )));
+        }
+    }
     for (index, action) in actions.iter_mut().enumerate() {
         action.id = synthesized_action_id(index);
     }

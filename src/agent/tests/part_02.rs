@@ -757,6 +757,29 @@ fn maap_batch_rejects_invalid_skill_names() {
     );
 }
 
+/// Verifies empty `say` text is rejected even when other actions are present.
+///
+/// Mixed batches used to silently drop malformed visible actions and continue
+/// executing the remaining batch. The parser should instead surface a direct
+/// diagnostic so the provider can repair the invalid `say` action.
+#[test]
+fn maap_parser_rejects_empty_say_text_in_mixed_batch() {
+    let error = parse_maap_action_batch_json_for_turn(
+        r#"{"rationale":"test action batch rationale","actions":[{"type":"say","status":"progress","text":"   "},{"type":"say","status":"final","text":"done"}]}"#,
+        "turn-1",
+        "agent-1",
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("maap action action-1 say text must not be empty"),
+        "{}",
+        error.message()
+    );
+}
+
 /// Verifies `say` content types are normalized at the MAAP boundary.
 ///
 /// New provider prompts require models to declare the presentation media type,
@@ -1018,11 +1041,14 @@ fn maap_batch_accepts_nonfinal_say_only_actions() {
     batch.validate(&turn(), &[], &[]).unwrap();
 }
 
-/// Verifies that empty provider-native `say` actions are treated as no-op
-/// presentation artifacts. Dropping them keeps a valid executable action from
-/// being rejected solely because the model emitted a blank auxiliary message.
+/// Verifies that empty provider-native `say` actions are rejected before batch
+/// validation.
+///
+/// Blank visible text previously disappeared before validation, allowing the
+/// runtime to execute the remaining batch without telling the provider which
+/// visible action was malformed.
 #[test]
-fn maap_parser_drops_empty_say_actions_before_validation() {
+fn maap_parser_rejects_empty_say_actions_before_validation() {
     let raw_text = serde_json::json!({
         "protocol": "maap/1",
         "turn_id": "turn-1",
@@ -1051,11 +1077,15 @@ fn maap_parser_drops_empty_say_actions_before_validation() {
     })
     .to_string();
 
-    let batch = parse_maap_action_batch_json(&raw_text).unwrap();
+    let error = parse_maap_action_batch_json(&raw_text).unwrap_err();
 
-    assert_eq!(batch.actions.len(), 1);
-    assert_eq!(batch.actions[0].id, "action-1");
-    batch.validate(&turn(), &[], &[]).unwrap();
+    assert!(
+        error
+            .message()
+            .contains("maap action action-1 say text must not be empty"),
+        "{}",
+        error.message()
+    );
 }
 
 /// Verifies maap batch rejects unavailable mcp server.
