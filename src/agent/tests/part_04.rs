@@ -996,6 +996,62 @@ fn openai_provider_http_error_includes_provider_message() {
     assert_eq!(failure_json["error"]["access_token"], "[REDACTED]");
 }
 
+/// Verifies provider HTTP failure sanitization redacts secret-like strings
+/// even when upstream places the credential under generic fields.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn openai_provider_http_error_redacts_secret_like_generic_values() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 401,
+            headers: Default::default(),
+            body: r#"{"error":{"message":"Bearer sk-test-secret leaked","type":"invalid_request_error","code":"bad_account","details":"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhY2N0In0.signaturex"}}"#.to_string(),
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        transport,
+    )
+    .unwrap();
+
+    let error = provider.send_request(&request).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(!error.message().contains("sk-test-secret"));
+    assert!(error.message().contains("[REDACTED]"));
+    let failure_json = error.provider_failure_json().unwrap();
+    assert!(!failure_json.contains("sk-test-secret"));
+    assert!(!failure_json.contains("eyJhbGciOiJIUzI1NiJ9"));
+    let failure_json: serde_json::Value = serde_json::from_str(failure_json).unwrap();
+    assert_eq!(failure_json["error"]["message"], "[REDACTED]");
+    assert_eq!(failure_json["error"]["details"], "[REDACTED]");
+}
+
 /// Verifies that streaming provider failure events preserve the structured
 /// failure object for runtime audit records. ChatGPT-backed OpenAI auth uses
 /// the streaming endpoint, so these diagnostics must survive SSE parsing.

@@ -71,7 +71,7 @@ const OPENAI_OAUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 
 /// Provider-issued bearer credential returned by OpenAI browser/device login.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OpenAiProviderCredential {
     /// Provider bearer credential returned by ChatGPT OAuth.
     pub api_key: String,
@@ -83,6 +83,23 @@ pub struct OpenAiProviderCredential {
     pub organization_id: Option<String>,
     /// Optional token expiry as a Unix timestamp string parsed from the ID token.
     pub token_expires_at: Option<String>,
+}
+
+impl std::fmt::Debug for OpenAiProviderCredential {
+    /// Formats provider credentials without exposing bearer or refresh tokens.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenAiProviderCredential")
+            .field("api_key", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("account_id", &self.account_id)
+            .field("organization_id", &self.organization_id)
+            .field("token_expires_at", &self.token_expires_at)
+            .finish()
+    }
 }
 
 /// Carries Pkce Codes state for this subsystem.
@@ -107,7 +124,7 @@ struct PkceCodes {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenResponse {
     /// Stores the access token value for this data structure.
     ///
@@ -132,6 +149,22 @@ struct TokenResponse {
     /// boundary and should remain aligned with the owning type invariant.
     #[serde(default, deserialize_with = "deserialize_optional_u64")]
     expires_in: Option<u64>,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    /// Formats OAuth token responses without exposing raw token material.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TokenResponse")
+            .field("access_token", &"[REDACTED]")
+            .field("id_token", &self.id_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("expires_in", &self.expires_in)
+            .finish()
+    }
 }
 
 /// Carries Device Code Response state for this subsystem.
@@ -1780,6 +1813,29 @@ mod tests {
         assert_eq!(credential.account_id.as_deref(), Some("acct_123"));
         assert_eq!(credential.organization_id.as_deref(), Some("org_123"));
         assert_eq!(credential.token_expires_at.as_deref(), Some("12345"));
+    }
+
+    /// Verifies debug formatting for OAuth token responses redacts token
+    /// material before conversion into persistent credential references.
+    ///
+    /// This regression scenario documents the behavior being protected so a
+    /// failure points at a concrete contract change rather than an incidental
+    /// implementation detail.
+    #[test]
+    fn token_response_debug_formatting_redacts_raw_tokens() {
+        let response = TokenResponse {
+            access_token: "access-secret".to_string(),
+            id_token: Some("id-secret".to_string()),
+            refresh_token: Some("refresh-secret".to_string()),
+            expires_in: Some(60),
+        };
+
+        let debug = format!("{response:?}");
+
+        assert!(!debug.contains("access-secret"));
+        assert!(!debug.contains("id-secret"));
+        assert!(!debug.contains("refresh-secret"));
+        assert!(debug.contains("expires_in"));
     }
 
     /// Verifies provider credential uses expires in for opaque access tokens.

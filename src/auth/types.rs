@@ -149,7 +149,7 @@ pub struct McpAuthStatus {
 }
 
 /// Secret-bearing MCP OAuth credential returned by a login or refresh flow.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct McpOAuthCredential {
     /// Access token used in the MCP Authorization header.
     pub access_token: String,
@@ -167,6 +167,26 @@ pub struct McpOAuthCredential {
     pub authorization_endpoint: Option<String>,
     /// Token endpoint used by login and refresh flows.
     pub token_endpoint: Option<String>,
+}
+
+impl std::fmt::Debug for McpOAuthCredential {
+    /// Formats MCP OAuth credentials without exposing bearer token material.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpOAuthCredential")
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("token_expires_at", &self.token_expires_at)
+            .field("scopes", &self.scopes)
+            .field("client_id", &self.client_id)
+            .field("resource", &self.resource)
+            .field("authorization_endpoint", &self.authorization_endpoint)
+            .field("token_endpoint", &self.token_endpoint)
+            .finish()
+    }
 }
 
 /// Secret-bearing credential class represented by an auth metadata record.

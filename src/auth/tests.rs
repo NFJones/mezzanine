@@ -4,8 +4,8 @@ use super::{
     AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthMethod, AuthPaths, AuthStore,
     CommandBackedCredentialStore, CredentialCommandOutput, CredentialCommandRunner,
     CredentialStore, CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, OpenAiProviderCredential, PrivateFileCredentialStore,
-    SECRET_TOOL_PROGRAM,
+    FileCredentialFallbackReason, McpOAuthCredential, OpenAiProviderCredential,
+    PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
 };
 use crate::error::Result;
 use secrecy::{ExposeSecret, SecretString};
@@ -245,6 +245,43 @@ fn metadata_rejects_obvious_secret_values() {
     let error = metadata.validate_non_secret().unwrap_err();
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
+}
+
+/// Verifies debug formatting for secret-bearing auth credentials redacts raw
+/// token material before credentials are persisted to secret storage.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn credential_debug_formatting_redacts_secret_tokens() {
+    let openai = OpenAiProviderCredential {
+        api_key: "access-secret".to_string(),
+        refresh_token: Some("refresh-secret".to_string()),
+        account_id: Some("acct_123".to_string()),
+        organization_id: Some("org_123".to_string()),
+        token_expires_at: Some("12345".to_string()),
+    };
+    let mcp = McpOAuthCredential {
+        access_token: "mcp-access-secret".to_string(),
+        refresh_token: Some("mcp-refresh-secret".to_string()),
+        token_expires_at: Some("12345".to_string()),
+        scopes: vec!["read".to_string()],
+        client_id: Some("public-client".to_string()),
+        resource: Some("https://example.test".to_string()),
+        authorization_endpoint: Some("https://example.test/auth".to_string()),
+        token_endpoint: Some("https://example.test/token".to_string()),
+    };
+
+    let openai_debug = format!("{openai:?}");
+    let mcp_debug = format!("{mcp:?}");
+
+    assert!(!openai_debug.contains("access-secret"));
+    assert!(!openai_debug.contains("refresh-secret"));
+    assert!(openai_debug.contains("acct_123"));
+    assert!(!mcp_debug.contains("mcp-access-secret"));
+    assert!(!mcp_debug.contains("mcp-refresh-secret"));
+    assert!(mcp_debug.contains("public-client"));
 }
 
 /// Verifies that new auth files record the non-secret credential kind so

@@ -15,7 +15,7 @@ pub(super) fn openai_provider_error_detail(body: &str) -> String {
     if body.trim().is_empty() {
         return "empty provider response".to_string();
     }
-    serde_json::from_str::<serde_json::Value>(body)
+    let detail = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|value| {
             value
@@ -26,7 +26,8 @@ pub(super) fn openai_provider_error_detail(body: &str) -> String {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
-        .unwrap_or_else(|| body.chars().take(240).collect())
+        .unwrap_or_else(|| body.chars().take(240).collect());
+    redact_or_truncate_provider_failure_text(&detail)
 }
 
 /// Runs the openai provider failure json operation for this subsystem.
@@ -413,9 +414,22 @@ fn sanitize_provider_failure_value(value: serde_json::Value) -> serde_json::Valu
                 .collect(),
         ),
         serde_json::Value::String(value) => {
-            serde_json::Value::String(truncate_provider_failure_text(&value))
+            serde_json::Value::String(redact_or_truncate_provider_failure_text(&value))
         }
         other => other,
+    }
+}
+
+/// Runs the redact or truncate provider failure text operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn redact_or_truncate_provider_failure_text(value: &str) -> String {
+    if provider_failure_text_contains_secret_like(value) {
+        "[REDACTED]".to_string()
+    } else {
+        truncate_provider_failure_text(value)
     }
 }
 
@@ -432,6 +446,73 @@ fn provider_failure_key_is_secret_like(key: &str) -> bool {
         || key.contains("refresh_token")
         || key.contains("secret")
         || key.contains("password")
+}
+
+/// Runs the provider failure text contains secret like operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn provider_failure_text_contains_secret_like(value: &str) -> bool {
+    value.contains("-----BEGIN")
+        || value
+            .split_whitespace()
+            .any(provider_failure_token_is_secret_like)
+}
+
+/// Runs the provider failure token is secret like operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn provider_failure_token_is_secret_like(token: &str) -> bool {
+    let token = token.trim_matches(|character: char| {
+        matches!(
+            character,
+            ',' | ';' | ':' | '.' | '!' | '?' | ')' | '(' | '[' | ']' | '{' | '}' | '"' | '\''
+        )
+    });
+    let lower = token.to_ascii_lowercase();
+    lower == "bearer"
+        || lower.starts_with("bearer=")
+        || lower.starts_with("sk-")
+        || lower.starts_with("sk_")
+        || lower.starts_with("sk-proj-")
+        || lower.starts_with("sk-ant-")
+        || lower.starts_with("xoxb-")
+        || lower.starts_with("ghp_")
+        || provider_failure_token_is_jwt_like(token)
+}
+
+/// Runs the provider failure token is jwt like operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn provider_failure_token_is_jwt_like(token: &str) -> bool {
+    let mut segments = token.split('.');
+    let Some(header) = segments.next() else {
+        return false;
+    };
+    let Some(payload) = segments.next() else {
+        return false;
+    };
+    let Some(signature) = segments.next() else {
+        return false;
+    };
+    segments.next().is_none()
+        && [header, payload, signature]
+            .into_iter()
+            .all(|segment| segment.len() >= 8 && segment.chars().all(is_base64_url_character))
+}
+
+/// Runs the is base64 url character operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+fn is_base64_url_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '-' || character == '_'
 }
 
 /// Runs the truncate provider failure text operation for this subsystem.
