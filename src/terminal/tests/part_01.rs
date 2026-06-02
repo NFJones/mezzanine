@@ -993,6 +993,24 @@ fn parses_sgr_mouse_press_drag_release_and_scroll() {
     assert_eq!(scroll.button, MouseButton::WheelDown);
 }
 
+/// Verifies malformed SGR mouse packets with extra fields are rejected.
+///
+/// SGR mouse packets must contain exactly `code;column;row` before the final
+/// button-state byte. Accepting surplus fields lets malformed terminal input
+/// trigger mux mouse actions using only the leading coordinates, so this
+/// regression protects the parser boundary and the higher-level key classifier.
+#[test]
+fn rejects_sgr_mouse_packets_with_extra_fields() {
+    assert!(parse_sgr_mouse(b"\x1b[<0;12;5;999M").unwrap().is_none());
+    assert!(
+        !matches!(
+            classify_terminal_input(b"\x1b[<0;12;5;999M", &KeyBindings::default()).unwrap(),
+            TerminalInputClassification::Mouse(_)
+        ),
+        "malformed SGR mouse input must not be classified as a mux mouse event"
+    );
+}
+
 /// Verifies classifies mouse actions for resize selection scroll and forwarding.
 ///
 /// This regression scenario documents the behavior being protected so a

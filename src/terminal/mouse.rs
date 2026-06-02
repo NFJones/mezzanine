@@ -745,7 +745,7 @@ pub fn parse_sgr_mouse(input: &[u8]) -> Result<Option<MouseEvent>> {
     };
     let body = &rest[..rest.len().saturating_sub(final_byte.len_utf8())];
     let fields = body.split(';').collect::<Vec<_>>();
-    if fields.len() < 3 {
+    if fields.len() != 3 {
         return Ok(None);
     }
     let Ok(code) = fields[0].parse::<u16>() else {
