@@ -9,10 +9,10 @@ use super::{
     Args, CliEnv, CliOutputFormat, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
     DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, MezError, PathBuf,
-    ProjectTrustRecord, ProjectTrustStore, Result, Subcommand, TrustDecision, Write,
+    ProjectTrustRecord, ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
     compose_effective_config, default_trust_database_path, diagnostics_json, discover_project_root,
-    fs, json_escape, json_optional, persist_config_mutation, render_cli_help, validate_config_file,
-    validate_config_text, write_json_or_plain,
+    fs, json_escape, json_optional, persist_config_mutation, render_cli_help, serialize_json,
+    validate_config_file, validate_config_text, write_json_or_plain,
 };
 
 // Config and project-trust subcommands.
@@ -709,7 +709,7 @@ pub(super) fn run_config_trust<W: Write>(
     let mut store = ProjectTrustStore::load_from_file(&trust_path)?;
     match args.command.unwrap_or(ConfigTrustCliCommand::List) {
         ConfigTrustCliCommand::List => {
-            let output = project_records_json(store.records());
+            let output = project_records_json(store.records())?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         ConfigTrustCliCommand::Inspect { root } => {
@@ -719,7 +719,7 @@ pub(super) fn run_config_trust<W: Write>(
                     "project trust record not found",
                 ));
             };
-            let output = project_record_json(record);
+            let output = project_record_json(record)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         ConfigTrustCliCommand::Trust { root } => {
@@ -783,7 +783,7 @@ fn persist_config_trust_decision<W: Write>(
             "project trust record not found after decision",
         )
     })?;
-    let output = project_record_json(record);
+    let output = project_record_json(record)?;
     write_json_or_plain(stdout, output_format, &output)?;
     Ok(())
 }
@@ -837,14 +837,11 @@ pub(super) fn json_string_array(values: &[String]) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn project_records_json<'a>(
     records: impl Iterator<Item = &'a ProjectTrustRecord>,
-) -> String {
-    format!(
-        "[{}]",
-        records
-            .map(project_record_json)
-            .collect::<Vec<_>>()
-            .join(",")
-    )
+) -> Result<String> {
+    let records = records
+        .map(ProjectTrustRecordJson::from)
+        .collect::<Vec<_>>();
+    serialize_json(&records)
 }
 
 /// Runs the project record json operation for this subsystem.
@@ -852,23 +849,44 @@ pub(super) fn project_records_json<'a>(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn project_record_json(record: &ProjectTrustRecord) -> String {
-    format!(
-        r#"{{"project_root":"{}","state":"{}","git_marker_path":{},"trusted_at_unix_seconds":{},"trust_policy_version":{},"configuration_schema_version":{},"vcs_remote":{}}}"#,
-        json_escape(&record.project_root.to_string_lossy()),
-        trust_decision_name(record.state),
-        json_optional(
-            record
+pub(super) fn project_record_json(record: &ProjectTrustRecord) -> Result<String> {
+    serialize_json(&ProjectTrustRecordJson::from(record))
+}
+
+/// Structured JSON payload emitted for one project trust record.
+#[derive(Serialize)]
+struct ProjectTrustRecordJson {
+    /// Canonical project root path associated with the trust record.
+    project_root: String,
+    /// Current trust decision label.
+    state: &'static str,
+    /// Canonical Git marker path used to bind trust when available.
+    git_marker_path: Option<String>,
+    /// Unix timestamp recording when the decision was made.
+    trusted_at_unix_seconds: u64,
+    /// Trust policy version recorded with the decision.
+    trust_policy_version: u32,
+    /// Configuration schema version recorded with the decision.
+    configuration_schema_version: u32,
+    /// VCS remote recorded with the decision when available.
+    vcs_remote: Option<String>,
+}
+
+impl From<&ProjectTrustRecord> for ProjectTrustRecordJson {
+    fn from(record: &ProjectTrustRecord) -> Self {
+        Self {
+            project_root: record.project_root.to_string_lossy().into_owned(),
+            state: trust_decision_name(record.state),
+            git_marker_path: record
                 .git_marker_path
                 .as_ref()
-                .map(|path| path.to_string_lossy())
-                .as_deref()
-        ),
-        record.trusted_at_unix_seconds,
-        record.trust_policy_version,
-        record.configuration_schema_version,
-        json_optional(record.vcs_remote.as_deref())
-    )
+                .map(|path| path.to_string_lossy().into_owned()),
+            trusted_at_unix_seconds: record.trusted_at_unix_seconds,
+            trust_policy_version: record.trust_policy_version,
+            configuration_schema_version: record.configuration_schema_version,
+            vcs_remote: record.vcs_remote.clone(),
+        }
+    }
 }
 
 /// Runs the trust decision name operation for this subsystem.
