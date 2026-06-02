@@ -29,6 +29,7 @@ use super::{
 };
 use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
+    provider_event_error_from_parts, provider_event_error_kind,
 };
 use crate::audit::AuditDeferredWrite;
 use crate::control::{decode_control_frame, encode_control_body};
@@ -2122,7 +2123,7 @@ impl AsyncRuntimeSessionActor {
             .unwrap_or(0)
             .saturating_add(1);
         let delay_ms = provider_retry_delay_ms(attempt);
-        let error = provider_event_error(
+        let error = provider_event_error_from_parts(
             &kind,
             &message,
             provider_failure_json.as_deref(),
@@ -3839,45 +3840,6 @@ fn provider_failure_is_retryable(
             | ProviderErrorRetryClass::OutputLimit
             | ProviderErrorRetryClass::RetryableTransport
     )
-}
-
-/// Runs the provider event error operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_event_error(
-    kind: &str,
-    message: &str,
-    provider_failure_json: Option<&str>,
-    provider_raw_text: Option<&str>,
-) -> MezError {
-    let mut error = MezError::new(provider_event_error_kind(kind), message);
-    if let Some(raw_text) = provider_raw_text {
-        error = error.with_provider_raw_text(raw_text.to_string());
-    }
-    if let Some(failure_json) = provider_failure_json {
-        error = error.with_provider_failure_json(failure_json.to_string());
-    }
-    error
-}
-
-/// Runs the provider event error kind operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_event_error_kind(kind: &str) -> crate::error::MezErrorKind {
-    match kind {
-        "invalid_args" | "InvalidArgs" => crate::error::MezErrorKind::InvalidArgs,
-        "config" | "Config" => crate::error::MezErrorKind::Config,
-        "io" | "Io" => crate::error::MezErrorKind::Io,
-        "conflict" | "Conflict" => crate::error::MezErrorKind::Conflict,
-        "not_found" | "NotFound" => crate::error::MezErrorKind::NotFound,
-        "forbidden" | "Forbidden" => crate::error::MezErrorKind::Forbidden,
-        "not_implemented" | "NotImplemented" => crate::error::MezErrorKind::NotImplemented,
-        _ => crate::error::MezErrorKind::InvalidState,
-    }
 }
 
 /// Runs the provider poll schedule timer key operation for this subsystem.

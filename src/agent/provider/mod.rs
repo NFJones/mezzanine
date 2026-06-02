@@ -41,6 +41,7 @@ use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
 pub(crate) use errors::{
     ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
+    provider_event_error_from_parts, provider_event_error_kind,
 };
 use errors::{
     openai_provider_error_detail, openai_provider_failure_json, provider_maap_parse_error,

@@ -143,6 +143,45 @@ pub(crate) fn provider_error_retry_class_from_parts(
     }
 }
 
+/// Converts a serialized provider-event error kind into a Mezzanine error kind.
+///
+/// Async provider workers carry error kinds as strings across actor channels.
+/// Keeping this parser beside provider retry classification and error-envelope
+/// construction prevents runtime and async-runtime copies from drifting.
+pub(crate) fn provider_event_error_kind(kind: &str) -> crate::error::MezErrorKind {
+    match kind {
+        "invalid_args" | "InvalidArgs" => crate::error::MezErrorKind::InvalidArgs,
+        "config" | "Config" => crate::error::MezErrorKind::Config,
+        "io" | "Io" => crate::error::MezErrorKind::Io,
+        "conflict" | "Conflict" => crate::error::MezErrorKind::Conflict,
+        "not_found" | "NotFound" => crate::error::MezErrorKind::NotFound,
+        "forbidden" | "Forbidden" => crate::error::MezErrorKind::Forbidden,
+        "not_implemented" | "NotImplemented" => crate::error::MezErrorKind::NotImplemented,
+        _ => crate::error::MezErrorKind::InvalidState,
+    }
+}
+
+/// Builds a provider/runtime error envelope from serialized provider-event fields.
+///
+/// The resulting `MezError` preserves the structured provider failure payload
+/// and raw provider text while sharing the event-kind parser used by retry
+/// classification.
+pub(crate) fn provider_event_error_from_parts(
+    kind: &str,
+    message: &str,
+    provider_failure_json: Option<&str>,
+    provider_raw_text: Option<&str>,
+) -> MezError {
+    let mut error = MezError::new(provider_event_error_kind(kind), message);
+    if let Some(raw_text) = provider_raw_text {
+        error = error.with_provider_raw_text(raw_text.to_string());
+    }
+    if let Some(failure_json) = provider_failure_json {
+        error = error.with_provider_failure_json(failure_json.to_string());
+    }
+    error
+}
+
 /// Extracts an HTTP status code from provider failure diagnostics.
 fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u16> {
     let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;

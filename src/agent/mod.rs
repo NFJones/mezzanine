@@ -157,6 +157,7 @@ pub use provider::{
 };
 pub(crate) use provider::{
     ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
+    provider_event_error_from_parts, provider_event_error_kind,
 };
 #[cfg(test)]
 pub(crate) use provider::{
