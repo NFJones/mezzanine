@@ -818,7 +818,6 @@ pub(super) async fn run_foreground_control_daemon(
     service
         .set_agent_transcript_store(AgentTranscriptStore::under_config_root(config.root.clone()));
     let auth_store = AuthStore::new(AuthPaths::under_config_root(&config.root));
-    spawn_openai_auth_refresh_if_needed(auth_store.clone());
     service.set_auth_store(auth_store);
     let trust_path = default_trust_database_path(&config.root);
     service.set_project_trust_store(
@@ -827,6 +826,12 @@ pub(super) async fn run_foreground_control_daemon(
     );
     let snapshot_repository = SnapshotRepository::new(config.root.join("snapshots"));
     service.replace_config_layers_async(config.layers).await?;
+    if let Some(auth_store) = service.auth_store().cloned() {
+        spawn_openai_auth_refresh_if_needed(
+            auth_store,
+            service.provider_auth_refresh_leeway_seconds(),
+        );
+    }
     match startup {
         RuntimeDaemonStartup::Initial { explicit_command } => {
             service.start_initial_pane_process(explicit_command.as_deref())?;
@@ -923,12 +928,15 @@ pub(super) async fn run_foreground_control_daemon(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn spawn_openai_auth_refresh_if_needed(auth_store: AuthStore) -> bool {
-    match auth_store.openai_refresh_needed_soon() {
+pub(super) fn spawn_openai_auth_refresh_if_needed(
+    auth_store: AuthStore,
+    leeway_seconds: u64,
+) -> bool {
+    match auth_store.openai_refresh_needed_with_leeway(leeway_seconds) {
         Ok(true) => {
             tokio::spawn(async move {
                 let _ = auth_store
-                    .refresh_openai_provider_credential_if_needed_async()
+                    .refresh_openai_provider_credential_if_needed_with_leeway_async(leeway_seconds)
                     .await;
             });
             true

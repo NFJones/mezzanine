@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 8
+version = 9
 
 [session]
 detach_behavior = "keep-running"
@@ -439,6 +439,7 @@ observer_policy = "primary-approval"
 auth_file = "auth.toml"
 credential_store = "auto"
 default_profile = "default"
+provider_refresh_leeway_seconds = 86400
 
 [instructions]
 global_files = []

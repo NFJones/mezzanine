@@ -796,39 +796,55 @@ impl AsyncRuntimeSessionActor {
                 let result = self
                     .service
                     .ensure_runtime_mcp_transports_discovered_async()
-                    .await
-                    .and_then(|_| {
-                        self.service
-                            .claim_configured_agent_provider_task(&agent_id, &turn_id)
-                    })
-                    .and_then(|dispatch| {
-                        if let Some(dispatch) = dispatch {
-                            self.next_provider_claim_timer_generation =
-                                self.next_provider_claim_timer_generation.saturating_add(1);
-                            let generation = self.next_provider_claim_timer_generation;
-                            self.service.record_claimed_agent_provider_task(
-                                &dispatch,
+                    .await;
+                let result = match result {
+                    Ok(_) => {
+                        let refresh_result =
+                            if let Some(auth_store) = self.service.auth_store().cloned() {
+                                let leeway_seconds =
+                                    self.service.provider_auth_refresh_leeway_seconds();
+                                auth_store
+                                    .refresh_openai_provider_credential_if_needed_with_leeway_async(
+                                        leeway_seconds,
+                                    )
+                                    .await
+                                    .map(|_| ())
+                            } else {
+                                Ok(())
+                            };
+                        refresh_result.and_then(|_| {
+                            self.service
+                                .claim_configured_agent_provider_task(&agent_id, &turn_id)
+                        })
+                    }
+                    Err(error) => Err(error),
+                };
+                let result = result.and_then(|dispatch| {
+                    if let Some(dispatch) = dispatch {
+                        self.next_provider_claim_timer_generation =
+                            self.next_provider_claim_timer_generation.saturating_add(1);
+                        let generation = self.next_provider_claim_timer_generation;
+                        self.service.record_claimed_agent_provider_task(
+                            &dispatch,
+                            generation,
+                            DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
+                        )?;
+                        self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                            key: RuntimeTimerKey::new(
+                                RuntimeTimerKind::ProviderClaim,
+                                turn_id.clone(),
                                 generation,
-                                DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-                            )?;
-                            self.queue_runtime_side_effects(vec![
-                                RuntimeSideEffect::ScheduleTimer {
-                                    key: RuntimeTimerKey::new(
-                                        RuntimeTimerKind::ProviderClaim,
-                                        turn_id.clone(),
-                                        generation,
-                                    ),
-                                    delay_ms: DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-                                },
-                            ])?;
-                            self.queue_deferred_pane_io_side_effects_from_service()?;
-                            Ok(Some(dispatch))
-                        } else {
-                            self.queue_deferred_pane_io_side_effects_from_service()?;
-                            self.queue_shell_transaction_timer_side_effects()?;
-                            Ok(None)
-                        }
-                    });
+                            ),
+                            delay_ms: DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
+                        }])?;
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        Ok(Some(dispatch))
+                    } else {
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_shell_transaction_timer_side_effects()?;
+                        Ok(None)
+                    }
+                });
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {

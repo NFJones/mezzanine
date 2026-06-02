@@ -50,9 +50,10 @@ use super::{
     runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
     runtime_pane_frame_visible_fields_from_config, runtime_pane_frames_enabled_from_config,
     runtime_parse_approval_policy, runtime_permission_policy_from_config,
-    runtime_preset_registry_from_config, runtime_provider_registry_from_config,
-    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
-    runtime_terminal_clipboard_from_config, runtime_terminal_cursor_blink_from_config,
+    runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
+    runtime_provider_registry_from_config, runtime_subagent_profiles_from_config,
+    runtime_subagent_wait_policy_from_config, runtime_terminal_clipboard_from_config,
+    runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_reduced_motion_from_config,
     runtime_terminal_render_rate_limit_fps_from_config,
@@ -287,6 +288,8 @@ impl RuntimeSessionService {
             agent_personality_selections: BTreeMap::new(),
             model_profile_overrides: RuntimeModelProfileOverrideStore::default(),
             auth_store: None,
+            provider_auth_refresh_leeway_seconds:
+                crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
             audit_log: None,
             defer_audit_writes: false,
             agent_scheduler: AgentScheduler::with_default_limit(),
@@ -785,6 +788,8 @@ impl RuntimeSessionService {
             runtime_agent_action_failure_retry_limit_from_config(&structured)?;
         self.agent_implementation_pressure_after_shell_actions =
             runtime_agent_implementation_pressure_after_shell_actions_from_config(&structured)?;
+        self.provider_auth_refresh_leeway_seconds =
+            runtime_provider_auth_refresh_leeway_seconds_from_config(&structured);
         self.agent_auto_sizing = runtime_agent_auto_sizing_from_config(&structured)?;
         self.agent_scheduler
             .set_max_concurrent_agents(max_concurrent_agents)?;
@@ -1707,6 +1712,11 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn auth_store(&self) -> Option<&AuthStore> {
         self.auth_store.as_ref()
+    }
+
+    /// Returns the configured provider auth refresh leeway in seconds.
+    pub fn provider_auth_refresh_leeway_seconds(&self) -> u64 {
+        self.provider_auth_refresh_leeway_seconds
     }
 
     /// Runs the set auth store operation for this subsystem.

@@ -706,7 +706,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
     let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
 
     assert_eq!(layers.len(), 1);
-    assert_eq!(effective.get("version"), Some("8"));
+    assert_eq!(effective.get("version"), Some("9"));
     assert_eq!(
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
@@ -715,7 +715,8 @@ fn startup_config_layers_migrate_existing_primary_config() {
         effective.get("agents.implementation_pressure_after_shell_actions"),
         Some("3")
     );
-    assert!(migrated.contains("version = 8"));
+    assert!(migrated.contains("version = 9"));
+    assert!(migrated.contains("provider_refresh_leeway_seconds = 86400"));
     assert!(migrated.contains("implementation_pressure_after_shell_actions = 3"));
     assert!(migrated.contains("[model_presets.deepseek]"));
     assert!(!migrated.contains("nested_muxxer"));
@@ -741,12 +742,12 @@ fn startup_config_layers_discover_project_overlays_and_apply_trust() {
     fs::create_dir_all(project.join(".mezzanine")).unwrap();
     fs::write(
         project.join(".mezzanine/config.toml"),
-        "version = 8\n[history]\nlines = 7\n",
+        "version = 9\n[history]\nlines = 7\n",
     )
     .unwrap();
     fs::write(
         nested.join(".mezzanine/config.toml"),
-        "version = 8\n[history]\nlines = 11\n",
+        "version = 9\n[history]\nlines = 11\n",
     )
     .unwrap();
 
@@ -1089,7 +1090,8 @@ fn serve_skips_background_auth_refresh_when_openai_token_is_still_fresh() {
         .unwrap();
 
     assert!(!super::serve::spawn_openai_auth_refresh_if_needed(
-        auth_store
+        auth_store,
+        crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
     ));
 
     let _ = fs::remove_dir_all(home);

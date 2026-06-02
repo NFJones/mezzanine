@@ -452,6 +452,12 @@ and raw credential-store references, even though local auth metadata may retain
 those non-secret but privacy-sensitive fields for provider selection and token
 refresh.
 
+Provider OAuth credentials are proactively refreshed when their persisted expiry
+metadata is within the configured refresh leeway. The default leeway is 24 hours
+(`auth.provider_refresh_leeway_seconds = 86400`); daemon startup checks this in
+the background, and each agent turn checks it before making its first provider
+API request.
+
 OpenAI ChatGPT browser/device login uses a built-in public native-app OAuth
 client id. That identifier is request metadata, not a secret, and Mezzanine does
 not store any paired OpenAI OAuth client secret in this repository or in user

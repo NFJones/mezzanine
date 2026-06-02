@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use secrecy::{ExposeSecret, SecretString};
 
@@ -43,11 +43,11 @@ const OPENAI_PROVIDER: &str = "openai";
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const OPENAI_REFRESH_CREDENTIAL_NAME: &str = "openai-refresh";
-/// Defines the OPENAI REFRESH LEEWAY const used by this subsystem.
+/// Defines the DEFAULT PROVIDER AUTH REFRESH LEEWAY SECONDS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const OPENAI_REFRESH_LEEWAY: Duration = Duration::from_secs(5 * 60);
+pub const DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS: u64 = 24 * 60 * 60;
 
 /// Carries Auth Store state for this subsystem.
 ///
@@ -897,13 +897,22 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn openai_refresh_needed_soon(&self) -> Result<bool> {
+        self.openai_refresh_needed_with_leeway(DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS)
+    }
+
+    /// Checks whether OpenAI provider auth should be refreshed within a custom leeway.
+    ///
+    /// # Parameters
+    /// - `leeway_seconds`: Number of seconds before token expiry that should
+    ///   trigger proactive refresh.
+    pub fn openai_refresh_needed_with_leeway(&self, leeway_seconds: u64) -> Result<bool> {
         let Some(metadata) = self.read_metadata_for_provider(OPENAI_PROVIDER)? else {
             return Ok(false);
         };
         Ok(openai_refresh_needed_at(
             &metadata,
             current_unix_seconds()?,
-            OPENAI_REFRESH_LEEWAY.as_secs(),
+            leeway_seconds,
         ))
     }
 
@@ -913,14 +922,25 @@ impl AuthStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn refresh_openai_provider_credential_if_needed_async(&self) -> Result<bool> {
+        self.refresh_openai_provider_credential_if_needed_with_leeway_async(
+            DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
+        )
+        .await
+    }
+
+    /// Refreshes OpenAI provider auth when expiry is within a custom leeway.
+    ///
+    /// # Parameters
+    /// - `leeway_seconds`: Number of seconds before token expiry that should
+    ///   trigger proactive refresh.
+    pub async fn refresh_openai_provider_credential_if_needed_with_leeway_async(
+        &self,
+        leeway_seconds: u64,
+    ) -> Result<bool> {
         let Some(mut metadata) = self.read_metadata_for_provider(OPENAI_PROVIDER)? else {
             return Ok(false);
         };
-        if !openai_refresh_needed_at(
-            &metadata,
-            current_unix_seconds()?,
-            OPENAI_REFRESH_LEEWAY.as_secs(),
-        ) {
+        if !openai_refresh_needed_at(&metadata, current_unix_seconds()?, leeway_seconds) {
             return Ok(false);
         }
         let Some(refresh_reference) = metadata.refresh_credential_store_ref.as_deref() else {

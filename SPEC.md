@@ -2687,8 +2687,12 @@ server entry MUST support `name`, `command`, and `args` for stdio servers,
 server approval settings, tool approval settings, and declared external
 capability metadata.
 
-The `auth` table MUST support `auth_file`, `credential_store`, and
-`default_profile`. It MUST NOT contain secret material.
+The `auth` table MUST support `auth_file`, `credential_store`,
+`default_profile`, and `provider_refresh_leeway_seconds`.
+`auth.provider_refresh_leeway_seconds` MUST be an integer number of seconds,
+MUST default to `86400`, and defines how far before stored provider access-token
+expiry Mezzanine starts proactive refresh. The `auth` table MUST NOT contain
+secret material.
 
 The `instructions` table MUST support `global_files`, `project_filenames`,
 `max_bytes`, `include_hidden_directories`, and `on_truncation`.
@@ -5799,7 +5803,9 @@ bounded recovery is exhausted and the turn is being failed.
 When a persisted provider access token has expiration metadata and a refresh
 credential-store reference, Mezzanine SHOULD attempt a background refresh during
 session daemon startup before the token expires or immediately when it is
-already expired. Startup MUST NOT block on that refresh attempt.
+already expired. Startup MUST NOT block on that refresh attempt. Mezzanine MUST
+also check and, when needed, complete provider access-token refresh before the
+first provider API request of every agent turn.
 
 Mezzanine MUST provide a logout command that revokes, deletes, or invalidates
 locally persisted credentials to the extent permitted by the provider.

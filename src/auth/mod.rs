@@ -61,7 +61,7 @@ pub use openai_oauth::{
     run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
 };
 pub use secret_service::NativeSecretServiceCredentialStore;
-pub use store::AuthStore;
+pub use store::{AuthStore, DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS};
 pub use types::{
     AuthCredentialKind, AuthCredentialState, AuthFlowPlan, AuthInteractivePromptPlan, AuthMetadata,
     AuthMethod, AuthPaths, AuthPromptAction, AuthStatus, CredentialStore,

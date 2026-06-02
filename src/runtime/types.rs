@@ -3901,6 +3901,11 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) auth_store: Option<AuthStore>,
+    /// Seconds before provider access-token expiry that triggers proactive refresh.
+    ///
+    /// The field is part of structured runtime state so startup and provider
+    /// turn preflight checks use the same configured threshold.
+    pub(super) provider_auth_refresh_leeway_seconds: u64,
     /// Stores the audit log value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

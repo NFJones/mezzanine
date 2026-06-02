@@ -3493,6 +3493,13 @@ pub(super) fn runtime_json_u64(value: Option<&Value>) -> Option<u64> {
     value.and_then(Value::as_u64)
 }
 
+/// Returns the configured provider auth refresh leeway in seconds.
+pub(super) fn runtime_provider_auth_refresh_leeway_seconds_from_config(root: &Value) -> u64 {
+    runtime_json_object(root, "auth")
+        .and_then(|auth| runtime_json_u64(auth.get("provider_refresh_leeway_seconds")))
+        .unwrap_or(crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS)
+}
+
 /// Runs the runtime json string array operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
