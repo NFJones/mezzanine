@@ -141,30 +141,49 @@ fn split_requested_size(original: Size, default_created: Size, spec: PaneSizeSpe
             columns.unwrap_or(default_created.columns),
             rows.unwrap_or(default_created.rows),
         ),
-        PaneSizeSpec::Percent { percent, axis } => {
-            if percent == 0 {
-                return Err(MezError::invalid_args(
-                    "percent split size requires a positive percent",
-                ));
-            }
-            let columns = if matches!(axis, ResizeAxis::Columns | ResizeAxis::Both) {
-                scaled_dimension(original.columns, percent, "columns")?
-            } else {
-                default_created.columns
-            };
-            let rows = if matches!(axis, ResizeAxis::Rows | ResizeAxis::Both) {
-                scaled_dimension(original.rows, percent, "rows")?
-            } else {
-                default_created.rows
-            };
-            Size::new(columns, rows)
-        }
+        PaneSizeSpec::Percent { percent, axis } => percent_size_for_axis(
+            original,
+            default_created,
+            percent,
+            axis,
+            "percent split size requires a positive percent",
+            "percent split size",
+        ),
         PaneSizeSpec::Delta { direction, amount }
         | PaneSizeSpec::Edge {
             edge: direction,
             amount,
         } => split_size_from_direction(default_created, direction, amount),
     }
+}
+
+/// Applies percentage scaling only to the dimensions selected by a resize axis.
+///
+/// Percent-based split and resize operations share the same axis handling: the
+/// selected dimensions are scaled from a source size, while unselected
+/// dimensions keep their fallback values.
+pub(super) fn percent_size_for_axis(
+    source: Size,
+    fallback: Size,
+    percent: u16,
+    axis: ResizeAxis,
+    positive_error: &'static str,
+    range_error_prefix: &'static str,
+) -> Result<Size> {
+    if percent == 0 {
+        return Err(MezError::invalid_args(positive_error));
+    }
+    let columns = if matches!(axis, ResizeAxis::Columns | ResizeAxis::Both) {
+        scaled_dimension(source.columns, percent, "columns", range_error_prefix)?
+    } else {
+        fallback.columns
+    };
+    let rows = if matches!(axis, ResizeAxis::Rows | ResizeAxis::Both) {
+        scaled_dimension(source.rows, percent, "rows", range_error_prefix)?
+    } else {
+        fallback.rows
+    };
+    Size::new(columns, rows)
 }
 
 /// Runs the split size from direction operation for this subsystem.
@@ -218,13 +237,18 @@ fn split_size_from_direction(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn scaled_dimension(total: u16, percent: u16, axis: &'static str) -> Result<u16> {
+fn scaled_dimension(
+    total: u16,
+    percent: u16,
+    axis: &'static str,
+    range_error_prefix: &'static str,
+) -> Result<u16> {
     let scaled = u32::from(total)
         .saturating_mul(u32::from(percent))
         .saturating_add(99)
         / 100;
     u16::try_from(scaled.max(1))
-        .map_err(|_| MezError::invalid_args(format!("percent split size {axis} is out of range")))
+        .map_err(|_| MezError::invalid_args(format!("{range_error_prefix} {axis} is out of range")))
 }
 
 /// Runs the split dimension evenly operation for this subsystem.

@@ -60,7 +60,9 @@ pub(crate) fn range_overlap_u16(
         .saturating_sub(first_start.max(second_start))
 }
 
-use sizing::{even_grid_dimensions, split_dimension_evenly, split_size_with_spec};
+use sizing::{
+    even_grid_dimensions, percent_size_for_axis, split_dimension_evenly, split_size_with_spec,
+};
 use targeting::pane_matches_target;
 
 /// Exposes the tests module boundary.

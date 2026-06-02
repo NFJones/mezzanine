@@ -7,8 +7,8 @@ use super::{
     IdFactory, LayoutNode, LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, Pane,
     PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, ResizeAxis,
     ResizeDirection, RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId,
-    WindowNameSource, even_grid_dimensions, pane_matches_target, range_overlap_u16,
-    split_dimension_evenly, split_size, split_size_with_spec,
+    WindowNameSource, even_grid_dimensions, pane_matches_target, percent_size_for_axis,
+    range_overlap_u16, split_dimension_evenly, split_size, split_size_with_spec,
 };
 
 impl Window {
@@ -945,24 +945,14 @@ impl Window {
                     rows.unwrap_or(current.rows),
                 )
             }
-            PaneSizeSpec::Percent { percent, axis } => {
-                if percent == 0 {
-                    return Err(MezError::invalid_args(
-                        "percent resize requires a positive percent",
-                    ));
-                }
-                let columns = if matches!(axis, ResizeAxis::Columns | ResizeAxis::Both) {
-                    scaled_dimension(self.size.columns, percent, "columns")?
-                } else {
-                    current.columns
-                };
-                let rows = if matches!(axis, ResizeAxis::Rows | ResizeAxis::Both) {
-                    scaled_dimension(self.size.rows, percent, "rows")?
-                } else {
-                    current.rows
-                };
-                Size::new(columns, rows)
-            }
+            PaneSizeSpec::Percent { percent, axis } => percent_size_for_axis(
+                self.size,
+                current,
+                percent,
+                axis,
+                "percent resize requires a positive percent",
+                "percent resize",
+            ),
             PaneSizeSpec::Delta { direction, amount }
             | PaneSizeSpec::Edge {
                 edge: direction,
