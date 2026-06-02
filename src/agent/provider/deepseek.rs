@@ -17,6 +17,7 @@ use super::{
     ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
+use crate::sse::parse_sse_events;
 use std::collections::BTreeMap;
 
 /// DeepSeek request strategy for provider-native MAAP transport.
@@ -1040,8 +1041,11 @@ fn parse_deepseek_chat_completions_stream_body(
     let mut usage = ModelTokenUsage::default();
     let mut finish_reason: Option<String> = None;
 
-    for line in body.lines() {
-        let data = line.strip_prefix("data: ").unwrap_or(line);
+    for event in parse_sse_events(
+        body,
+        "DeepSeek stream response did not contain SSE data events",
+    )? {
+        let data = event.data.trim();
         if data == "[DONE]" || data.is_empty() {
             continue;
         }

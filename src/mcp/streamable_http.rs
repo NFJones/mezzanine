@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::error::{MezError, Result};
+use crate::sse::parse_sse_events;
 
 use super::protocol::{
     build_mcp_default_initialize_request, build_mcp_initialized_notification,
@@ -412,22 +413,13 @@ fn header_value(headers: &BTreeMap<String, String>, name: &str) -> Option<String
 /// on duplicated control-flow logic.
 fn extract_sse_json_rpc_response(body: &str, expected_id: u64) -> Result<String> {
     let expected = expected_id.to_string();
-    let mut data = String::new();
-    for line in body.lines().chain(std::iter::once("")) {
-        if let Some(value) = line.strip_prefix("data:") {
-            data.push_str(value.trim_start());
-            continue;
+    for event in parse_sse_events(
+        body,
+        "streamable HTTP MCP SSE response did not contain SSE data events",
+    )? {
+        if json_id_matches(&event.data, expected.as_str()) {
+            return Ok(event.data);
         }
-        if !line.trim().is_empty() {
-            continue;
-        }
-        if data.is_empty() {
-            continue;
-        }
-        if json_id_matches(&data, expected.as_str()) {
-            return Ok(data);
-        }
-        data.clear();
     }
     Err(MezError::invalid_state(
         "streamable HTTP MCP SSE response did not contain the expected JSON-RPC id",

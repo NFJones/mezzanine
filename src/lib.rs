@@ -159,6 +159,11 @@ pub mod skills;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod snapshot;
+/// Exposes shared server-sent event parsing helpers.
+///
+/// The nested module keeps provider and integration streaming parsers aligned
+/// without hiding their transport-specific completion policies.
+pub(crate) mod sse;
 /// Exposes the subagent module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

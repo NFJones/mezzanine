@@ -9,6 +9,7 @@ use super::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 use super::schema::OpenAiMaapToolSurface;
 use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
 use crate::error::{MezError, Result};
+use crate::sse::parse_sse_events;
 use std::collections::BTreeMap;
 
 /// Maximum native function-call argument bytes accepted from OpenAI responses.
@@ -272,30 +273,16 @@ fn openai_cached_input_tokens(value: &serde_json::Value) -> Option<u64> {
 
 /// Parses OpenAI SSE data events into event-name/data pairs.
 fn parse_sse_data_events(body: &str) -> Result<Vec<(Option<String>, String)>> {
-    let mut events = Vec::new();
-    for block in body.replace("\r\n", "\n").split("\n\n") {
-        let mut event_name = None;
-        let mut data_lines = Vec::new();
-        for line in block.lines() {
-            if line.is_empty() || line.starts_with(':') {
-                continue;
-            }
-            if let Some(value) = line.strip_prefix("event:") {
-                event_name = Some(value.trim().to_string());
-            } else if let Some(value) = line.strip_prefix("data:") {
-                data_lines.push(value.trim_start().to_string());
-            }
-        }
-        if !data_lines.is_empty() {
-            events.push((event_name, data_lines.join("\n")));
-        }
-    }
-    if events.is_empty() {
-        return Err(MezError::invalid_state(
-            "OpenAI stream response did not contain SSE data events",
-        ));
-    }
-    Ok(events)
+    parse_sse_events(
+        body,
+        "OpenAI stream response did not contain SSE data events",
+    )
+    .map(|events| {
+        events
+            .into_iter()
+            .map(|event| (event.name, event.data))
+            .collect()
+    })
 }
 
 /// Returns a human-readable error detail from an OpenAI stream event.
