@@ -3380,6 +3380,14 @@ pub struct RuntimeAgentProviderDispatch {
     /// Optional router provider for auto-sizing when different from the main
     /// turn provider. When set, auto-sizing requests use this provider.
     pub auto_sizing_provider: Option<RuntimeAgentProviderDispatchProvider>,
+    /// Providers that may be selected by automatic sizing target profiles.
+    ///
+    /// The async provider worker runs outside the runtime actor after the
+    /// router decision is known. Carrying target providers with the dispatch
+    /// lets cross-provider routing use the selected profile instead of falling
+    /// back to the originally active provider.
+    pub auto_sizing_target_providers:
+        std::collections::BTreeMap<String, RuntimeAgentProviderDispatchProvider>,
     /// Stores the provider value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

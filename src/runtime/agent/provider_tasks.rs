@@ -249,6 +249,51 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        let mut auto_sizing_target_providers = std::collections::BTreeMap::new();
+        if let Some(auto_sizing) = auto_sizing.as_ref() {
+            for provider_id in [
+                auto_sizing.small.profile.provider.as_str(),
+                auto_sizing.medium.profile.provider.as_str(),
+                auto_sizing.large.profile.provider.as_str(),
+            ] {
+                if provider_id == model_profile.provider
+                    || auto_sizing_target_providers.contains_key(provider_id)
+                {
+                    continue;
+                }
+                let Some(target_provider_config) =
+                    self.provider_registry.provider(provider_id).cloned()
+                else {
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!("auto_sizing target provider `{provider_id}` is not configured"),
+                    )?;
+                    continue;
+                };
+                match self.runtime_dispatch_provider_from_config(
+                    provider_id,
+                    &target_provider_config,
+                    "provider_request",
+                ) {
+                    Ok(provider) => {
+                        auto_sizing_target_providers.insert(provider_id.to_string(), provider);
+                    }
+                    Err(error) => {
+                        self.append_agent_trace_turn_event(
+                            &turn.pane_id,
+                            &turn.turn_id,
+                            &format!(
+                                "auto_sizing target provider unavailable provider={} error_kind={} error={}",
+                                provider_id,
+                                runtime_mezzanine_error_code(error.kind()),
+                                error.message()
+                            ),
+                        )?;
+                    }
+                }
+            }
+        }
         if let Some(block) = self.run_configured_pre_action_hooks(
             HookEvent::AgentTurnStart,
             &runtime_agent_turn_start_hook_payload(&turn, &model_profile),
@@ -344,6 +389,7 @@ impl RuntimeSessionService {
             model_profile,
             auto_sizing,
             auto_sizing_provider,
+            auto_sizing_target_providers,
             provider,
             permission_policy,
             session_approvals: self.session_approvals.clone(),

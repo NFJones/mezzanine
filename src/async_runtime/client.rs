@@ -19,10 +19,10 @@ use super::{
     run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
 use crate::agent::{
-    ActionResult, ActionStatus, AgentActionPayload, AgentContext, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
-    ModelTokenUsageKey, ProviderErrorRetryClass, ReqwestProviderHttpTransport,
+    ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
+    AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage, ModelMessageRole,
+    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderErrorRetryClass, ReqwestProviderHttpTransport,
     execute_network_action_with_transport_async, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
@@ -1268,6 +1268,7 @@ async fn execute_runtime_agent_provider_dispatch(
         mut model_profile,
         auto_sizing,
         auto_sizing_provider,
+        auto_sizing_target_providers,
         provider,
         permission_policy,
         session_approvals,
@@ -1276,8 +1277,8 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_servers,
         available_mcp_tools,
     } = dispatch;
-    let main_model_provider = model_profile.provider.clone();
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
+    let mut selected_auto_sizing_profile: Option<ModelProfile> = None;
     if let Some(auto_sizing) = auto_sizing.as_ref()
         && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
     {
@@ -1294,9 +1295,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
                 );
-                if auto_sizing_execution.selected_profile.provider == main_model_provider {
-                    model_profile = auto_sizing_execution.selected_profile;
-                }
+                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
             }
             RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
                 let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
@@ -1310,9 +1309,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
                 );
-                if auto_sizing_execution.selected_profile.provider == main_model_provider {
-                    model_profile = auto_sizing_execution.selected_profile;
-                }
+                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
             }
             RuntimeAgentProviderDispatchProvider::OpenAiCompatible(router_provider) => {
                 let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
@@ -1326,28 +1323,68 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
                 );
-                if auto_sizing_execution.selected_profile.provider == main_model_provider {
-                    model_profile = auto_sizing_execution.selected_profile;
-                }
+                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
             }
         }
     }
+    let mut provider = provider;
+    if selected_auto_sizing_profile.is_none()
+        && let Some(auto_sizing) = auto_sizing.as_ref()
+        && auto_sizing.router_profile.provider == provider.provider_id()
+    {
+        selected_auto_sizing_profile = match &provider {
+            RuntimeAgentProviderDispatchProvider::OpenAi(router_provider) => {
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                Some(auto_sizing_execution.selected_profile)
+            }
+            RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                Some(auto_sizing_execution.selected_profile)
+            }
+            RuntimeAgentProviderDispatchProvider::OpenAiCompatible(router_provider) => {
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                Some(auto_sizing_execution.selected_profile)
+            }
+        };
+    }
+    (provider, model_profile) = runtime_provider_dispatch_after_auto_sizing(
+        provider,
+        model_profile,
+        selected_auto_sizing_profile,
+        &auto_sizing_target_providers,
+    );
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
-            let auto_sizing_result = runtime_apply_same_provider_auto_sizing_if_needed(
-                &provider,
-                model_profile,
-                auto_sizing_provider.is_some(),
-                auto_sizing.as_ref(),
-                &turn,
-                &context,
-            )
-            .await;
-            model_profile = auto_sizing_result.0;
-            merge_model_token_usage_by_model(
-                &mut routing_token_usage_by_model,
-                auto_sizing_result.1,
-            );
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1367,20 +1404,6 @@ async fn execute_runtime_agent_provider_dispatch(
             Ok(execution)
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
-            let auto_sizing_result = runtime_apply_same_provider_auto_sizing_if_needed(
-                &provider,
-                model_profile,
-                auto_sizing_provider.is_some(),
-                auto_sizing.as_ref(),
-                &turn,
-                &context,
-            )
-            .await;
-            model_profile = auto_sizing_result.0;
-            merge_model_token_usage_by_model(
-                &mut routing_token_usage_by_model,
-                auto_sizing_result.1,
-            );
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1400,20 +1423,6 @@ async fn execute_runtime_agent_provider_dispatch(
             Ok(execution)
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-            let auto_sizing_result = runtime_apply_same_provider_auto_sizing_if_needed(
-                &provider,
-                model_profile,
-                auto_sizing_provider.is_some(),
-                auto_sizing.as_ref(),
-                &turn,
-                &context,
-            )
-            .await;
-            model_profile = auto_sizing_result.0;
-            merge_model_token_usage_by_model(
-                &mut routing_token_usage_by_model,
-                auto_sizing_result.1,
-            );
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -1433,6 +1442,30 @@ async fn execute_runtime_agent_provider_dispatch(
             Ok(execution)
         }
     }
+}
+
+/// Applies a router-selected profile to the async provider dispatch.
+///
+/// Async provider workers run after the runtime actor has already constructed
+/// concrete provider clients. When automatic sizing selects a profile owned by
+/// a different configured provider, the worker must switch to the carried
+/// target provider instead of silently keeping the originally active provider.
+fn runtime_provider_dispatch_after_auto_sizing(
+    provider: RuntimeAgentProviderDispatchProvider,
+    current_profile: ModelProfile,
+    selected_profile: Option<ModelProfile>,
+    target_providers: &std::collections::BTreeMap<String, RuntimeAgentProviderDispatchProvider>,
+) -> (RuntimeAgentProviderDispatchProvider, ModelProfile) {
+    let Some(selected_profile) = selected_profile else {
+        return (provider, current_profile);
+    };
+    if selected_profile.provider == provider.provider_id() {
+        return (provider, selected_profile);
+    }
+    if let Some(target_provider) = target_providers.get(&selected_profile.provider).cloned() {
+        return (target_provider, selected_profile);
+    }
+    (provider, current_profile)
 }
 
 /// Executes runtime-owned network actions before returning provider work to the
@@ -1516,13 +1549,14 @@ fn async_agent_turn_state_from_action_results(
 
 /// Applies auto-sizing with the main provider when no separate router provider
 /// was constructed for the turn.
+#[cfg(test)]
 async fn runtime_apply_same_provider_auto_sizing_if_needed<P: AsyncModelProvider>(
     provider: &P,
     current_profile: ModelProfile,
     has_separate_router_provider: bool,
     auto_sizing: Option<&crate::runtime::RuntimeAutoSizingDispatch>,
     turn: &AgentTurnRecord,
-    context: &AgentContext,
+    context: &crate::agent::AgentContext,
 ) -> (
     ModelProfile,
     std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
@@ -1793,6 +1827,73 @@ mod tests {
             allowed_reasoning_efforts: vec!["high".to_string(), "xhigh".to_string()],
             fallback_policy: RuntimeAutoSizingFallbackPolicy::UseDefaultProfile,
         }
+    }
+
+    /// Verifies async provider dispatch switches to a carried target provider
+    /// when routing selects a profile owned by a different provider id.
+    ///
+    /// The async worker runs after the runtime actor has already built concrete
+    /// provider clients. Cross-provider auto-sizing decisions therefore need to
+    /// replace both the effective model profile and provider client before the
+    /// normal provider request is sent, otherwise routing silently falls back to
+    /// the previously active provider.
+    #[test]
+    fn auto_sizing_dispatch_switches_to_selected_target_provider() {
+        let current_provider = crate::agent::OpenAiResponsesProvider::without_auth(
+            "http://127.0.0.1/current",
+            1_000,
+            BTreeMap::new(),
+            false,
+            ReqwestProviderHttpTransport,
+        )
+        .unwrap()
+        .with_provider_id("current")
+        .unwrap();
+        let target_provider = crate::agent::OpenAiResponsesProvider::without_auth(
+            "http://127.0.0.1/target",
+            1_000,
+            BTreeMap::new(),
+            false,
+            ReqwestProviderHttpTransport,
+        )
+        .unwrap()
+        .with_provider_id("target")
+        .unwrap();
+        let mut target_providers = BTreeMap::new();
+        target_providers.insert(
+            "target".to_string(),
+            RuntimeAgentProviderDispatchProvider::OpenAi(target_provider),
+        );
+        let current_profile = ModelProfile {
+            provider: "current".to_string(),
+            model: "current-model".to_string(),
+            reasoning_profile: Some("medium".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: BTreeMap::new(),
+            safety_tier: None,
+        };
+        let selected_profile = ModelProfile {
+            provider: "target".to_string(),
+            model: "target-model".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: BTreeMap::new(),
+            safety_tier: None,
+        };
+
+        let (provider, profile) = runtime_provider_dispatch_after_auto_sizing(
+            RuntimeAgentProviderDispatchProvider::OpenAi(current_provider),
+            current_profile,
+            Some(selected_profile),
+            &target_providers,
+        );
+
+        assert_eq!(provider.provider_id(), "target");
+        assert_eq!(profile.provider, "target");
+        assert_eq!(profile.model, "target-model");
+        assert_eq!(profile.reasoning_profile.as_deref(), Some("high"));
     }
 
     /// Verifies model-backed compaction retries output-limit provider failures
