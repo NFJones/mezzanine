@@ -8,9 +8,10 @@ use super::{
     Args, AuthPaths, AuthStore, BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer,
     ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths,
     ConfigScope, DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore,
-    Result, Subcommand, TrustDecision, Write, compose_effective_config,
+    Result, Serialize, Subcommand, TrustDecision, Write, compose_effective_config,
     default_trust_database_path, discover_existing_overlays, discover_project_root, fs,
-    json_escape, json_optional, migrate_config_file, persist_config_mutation, write_json_or_plain,
+    json_escape, json_optional, migrate_config_file, persist_config_mutation, serialize_json,
+    write_json_or_plain,
 };
 use crate::auth::{
     AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
@@ -125,27 +126,14 @@ pub(super) async fn run_mcp<W: Write>(
                 .as_deref()
                 .and_then(|reference| reference.split_once(':').map(|(prefix, _)| prefix))
                 .unwrap_or("unknown");
-            let output = format!(
-                r#"{{"server_id":"{}","authenticated":true,"metadata_present":true,"credential_store":"{}","url_origin":"{}","url_fingerprint":"{}","token_expires_at":{},"scopes":{}}}"#,
-                json_escape(&id),
-                json_escape(credential_store_name),
-                json_escape(&metadata.url_origin),
-                json_escape(&metadata.url_fingerprint),
-                json_optional(metadata.token_expires_at.as_deref()),
-                string_list_json(&metadata.scopes)
-            );
+            let output = mcp_login_json(&id, credential_store_name, &metadata)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Logout { id } => {
             validate_config_identifier(&id, "MCP server id")?;
             let store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
             let changed = store.logout_mcp_server(&id)?;
-            let output = format!(
-                r#"{{"server_id":"{}","logged_out":{},"changed":{}}}"#,
-                json_escape(&id),
-                changed,
-                changed
-            );
+            let output = mcp_logout_json(&id, changed)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Status { id } => {
@@ -158,7 +146,7 @@ pub(super) async fn run_mcp<W: Write>(
                 binding.url_origin.as_deref(),
                 binding.url_fingerprint.as_deref(),
             )?;
-            let output = mcp_status_json(&binding, &status);
+            let output = mcp_status_json(&binding, &status)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Add {
@@ -215,23 +203,21 @@ pub(super) async fn run_mcp<W: Write>(
                     ConfigMutation::set_string_array(format!("mcp_servers.{}.args", id), &[]),
                 )?);
             }
-            let output = format!(
-                r#"{{"server_id":"{}","changed":{},"reload_required":{}}}"#,
-                json_escape(&id),
+            let output = mcp_mutation_json(
+                &id,
                 mutation_plans_changed(&plans),
-                mutation_plans_reload_required(&plans)
-            );
+                mutation_plans_reload_required(&plans),
+            )?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Remove { id } => {
             validate_config_identifier(&id, "MCP server id")?;
             let plans = persist_mcp_server_removal(&paths, &id)?;
-            let output = format!(
-                r#"{{"server_id":"{}","removed":true,"changed":{},"reload_required":{}}}"#,
-                json_escape(&id),
+            let output = mcp_remove_json(
+                &id,
                 mutation_plans_changed(&plans),
-                mutation_plans_reload_required(&plans)
-            );
+                mutation_plans_reload_required(&plans),
+            )?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Enable { id } => {
@@ -241,13 +227,7 @@ pub(super) async fn run_mcp<W: Write>(
                 &paths,
                 ConfigMutation::set_boolean(format!("mcp_servers.{id}.enabled"), enabled),
             )?;
-            let output = format!(
-                r#"{{"server_id":"{}","enabled":{},"changed":{},"reload_required":{}}}"#,
-                json_escape(&id),
-                enabled,
-                plan.changed,
-                plan.reload_required
-            );
+            let output = mcp_enabled_json(&id, enabled, plan.changed, plan.reload_required)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Disable { id } => {
@@ -257,13 +237,7 @@ pub(super) async fn run_mcp<W: Write>(
                 &paths,
                 ConfigMutation::set_boolean(format!("mcp_servers.{id}.enabled"), enabled),
             )?;
-            let output = format!(
-                r#"{{"server_id":"{}","enabled":{},"changed":{},"reload_required":{}}}"#,
-                json_escape(&id),
-                enabled,
-                plan.changed,
-                plan.reload_required
-            );
+            let output = mcp_enabled_json(&id, enabled, plan.changed, plan.reload_required)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
     }
@@ -599,6 +573,104 @@ struct McpAuthBinding {
     bearer_token_env: Option<String>,
 }
 
+/// Typed JSON output for successful MCP login flows.
+#[derive(Serialize)]
+struct McpLoginJson {
+    /// Stable configured server identifier.
+    server_id: String,
+    /// Whether a usable credential is now available.
+    authenticated: bool,
+    /// Whether metadata exists for the configured server.
+    metadata_present: bool,
+    /// Credential backend selected for the stored secret.
+    credential_store: String,
+    /// Origin component of the configured MCP server URL.
+    url_origin: String,
+    /// Stable fingerprint of the full configured MCP URL.
+    url_fingerprint: String,
+    /// Optional Unix-seconds access-token expiration timestamp.
+    token_expires_at: Option<String>,
+    /// Optional non-secret OAuth scopes attached to the credential.
+    scopes: Vec<String>,
+}
+
+/// Typed JSON output for secret-safe MCP auth status.
+#[derive(Serialize)]
+struct McpStatusJson {
+    /// Stable configured server identifier.
+    server_id: String,
+    /// Configured transport label.
+    transport: String,
+    /// Secret-safe auth mode name.
+    auth_mode: String,
+    /// Whether a usable credential is currently available.
+    authenticated: bool,
+    /// Whether metadata exists for this server.
+    metadata_present: bool,
+    /// Whether the stored credential URL binding mismatches config.
+    stale_url: bool,
+    /// Secret-safe credential availability state name.
+    credential_state: String,
+    /// Environment variable used for bearer auth, when configured.
+    bearer_token_env: Option<String>,
+    /// URL origin used to bind stored OAuth credentials.
+    url_origin: Option<String>,
+    /// Stable fingerprint of the full configured URL.
+    url_fingerprint: Option<String>,
+    /// Optional Unix-seconds access-token expiration timestamp.
+    token_expires_at: Option<String>,
+    /// Optional non-secret OAuth scopes attached to the credential.
+    scopes: Vec<String>,
+}
+
+/// Typed JSON output for MCP logout flows.
+#[derive(Serialize)]
+struct McpLogoutJson {
+    /// Stable configured server identifier.
+    server_id: String,
+    /// Whether the credential is now logged out.
+    logged_out: bool,
+    /// Whether any stored state changed.
+    changed: bool,
+}
+
+/// Typed JSON output for MCP config mutations.
+#[derive(Serialize)]
+struct McpMutationJson {
+    /// Stable configured server identifier.
+    server_id: String,
+    /// Whether any persisted state changed.
+    changed: bool,
+    /// Whether the runtime must reload configuration.
+    reload_required: bool,
+}
+
+/// Typed JSON output for MCP server removals.
+#[derive(Serialize)]
+struct McpRemoveJson {
+    /// Stable configured server identifier.
+    server_id: String,
+    /// Whether the server was removed.
+    removed: bool,
+    /// Whether any persisted state changed.
+    changed: bool,
+    /// Whether the runtime must reload configuration.
+    reload_required: bool,
+}
+
+/// Typed JSON output for MCP enable or disable operations.
+#[derive(Serialize)]
+struct McpEnabledJson {
+    /// Stable configured server identifier.
+    server_id: String,
+    /// Whether the server is enabled after the mutation.
+    enabled: bool,
+    /// Whether any persisted state changed.
+    changed: bool,
+    /// Whether the runtime must reload configuration.
+    reload_required: bool,
+}
+
 /// Resolves the configured auth binding for status output.
 fn configured_mcp_auth_binding(effective: &EffectiveConfig, id: &str) -> Result<McpAuthBinding> {
     let prefix = format!("mcp_servers.{id}.");
@@ -678,15 +750,6 @@ fn url_fingerprint(url: &str) -> String {
     format!("sha256:{hex}")
 }
 
-/// Renders a JSON array of strings.
-fn string_list_json(values: &[String]) -> String {
-    let values = values
-        .iter()
-        .map(|value| format!("\"{}\"", json_escape(value)))
-        .collect::<Vec<_>>();
-    format!("[{}]", values.join(","))
-}
-
 /// Runs a blocking MCP auth-store operation off the async CLI task.
 async fn run_mcp_auth_store_operation<T, F>(operation: F) -> Result<T>
 where
@@ -710,8 +773,26 @@ fn login_mcp_oauth_credential_for_cli(
     store.login_mcp_oauth_credential_with_selected_store(metadata, credential, credential_store)
 }
 
+/// Renders successful MCP login output through typed JSON serialization.
+fn mcp_login_json(
+    id: &str,
+    credential_store_name: &str,
+    metadata: &McpAuthMetadata,
+) -> Result<String> {
+    serialize_json(&McpLoginJson {
+        server_id: id.to_string(),
+        authenticated: true,
+        metadata_present: true,
+        credential_store: credential_store_name.to_string(),
+        url_origin: metadata.url_origin.clone(),
+        url_fingerprint: metadata.url_fingerprint.clone(),
+        token_expires_at: metadata.token_expires_at.clone(),
+        scopes: metadata.scopes.clone(),
+    })
+}
+
 /// Renders secret-safe MCP auth status as JSON.
-fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> String {
+fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> Result<String> {
     let auth_mode = if binding.bearer_token_env.is_some() {
         "env-bearer"
     } else if status.metadata_present {
@@ -722,27 +803,69 @@ fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> String {
     let scopes = status
         .metadata
         .as_ref()
-        .map(|metadata| string_list_json(&metadata.scopes))
-        .unwrap_or_else(|| "[]".to_string());
-    let expiry = status
+        .map(|metadata| metadata.scopes.clone())
+        .unwrap_or_default();
+    let token_expires_at = status
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.token_expires_at.as_deref());
-    format!(
-        r#"{{"server_id":"{}","transport":"{}","auth_mode":"{}","authenticated":{},"metadata_present":{},"stale_url":{},"credential_state":"{}","bearer_token_env":{},"url_origin":{},"url_fingerprint":{},"token_expires_at":{},"scopes":{}}}"#,
-        json_escape(&binding.id),
-        binding.transport,
-        auth_mode,
-        status.authenticated,
-        status.metadata_present,
-        status.stale_url,
-        mcp_credential_state_name(&status.credential_state),
-        json_optional(binding.bearer_token_env.as_deref()),
-        json_optional(binding.url_origin.as_deref()),
-        json_optional(binding.url_fingerprint.as_deref()),
-        json_optional(expiry),
-        scopes
-    )
+        .and_then(|metadata| metadata.token_expires_at.clone());
+    serialize_json(&McpStatusJson {
+        server_id: binding.id.clone(),
+        transport: binding.transport.to_string(),
+        auth_mode: auth_mode.to_string(),
+        authenticated: status.authenticated,
+        metadata_present: status.metadata_present,
+        stale_url: status.stale_url,
+        credential_state: mcp_credential_state_name(&status.credential_state).to_string(),
+        bearer_token_env: binding.bearer_token_env.clone(),
+        url_origin: binding.url_origin.clone(),
+        url_fingerprint: binding.url_fingerprint.clone(),
+        token_expires_at,
+        scopes,
+    })
+}
+
+/// Renders MCP logout output through typed JSON serialization.
+fn mcp_logout_json(id: &str, changed: bool) -> Result<String> {
+    serialize_json(&McpLogoutJson {
+        server_id: id.to_string(),
+        logged_out: changed,
+        changed,
+    })
+}
+
+/// Renders MCP config mutation output through typed JSON serialization.
+fn mcp_mutation_json(id: &str, changed: bool, reload_required: bool) -> Result<String> {
+    serialize_json(&McpMutationJson {
+        server_id: id.to_string(),
+        changed,
+        reload_required,
+    })
+}
+
+/// Renders MCP server removal output through typed JSON serialization.
+fn mcp_remove_json(id: &str, changed: bool, reload_required: bool) -> Result<String> {
+    serialize_json(&McpRemoveJson {
+        server_id: id.to_string(),
+        removed: true,
+        changed,
+        reload_required,
+    })
+}
+
+/// Renders MCP enable or disable output through typed JSON serialization.
+fn mcp_enabled_json(
+    id: &str,
+    enabled: bool,
+    changed: bool,
+    reload_required: bool,
+) -> Result<String> {
+    serialize_json(&McpEnabledJson {
+        server_id: id.to_string(),
+        enabled,
+        changed,
+        reload_required,
+    })
 }
 
 /// Returns the stable display name for a secret-safe credential state.
@@ -826,4 +949,82 @@ pub(super) fn mcp_tools_json(registry: &McpRegistry) -> String {
         })
         .collect::<Vec<_>>();
     format!("[{}]", tools.join(","))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{CredentialStoreKind, McpCredentialKind};
+
+    /// Verifies typed MCP status JSON preserves the existing secret-safe field
+    /// order and null-handling expected by CLI scripts.
+    #[test]
+    fn mcp_status_json_preserves_secret_safe_output_shape() {
+        let binding = McpAuthBinding {
+            id: "demo".to_string(),
+            transport: "streamable_http",
+            url: Some("https://example.invalid/mcp".to_string()),
+            url_origin: Some("https://example.invalid".to_string()),
+            url_fingerprint: Some("sha256:abc".to_string()),
+            bearer_token_env: None,
+        };
+        let status = McpAuthStatus {
+            server_id: "demo".to_string(),
+            authenticated: true,
+            metadata_present: true,
+            credential_state: AuthCredentialState::Available {
+                store: CredentialStoreKind::OperatingSystem,
+                reference: "os-keyring:demo".to_string(),
+            },
+            metadata: Some(McpAuthMetadata {
+                server_id: "demo".to_string(),
+                credential_kind: McpCredentialKind::OAuthBearer,
+                url_origin: "https://example.invalid".to_string(),
+                url_fingerprint: "sha256:abc".to_string(),
+                scopes: vec!["scope:read".to_string(), "scope:write".to_string()],
+                client_id: None,
+                resource: None,
+                authorization_endpoint: None,
+                token_endpoint: None,
+                credential_store_ref: Some("os-keyring:demo".to_string()),
+                refresh_credential_store_ref: None,
+                token_expires_at: Some("1700000000".to_string()),
+            }),
+            stale_url: false,
+        };
+
+        let output = mcp_status_json(&binding, &status).unwrap();
+
+        assert_eq!(
+            output,
+            r#"{"server_id":"demo","transport":"streamable_http","auth_mode":"oauth","authenticated":true,"metadata_present":true,"stale_url":false,"credential_state":"available","bearer_token_env":null,"url_origin":"https://example.invalid","url_fingerprint":"sha256:abc","token_expires_at":"1700000000","scopes":["scope:read","scope:write"]}"#
+        );
+    }
+
+    /// Verifies typed MCP login JSON preserves the CLI contract for
+    /// credential-store, expiry, and scope fields.
+    #[test]
+    fn mcp_login_json_preserves_secret_safe_output_shape() {
+        let metadata = McpAuthMetadata {
+            server_id: "demo".to_string(),
+            credential_kind: McpCredentialKind::OAuthBearer,
+            url_origin: "https://example.invalid".to_string(),
+            url_fingerprint: "sha256:def".to_string(),
+            scopes: vec!["scope:read".to_string()],
+            client_id: None,
+            resource: None,
+            authorization_endpoint: None,
+            token_endpoint: None,
+            credential_store_ref: Some("file:demo".to_string()),
+            refresh_credential_store_ref: None,
+            token_expires_at: None,
+        };
+
+        let output = mcp_login_json("demo", "file", &metadata).unwrap();
+
+        assert_eq!(
+            output,
+            r#"{"server_id":"demo","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:def","token_expires_at":null,"scopes":["scope:read"]}"#
+        );
+    }
 }

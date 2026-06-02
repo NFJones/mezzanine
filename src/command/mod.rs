@@ -24,6 +24,46 @@ use crate::layout::{
 use crate::session::Session;
 use crate::terminal::{KeyBindings, KeyChord, KeyCode};
 
+/// Builds stable `key=value` command output lines with a caller-selected separator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyValueLine {
+    /// Separator inserted between successive `key=value` fields.
+    separator: &'static str,
+    /// Accumulated `key=value` fields in emission order.
+    fields: Vec<String>,
+}
+
+impl KeyValueLine {
+    /// Creates a space-separated key-value output line.
+    pub(crate) fn spaced() -> Self {
+        Self::new(" ")
+    }
+
+    /// Creates a colon-separated key-value output line.
+    pub(crate) fn colon_separated() -> Self {
+        Self::new(":")
+    }
+
+    /// Creates a key-value output line with the provided field separator.
+    pub(crate) fn new(separator: &'static str) -> Self {
+        Self {
+            separator,
+            fields: Vec::new(),
+        }
+    }
+
+    /// Appends one `key=value` field while preserving insertion order.
+    pub(crate) fn push(mut self, key: &str, value: impl std::fmt::Display) -> Self {
+        self.fields.push(format!("{key}={value}"));
+        self
+    }
+
+    /// Finishes the accumulated output line.
+    pub(crate) fn finish(self) -> String {
+        self.fields.join(self.separator)
+    }
+}
+
 /// Exposes the dispatch module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

@@ -7,9 +7,9 @@
 use super::{
     AuthMethod, AuthStatus, AuthStore, CommandInvocation, ConfigFormat, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
-    MezError, Result, credential_store_kind_name, flag_value, fs, persist_config_mutation,
-    persist_config_text, plan_config_mutation, positional_args, repeated_flag_values,
-    validate_command_identifier,
+    KeyValueLine, MezError, Result, credential_store_kind_name, flag_value, fs,
+    persist_config_mutation, persist_config_text, plan_config_mutation, positional_args,
+    repeated_flag_values, validate_command_identifier,
 };
 use crate::auth::selected_auth_method_from_flags;
 use crate::config::parse_config_json_value;
@@ -467,18 +467,28 @@ pub(super) fn auth_status_store_display(status: AuthStatus) -> String {
         .map(|metadata| metadata.selected_model_profile.as_str())
         .unwrap_or("none");
     match status.credential_state {
-        crate::auth::AuthCredentialState::Available { store, .. } => format!(
-            "authenticated=true provider={provider} profile={profile} credential_store={} source=auth-store",
-            credential_store_kind_name(store)
-        ),
-        crate::auth::AuthCredentialState::LoggedOut => {
-            "authenticated=false provider=none profile=none state=logged-out source=auth-store"
-                .to_string()
-        }
-        crate::auth::AuthCredentialState::MissingSecret { reference } => format!(
-            "authenticated=false provider={provider} profile={profile} state=missing-secret reference_present={} source=auth-store",
-            reference.is_some()
-        ),
+        crate::auth::AuthCredentialState::Available { store, .. } => KeyValueLine::spaced()
+            .push("authenticated", true)
+            .push("provider", provider)
+            .push("profile", profile)
+            .push("credential_store", credential_store_kind_name(store))
+            .push("source", "auth-store")
+            .finish(),
+        crate::auth::AuthCredentialState::LoggedOut => KeyValueLine::spaced()
+            .push("authenticated", false)
+            .push("provider", "none")
+            .push("profile", "none")
+            .push("state", "logged-out")
+            .push("source", "auth-store")
+            .finish(),
+        crate::auth::AuthCredentialState::MissingSecret { reference } => KeyValueLine::spaced()
+            .push("authenticated", false)
+            .push("provider", provider)
+            .push("profile", profile)
+            .push("state", "missing-secret")
+            .push("reference_present", reference.is_some())
+            .push("source", "auth-store")
+            .finish(),
     }
 }
 
@@ -489,24 +499,29 @@ pub(super) fn auth_status_store_display(status: AuthStatus) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn mcp_status_store_display(status: crate::auth::McpAuthStatus) -> String {
     match status.credential_state {
-        crate::auth::AuthCredentialState::Available { store, .. } => format!(
-            "server={} authenticated={} metadata_present={} stale_url={} credential_store={} source=auth-store",
-            status.server_id,
-            status.authenticated,
-            status.metadata_present,
-            status.stale_url,
-            credential_store_kind_name(store)
-        ),
-        crate::auth::AuthCredentialState::LoggedOut => format!(
-            "server={} authenticated=false metadata_present=false state=logged-out source=auth-store",
-            status.server_id
-        ),
-        crate::auth::AuthCredentialState::MissingSecret { reference } => format!(
-            "server={} authenticated=false metadata_present={} stale_url={} state=missing-secret reference_present={} source=auth-store",
-            status.server_id,
-            status.metadata_present,
-            status.stale_url,
-            reference.is_some()
-        ),
+        crate::auth::AuthCredentialState::Available { store, .. } => KeyValueLine::spaced()
+            .push("server", &status.server_id)
+            .push("authenticated", status.authenticated)
+            .push("metadata_present", status.metadata_present)
+            .push("stale_url", status.stale_url)
+            .push("credential_store", credential_store_kind_name(store))
+            .push("source", "auth-store")
+            .finish(),
+        crate::auth::AuthCredentialState::LoggedOut => KeyValueLine::spaced()
+            .push("server", &status.server_id)
+            .push("authenticated", false)
+            .push("metadata_present", false)
+            .push("state", "logged-out")
+            .push("source", "auth-store")
+            .finish(),
+        crate::auth::AuthCredentialState::MissingSecret { reference } => KeyValueLine::spaced()
+            .push("server", &status.server_id)
+            .push("authenticated", false)
+            .push("metadata_present", status.metadata_present)
+            .push("stale_url", status.stale_url)
+            .push("state", "missing-secret")
+            .push("reference_present", reference.is_some())
+            .push("source", "auth-store")
+            .finish(),
     }
 }

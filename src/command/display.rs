@@ -6,9 +6,10 @@
 
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
-    MezError, Result, Session, baseline_commands, explicit_shell_command_flag, flag_value,
-    mcp_server_id, mcp_transport_target, positional_args, positional_args_before_double_dash,
-    repeated_flag_values, shell_command_after_double_dash, shell_command_from_words,
+    KeyValueLine, MezError, Result, Session, baseline_commands, explicit_shell_command_flag,
+    flag_value, mcp_server_id, mcp_transport_target, positional_args,
+    positional_args_before_double_dash, repeated_flag_values, shell_command_after_double_dash,
+    shell_command_from_words,
 };
 use crate::auth::selected_auth_method_from_flags;
 
@@ -805,7 +806,11 @@ pub(super) fn create_buffer_display(invocation: &CommandInvocation) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn list_buffers_display() -> String {
-    "buffers=0 source=not-connected status=empty".to_string()
+    KeyValueLine::spaced()
+        .push("buffers", 0)
+        .push("source", "not-connected")
+        .push("status", "empty")
+        .finish()
 }
 
 /// Runs the choose buffer display operation for this subsystem.
@@ -942,7 +947,11 @@ pub(super) fn resume_session_display(invocation: &CommandInvocation) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn show_messages_display() -> String {
-    "messages=0 source=in-memory-log status=empty".to_string()
+    KeyValueLine::spaced()
+        .push("messages", 0)
+        .push("source", "in-memory-log")
+        .push("status", "empty")
+        .finish()
 }
 /// Runs the show metrics display operation for this subsystem.
 ///
@@ -950,7 +959,12 @@ pub(super) fn show_messages_display() -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn show_metrics_display() -> String {
-    "metrics source=async-runtime status=unavailable".to_string()
+    KeyValueLine::spaced()
+        .push("metrics", "")
+        .push("source", "async-runtime")
+        .push("status", "unavailable")
+        .finish()
+        .replace("metrics= ", "metrics ")
 }
 
 /// Runs the list default key bindings operation for this subsystem.
@@ -1303,7 +1317,12 @@ pub(super) fn hex_digit(nibble: u8) -> char {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn auth_status_display() -> String {
-    "authenticated=unknown provider=openai profile=default source=not-connected".to_string()
+    KeyValueLine::spaced()
+        .push("authenticated", "unknown")
+        .push("provider", "openai")
+        .push("profile", "default")
+        .push("source", "not-connected")
+        .finish()
 }
 
 /// Runs the auth login plan display operation for this subsystem.
@@ -1323,7 +1342,12 @@ pub(super) fn auth_login_plan_display(invocation: &CommandInvocation) -> String 
     )
     .map(|method| method.as_str())
     .unwrap_or("browser");
-    format!("provider=openai method={method} action=plan-only reason=auth-store-not-connected")
+    KeyValueLine::spaced()
+        .push("provider", "openai")
+        .push("method", method)
+        .push("action", "plan-only")
+        .push("reason", "auth-store-not-connected")
+        .finish()
 }
 
 /// Runs the mcp add plan display operation for this subsystem.
@@ -1335,10 +1359,14 @@ pub(super) fn mcp_add_plan_display(invocation: &CommandInvocation) -> Result<Str
     let server_id = mcp_server_id(invocation, "mcp-add requires a server id")?;
     let args = repeated_flag_values(&invocation.args, "--arg");
     let (transport, target) = mcp_transport_target(invocation)?;
-    Ok(format!(
-        "server={server_id}:transport={transport}:target={target}:args={}:changed=false:reason=live-config-control-unavailable",
-        args.len()
-    ))
+    Ok(KeyValueLine::colon_separated()
+        .push("server", server_id)
+        .push("transport", transport)
+        .push("target", target)
+        .push("args", args.len())
+        .push("changed", false)
+        .push("reason", "live-config-control-unavailable")
+        .finish())
 }
 
 /// Runs the mcp remove plan display operation for this subsystem.
@@ -1348,9 +1376,11 @@ pub(super) fn mcp_add_plan_display(invocation: &CommandInvocation) -> Result<Str
 /// on duplicated control-flow logic.
 pub(super) fn mcp_remove_plan_display(invocation: &CommandInvocation) -> Result<String> {
     let server_id = mcp_server_id(invocation, "mcp-remove requires a server id")?;
-    Ok(format!(
-        "server={server_id}:removed=false:reason=live-config-control-unavailable"
-    ))
+    Ok(KeyValueLine::colon_separated()
+        .push("server", server_id)
+        .push("removed", false)
+        .push("reason", "live-config-control-unavailable")
+        .finish())
 }
 
 /// Runs the mcp login plan display operation for this subsystem.
@@ -1360,9 +1390,12 @@ pub(super) fn mcp_remove_plan_display(invocation: &CommandInvocation) -> Result<
 /// on duplicated control-flow logic.
 pub(super) fn mcp_login_plan_display(invocation: &CommandInvocation) -> Result<String> {
     let server_id = mcp_server_id(invocation, "mcp-login requires a server id")?;
-    Ok(format!(
-        "server={server_id}:authenticated=false:action=interactive-required:reason=run-mez-mcp-login"
-    ))
+    Ok(KeyValueLine::colon_separated()
+        .push("server", server_id)
+        .push("authenticated", false)
+        .push("action", "interactive-required")
+        .push("reason", "run-mez-mcp-login")
+        .finish())
 }
 
 /// Runs the mcp logout plan display operation for this subsystem.
@@ -1372,9 +1405,11 @@ pub(super) fn mcp_login_plan_display(invocation: &CommandInvocation) -> Result<S
 /// on duplicated control-flow logic.
 pub(super) fn mcp_logout_plan_display(invocation: &CommandInvocation) -> Result<String> {
     let server_id = mcp_server_id(invocation, "mcp-logout requires a server id")?;
-    Ok(format!(
-        "server={server_id}:logged_out=false:reason=auth-store-unavailable"
-    ))
+    Ok(KeyValueLine::colon_separated()
+        .push("server", server_id)
+        .push("logged_out", false)
+        .push("reason", "auth-store-unavailable")
+        .finish())
 }
 
 /// Runs the mcp status plan display operation for this subsystem.
@@ -1384,9 +1419,12 @@ pub(super) fn mcp_logout_plan_display(invocation: &CommandInvocation) -> Result<
 /// on duplicated control-flow logic.
 pub(super) fn mcp_status_plan_display(invocation: &CommandInvocation) -> Result<String> {
     let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
-    Ok(format!(
-        "server={server_id}:authenticated=false:state=unknown:reason=auth-store-unavailable"
-    ))
+    Ok(KeyValueLine::colon_separated()
+        .push("server", server_id)
+        .push("authenticated", false)
+        .push("state", "unknown")
+        .push("reason", "auth-store-unavailable")
+        .finish())
 }
 
 /// Runs the mcp retry plan display operation for this subsystem.
