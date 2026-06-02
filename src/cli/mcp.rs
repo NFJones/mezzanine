@@ -10,8 +10,7 @@ use super::{
     ConfigScope, DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore,
     Result, Serialize, Subcommand, TrustDecision, Write, compose_effective_config,
     default_trust_database_path, discover_existing_overlays, discover_project_root, fs,
-    json_escape, json_optional, migrate_config_file, persist_config_mutation, serialize_json,
-    write_json_or_plain,
+    migrate_config_file, persist_config_mutation, serialize_json, write_json_or_plain,
 };
 use crate::auth::{
     AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
@@ -38,11 +37,7 @@ pub(super) async fn run_mcp<W: Write>(
         McpCliCommand::List => {
             let effective = load_primary_effective_config(&paths)?;
             let registry = McpRegistry::default();
-            let output = format!(
-                r#"{{"servers":{},"tools":{}}}"#,
-                configured_mcp_servers_json(&effective),
-                mcp_tools_json(&registry)
-            );
+            let output = mcp_list_json(&effective, &registry)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Inspect { id } => {
@@ -54,7 +49,7 @@ pub(super) async fn run_mcp<W: Write>(
                     "MCP server not found",
                 ));
             };
-            let output = format!(r#"{{"server":{server}}}"#);
+            let output = mcp_inspect_json(server)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Login {
@@ -479,17 +474,16 @@ pub(super) fn persist_mcp_server_removal(
     .map(|plan| vec![plan])
 }
 
-/// Runs the configured mcp servers json operation for this subsystem.
+/// Runs the configured mcp servers operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn configured_mcp_servers_json(effective: &EffectiveConfig) -> String {
-    let servers = configured_mcp_server_ids(effective)
+/// on duplicated subsystem rules.
+fn configured_mcp_servers(effective: &EffectiveConfig) -> Vec<ConfiguredMcpServerJson> {
+    configured_mcp_server_ids(effective)
         .into_iter()
         .filter_map(|id| configured_mcp_server_json(effective, &id))
-        .collect::<Vec<_>>();
-    format!("[{}]", servers.join(","))
+        .collect()
 }
 
 /// Runs the configured mcp server ids operation for this subsystem.
@@ -516,7 +510,10 @@ pub(super) fn configured_mcp_server_ids(effective: &EffectiveConfig) -> Vec<Stri
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn configured_mcp_server_json(effective: &EffectiveConfig, id: &str) -> Option<String> {
+fn configured_mcp_server_json(
+    effective: &EffectiveConfig,
+    id: &str,
+) -> Option<ConfiguredMcpServerJson> {
     let prefix = format!("mcp_servers.{id}.");
     if !effective
         .values()
@@ -542,18 +539,72 @@ pub(super) fn configured_mcp_server_json(effective: &EffectiveConfig, id: &str) 
         .unwrap_or(true);
     let args = effective
         .get(&format!("{prefix}args"))
-        .map(config_value_array_json)
-        .unwrap_or_else(|| "[]".to_string());
-    Some(format!(
-        r#"{{"id":"{}","name":"{}","enabled":{},"transport":"{}","command":{},"url":{},"args":{},"source":"primary"}}"#,
-        json_escape(id),
-        json_escape(&name),
+        .map(config_value_array_values)
+        .unwrap_or_default();
+    Some(ConfiguredMcpServerJson {
+        id: id.to_string(),
+        name,
         enabled,
-        transport,
-        json_optional(command),
-        json_optional(url),
-        args
-    ))
+        transport: transport.to_string(),
+        command: command.map(ToOwned::to_owned),
+        url: url.map(ToOwned::to_owned),
+        args,
+        source: "primary".to_string(),
+    })
+}
+
+/// Typed JSON output for `mcp list`.
+#[derive(Serialize)]
+struct McpListJson {
+    /// Configured MCP servers visible from the primary config.
+    servers: Vec<ConfiguredMcpServerJson>,
+    /// Registered MCP tools visible to the CLI registry.
+    tools: Vec<McpToolJson>,
+}
+
+/// Typed JSON output for `mcp inspect`.
+#[derive(Serialize)]
+struct McpInspectJson {
+    /// One configured MCP server record.
+    server: ConfiguredMcpServerJson,
+}
+
+/// Typed JSON output for one configured MCP server.
+#[derive(Serialize)]
+struct ConfiguredMcpServerJson {
+    /// Stable configured server identifier.
+    id: String,
+    /// Display name for the configured server.
+    name: String,
+    /// Whether the configured server is enabled.
+    enabled: bool,
+    /// Configured transport label.
+    transport: String,
+    /// Optional stdio command.
+    command: Option<String>,
+    /// Optional streamable HTTP URL.
+    url: Option<String>,
+    /// Configured stdio arguments.
+    args: Vec<serde_json::Value>,
+    /// Origin of this configuration record.
+    source: String,
+}
+
+/// Typed JSON output for one MCP tool entry.
+#[derive(Serialize)]
+struct McpToolJson {
+    /// Stable server identifier that owns the tool.
+    server_id: String,
+    /// Tool name exposed by the server.
+    name: String,
+    /// Whether the tool is currently available.
+    available: bool,
+    /// Whether the tool is blacklisted.
+    blacklisted: bool,
+    /// Whether the tool requires approval.
+    permission_required: bool,
+    /// Input schema advertised by the tool.
+    input_schema: serde_json::Value,
 }
 
 /// Secret-safe auth binding for one configured MCP server.
@@ -877,17 +928,16 @@ fn mcp_credential_state_name(state: &AuthCredentialState) -> &'static str {
     }
 }
 
-/// Runs the config value array json operation for this subsystem.
+/// Runs the config value array values operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn config_value_array_json(value: &str) -> String {
+fn config_value_array_values(value: &str) -> Vec<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(value)
         .ok()
-        .filter(serde_json::Value::is_array)
-        .and_then(|value| serde_json::to_string(&value).ok())
-        .unwrap_or_else(|| "[]".to_string())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
 }
 
 /// Runs the mutation plans changed operation for this subsystem.
@@ -925,30 +975,40 @@ pub(super) fn validate_config_identifier(value: &str, label: &str) -> Result<()>
     }
     Ok(())
 }
-/// Runs the mcp tools json operation for this subsystem.
+/// Runs the mcp tools operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_tools_json(registry: &McpRegistry) -> String {
-    let tools = registry
+fn mcp_tools(registry: &McpRegistry) -> Vec<McpToolJson> {
+    registry
         .list_servers()
         .iter()
         .flat_map(|server| {
-            server.tools.iter().map(|tool| {
-                format!(
-                    r#"{{"server_id":"{}","name":"{}","available":{},"blacklisted":{},"permission_required":{},"input_schema":{}}}"#,
-                    json_escape(&tool.server_id),
-                    json_escape(&tool.name),
-                    tool.available,
-                    tool.blacklisted,
-                    tool.permission_required,
-                    tool.input_schema_json
-                )
+            server.tools.iter().map(|tool| McpToolJson {
+                server_id: tool.server_id.clone(),
+                name: tool.name.clone(),
+                available: tool.available,
+                blacklisted: tool.blacklisted,
+                permission_required: tool.permission_required,
+                input_schema: serde_json::from_str(&tool.input_schema_json)
+                    .unwrap_or(serde_json::Value::Null),
             })
         })
-        .collect::<Vec<_>>();
-    format!("[{}]", tools.join(","))
+        .collect()
+}
+
+/// Renders `mcp list` output through typed JSON serialization.
+fn mcp_list_json(effective: &EffectiveConfig, registry: &McpRegistry) -> Result<String> {
+    serialize_json(&McpListJson {
+        servers: configured_mcp_servers(effective),
+        tools: mcp_tools(registry),
+    })
+}
+
+/// Renders `mcp inspect` output through typed JSON serialization.
+fn mcp_inspect_json(server: ConfiguredMcpServerJson) -> Result<String> {
+    serialize_json(&McpInspectJson { server })
 }
 
 #[cfg(test)]
@@ -1025,6 +1085,33 @@ mod tests {
         assert_eq!(
             output,
             r#"{"server_id":"demo","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:def","token_expires_at":null,"scopes":["scope:read"]}"#
+        );
+    }
+
+    /// Verifies typed MCP list and inspect JSON preserve existing field order
+    /// and compact nested server serialization for CLI consumers.
+    #[test]
+    fn mcp_server_json_preserves_list_and_inspect_output_shape() {
+        let effective = compose_effective_config(&[ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[mcp_servers.demo]\nname = \"Demo\"\ncommand = \"demo-server\"\nargs = [\"--serve\", \"stdio\"]\nenabled = true\n".to_string(),
+        }])
+        .unwrap();
+
+        let server = configured_mcp_server_json(&effective, "demo").unwrap();
+
+        assert_eq!(
+            mcp_inspect_json(server).unwrap(),
+            r#"{"server":{"id":"demo","name":"Demo","enabled":true,"transport":"stdio","command":"demo-server","url":null,"args":["--serve","stdio"],"source":"primary"}}"#
+        );
+
+        assert_eq!(
+            mcp_list_json(&effective, &McpRegistry::default()).unwrap(),
+            r#"{"servers":[{"id":"demo","name":"Demo","enabled":true,"transport":"stdio","command":"demo-server","url":null,"args":["--serve","stdio"],"source":"primary"}],"tools":[]}"#
         );
     }
 }
