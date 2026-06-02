@@ -2076,39 +2076,11 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
             break;
         };
         let action = route_client_input(&remaining[..mouse_len], &config)?;
-        match action {
-            TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. }) => {
-                config.mouse_policy.pane_resize_active = true;
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::FocusPaneOnly(position)) => {
-                set_mouse_region_active_at(&mut config, position.column, position.line);
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::FocusPane(_)) => {
-                config.mouse_selection_active = true;
-            }
-            TerminalClientLoopAction::HandleMouse(
-                MouseAction::CopySelectionStart(_) | MouseAction::CopySelectionUpdate(_),
-            ) => {
-                config.mouse_selection_active = true;
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane) => {
-                config.mouse_policy.pane_resize_active = false;
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionFinish(_)) => {
-                config.mouse_selection_active = false;
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::PressWindowAction {
-                ref action,
-            }) => {
-                config.frame_context.pressed_window_action = Some(action.clone());
-            }
-            TerminalClientLoopAction::HandleMouse(
-                MouseAction::ReleaseWindowAction { .. } | MouseAction::CancelWindowAction,
-            ) => {
-                config.frame_context.pressed_window_action = None;
-            }
-            _ => {}
-        }
+        apply_batched_mouse_action_side_effects(
+            &mut config,
+            &action,
+            BatchedMouseSideEffectMode::ImmediateForwarding,
+        );
         actions.push(action);
         remaining = &remaining[mouse_len..];
     }
@@ -2245,27 +2217,74 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
             break;
         };
         let action = route_client_input(&remaining[..mouse_len], &config)?;
-        match action {
-            TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. }) => {
-                config.mouse_policy.pane_resize_active = true;
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::FocusPaneOnly(position)) => {
-                set_mouse_region_active_at(&mut config, position.column, position.line);
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::FocusPane(_))
-            | TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionUpdate(_)) => {
-                config.mouse_selection_active = true;
-            }
-            TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionFinish(_)) => {
-                config.mouse_selection_active = false;
-            }
-            _ => {}
-        }
+        apply_batched_mouse_action_side_effects(
+            &mut config,
+            &action,
+            BatchedMouseSideEffectMode::BufferedPaste,
+        );
         actions.push(action);
         remaining = &remaining[mouse_len..];
     }
 
     Ok(actions)
+}
+
+/// Selects compatibility behavior for batched mouse side-effect tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchedMouseSideEffectMode {
+    /// Applies the full historical side-effect set used by the immediate
+    /// forwarding router.
+    ImmediateForwarding,
+    /// Preserves the narrower historical side-effect set used by the paste
+    /// buffering router.
+    BufferedPaste,
+}
+
+/// Applies routing state transitions for mouse actions emitted from a batched
+/// attached-terminal input scan.
+fn apply_batched_mouse_action_side_effects(
+    config: &mut TerminalClientLoopConfig,
+    action: &TerminalClientLoopAction,
+    mode: BatchedMouseSideEffectMode,
+) {
+    match action {
+        TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. }) => {
+            config.mouse_policy.pane_resize_active = true;
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::FocusPaneOnly(position)) => {
+            set_mouse_region_active_at(config, position.column, position.line);
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::FocusPane(_)) => {
+            config.mouse_selection_active = true;
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionStart(_))
+            if mode == BatchedMouseSideEffectMode::ImmediateForwarding =>
+        {
+            config.mouse_selection_active = true;
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionUpdate(_)) => {
+            config.mouse_selection_active = true;
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane)
+            if mode == BatchedMouseSideEffectMode::ImmediateForwarding =>
+        {
+            config.mouse_policy.pane_resize_active = false;
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionFinish(_)) => {
+            config.mouse_selection_active = false;
+        }
+        TerminalClientLoopAction::HandleMouse(MouseAction::PressWindowAction { action })
+            if mode == BatchedMouseSideEffectMode::ImmediateForwarding =>
+        {
+            config.frame_context.pressed_window_action = Some(action.clone());
+        }
+        TerminalClientLoopAction::HandleMouse(
+            MouseAction::ReleaseWindowAction { .. } | MouseAction::CancelWindowAction,
+        ) if mode == BatchedMouseSideEffectMode::ImmediateForwarding => {
+            config.frame_context.pressed_window_action = None;
+        }
+        _ => {}
+    }
 }
 
 /// Runs the earliest sequence start operation for this subsystem.
