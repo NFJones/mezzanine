@@ -446,6 +446,17 @@ mez [--json] <command> [options]
 | `mez mcp ...`              | List, add, remove, enable, disable, inspect, login, logout, and status MCP servers. |
 | `mez memory ...`           | List, add, inspect, edit, delete, and export persistent memory. |
 
+`mez auth status` reports coarse authentication state that is safe to share for
+debugging by default. JSON status output intentionally omits account identifiers
+and raw credential-store references, even though local auth metadata may retain
+those non-secret but privacy-sensitive fields for provider selection and token
+refresh.
+
+OpenAI ChatGPT browser/device login uses a built-in public native-app OAuth
+client id. That identifier is request metadata, not a secret, and Mezzanine does
+not store any paired OpenAI OAuth client secret in this repository or in user
+auth metadata.
+
 `mez mcp login <server-id>` authenticates streamable HTTP MCP servers with a
 browser authorization-code PKCE flow. If the server advertises OAuth dynamic
 client registration and you do not pass `--client-id`, Mezzanine registers a

@@ -2073,6 +2073,60 @@ fn auth_status_and_logout_use_dedicated_auth_store() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies auth status JSON omits privacy-sensitive provider metadata.
+///
+/// The default status contract is safe to share for debugging: it reports the
+/// coarse credential state without exposing account identifiers or raw
+/// credential-store locators from the local auth metadata file.
+#[test]
+fn auth_status_json_omits_account_and_store_metadata() {
+    let (env, home) = test_env("auth-status-private-metadata");
+    let paths = env.config_paths().unwrap();
+    let auth_store = AuthStore::new(AuthPaths::under_config_root(paths.root()));
+    let credential_store = auth_store.file_credential_store("openai").unwrap();
+    auth_store
+        .login_openai_provider_credential(
+            "default",
+            OpenAiProviderCredential {
+                api_key: "access-secret".to_string(),
+                refresh_token: Some("refresh-secret".to_string()),
+                account_id: Some("acct_123".to_string()),
+                organization_id: Some("org_123".to_string()),
+                token_expires_at: Some("9999999999".to_string()),
+            },
+            &credential_store,
+        )
+        .unwrap();
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    run_with(
+        vec!["mez".to_string(), "auth".to_string(), "status".to_string()],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let output = String::from_utf8(stdout).unwrap();
+    assert!(output.contains(r#""authenticated":true"#), "{output}");
+    assert!(output.contains(r#""provider":"openai""#), "{output}");
+    assert!(
+        output.contains(r#""credential_kind":"chatgpt""#),
+        "{output}"
+    );
+    assert!(!output.contains("account_id"), "{output}");
+    assert!(!output.contains("acct_123"), "{output}");
+    assert!(!output.contains("organization_id"), "{output}");
+    assert!(!output.contains("org_123"), "{output}");
+    assert!(!output.contains("credential_store_ref"), "{output}");
+    assert!(!output.contains("access-secret"), "{output}");
+    assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies auth login noninteractive default requires browser interaction.
 ///
 /// This regression scenario documents the behavior being protected so a

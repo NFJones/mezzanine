@@ -29,8 +29,9 @@ use crate::terminal::{TerminalColor, UiTheme};
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 /// Defines the DEFAULT CLIENT ID const used by this subsystem.
 ///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
+/// This is an intentionally public native-app OAuth client identifier for the
+/// ChatGPT browser/device-code login flows. It is sent as request metadata and
+/// is not a client secret; no paired client secret is stored in this repository.
 const DEFAULT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Defines the DEFAULT BROWSER PORT const used by this subsystem.
 ///
@@ -1659,6 +1660,7 @@ mod tests {
         assert!(url.starts_with("https://auth.openai.com/oauth/authorize?"));
         assert!(url.contains("response_type=code"));
         assert!(url.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
+        assert!(!url.contains("client_secret"));
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
         assert!(url.contains("code_challenge=challenge"));
         assert!(url.contains("code_challenge_method=S256"));
@@ -1677,6 +1679,7 @@ mod tests {
             serde_json::from_str(&device_code_request_body(DEFAULT_CLIENT_ID)).unwrap();
 
         assert_eq!(body["client_id"], DEFAULT_CLIENT_ID);
+        assert!(body.get("client_secret").is_none());
         assert!(!body["scope"].as_str().unwrap().contains("api.model.read"));
     }
 

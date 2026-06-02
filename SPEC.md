@@ -5763,9 +5763,19 @@ authentication that returns refresh material MUST persist the refresh secret
 through the credential-store boundary and MUST store only a credential-store
 reference in the auth configuration file.
 
+Default auth status output, including JSON output, MUST omit privacy-sensitive
+auth metadata such as provider account identifiers, organization identifiers,
+and raw credential-store references unless the user explicitly requests a
+verbose or debug view. Status output MAY report coarse non-secret fields such as
+authenticated state, provider identity, credential kind, selected model profile,
+and token expiration metadata.
+
 Mezzanine MUST distinguish direct OpenAI API-key credentials from ChatGPT
-browser/device-code OAuth credentials. Direct API-key credentials MUST be sent
-only to the direct OpenAI API endpoint unless the user has explicitly
+browser/device-code OAuth credentials. OpenAI ChatGPT browser/device-code login
+MAY use a built-in public native-app OAuth client id; that id is request
+metadata, not a secret, and Mezzanine MUST NOT store any paired OAuth client
+secret in source, configuration, auth metadata, or credential-store references.
+Direct API-key credentials MUST be sent only to the direct OpenAI API endpoint unless the user has explicitly
 configured a provider endpoint override. ChatGPT OAuth access tokens MUST NOT
 be treated as direct OpenAI API keys; runtime provider requests using those
 tokens MUST use the ChatGPT-backed provider endpoint and MUST include the

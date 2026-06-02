@@ -396,16 +396,10 @@ pub(super) struct AuthStatusWithMetadataJson<'a> {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) credential_kind: &'a str,
-    /// Stores the account id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) account_id: Option<&'a str>,
     /// Stores the organization id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) organization_id: Option<&'a str>,
     /// Stores the selected model profile value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -415,7 +409,6 @@ pub(super) struct AuthStatusWithMetadataJson<'a> {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) credential_store_ref: Option<&'a str>,
     /// Stores the token expires at value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -455,10 +448,7 @@ pub(super) fn auth_status_json(
             authenticated,
             provider: &metadata.provider,
             credential_kind: metadata.credential_kind.as_str(),
-            account_id: metadata.account_id.as_deref(),
-            organization_id: metadata.organization_id.as_deref(),
             selected_model_profile: &metadata.selected_model_profile,
-            credential_store_ref: metadata.credential_store_ref.as_deref(),
             token_expires_at: metadata.token_expires_at.as_deref(),
         }),
         None => serialize_json(&AuthStatusWithoutMetadataJson {
