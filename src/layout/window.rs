@@ -5,10 +5,10 @@
 
 use super::{
     IdFactory, LayoutNode, LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, Pane,
-    PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, ResizeAxis,
-    ResizeDirection, RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId,
-    WindowNameSource, even_grid_dimensions, pane_matches_target, percent_size_for_axis,
-    range_overlap_u16, split_dimension_evenly, split_size, split_size_with_spec,
+    PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, ResizeDirection,
+    RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId, WindowNameSource,
+    even_grid_dimensions, pane_matches_target, percent_size_for_axis, range_overlap_u16,
+    split_dimension_evenly, split_size, split_size_with_spec,
 };
 
 impl Window {
@@ -1496,20 +1496,6 @@ fn wrapped_directional_candidate(
 /// on duplicated control-flow logic.
 fn abs_delta(first: u32, second: u32) -> u32 {
     first.max(second).saturating_sub(first.min(second))
-}
-
-/// Runs the scaled dimension operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn scaled_dimension(total: u16, percent: u16, axis: &'static str) -> Result<u16> {
-    let scaled = u32::from(total)
-        .saturating_mul(u32::from(percent))
-        .saturating_add(99)
-        / 100;
-    u16::try_from(scaled.max(1))
-        .map_err(|_| MezError::invalid_args(format!("percent resize {axis} is out of range")))
 }
 
 /// Runs the size from direction operation for this subsystem.
