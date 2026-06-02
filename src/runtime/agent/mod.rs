@@ -56,11 +56,9 @@ use crate::agent::{
     effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
-use crate::agent::{SayStatus, assistant_context_content_for_execution};
 #[cfg(test)]
-use crate::agent::{
-    provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
-};
+use crate::agent::{ProviderErrorRetryClass, provider_error_retry_class};
+use crate::agent::{SayStatus, assistant_context_content_for_execution};
 use crate::command::CommandInvocation;
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,

@@ -177,9 +177,9 @@ impl RuntimeSessionService {
                         provider.provider_id(),
                         &error,
                     )?;
-                    if provider_error_is_context_limit_exceeded(
-                        error.message(),
-                        error.provider_failure_json(),
+                    if matches!(
+                        provider_error_retry_class(&error),
+                        ProviderErrorRetryClass::ContextLimit
                     ) && context_limit_recovery_attempts
                         < RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT
                     {
@@ -212,9 +212,9 @@ impl RuntimeSessionService {
                             continue;
                         }
                     }
-                    if provider_error_is_output_limit_exceeded(
-                        error.message(),
-                        error.provider_failure_json(),
+                    if matches!(
+                        provider_error_retry_class(&error),
+                        ProviderErrorRetryClass::OutputLimit
                     ) && output_limit_recovery_attempts
                         < RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT
                     {
@@ -410,9 +410,9 @@ impl RuntimeSessionService {
                         provider.provider_id(),
                         &error,
                     )?;
-                    if provider_error_is_context_limit_exceeded(
-                        error.message(),
-                        error.provider_failure_json(),
+                    if matches!(
+                        provider_error_retry_class(&error),
+                        ProviderErrorRetryClass::ContextLimit
                     ) && context_limit_recovery_attempts
                         < RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT
                     {
@@ -445,9 +445,9 @@ impl RuntimeSessionService {
                             continue;
                         }
                     }
-                    if provider_error_is_output_limit_exceeded(
-                        error.message(),
-                        error.provider_failure_json(),
+                    if matches!(
+                        provider_error_retry_class(&error),
+                        ProviderErrorRetryClass::OutputLimit
                     ) && output_limit_recovery_attempts
                         < RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT
                     {

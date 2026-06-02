@@ -156,8 +156,11 @@ pub use provider::{
     ModelProvider, ProviderHttpTransport, openai_provider_from_auth_store_with_transport,
 };
 pub(crate) use provider::{
-    provider_error_invites_retry, provider_error_is_context_limit_exceeded,
-    provider_error_is_output_limit_exceeded,
+    ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
+};
+#[cfg(test)]
+pub(crate) use provider::{
+    provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use readiness::{

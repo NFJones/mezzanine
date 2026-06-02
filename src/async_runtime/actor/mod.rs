@@ -28,8 +28,7 @@ use super::{
     plan_attached_terminal_client_step, watch,
 };
 use crate::agent::{
-    DEFAULT_PROVIDER_TIMEOUT_MS, provider_error_invites_retry,
-    provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
+    DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
 };
 use crate::audit::AuditDeferredWrite;
 use crate::control::{decode_control_frame, encode_control_body};
@@ -2129,7 +2128,12 @@ impl AsyncRuntimeSessionActor {
             provider_failure_json.as_deref(),
             provider_raw_text.as_deref(),
         );
-        if provider_error_is_context_limit_exceeded(&message, provider_failure_json.as_deref()) {
+        let retry_class = provider_error_retry_class_from_parts(
+            provider_event_error_kind(&kind),
+            &message,
+            provider_failure_json.as_deref(),
+        );
+        if matches!(retry_class, ProviderErrorRetryClass::ContextLimit) {
             let recovered = self.service.recover_agent_provider_context_limit_failure(
                 &agent_id, &turn_id, &error, attempt,
             )?;
@@ -2155,7 +2159,7 @@ impl AsyncRuntimeSessionActor {
                 });
             }
         }
-        if provider_error_is_output_limit_exceeded(&message, provider_failure_json.as_deref()) {
+        if matches!(retry_class, ProviderErrorRetryClass::OutputLimit) {
             let recovered = self.service.recover_agent_provider_output_limit_failure(
                 &agent_id, &turn_id, &error, attempt,
             )?;
@@ -3825,36 +3829,16 @@ fn provider_failure_is_retryable(
     message: &str,
     provider_failure_json: Option<&str>,
 ) -> bool {
-    if provider_error_is_context_limit_exceeded(message, provider_failure_json) {
-        return true;
-    }
-    if provider_error_is_output_limit_exceeded(message, provider_failure_json) {
-        return true;
-    }
-    if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
-        if status_code == 400
-            && (message.contains("Unsupported") || message.contains("unsupported"))
-        {
-            return false;
-        }
-        return status_code == 429 || (500..=599).contains(&status_code);
-    }
-    matches!(kind, "io" | "Io")
-        || matches!(kind, "invalid_state" | "InvalidState")
-            && (message.contains("provider HTTP request failed")
-                || message.contains("provider HTTP response read failed")
-                || provider_error_invites_retry(message, provider_failure_json))
-}
-
-/// Runs the provider failure status code operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u16> {
-    let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;
-    let status_code = value.get("status_code")?.as_u64()?;
-    u16::try_from(status_code).ok()
+    matches!(
+        provider_error_retry_class_from_parts(
+            provider_event_error_kind(kind),
+            message,
+            provider_failure_json,
+        ),
+        ProviderErrorRetryClass::ContextLimit
+            | ProviderErrorRetryClass::OutputLimit
+            | ProviderErrorRetryClass::RetryableTransport
+    )
 }
 
 /// Runs the provider event error operation for this subsystem.

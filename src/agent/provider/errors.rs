@@ -70,6 +70,86 @@ pub(super) fn openai_provider_failure_event_json(value: &serde_json::Value) -> S
     serde_json::Value::Object(object).to_string()
 }
 
+/// Shared retry/recovery class for provider failures.
+///
+/// Runtime provider execution and turn-runner recovery need the same coarse
+/// classification so context-limit recovery, output-limit recovery, transport
+/// retries, and terminal failure summaries do not drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderErrorRetryClass {
+    /// The request exceeded the provider input context window.
+    ContextLimit,
+    /// The response exhausted the provider output-token budget.
+    OutputLimit,
+    /// The same request may be retried by the runtime without a terminal summary.
+    RetryableTransport,
+    /// The provider failure should be handled as a terminal turn failure.
+    NonRetryable,
+}
+
+/// Classifies one provider failure for runtime recovery and retry handling.
+///
+/// The classifier preserves existing precedence: context-limit and
+/// output-limit recovery win over generic transport retry, unsupported 400s do
+/// not retry, and provider-authored retry invitations remain visible.
+pub(crate) fn provider_error_retry_class(error: &MezError) -> ProviderErrorRetryClass {
+    provider_error_retry_class_from_parts(
+        error.kind(),
+        error.message(),
+        error.provider_failure_json(),
+    )
+}
+
+/// Classifies provider failure fields after an error crosses an async boundary.
+///
+/// Provider worker events carry the stable error kind, message, and sanitized
+/// provider failure payload separately. This helper keeps their retry policy in
+/// sync with in-process `MezError` classification.
+pub(crate) fn provider_error_retry_class_from_parts(
+    kind: crate::error::MezErrorKind,
+    message: &str,
+    provider_failure_json: Option<&str>,
+) -> ProviderErrorRetryClass {
+    if provider_error_is_context_limit_exceeded(message, provider_failure_json) {
+        return ProviderErrorRetryClass::ContextLimit;
+    }
+    if provider_error_is_output_limit_exceeded(message, provider_failure_json) {
+        return ProviderErrorRetryClass::OutputLimit;
+    }
+    if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
+        if status_code == 400
+            && (message.contains("Unsupported") || message.contains("unsupported"))
+        {
+            return ProviderErrorRetryClass::NonRetryable;
+        }
+        if status_code == 429 || (500..=599).contains(&status_code) {
+            return ProviderErrorRetryClass::RetryableTransport;
+        }
+        return ProviderErrorRetryClass::NonRetryable;
+    }
+    if kind == crate::error::MezErrorKind::Io {
+        return ProviderErrorRetryClass::RetryableTransport;
+    }
+    if kind != crate::error::MezErrorKind::InvalidState {
+        return ProviderErrorRetryClass::NonRetryable;
+    }
+    if message.contains("provider HTTP request failed")
+        || message.contains("provider HTTP response read failed")
+        || provider_error_invites_retry(message, provider_failure_json)
+    {
+        ProviderErrorRetryClass::RetryableTransport
+    } else {
+        ProviderErrorRetryClass::NonRetryable
+    }
+}
+
+/// Extracts an HTTP status code from provider failure diagnostics.
+fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u16> {
+    let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;
+    let status_code = value.get("status_code")?.as_u64()?;
+    u16::try_from(status_code).ok()
+}
+
 /// Reports whether provider error text explicitly says the same request can be
 /// retried.
 ///

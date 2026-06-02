@@ -10,10 +10,9 @@ use super::super::{
     ActionError, ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability,
     AgentTurnRecord, AgentTurnState, AllowedAction, AllowedActionSet, AsyncModelProvider,
     ContextSourceKind, MaapBatch, McpPromptTool, MezError, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, Result, SayStatus,
-    action_text_content_blocks, constrain_skill_actions_for_loaded_context, json_escape,
-    provider_error_invites_retry, provider_error_is_context_limit_exceeded,
-    provider_error_is_output_limit_exceeded,
+    ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, ProviderErrorRetryClass,
+    Result, SayStatus, action_text_content_blocks, constrain_skill_actions_for_loaded_context,
+    json_escape, provider_error_retry_class,
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
@@ -398,37 +397,12 @@ fn provider_error_raw_text(error: &MezError) -> String {
 /// Reports whether a provider error should remain visible to runtime retry
 /// handling instead of being converted into a terminal failure summary.
 pub(super) fn provider_error_should_retry_without_summary(error: &MezError) -> bool {
-    if provider_error_is_context_limit_exceeded(error.message(), error.provider_failure_json()) {
-        return true;
-    }
-    if provider_error_is_output_limit_exceeded(error.message(), error.provider_failure_json()) {
-        return true;
-    }
-    if let Some(status_code) = provider_failure_status_code(error.provider_failure_json()) {
-        if status_code == 400
-            && (error.message().contains("Unsupported") || error.message().contains("unsupported"))
-        {
-            return false;
-        }
-        return status_code == 429 || (500..=599).contains(&status_code);
-    }
-    if error.kind() == crate::error::MezErrorKind::Io {
-        return true;
-    }
-    if error.kind() != crate::error::MezErrorKind::InvalidState {
-        return false;
-    }
-    let message = error.message();
-    message.contains("provider HTTP request failed")
-        || message.contains("provider HTTP response read failed")
-        || provider_error_invites_retry(message, error.provider_failure_json())
-}
-
-/// Extracts an HTTP status code from provider failure diagnostics.
-fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u16> {
-    let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;
-    let status_code = value.get("status_code")?.as_u64()?;
-    u16::try_from(status_code).ok()
+    matches!(
+        provider_error_retry_class(error),
+        ProviderErrorRetryClass::ContextLimit
+            | ProviderErrorRetryClass::OutputLimit
+            | ProviderErrorRetryClass::RetryableTransport
+    )
 }
 
 /// Builds a response-only model request for final failure characterization.

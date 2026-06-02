@@ -22,8 +22,8 @@ use crate::agent::{
     ActionResult, ActionStatus, AgentActionPayload, AgentContext, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage,
     ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
-    ModelTokenUsageKey, ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
-    provider_error_is_output_limit_exceeded,
+    ModelTokenUsageKey, ProviderErrorRetryClass, ReqwestProviderHttpTransport,
+    execute_network_action_with_transport_async, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
@@ -1600,9 +1600,9 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
     match provider.send_request_async(&request).await {
         Ok(response) => Ok(response),
         Err(error)
-            if provider_error_is_output_limit_exceeded(
-                error.message(),
-                error.provider_failure_json(),
+            if matches!(
+                provider_error_retry_class(&error),
+                ProviderErrorRetryClass::OutputLimit
             ) =>
         {
             request =

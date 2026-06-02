@@ -39,12 +39,15 @@ pub use catalog::{
 pub use chat_completions::ChatCompletionsProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
+pub(crate) use errors::{
+    ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
+};
 use errors::{
     openai_provider_error_detail, openai_provider_failure_json, provider_maap_parse_error,
 };
+#[cfg(test)]
 pub(crate) use errors::{
-    provider_error_invites_retry, provider_error_is_context_limit_exceeded,
-    provider_error_is_output_limit_exceeded,
+    provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
 };
 #[cfg(test)]
 pub use http::ProviderHttpTransport;
