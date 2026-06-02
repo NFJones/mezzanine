@@ -7,16 +7,23 @@
 use super::serve::{ServeCliArgs, assign_unique_live_session_id};
 use super::{
     Args, CliEnv, CliOutputFormat, ConfigPaths, LoadedRuntimeConfig, MezError, ParsedServeOptions,
-    RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup, RuntimeSessionService,
+    RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup, RuntimeSessionService, Serialize,
     SnapshotKind, SnapshotRepository, SnapshotRestoreResult, SnapshotResumePlan,
     SnapshotRollbackPlan, SnapshotState, SocketSelection, Subcommand, Write,
     apply_default_serve_auxiliary_sockets, cli_idempotency_key, current_unix_seconds, json_escape,
     json_optional, json_string_array, load_runtime_config_layers, resolve_shell,
-    run_control_request, run_foreground_control_daemon, selected_socket_path,
+    run_control_request, run_foreground_control_daemon, selected_socket_path, serialize_json,
     validate_serve_options, write_json_or_plain,
 };
 
 // Snapshot subcommands and restored daemon startup.
+
+/// Structured JSON payload emitted when a snapshot delete command completes.
+#[derive(Serialize)]
+struct SnapshotDeleteJson {
+    /// Whether a snapshot manifest and payload were removed.
+    deleted: bool,
+}
 
 /// Runs the run snapshot operation for this subsystem.
 ///
@@ -46,7 +53,7 @@ pub(super) async fn run_snapshot<W: Write>(
         }
         SnapshotCliCommand::Delete { snapshot_id } => {
             let deleted = repository.delete(&snapshot_id)?;
-            let output = format!(r#"{{"deleted":{deleted}}}"#);
+            let output = serialize_json(&SnapshotDeleteJson { deleted })?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         SnapshotCliCommand::ResumePlan { snapshot_id } => {
