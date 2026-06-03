@@ -1232,12 +1232,22 @@ fn help_command_describes_mezzanine_command_set() {
     );
 
     assert!(help.contains("# Mezzanine command help"), "{help}");
-    assert!(help.contains("## Agent and integrations"), "{help}");
-    assert!(help.contains("## Configuration"), "{help}");
-    assert!(help.contains("## Copy, buffers, and history"), "{help}");
-    assert!(help.contains("## Diagnostics and help"), "{help}");
-    assert!(help.contains("## Sessions and clients"), "{help}");
-    assert!(help.contains("## Windows, groups, and panes"), "{help}");
+    assert!(
+        help.contains("| Category | Command | Description |"),
+        "{help}"
+    );
+    assert!(help.contains("| Agent and integrations |  |  |"), "{help}");
+    assert!(help.contains("| Configuration |  |  |"), "{help}");
+    assert!(
+        help.contains("| Copy, buffers, and history |  |  |"),
+        "{help}"
+    );
+    assert!(help.contains("| Diagnostics and help |  |  |"), "{help}");
+    assert!(help.contains("| Sessions and clients |  |  |"), "{help}");
+    assert!(
+        help.contains("| Windows, groups, and panes |  |  |"),
+        "{help}"
+    );
     assert!(help.contains("| `list-commands` |"), "{help}");
     assert!(help.contains("| `list-keys` |"), "{help}");
     assert!(help.contains("show-metrics"), "{help}");
@@ -1275,7 +1285,7 @@ fn help_command_describes_mezzanine_command_set() {
         "{help}"
     );
     assert!(
-        help.find("Windows, groups, and panes").unwrap()
+        help.find("| Windows, groups, and panes |  |  |").unwrap()
             < help.find("\n## Key bindings\n").unwrap(),
         "{help}"
     );

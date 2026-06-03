@@ -4419,7 +4419,7 @@ fn runtime_primary_command_prompt_submits_and_clears_through_terminal_step() {
         display_view
             .lines
             .iter()
-            .any(|line| line.contains("Command") && line.contains("Description")),
+            .any(|line| line.contains("Category") && line.contains("Command")),
         "{:?}",
         display_view.lines
     );

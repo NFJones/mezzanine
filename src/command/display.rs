@@ -476,8 +476,8 @@ pub(super) fn command_help_display() -> String {
         "",
         "Commands entered through the Mezzanine command prompt run against the active session. Commands that produce output render that output into the active pane.",
         "",
-        "| Command | Description |",
-        "| --- | --- |",
+        "| Category | Command | Description |",
+        "| --- | --- | --- |",
     ]
     .into_iter()
     .map(str::to_string)
@@ -486,12 +486,10 @@ pub(super) fn command_help_display() -> String {
     for (name, description) in rows {
         let category = terminal_command_category(name);
         if category != current_category {
-            lines.push(String::new());
-            lines.push(format!("## {}", terminal_help_title_case(category)));
-            lines.push(String::new());
+            lines.push(format!("| {} |  |  |", terminal_help_title_case(category)));
             current_category = category;
         }
-        lines.push(format!("| `{name}` | {description} |"));
+        lines.push(format!("|  | `{name}` | {description} |"));
     }
     lines.push(String::new());
     lines.push("## Key bindings".to_string());

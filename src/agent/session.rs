@@ -613,22 +613,23 @@ pub(super) fn agent_shell_help_display() -> String {
         String::new(),
         "Commands run inside the pane-local agent shell.".to_string(),
         String::new(),
-        "| Command | Description |".to_string(),
-        "| --- | --- |".to_string(),
+        "| Category | Command | Description |".to_string(),
+        "| --- | --- | --- |".to_string(),
     ];
     let mut current_category = "";
     for spec in specs {
         let category = agent_shell_command_category(spec.name);
         if category != current_category {
-            lines.push(String::new());
-            lines.push(format!("## {}", agent_shell_help_title_case(category)));
-            lines.push(String::new());
+            lines.push(format!(
+                "| {} |  |  |",
+                agent_shell_help_title_case(category)
+            ));
             current_category = category;
         }
         let aliases = agent_shell_help_alias_suffix(spec.aliases);
         let name = format!("/{}{}", spec.name, aliases);
         lines.push(format!(
-            "| `{name}` | {} |",
+            "|  | `{name}` | {} |",
             agent_shell_command_description(spec.name)
         ));
     }

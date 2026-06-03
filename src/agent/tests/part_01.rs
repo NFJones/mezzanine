@@ -1699,6 +1699,10 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         panic!("expected /help display outcome");
     };
     assert!(body.contains("# Agent shell commands"), "{body}");
+    assert!(
+        body.contains("| Category | Command | Description |"),
+        "{body}"
+    );
     assert!(body.contains("| `/list-sessions` |"), "{body}");
     assert!(
         body.contains("list resumable saved agent conversations."),
@@ -1714,10 +1718,10 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         body.contains("show the current agent shell session status."),
         "{body}"
     );
-    assert!(body.contains("## Copy and diagnostics"), "{body}");
-    assert!(body.contains("## Configuration"), "{body}");
-    assert!(body.contains("## Discovery"), "{body}");
-    assert!(body.contains("## Work control"), "{body}");
+    assert!(body.contains("| Copy and diagnostics |  |  |"), "{body}");
+    assert!(body.contains("| Configuration |  |  |"), "{body}");
+    assert!(body.contains("| Discovery |  |  |"), "{body}");
+    assert!(body.contains("| Work control |  |  |"), "{body}");
     assert!(body.find("/approval").unwrap() < body.find("/approve").unwrap());
     assert!(!body.contains("/agent"), "{body}");
     assert!(!body.contains("/memory"), "{body}");
