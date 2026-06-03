@@ -299,7 +299,9 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file" | "auth-login"
         | "auth-status" | "mcp-add" | "mcp-remove" | "mcp-login" | "mcp-logout" | "mcp-status"
         | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
-        "snapshot-session" | "resume-session" => BaselineCommandStatus::ControlRequired,
+        "attach-session" | "list-sessions" | "snapshot-session" | "resume-session" => {
+            BaselineCommandStatus::ControlRequired
+        }
         _ => BaselineCommandStatus::Implemented,
     }
 }

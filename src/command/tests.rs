@@ -1045,13 +1045,13 @@ fn config_commands_report_live_config_requirements_without_store() {
     );
 }
 
-/// Verifies config store commands mutate primary config and validate source file.
+/// Verifies config store commands mutate primary config and apply source files.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn config_store_commands_mutate_primary_config_and_validate_source_file() {
+fn config_store_commands_mutate_primary_config_and_apply_source_file() {
     let root =
         std::env::temp_dir().join(format!("mez-command-config-store-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -1118,10 +1118,16 @@ fn config_store_commands_mutate_primary_config_and_validate_source_file() {
     let text = fs::read_to_string(&config_path).unwrap();
     assert!(!text.contains("key_43_2d_61 = \"split-window -h\""));
 
+    let source_path = root.join("sourced-config.toml");
+    let source_text = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("lines = 2048", "lines = 4096");
+    fs::write(&source_path, source_text).unwrap();
+
     let source = display_body(
         execute_config_store_command(
             &paths,
-            &parse_command_sequence(&format!("source-file {}", config_path.display()))
+            &parse_command_sequence(&format!("source-file {}", source_path.display()))
                 .unwrap()
                 .remove(0),
         )
@@ -1129,7 +1135,13 @@ fn config_store_commands_mutate_primary_config_and_validate_source_file() {
     );
     assert!(source.contains("valid=true"));
     assert!(source.contains("diagnostics=0"));
+    assert!(source.contains("applied=true"));
+    assert!(source.contains("changed=true"));
+    assert!(source.contains("reload_required=true"));
+    assert!(source.contains(&format!("target={}", config_path.display())));
     assert!(source.contains("source=config-store"));
+    let text = fs::read_to_string(&config_path).unwrap();
+    assert!(text.contains("lines = 4096"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -1158,7 +1170,8 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("break-pane:status=implemented"));
     assert!(body.contains("join-pane:status=implemented"));
     assert!(body.contains("rebalance-window:status=implemented"));
-    assert!(body.contains("attach-session:status=implemented"));
+    assert!(body.contains("attach-session:status=control-required"));
+    assert!(body.contains("list-sessions:status=control-required"));
     assert!(body.contains("copy-mode:status=runtime-required"));
     assert!(body.contains("show-messages:status=implemented"));
     assert!(body.contains("show-metrics:status=runtime-required"));
@@ -1177,6 +1190,9 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("auth-status:status=store-required"));
     assert!(body.contains("mcp-add:status=store-required"));
     assert!(body.contains("mcp-remove:status=store-required"));
+    assert!(body.contains("mcp-login:status=store-required"));
+    assert!(body.contains("mcp-logout:status=store-required"));
+    assert!(body.contains("mcp-status:status=store-required"));
     assert!(body.contains("mcp-retry:status=runtime-required"));
     assert!(body.contains("mark-pane-ready:status=store-required"));
     assert!(body.contains("copy-selection:status=runtime-required"));
@@ -1885,6 +1901,52 @@ fn auth_commands_can_execute_against_auth_store_without_printing_secret() {
     assert!(status.contains("profile=work"));
     assert!(status.contains("credential_store=file"));
     assert!(!status.contains("sk-command-secret"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies MCP auth commands execute against the auth store from the terminal
+/// command path instead of falling back to display-only placeholder text.
+///
+/// Runtime command routing delegates `mcp-login`, `mcp-logout`, and
+/// `mcp-status` to the same store-backed helper, so the command layer must keep
+/// the MCP variants store-aware and distinguish them from offline plan output.
+#[test]
+fn mcp_auth_commands_execute_against_auth_store_without_placeholder_status() {
+    let root =
+        std::env::temp_dir().join(format!("mez-command-mcp-auth-store-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let auth_store = AuthStore::new(AuthPaths::under_config_root(&root));
+
+    let login_invocation = parse_command_sequence("mcp-login atlassian_rovo")
+        .unwrap()
+        .remove(0);
+    let login = display_body(execute_auth_command(&auth_store, &login_invocation).unwrap());
+    assert!(login.contains("server=atlassian_rovo"), "{login}");
+    assert!(login.contains("action=interactive-required"), "{login}");
+    assert!(login.contains("reason=run-mez-mcp-login"), "{login}");
+
+    let status_invocation = parse_command_sequence("mcp-status atlassian_rovo")
+        .unwrap()
+        .remove(0);
+    let status = display_body(execute_auth_command(&auth_store, &status_invocation).unwrap());
+    assert!(status.contains("server=atlassian_rovo"), "{status}");
+    assert!(status.contains("state=logged-out"), "{status}");
+    assert!(status.contains("source=auth-store"), "{status}");
+    assert!(
+        !status.contains("reason=auth-store-unavailable"),
+        "{status}"
+    );
+
+    let logout_invocation = parse_command_sequence("mcp-logout atlassian_rovo")
+        .unwrap()
+        .remove(0);
+    let logout = display_body(execute_auth_command(&auth_store, &logout_invocation).unwrap());
+    assert_eq!(
+        logout,
+        "server=atlassian_rovo:logged_out=false:changed=false:source=auth-store"
+    );
 
     let _ = fs::remove_dir_all(root);
 }

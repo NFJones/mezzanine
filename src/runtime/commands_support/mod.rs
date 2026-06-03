@@ -496,7 +496,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 ),
             }))
         }
-        "auth-login" | "auth-status" => {
+        "auth-login" | "auth-status" | "mcp-login" | "mcp-logout" | "mcp-status" => {
             let outcome = {
                 let Some(auth_store) = service.auth_store() else {
                     return Ok(None);

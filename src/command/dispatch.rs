@@ -27,11 +27,13 @@ use super::{
     mutation_plans_changed, mutation_plans_reload_required, pane_readiness_state_name,
     parse_command_sequence, parse_config_command_value, paste_buffer_display,
     paste_clipboard_display, persist_command_config_mutation, persist_command_theme_config,
-    persist_mcp_add, persist_mcp_remove, pipe_pane_display, positional_args,
+    persist_config_text, persist_mcp_add, persist_mcp_remove, pipe_pane_display, positional_args,
     resume_session_display, save_buffer_display, search_history_display, set_option_args,
     set_theme_arg, show_default_options, show_messages_display, show_metrics_display,
     snapshot_session_display, validate_config_file,
 };
+
+use std::fs;
 
 // In-memory command execution entry points.
 
@@ -287,14 +289,30 @@ pub fn execute_config_store_command(
             } else {
                 ConfigScope::Primary
             };
-            let validation = validate_config_file(&PathBuf::from(path), scope)?;
+            let source_path = PathBuf::from(path);
+            let validation = validate_config_file(&source_path, scope)?;
+            let target_path = match scope {
+                ConfigScope::ProjectOverlay => source_path.clone(),
+                ConfigScope::Primary => paths
+                    .select_primary_file()?
+                    .unwrap_or_else(|| paths.default_primary_file()),
+                ConfigScope::LiveOverride => {
+                    return Err(MezError::config(
+                        "source-file cannot persist live override scope through config store",
+                    ));
+                }
+            };
+            let source_text = fs::read_to_string(&source_path)?;
+            let previous_text = fs::read_to_string(&target_path).ok();
+            let changed = previous_text.as_deref() != Some(source_text.as_str());
+            persist_config_text(&target_path, scope, &source_text)?;
             Ok(CommandOutcome::Display {
                 command: invocation.name.clone(),
                 body: format!(
-                    "path={path}:valid={}:diagnostics={}:applied=false:reload_required={}:source=config-store",
+                    "path={path}:valid={}:diagnostics={}:applied=true:changed={changed}:reload_required={changed}:target={}:source=config-store",
                     validation.valid,
                     validation.diagnostics.len(),
-                    validation.valid
+                    target_path.display()
                 ),
             })
         }
