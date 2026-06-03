@@ -4411,7 +4411,7 @@ fn runtime_primary_command_prompt_submits_and_clears_through_terminal_step() {
         display_view
             .lines
             .iter()
-            .any(|line| line.contains("mezzanine command help")),
+            .any(|line| line.contains("Mezzanine command help")),
         "{:?}",
         display_view.lines
     );
@@ -4419,7 +4419,7 @@ fn runtime_primary_command_prompt_submits_and_clears_through_terminal_step() {
         display_view
             .lines
             .iter()
-            .any(|line| line.contains("agent-shell")),
+            .any(|line| line.contains("Command") && line.contains("Description")),
         "{:?}",
         display_view.lines
     );

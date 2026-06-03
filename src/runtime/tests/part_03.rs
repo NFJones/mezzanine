@@ -3040,7 +3040,7 @@ fn runtime_agent_shell_mcp_command_reports_live_registry_detail() {
         "{response}"
     );
     assert!(
-        response.contains("- `read_file`: state=blacklisted"),
+        response.contains("| `read_file` | blacklisted |"),
         "{response}"
     );
     assert!(!response.contains("requires_runtime"), "{response}");
@@ -3091,7 +3091,7 @@ fn runtime_agent_shell_list_mcp_lazily_discovers_configured_server() {
     assert!(response.contains("Tools: 1"), "{response}");
     assert!(response.contains("### `fixture` - fixture"), "{response}");
     assert!(response.contains("- Status: available"), "{response}");
-    assert!(response.contains("- `echo`: state=available"), "{response}");
+    assert!(response.contains("| `echo` | available |"), "{response}");
     assert_eq!(
         service.mcp_registry().prompt_summary().available_tools[0].tool_name,
         "echo"

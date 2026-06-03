@@ -1695,30 +1695,38 @@ fn agent_shell_executes_builtin_slash_command_effects() {
     let help = execute_agent_shell_command(&mut store, "%1", "/help")
         .unwrap()
         .unwrap();
-    assert!(matches!(
-        help,
-        AgentShellCommandOutcome::Display { ref body, .. }
-            if body.contains("agent shell commands")
-                && body.contains("/list-sessions")
-                && body.contains("list resumable saved agent conversations.")
-                && body.contains("/list-skills")
-                && body.contains("list available skills and their $skill prompt names.")
-                && body.contains("/status")
-                && body.contains("show the current agent shell session status.")
-                && body.contains("copy and diagnostics")
-                && body.contains("configuration")
-                && body.contains("discovery")
-                && body.contains("work control")
-                && body.find("/approval").unwrap() < body.find("/approve").unwrap()
-                && !body.contains("/agent")
-                && !body.contains("/memory")
-                && !body.contains("/mention")
-                && !body.contains("/plan")
-                && !body.contains("/plugins")
-                && !body.contains("/ps")
-                && !body.contains("/review")
-                && !body.contains("effect=")
-    ));
+    let AgentShellCommandOutcome::Display { ref body, .. } = help else {
+        panic!("expected /help display outcome");
+    };
+    assert!(body.contains("# Agent shell commands"), "{body}");
+    assert!(body.contains("| `/list-sessions` |"), "{body}");
+    assert!(
+        body.contains("list resumable saved agent conversations."),
+        "{body}"
+    );
+    assert!(body.contains("| `/list-skills` |"), "{body}");
+    assert!(
+        body.contains("list available skills and their $skill prompt names."),
+        "{body}"
+    );
+    assert!(body.contains("| `/status` |"), "{body}");
+    assert!(
+        body.contains("show the current agent shell session status."),
+        "{body}"
+    );
+    assert!(body.contains("## Copy and diagnostics"), "{body}");
+    assert!(body.contains("## Configuration"), "{body}");
+    assert!(body.contains("## Discovery"), "{body}");
+    assert!(body.contains("## Work control"), "{body}");
+    assert!(body.find("/approval").unwrap() < body.find("/approve").unwrap());
+    assert!(!body.contains("/agent"), "{body}");
+    assert!(!body.contains("/memory"), "{body}");
+    assert!(!body.contains("/mention"), "{body}");
+    assert!(!body.contains("/plan"), "{body}");
+    assert!(!body.contains("/plugins"), "{body}");
+    assert!(!body.contains("/ps"), "{body}");
+    assert!(!body.contains("/review"), "{body}");
+    assert!(!body.contains("effect="), "{body}");
 
     store.finish_turn("%1", "turn-2").unwrap();
     let old_session = store.get("%1").unwrap().session_id.clone();
@@ -1919,12 +1927,8 @@ fn agent_shell_mcp_command_lists_injected_registry_state() {
     assert!(body.contains("- State: available"), "{body}");
     assert!(body.contains("- Status: available"), "{body}");
     assert!(body.contains("- Retryable: false"), "{body}");
-    assert!(
-        body.contains(
-            "- `read_file`: state=available, approval=inherit, permission_required=true, effects=read-fs"
-        ),
-        "{body}"
-    );
+    assert!(body.contains("| Tool | State | Approval | Permission | Effects | Description |"), "{body}");
+    assert!(body.contains("| `read_file` | available | inherit | true | read-fs |"), "{body}");
 }
 
 /// Verifies that `/list-mcp` reports an empty live registry as a concrete runtime
@@ -1991,7 +1995,7 @@ fn agent_shell_mcp_command_reports_unavailable_server_reason() {
     assert!(body.contains("- Session blacklisted: false"), "{body}");
     assert!(body.contains("- Retryable: true"), "{body}");
     assert!(body.contains("- Reason: process exited"), "{body}");
-    assert!(body.contains("- `read_file`: state=unavailable"), "{body}");
+    assert!(body.contains("| `read_file` | unavailable |"), "{body}");
 }
 
 /// Verifies that `/list-mcp` exposes session-blacklisted server state, failure
@@ -2024,7 +2028,7 @@ fn agent_shell_mcp_command_reports_session_blacklisted_server_and_tools() {
     assert!(body.contains("- Session blacklisted: true"), "{body}");
     assert!(body.contains("- Retryable: true"), "{body}");
     assert!(body.contains("- Reason: failed handshake"), "{body}");
-    assert!(body.contains("- `read_file`: state=blacklisted"), "{body}");
+    assert!(body.contains("| `read_file` | blacklisted |"), "{body}");
 }
 
 /// Verifies that configured disabled tools take precedence in `/list-mcp` display
@@ -2044,7 +2048,7 @@ fn agent_shell_mcp_command_reports_disabled_tool_precedence() {
 
     assert!(body.contains("### `fs` - filesystem"), "{body}");
     assert!(body.contains("- State: available"), "{body}");
-    assert!(body.contains("- `read_file`: state=disabled"), "{body}");
+    assert!(body.contains("| `read_file` | disabled |"), "{body}");
 }
 
 /// Verifies agent shell permissions command lists injected policy.

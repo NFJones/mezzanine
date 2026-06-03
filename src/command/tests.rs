@@ -1231,21 +1231,21 @@ fn help_command_describes_mezzanine_command_set() {
         .unwrap(),
     );
 
-    assert!(help.contains("mezzanine command help"), "{help}");
-    assert!(help.contains("agent and integrations"), "{help}");
-    assert!(help.contains("configuration"), "{help}");
-    assert!(help.contains("copy, buffers, and history"), "{help}");
-    assert!(help.contains("diagnostics and help"), "{help}");
-    assert!(help.contains("sessions and clients"), "{help}");
-    assert!(help.contains("windows, groups, and panes"), "{help}");
-    assert!(help.contains("list-commands"), "{help}");
-    assert!(help.contains("list-keys"), "{help}");
+    assert!(help.contains("# Mezzanine command help"), "{help}");
+    assert!(help.contains("## Agent and integrations"), "{help}");
+    assert!(help.contains("## Configuration"), "{help}");
+    assert!(help.contains("## Copy, buffers, and history"), "{help}");
+    assert!(help.contains("## Diagnostics and help"), "{help}");
+    assert!(help.contains("## Sessions and clients"), "{help}");
+    assert!(help.contains("## Windows, groups, and panes"), "{help}");
+    assert!(help.contains("| `list-commands` |"), "{help}");
+    assert!(help.contains("| `list-keys` |"), "{help}");
     assert!(help.contains("show-metrics"), "{help}");
     assert!(help.contains("rebalance-window"), "{help}");
     assert!(help.contains("set-theme"), "{help}");
     assert!(help.contains("agent-shell"), "{help}");
     assert!(help.contains("snapshot-session"), "{help}");
-    assert!(help.contains("\nkey bindings\n"), "{help}");
+    assert!(help.contains("\n## Key bindings\n"), "{help}");
     assert!(help.contains("key"), "{help}");
     assert!(help.contains("source"), "{help}");
     assert!(help.contains("command"), "{help}");
@@ -1275,12 +1275,15 @@ fn help_command_describes_mezzanine_command_set() {
         "{help}"
     );
     assert!(
-        help.find("windows, groups, and panes").unwrap() < help.find("\nkey bindings\n").unwrap(),
+        help.find("Windows, groups, and panes").unwrap()
+            < help.find("\n## Key bindings\n").unwrap(),
         "{help}"
     );
-    let last_line = help.lines().last().unwrap_or_default();
-    assert!(last_line.contains("C-a ~"), "{help}");
-    assert!(last_line.contains("show-messages"), "{help}");
+    let mut trailing_lines = help.lines().rev();
+    assert_eq!(trailing_lines.next(), Some("```"), "{help}");
+    let last_binding = trailing_lines.next().unwrap_or_default();
+    assert!(last_binding.contains("C-a ~"), "{help}");
+    assert!(last_binding.contains("show-messages"), "{help}");
 }
 
 /// Verifies that agent-scoped commands with slash-command equivalents are no

@@ -608,35 +608,50 @@ pub(super) fn agent_shell_help_display() -> String {
             .cmp(agent_shell_command_category(right.name))
             .then_with(|| left.name.cmp(right.name))
     });
-    let name_width = specs
-        .iter()
-        .map(|spec| {
-            let aliases = agent_shell_help_alias_suffix(spec.aliases);
-            format!("/{}{}", spec.name, aliases).len()
-        })
-        .max()
-        .unwrap_or(0);
     let mut lines = vec![
-        "agent shell commands".to_string(),
+        "# Agent shell commands".to_string(),
         String::new(),
-        "commands run inside the pane-local agent shell.".to_string(),
+        "Commands run inside the pane-local agent shell.".to_string(),
+        String::new(),
+        "| Command | Description |".to_string(),
+        "| --- | --- |".to_string(),
     ];
     let mut current_category = "";
     for spec in specs {
         let category = agent_shell_command_category(spec.name);
         if category != current_category {
             lines.push(String::new());
-            lines.push(category.to_string());
+            lines.push(format!("## {}", agent_shell_help_title_case(category)));
+            lines.push(String::new());
             current_category = category;
         }
         let aliases = agent_shell_help_alias_suffix(spec.aliases);
         let name = format!("/{}{}", spec.name, aliases);
         lines.push(format!(
-            "  {name:<name_width$}  {}",
+            "| `{name}` | {} |",
             agent_shell_command_description(spec.name)
         ));
     }
     lines.join("\n")
+}
+
+/// Returns a display heading for one lower-case agent-shell help category.
+fn agent_shell_help_title_case(category: &str) -> String {
+    category
+        .split_whitespace()
+        .enumerate()
+        .map(|(index, word)| {
+            if index > 0 {
+                return word.to_string();
+            }
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Returns the help category for one slash command.
@@ -841,10 +856,12 @@ fn agent_shell_mcp_tool_lines(server: &McpServerState, lines: &mut Vec<String>) 
         lines.push("- Tools: none".to_string());
         return;
     }
-    lines.push("- Tools:".to_string());
+    lines.push(String::new());
+    lines.push("| Tool | State | Approval | Permission | Effects | Description |".to_string());
+    lines.push("| --- | --- | --- | --- | --- | --- |".to_string());
     for tool in &server.tools {
         lines.push(format!(
-            "  - `{}`: state={}, approval={}, permission_required={}, effects={}, description={}",
+            "| `{}` | {} | {} | {} | {} | {} |",
             tool.name,
             agent_shell_mcp_tool_state_name(server, tool),
             agent_shell_mcp_approval_name(tool.approval),

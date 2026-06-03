@@ -1098,7 +1098,7 @@ impl RuntimeSessionService {
         }
         let content = self
             .execute_terminal_command(primary_client_id, command)
-            .and_then(|body| runtime_command_display_overlay_content(&body))?;
+            .and_then(|body| runtime_command_display_overlay_content(&body, &self.ui_theme))?;
         if runtime_command_display_should_open_overlay(&content) {
             self.show_primary_display_overlay_inner(
                 content.lines,
@@ -1447,8 +1447,9 @@ impl RuntimeSessionService {
                         }
                         match self
                             .execute_terminal_command(primary_client_id, &command)
-                            .and_then(|body| runtime_command_display_overlay_content(&body))
-                        {
+                            .and_then(|body| {
+                                runtime_command_display_overlay_content(&body, &self.ui_theme)
+                            }) {
                             Ok(content)
                                 if runtime_command_display_should_open_overlay(&content) =>
                             {
@@ -4257,7 +4258,7 @@ impl RuntimeSessionService {
                 truncated
             ),
         )?;
-        let content = runtime_command_display_overlay_content(&output)?;
+        let content = runtime_command_display_overlay_content(&output, &self.ui_theme)?;
         if runtime_command_display_should_open_overlay(&content) {
             self.show_primary_display_overlay_inner(
                 content.lines,
@@ -5856,7 +5857,7 @@ mod tests {
             }]
         })
         .to_string();
-        let content = runtime_command_display_overlay_content(&body).unwrap();
+        let content = runtime_command_display_overlay_content(&body, &default_ui_theme()).unwrap();
 
         assert!(content.selections.is_empty());
         assert_eq!(

@@ -471,16 +471,13 @@ pub(super) fn command_help_display() -> String {
             .cmp(terminal_command_category(right.0))
             .then_with(|| left.0.cmp(right.0))
     });
-    let name_width = rows
-        .iter()
-        .map(|(name, _)| name.len())
-        .max()
-        .unwrap_or(0)
-        .max(22);
     let mut lines = vec![
-        "mezzanine command help",
+        "# Mezzanine command help",
         "",
-        "commands entered through the mezzanine command prompt run against the active session. commands that produce output render that output into the active pane.",
+        "Commands entered through the Mezzanine command prompt run against the active session. Commands that produce output render that output into the active pane.",
+        "",
+        "| Command | Description |",
+        "| --- | --- |",
     ]
     .into_iter()
     .map(str::to_string)
@@ -490,15 +487,38 @@ pub(super) fn command_help_display() -> String {
         let category = terminal_command_category(name);
         if category != current_category {
             lines.push(String::new());
-            lines.push(category.to_string());
+            lines.push(format!("## {}", terminal_help_title_case(category)));
+            lines.push(String::new());
             current_category = category;
         }
-        lines.push(format!("  {name:<name_width$}  {description}"));
+        lines.push(format!("| `{name}` | {description} |"));
     }
     lines.push(String::new());
-    lines.push("key bindings".to_string());
+    lines.push("## Key bindings".to_string());
+    lines.push(String::new());
+    lines.push("```text".to_string());
     lines.extend(list_default_key_bindings().lines().map(str::to_string));
+    lines.push("```".to_string());
     lines.join("\n")
+}
+
+/// Returns a display heading for one lower-case terminal help category.
+fn terminal_help_title_case(category: &str) -> String {
+    category
+        .split_whitespace()
+        .enumerate()
+        .map(|(index, word)| {
+            if index > 0 {
+                return word.to_string();
+            }
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Returns terminal command help rows before presentation sorting.
@@ -521,7 +541,10 @@ fn terminal_command_category(name: &str) -> &'static str {
         | "auth-login"
         | "auth-status"
         | "mcp-add"
+        | "mcp-login"
+        | "mcp-logout"
         | "mcp-remove"
+        | "mcp-status"
         | "mcp-retry"
         | "refresh-provider-info" => "agent and integrations",
         "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
@@ -583,8 +606,11 @@ fn terminal_command_description(name: &str) -> &'static str {
         "list-windows" => "show window identities, names, active state, and sizes.",
         "mark-pane-ready" => "temporarily mark a pane as ready after risk acknowledgement.",
         "mcp-add" => "add an MCP server.",
+        "mcp-login" => "authenticate an MCP server.",
+        "mcp-logout" => "remove MCP server authentication.",
         "mcp-remove" => "remove an MCP server.",
         "mcp-retry" => "retry an unavailable MCP server.",
+        "mcp-status" => "show non-secret MCP server auth status.",
         "new-group" => "create a window group with one landing window.",
         "new-window" => "create a window with one pane.",
         "next-group" => "focus the next window group.",

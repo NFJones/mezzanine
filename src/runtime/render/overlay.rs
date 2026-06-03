@@ -437,6 +437,7 @@ pub(super) struct RuntimeDisplayChoice {
 /// Parses command JSON output into human-readable overlay content.
 pub(super) fn runtime_command_display_overlay_content(
     body: &str,
+    ui_theme: &UiTheme,
 ) -> Result<RuntimeCommandDisplayOverlayContent> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("runtime command response is not valid JSON"))?;
@@ -461,10 +462,29 @@ pub(super) fn runtime_command_display_overlay_content(
                 .map(ToOwned::to_owned);
         }
         if let Some(body) = outcome.get("body").and_then(serde_json::Value::as_str) {
-            content.extend_body(body);
+            let command = outcome
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            let content_type = outcome
+                .get("content_type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if agent_output_content_type_is_markdown(content_type)
+                || terminal_command_display_body_is_markdown(command.as_deref(), body)
+            {
+                content.extend_markdown_body(command, body, ui_theme);
+            } else {
+                content.extend_body(body);
+            }
         }
     }
     Ok(content)
+}
+
+/// Returns true when a terminal command display body is authored as Markdown.
+fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
+    matches!(command, Some("help")) && body.trim_start().starts_with('#')
 }
 
 /// Returns whether a terminal command response needs the modal display overlay.
@@ -705,6 +725,25 @@ pub(super) fn runtime_enabled_phrase(value: &str) -> &'static str {
 }
 
 impl RuntimeCommandDisplayOverlayContent {
+    /// Appends one markdown display body to this overlay content.
+    fn extend_markdown_body(&mut self, command: Option<String>, body: &str, ui_theme: &UiTheme) {
+        let mut markdown_content =
+            runtime_agent_shell_markdown_overlay_content(command, body, ui_theme);
+        let line_offset = self.lines.len();
+        self.lines.append(&mut markdown_content.lines);
+        self.line_style_spans
+            .append(&mut markdown_content.line_style_spans);
+        self.selections.extend(
+            markdown_content
+                .selections
+                .into_iter()
+                .map(|mut selection| {
+                    selection.line_index += line_offset;
+                    selection
+                }),
+        );
+    }
+
     /// Appends one raw display body to this overlay content.
     fn extend_body(&mut self, body: &str) {
         for line in body.lines() {
