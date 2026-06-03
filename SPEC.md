@@ -4254,6 +4254,11 @@ failure for the user. A failure-summary response MUST NOT convert a retryable
 provider failure into a terminal failed turn before the configured retry
 attempts are exhausted.
 
+Rate-limit and retryable transport failures MUST use the runtime retry
+scheduler's bounded exponential backoff policy. The default policy MUST attempt
+up to five retries for one active turn before surfacing the provider failure as
+terminal.
+
 Every completed turn MUST persist enough state to resume the conversation,
 audit actions, and explain the final result after detach and reattach.
 

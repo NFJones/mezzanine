@@ -64,7 +64,7 @@ const DEFAULT_SHELL_RECOVERY_INTERVAL_MS: u64 = 250;
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const DEFAULT_PROVIDER_RETRY_MAX_ATTEMPTS: u32 = 2;
+const DEFAULT_PROVIDER_RETRY_MAX_ATTEMPTS: u32 = 5;
 /// Defines the DEFAULT PROVIDER RETRY INITIAL DELAY MS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

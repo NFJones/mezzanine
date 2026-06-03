@@ -3185,6 +3185,116 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies rate-limited provider failures receive the full bounded exponential
+/// retry policy before the runtime records a terminal turn failure.
+///
+/// The backlog regression was a 429 response that failed the turn after the
+/// earlier shorter retry budget. This test drives five consecutive rate-limit
+/// failures through the actor-owned retry timer path, checks the backoff delay
+/// for every scheduled retry, and verifies the sixth failure exhausts the
+/// policy instead of scheduling an extra retry.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "summarize the pane")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
+    let expected_turn = pending[0].turn_id.clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+
+    let client = async {
+        let expected_delays = [1_000, 2_000, 4_000, 8_000, 16_000];
+        for (index, expected_delay_ms) in expected_delays.into_iter().enumerate() {
+            let attempt = index + 1;
+            let mut failure = RuntimeEventBatch::new();
+            failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+                agent_id: expected_agent.clone(),
+                turn_id: expected_turn.clone(),
+                kind: "invalid_state".to_string(),
+                message: "provider HTTP request failed: rate limited".to_string(),
+                provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
+                provider_raw_text: None,
+            }));
+            let failure_report = handle.submit_runtime_events(failure).await.unwrap();
+            assert_eq!(failure_report.accepted, 1);
+            assert_eq!(failure_report.applied, 1);
+
+            let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
+            let (retry_key, retry_delay_ms) = timer_effects
+                .iter()
+                .find_map(|effect| match effect {
+                    RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                        if key.kind == RuntimeTimerKind::ProviderRetry =>
+                    {
+                        Some((key.clone(), *delay_ms))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
+            assert_eq!(retry_key.owner_id, expected_turn);
+            assert_eq!(retry_key.generation, attempt as u64);
+            assert_eq!(retry_delay_ms, expected_delay_ms);
+
+            let mut retry = RuntimeEventBatch::new();
+            retry.push(RuntimeEvent::Timer(TimerEvent {
+                key: retry_key,
+                now_ms: expected_delay_ms,
+            }));
+            let retry_report = handle.submit_runtime_events(retry).await.unwrap();
+            assert_eq!(retry_report.accepted, 1);
+            assert_eq!(retry_report.applied, 1);
+
+            let dispatches = handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap();
+            assert_eq!(
+                dispatches,
+                vec![RuntimeSideEffect::DispatchAgentProvider {
+                    agent_id: expected_agent.clone(),
+                    turn_id: expected_turn.clone(),
+                }]
+            );
+        }
+
+        let mut exhausted = RuntimeEventBatch::new();
+        exhausted.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id: expected_agent,
+            turn_id: expected_turn,
+            kind: "invalid_state".to_string(),
+            message: "provider HTTP request failed: rate limited".to_string(),
+            provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
+            provider_raw_text: None,
+        }));
+        let exhausted_report = handle.submit_runtime_events(exhausted).await.unwrap();
+        assert_eq!(exhausted_report.accepted, 1);
+        assert_eq!(exhausted_report.applied, 1);
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "exhausted retry budget must not schedule another timer"
+        );
+        assert_eq!(handle.shutdown().await.unwrap(), RuntimeLifecycleState::Running);
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_side_effects_queued >= 10);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies provider output-limit failures use the retry timer path after
 /// mutating only active-turn retry guidance and the model profile output cap.
 ///
