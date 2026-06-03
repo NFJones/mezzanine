@@ -206,6 +206,11 @@ pub struct RenderedClientView {
     /// This mirrors the active pane application mode so host clipboard pastes
     /// arrive with `CSI 200~`/`CSI 201~` delimiters and can be routed opaquely.
     pub bracketed_paste: bool,
+    /// Whether the attached terminal should request host mouse reporting.
+    ///
+    /// This mirrors the foreground client mouse policy so serialized client
+    /// views can preserve the same host-mouse capture decision as local frames.
+    pub host_mouse_reporting: bool,
     /// Milliseconds between client-requested animation refreshes.
     ///
     /// A zero value means the view does not require animation refreshes.
@@ -315,6 +320,11 @@ pub struct AttachedTerminalOutputModes {
     /// be forwarded to the pane without interpreting Mezzanine prefix commands
     /// or mouse reports embedded in the pasted bytes.
     pub bracketed_paste: bool,
+    /// Whether the attached terminal should request host mouse reporting.
+    ///
+    /// This mirrors the foreground client's configured mouse policy so
+    /// Mezzanine only captures host mouse input when mouse support is enabled.
+    pub host_mouse_reporting: bool,
     /// Stores the cursor style value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -366,6 +376,7 @@ impl Default for AttachedTerminalOutputModes {
         Self {
             application_keypad: false,
             bracketed_paste: false,
+            host_mouse_reporting: true,
             cursor_style: TerminalCursorStyle::default(),
             cursor_blink: false,
             cursor_blink_interval_ms: 500,
@@ -686,6 +697,8 @@ pub(crate) struct AttachedTerminalOutputFrameState {
     line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Whether host bracketed paste was enabled for the retained frame.
     bracketed_paste: bool,
+    /// Whether host mouse reporting was enabled for the retained frame.
+    host_mouse_reporting: bool,
     /// Cursor presentation sequence emitted by the retained frame.
     cursor_presentation: String,
 }
@@ -716,6 +729,7 @@ impl AttachedTerminalOutputFrameState {
             lines: lines.to_vec(),
             line_style_spans: normalized_style_span_rows(line_style_spans, lines.len()),
             bracketed_paste: modes.bracketed_paste,
+            host_mouse_reporting: modes.host_mouse_reporting,
             cursor_presentation: cursor_presentation_sequence(lines, modes),
         }
     }
@@ -1011,6 +1025,9 @@ pub(crate) fn encode_attached_terminal_output_frame_with_styles(
         None => {}
     }
     frame.extend_from_slice(attached_terminal_enter_presentation_frame());
+    frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
+        modes.host_mouse_reporting,
+    ));
     frame.extend_from_slice(attached_terminal_bracketed_paste_frame(
         modes.bracketed_paste,
     ));
@@ -1071,6 +1088,11 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             modes.bracketed_paste,
         ));
     }
+    if previous.host_mouse_reporting != modes.host_mouse_reporting {
+        frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
+            modes.host_mouse_reporting,
+        ));
+    }
     let changed_row_count = lines
         .iter()
         .enumerate()
@@ -1090,7 +1112,7 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         .count();
     let allow_segment_updates = changed_row_count <= 3;
     let mut changed_rows = 0usize;
-    let mut cursor_hidden_for_row_updates = false;
+    let mut presentation_reset_emitted = false;
     for (index, line) in lines.iter().enumerate() {
         let previous_line = previous.lines.get(index).map(String::as_str).unwrap_or("");
         let previous_spans = previous
@@ -1105,9 +1127,12 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         if line.as_str() == previous_line && spans == previous_spans {
             continue;
         }
-        if !cursor_hidden_for_row_updates {
-            frame.extend_from_slice(b"\x1b[?25l");
-            cursor_hidden_for_row_updates = true;
+        if !presentation_reset_emitted {
+            frame.extend_from_slice(attached_terminal_enter_presentation_frame());
+            frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
+                modes.host_mouse_reporting,
+            ));
+            presentation_reset_emitted = true;
         }
         let row = index.saturating_add(1);
         if allow_segment_updates
@@ -1127,6 +1152,12 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
     }
     let cursor_presentation = cursor_presentation_sequence(lines, modes);
     if changed_rows > 0 || cursor_presentation != previous.cursor_presentation {
+        if !presentation_reset_emitted {
+            frame.extend_from_slice(attached_terminal_enter_presentation_frame());
+            frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
+                modes.host_mouse_reporting,
+            ));
+        }
         frame.extend_from_slice(cursor_presentation.as_bytes());
     }
     frame
@@ -1208,6 +1239,7 @@ fn terminal_output_style_spans_drop_focused_overlay_spans_for_mismatched_diff_ro
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -1261,6 +1293,7 @@ fn terminal_output_style_spans_drop_hidden_spans_for_matching_diff_row_slices() 
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -1469,7 +1502,16 @@ fn terminal_line_width(line: &str) -> usize {
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(crate) const fn attached_terminal_enter_presentation_frame() -> &'static [u8] {
-    b"\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h"
+    b"\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h"
+}
+
+/// Returns the host mouse reporting DEC private-mode sequence for a frame.
+const fn attached_terminal_mouse_reporting_frame(enabled: bool) -> &'static [u8] {
+    if enabled {
+        b"\x1b[?1000;1002;1006h"
+    } else {
+        b"\x1b[?1006l\x1b[?1002l\x1b[?1000l"
+    }
 }
 
 /// Returns the host bracketed-paste DEC private-mode sequence for a frame.
@@ -1486,7 +1528,7 @@ const fn attached_terminal_bracketed_paste_frame(enabled: bool) -> &'static [u8]
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(crate) const fn attached_terminal_restore_presentation_frame() -> &'static [u8] {
-    b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
+    b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
 }
 
 /// Runs the cursor presentation sequence operation for this subsystem.
@@ -1496,7 +1538,7 @@ pub(crate) const fn attached_terminal_restore_presentation_frame() -> &'static [
 /// on duplicated control-flow logic.
 fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputModes) -> String {
     if !cursor_phase_visible(modes) {
-        return "\x1b[?25l".to_string();
+        return "\x1b[?25l\x1b[0m".to_string();
     }
     let row = modes
         .cursor_row
@@ -1513,7 +1555,7 @@ fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputM
         .min(frame_width.saturating_sub(1))
         .saturating_add(1);
     let style = modes.cursor_style.decscusr_parameter(false);
-    format!("\x1b[?25l\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
+    format!("\x1b[?25l\x1b[0m\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
 }
 
 /// Runs the cursor phase visible operation for this subsystem.
@@ -1552,15 +1594,28 @@ fn encode_styled_terminal_line(line: &str, style_spans: &[TerminalStyleSpan]) ->
     let mut active = super::GraphicRendition::default();
     let mut column = 0usize;
     for grapheme in terminal_graphemes(line) {
+        let sanitized = sanitize_terminal_output_grapheme(grapheme);
+        if sanitized.is_empty() {
+            continue;
+        }
         let rendition = rendition_at_column(style_spans, column);
         if rendition != active {
             encoded.push_str(&sgr_sequence(rendition));
             active = rendition;
         }
-        encoded.push_str(grapheme);
+        encoded.push_str(sanitized.as_str());
         column = column.saturating_add(terminal_grapheme_width(grapheme));
     }
     encoded
+}
+
+/// Returns terminal-display text for one rendered grapheme cluster.
+///
+/// Rendered pane text is untrusted by the attached terminal writer. Control
+/// bytes that reach this final boundary must be removed so only Mezzanine-owned
+/// framing, cursor, and SGR sequences can affect the host terminal.
+fn sanitize_terminal_output_grapheme(grapheme: &str) -> String {
+    grapheme.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 /// Returns the active rendition at a display column.
@@ -2779,6 +2834,7 @@ where
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: terminal_config.mouse_policy.pane_application_keypad_mode,
                 bracketed_paste: terminal_config.pane_bracketed_paste_mode,
+                host_mouse_reporting: terminal_config.mouse_policy.enabled,
                 cursor_style: terminal_config.cursor_style,
                 cursor_blink: terminal_config.cursor_blink,
                 cursor_blink_interval_ms: terminal_config.cursor_blink_interval_ms,

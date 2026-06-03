@@ -281,7 +281,9 @@ impl RuntimeSessionService {
         window: &crate::layout::Window,
         view: &mut RenderedClientView,
     ) -> Result<()> {
-        if let Some((pane_id, copy_mode)) = self.deferred_word_copy_cleanup.take()
+        let mut deferred_cleanup = self.deferred_word_copy_cleanup.borrow_mut();
+        let mut rendered_deferred_cleanup = false;
+        if let Some((pane_id, copy_mode)) = deferred_cleanup.as_ref()
             && let Some(pane_index) = window
                 .panes()
                 .iter()
@@ -289,7 +291,7 @@ impl RuntimeSessionService {
             && let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane_index)
         {
             let mut lines = copy_mode.visible_styled_lines().to_vec();
-            apply_copy_mode_selection_spans(&copy_mode, &mut lines, &self.ui_theme);
+            apply_copy_mode_selection_spans(copy_mode, &mut lines, &self.ui_theme);
             overlay_styled_lines(
                 view,
                 row,
@@ -298,7 +300,12 @@ impl RuntimeSessionService {
                 usize::from(size.rows),
                 &lines,
             );
+            rendered_deferred_cleanup = true;
         }
+        if rendered_deferred_cleanup {
+            deferred_cleanup.take();
+        }
+        drop(deferred_cleanup);
         for pane in window.panes() {
             let Some(copy_mode) = self.active_copy_modes.get(pane.id.as_str()) else {
                 continue;
@@ -554,15 +561,19 @@ impl RuntimeSessionService {
         config.mouse_pane_regions = self.active_window_mouse_pane_regions();
         config.frame_context = frame_context;
         config.mouse_policy.pane_resize_active = self.mouse_resize_drag_state.is_some();
-        config.mouse_selection_active = self.mouse_selection_drag_state.is_some();
-        config.mouse_selection_autoscroll_position = self
-            .mouse_selection_drag_state
-            .as_ref()
-            .and_then(|state| state.autoscroll_position);
-        if let Ok(pane_id) = self.active_pane_id() {
+        let active_pane_id = self.active_pane_id().ok();
+        let active_mouse_selection_state = active_pane_id.as_deref().and_then(|pane_id| {
+            self.mouse_selection_drag_state
+                .as_ref()
+                .filter(|state| state.pane_id.as_str() == pane_id)
+        });
+        config.mouse_selection_active = active_mouse_selection_state.is_some();
+        config.mouse_selection_autoscroll_position =
+            active_mouse_selection_state.and_then(|state| state.autoscroll_position);
+        if let Some(pane_id) = active_pane_id {
             config.mouse_policy.copy_mode_active =
                 self.active_copy_modes.contains_key(pane_id.as_str())
-                    || self.mouse_selection_drag_state.is_some();
+                    || active_mouse_selection_state.is_some();
             config.mouse_policy.pane_application_mouse_mode = self
                 .pane_screens
                 .get(pane_id.as_str())

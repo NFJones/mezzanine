@@ -258,7 +258,7 @@ fn foreground_serve_attach_primary_renders_default_frames_and_restores_presentat
     process.send_interrupt().unwrap();
     process
         .read_until(&mut output, Duration::from_secs(5), |text| {
-            text.contains("\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q")
+            text.contains("\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q")
         })
         .unwrap();
     process.wait_for_exit(Duration::from_secs(5)).unwrap();

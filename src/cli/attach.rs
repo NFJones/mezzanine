@@ -1874,6 +1874,11 @@ pub(super) fn terminal_step_response_output_modes(
         .and_then(|modes| modes.get("bracketed_paste"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let host_mouse_reporting = view
+        .get("output_modes")
+        .and_then(|modes| modes.get("host_mouse_reporting"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
     let animation_refresh_interval_ms = view
         .get("output_modes")
         .and_then(|modes| modes.get("animation_refresh_interval_ms"))
@@ -1882,6 +1887,7 @@ pub(super) fn terminal_step_response_output_modes(
     Ok(Some(AttachedTerminalOutputModes {
         application_keypad,
         bracketed_paste,
+        host_mouse_reporting,
         animation_refresh_interval_ms,
         cursor_style,
         cursor_blink,

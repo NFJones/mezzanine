@@ -2013,6 +2013,7 @@ fn attached_terminal_client_step_routes_input_and_composes_output() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -2092,6 +2093,7 @@ fn attached_terminal_client_step_forwards_raw_input_when_primary_prompt_is_activ
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -2312,6 +2314,7 @@ fn attached_terminal_client_loop_pumps_input_output_and_stops_on_hangup() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -2417,6 +2420,7 @@ fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -2447,7 +2451,7 @@ fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
         "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
     ));
     assert!(rendered.contains("pane"));
-    assert!(rendered.ends_with("\x1b[?25l\x1b[2 q\x1b[1;1H\x1b[?25h"));
+    assert!(rendered.ends_with("\x1b[?25l\x1b[0m\x1b[2 q\x1b[1;1H\x1b[?25h"));
 }
 
 /// Verifies that attached TTY output writability is sampled after the blocking
@@ -2509,7 +2513,29 @@ fn attached_terminal_output_frame_controls_cursor_presentation() {
         "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
     ));
     assert!(rendered.contains("pane"));
-    assert!(rendered.ends_with("\x1b[?25l\x1b[4 q\x1b[3;4H\x1b[?25h"));
+    assert!(rendered.ends_with("\x1b[?25l\x1b[0m\x1b[4 q\x1b[3;4H\x1b[?25h"));
+}
+
+/// Verifies attached-terminal frames honor the configured host mouse policy.
+///
+/// Sessions with mouse disabled must not place the containing terminal in xterm
+/// mouse modes, otherwise normal host selection and scrolling can be captured
+/// even though Mezzanine mouse support is disabled.
+#[test]
+fn attached_terminal_output_frame_disables_host_mouse_reporting_when_configured() {
+    let frame = encode_attached_terminal_output_frame_with_styles(
+        &["pane".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            host_mouse_reporting: false,
+            ..AttachedTerminalOutputModes::default()
+        },
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[?1000;1002;1006h"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[?1006l\x1b[?1002l\x1b[?1000l"), "{rendered:?}");
 }
 
 /// Verifies attached-terminal cursor presentation clamps to the rendered frame
@@ -2533,7 +2559,7 @@ fn attached_terminal_output_frame_clamps_visible_cursor_to_rendered_bounds() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(
-        rendered.ends_with("\x1b[?25l\x1b[2 q\x1b[2;5H\x1b[?25h"),
+        rendered.ends_with("\x1b[?25l\x1b[0m\x1b[2 q\x1b[2;5H\x1b[?25h"),
         "{rendered:?}"
     );
     assert!(!rendered.contains("\x1b[10;6H"), "{rendered:?}");
@@ -2561,7 +2587,7 @@ fn attached_terminal_output_frame_uses_screen_cursor_after_patched_font_prompt_g
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(
-        rendered.ends_with("\x1b[?25l\x1b[2 q\x1b[1;2H\x1b[?25h"),
+        rendered.ends_with("\x1b[?25l\x1b[0m\x1b[2 q\x1b[1;2H\x1b[?25h"),
         "{rendered:?}"
     );
 }
@@ -2584,7 +2610,7 @@ fn attached_terminal_output_frame_honors_cursor_blink_interval_phase() {
     );
     let rendered = String::from_utf8(frame).unwrap();
 
-    assert!(rendered.ends_with("\x1b[?25l"), "{rendered:?}");
+    assert!(rendered.ends_with("\x1b[?25l\x1b[0m"), "{rendered:?}");
 }
 
 /// Verifies that stable-size attached-terminal redraws are encoded as row
@@ -2897,8 +2923,8 @@ fn attached_terminal_output_update_omits_unchanged_frame_bytes() {
 
 /// Verifies stable-size attached-terminal updates emit only cursor bytes when
 /// the visible content is unchanged and the cursor moves. Row-differential
-/// updates should not resend static presentation setup or host bracketed-paste
-/// mode just to reposition the cursor.
+/// updates should resend coordinate-state presentation setup before cursor
+/// addressing, but not clear or repaint static content.
 #[test]
 fn attached_terminal_output_update_uses_cursor_only_frame_for_cursor_moves() {
     let lines = vec!["one    ".to_string(), "two    ".to_string()];
@@ -2925,10 +2951,12 @@ fn attached_terminal_output_update_uses_cursor_only_frame_for_cursor_moves() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[?1000;1002;1006h"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[?2004"), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;1Hone"), "{rendered:?}");
-    assert_eq!(rendered, "\x1b[?25l\x1b[2 q\x1b[1;2H\x1b[?25h");
+    assert_eq!(
+        rendered,
+        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?25l\x1b[0m\x1b[2 q\x1b[1;2H\x1b[?25h"
+    );
 }
 
 /// Verifies stable-size attached-terminal updates emit bracketed-paste mode
@@ -2971,7 +2999,7 @@ fn attached_terminal_restore_frame_restores_cursor_visibility() {
 
     assert_eq!(
         restore,
-        "\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
+        "\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
     );
 }
 
@@ -3593,6 +3621,7 @@ fn observer_client_presentation_uses_local_viewport_offset() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -3839,6 +3868,7 @@ fn client_presentation_renders_status_line_inside_authoritative_size() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -3893,6 +3923,7 @@ fn client_presentation_highlights_current_pager_search_match() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -3945,6 +3976,7 @@ fn terminal_output_style_spans_drop_styles_for_matching_row_slice() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -4026,6 +4058,7 @@ fn readline_prompt_client_presentation_places_prompt_on_status_row() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
@@ -4072,6 +4105,7 @@ fn readline_prompt_client_presentation_styles_agent_prompt_by_display_width() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,

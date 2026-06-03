@@ -137,6 +137,7 @@ where
     let output_modes = AttachedTerminalOutputModes {
         application_keypad: refreshed.config.mouse_policy.pane_application_keypad_mode,
         bracketed_paste: refreshed.config.pane_bracketed_paste_mode,
+        host_mouse_reporting: refreshed.config.mouse_policy.enabled,
         cursor_style: refreshed.config.cursor_style,
         cursor_blink: false,
         cursor_blink_interval_ms: refreshed.config.cursor_blink_interval_ms,
@@ -396,6 +397,7 @@ where
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
                 bracketed_paste: frame.config.pane_bracketed_paste_mode,
+                host_mouse_reporting: frame.config.mouse_policy.enabled,
                 cursor_style: frame.config.cursor_style,
                 cursor_blink: frame.config.cursor_blink,
                 cursor_blink_interval_ms: frame.config.cursor_blink_interval_ms,
@@ -487,6 +489,7 @@ where
                             .mouse_policy
                             .pane_application_keypad_mode,
                         bracketed_paste: refreshed.config.pane_bracketed_paste_mode,
+                        host_mouse_reporting: refreshed.config.mouse_policy.enabled,
                         cursor_style: refreshed.config.cursor_style,
                         cursor_blink: refreshed.config.cursor_blink,
                         cursor_blink_interval_ms: refreshed.config.cursor_blink_interval_ms,

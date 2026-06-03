@@ -3127,6 +3127,7 @@ impl AsyncRuntimeSessionActor {
             modes: AttachedTerminalOutputModes {
                 application_keypad,
                 bracketed_paste,
+                host_mouse_reporting: config.mouse_policy.enabled,
                 cursor_style: config.cursor_style,
                 cursor_blink: config.cursor_blink,
                 cursor_blink_interval_ms: config.cursor_blink_interval_ms,

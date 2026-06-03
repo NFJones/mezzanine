@@ -2555,7 +2555,7 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
 #[test]
 fn terminal_step_response_output_modes_parse_cursor_metadata() {
     let modes = terminal_step_response_output_modes(
-        r#"{"jsonrpc":"2.0","id":1,"result":{"view":{"cursor":{"row":2,"column":7,"visible":true,"style":"bar","blink":true,"blink_interval_ms":250},"output_modes":{"application_keypad":true,"bracketed_paste":true,"animation_refresh_interval_ms":180},"lines":["pane"]}}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"result":{"view":{"cursor":{"row":2,"column":7,"visible":true,"style":"bar","blink":true,"blink_interval_ms":250},"output_modes":{"application_keypad":true,"bracketed_paste":true,"host_mouse_reporting":false,"animation_refresh_interval_ms":180},"lines":["pane"]}}}"#,
     )
     .unwrap()
     .unwrap();
@@ -2571,6 +2571,7 @@ fn terminal_step_response_output_modes_parse_cursor_metadata() {
     assert_eq!(modes.cursor_blink_interval_ms, 250);
     assert!(modes.application_keypad);
     assert!(modes.bracketed_paste);
+    assert!(!modes.host_mouse_reporting);
     assert_eq!(modes.animation_refresh_interval_ms, 180);
 }
 

@@ -266,6 +266,7 @@ pub fn render_attached_client_view(
         cursor_blink_interval_ms: config.cursor_blink_interval_ms,
         application_keypad: config.mouse_policy.pane_application_keypad_mode,
         bracketed_paste: config.pane_bracketed_paste_mode,
+        host_mouse_reporting: config.mouse_policy.enabled,
         animation_refresh_interval_ms: if config.frame_context.animation_tick_ms > 0 {
             AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
         } else {

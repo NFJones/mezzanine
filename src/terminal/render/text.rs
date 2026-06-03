@@ -314,10 +314,11 @@ fn wrap_agent_log_physical_line(line: &str, wrap_width: usize) -> Vec<String> {
 /// Fits a styled terminal line and clips its style spans to the retained width.
 pub(super) fn fit_styled_width(line: &TerminalStyledLine, width: usize) -> TerminalStyledLine {
     let text = fit_width(&line.text, width);
+    let retained_width = fitted_text_width(&line.text, width);
     let style_spans = line
         .style_spans
         .iter()
-        .filter_map(|span| clip_style_span(*span, width))
+        .filter_map(|span| clip_style_span(*span, retained_width))
         .collect::<Vec<_>>();
     TerminalStyledLine {
         text,
@@ -620,7 +621,8 @@ fn terminal_scalar_has_emoji_presentation_width(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_log_wrap_width, terminal_text_width, wrap_agent_log_text};
+    use super::{agent_log_wrap_width, fit_styled_width, terminal_text_width, wrap_agent_log_text};
+    use crate::terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
     /// Verifies agent log wrapping uses the pane width until the global cap
     /// applies, so very wide terminals do not create unbounded transcript rows.
@@ -686,5 +688,30 @@ mod tests {
 
         assert_eq!(terminal_text_width(&wrapped[0]), 120);
         assert_eq!(terminal_text_width(&wrapped[1]), 10);
+    }
+
+    /// Verifies style spans are clipped to the display cells retained after text
+    /// fitting, not merely to the target pane width. A double-width glyph that
+    /// starts at the final pane column is dropped from text, so its style must
+    /// also be dropped instead of painting the remaining blank edge cell.
+    #[test]
+    fn fit_styled_width_drops_style_for_clipped_wide_glyph() {
+        let line = TerminalStyledLine {
+            text: "x界".to_string(),
+            style_spans: vec![TerminalStyleSpan {
+                start: 1,
+                length: 2,
+                rendition: GraphicRendition {
+                    inverse: true,
+                    ..GraphicRendition::default()
+                },
+            }],
+            copy_text: None,
+        };
+
+        let fitted = fit_styled_width(&line, 2);
+
+        assert_eq!(fitted.text, "x ");
+        assert!(fitted.style_spans.is_empty(), "{:?}", fitted.style_spans);
     }
 }
