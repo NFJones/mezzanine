@@ -637,9 +637,20 @@ impl CopyMode {
         let Some(copy_line) = self.copy_lines.get(line) else {
             return line_slice(display_line, start, end);
         };
+        if copy_line == AGENT_COPY_SKIP_LINE {
+            return AGENT_COPY_SKIP_LINE.to_string();
+        }
         let display_end = char_count(display_line);
-        if copy_line != display_line && start == 0 && end >= display_end {
-            return copy_line.clone();
+        if copy_line != display_line {
+            if start == 0 && end >= display_end {
+                return copy_line.clone();
+            }
+            if let Some(raw_line) = copy_line.strip_prefix(AGENT_COPY_INDICATOR_PREFIX) {
+                return format!(
+                    "{AGENT_COPY_INDICATOR_PREFIX}{}",
+                    line_slice(raw_line, start, end)
+                );
+            }
         }
         line_slice(display_line, start, end)
     }

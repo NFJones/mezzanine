@@ -45,6 +45,8 @@ pub(super) struct AgentRenderedLine {
 pub(super) enum AgentRenderedLineKind {
     /// Ordinary rendered text with no special wrapping behavior.
     Normal,
+    /// Synthetic frame row displayed above one rendered markdown block.
+    MarkdownFrame,
     /// First physical row for one source markdown table row.
     MarkdownTableRow,
     /// Continuation physical row for a wrapped source markdown table row.
@@ -64,7 +66,7 @@ impl AgentRenderedLineKind {
 
     /// Returns whether this row should consume one raw markdown source line.
     fn consumes_markdown_source_line(self) -> bool {
-        !matches!(self, Self::MarkdownTableContinuation)
+        !matches!(self, Self::MarkdownFrame | Self::MarkdownTableContinuation)
     }
 
     /// Returns the row kind to use for a generic wrapped continuation.
@@ -793,38 +795,49 @@ pub(super) fn markdown_rendered_line_is_table_row(line: &AgentRenderedLine) -> b
     line.kind.is_markdown_table()
 }
 
-/// Returns model-authored markdown without an extra divider row.
+/// Adds the synthetic visual frame row required above markdown blocks.
 pub(super) fn frame_agent_markdown_lines(
-    lines: Vec<AgentRenderedLine>,
-    _display_width: usize,
+    mut lines: Vec<AgentRenderedLine>,
+    display_width: usize,
 ) -> Vec<AgentRenderedLine> {
-    lines
+    let prefix = "mez> ";
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    let divider_width = display_width.saturating_sub(prefix_width).max(1);
+    let mut framed = Vec::with_capacity(lines.len().saturating_add(1));
+    framed.push(AgentRenderedLine {
+        display: format!("{prefix}{}", "─".repeat(divider_width)),
+        style_spans: Vec::new(),
+        copy_text: Some(AGENT_COPY_SKIP_LINE.to_string()),
+        kind: AgentRenderedLineKind::MarkdownFrame,
+    });
+    framed.append(&mut lines);
+    framed
 }
 
 /// Builds copy text lines for a framed markdown block.
 pub(super) fn markdown_block_copy_lines(
     rendered_lines: &[AgentRenderedLine],
-    body_rendered_count: usize,
+    _body_rendered_count: usize,
     raw_body_copy_lines: Vec<String>,
 ) -> Vec<String> {
-    if raw_body_copy_lines.len() == body_rendered_count
-        && rendered_lines.len() == body_rendered_count.saturating_add(1)
-    {
-        let mut lines = Vec::with_capacity(raw_body_copy_lines.len().saturating_add(1));
-        if let Some(first) = rendered_lines.first() {
-            lines.push(markdown_rendered_line_copy_text(first));
-        }
-        lines.extend(raw_body_copy_lines);
-        return lines;
-    }
-    if raw_body_copy_lines.len() == body_rendered_count
-        && rendered_lines.len() == body_rendered_count
-    {
-        return raw_body_copy_lines;
-    }
+    let mut raw_lines = raw_body_copy_lines.into_iter();
     rendered_lines
         .iter()
-        .map(markdown_rendered_line_copy_text)
+        .map(|line| {
+            if line
+                .copy_text
+                .as_deref()
+                .is_some_and(|copy_text| copy_text == AGENT_COPY_SKIP_LINE)
+            {
+                return AGENT_COPY_SKIP_LINE.to_string();
+            }
+            if line.kind.consumes_markdown_source_line()
+                && let Some(raw_line) = raw_lines.next()
+            {
+                return raw_line;
+            }
+            markdown_rendered_line_copy_text(line)
+        })
         .collect()
 }
 
@@ -939,7 +952,7 @@ pub(super) fn markdown_blank_line() -> AgentRenderedLine {
     AgentRenderedLine {
         display: String::new(),
         style_spans: Vec::new(),
-        copy_text: Some(String::new()),
+        copy_text: Some(AGENT_COPY_SKIP_LINE.to_string()),
         kind: AgentRenderedLineKind::Normal,
     }
 }

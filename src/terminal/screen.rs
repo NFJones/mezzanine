@@ -5,9 +5,10 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, MAX_OSC_STRING_BYTES, Result, Size,
-    blank_cells, blank_row, collect_screen_cells, terminal_char_width, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width, trim_row,
+    AGENT_COPY_SKIP_LINE, BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer,
+    MAX_OSC_STRING_BYTES, Result, Size, blank_cells, blank_row, collect_screen_cells,
+    terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    trim_row,
 };
 
 // Terminal screen parser, OSC events, and alternate-screen state.
@@ -1364,7 +1365,10 @@ impl TerminalScreen {
                 .take(target_end)
                 .skip(start.saturating_add(1))
             {
-                self.assign_normal_physical_copy_text(target.index, None);
+                self.assign_normal_physical_copy_text(
+                    target.index,
+                    Some(AGENT_COPY_SKIP_LINE.to_string()),
+                );
             }
             target_end = start;
         }
