@@ -238,6 +238,29 @@ impl CopyMode {
         &self.styled_lines[self.scroll_top..end]
     }
 
+    /// Updates the copy-mode viewport height after a pane or window resize.
+    pub fn resize_viewport_rows(&mut self, viewport_rows: usize) -> Result<()> {
+        if viewport_rows == 0 {
+            return Err(MezError::invalid_args(
+                "copy mode viewport must have at least one row",
+            ));
+        }
+        self.viewport_rows = viewport_rows;
+        self.scroll_top = self
+            .scroll_top
+            .min(self.lines.len().saturating_sub(self.viewport_rows));
+        self.cursor = self.clamp_position(self.cursor);
+        self.selection = self
+            .selection
+            .map(|(start, end)| (self.clamp_position(start), self.clamp_position(end)));
+        self.selection_anchor = self
+            .selection_anchor
+            .map(|anchor| self.clamp_position(anchor));
+        self.keep_cursor_visible();
+        self.update_keyboard_selection();
+        Ok(())
+    }
+
     /// Runs the scroll by operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

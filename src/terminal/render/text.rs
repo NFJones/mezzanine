@@ -11,10 +11,55 @@ use crate::error::{MezError, Result};
 use crate::layout::Size;
 use crate::terminal::{CopyPosition, GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
-/// Internal marker for cells occupied by the continuation half of a wide glyph.
-const TERMINAL_WIDE_CONTINUATION_CELL: char = '\0';
 /// Maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const AGENT_LOG_WRAP_COLUMN_CAP: usize = 120;
+
+/// One display-cell slot in a Mezzanine-owned render canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TerminalRenderCell {
+    text: String,
+    continuation: bool,
+}
+
+impl TerminalRenderCell {
+    /// Builds one leading render cell containing a single glyph.
+    pub(super) fn from_char(ch: char) -> Self {
+        Self {
+            text: ch.to_string(),
+            continuation: false,
+        }
+    }
+
+    /// Builds one leading render cell containing a complete grapheme cluster.
+    pub(super) fn from_grapheme(grapheme: &str) -> Self {
+        Self {
+            text: grapheme.to_string(),
+            continuation: false,
+        }
+    }
+
+    /// Builds one continuation cell for a multi-column grapheme cluster.
+    pub(super) fn continuation() -> Self {
+        Self {
+            text: String::new(),
+            continuation: true,
+        }
+    }
+}
+
+/// Builds one render-canvas row initialized to the requested fill glyph.
+pub(super) fn blank_render_row(columns: usize, fill: char) -> Vec<TerminalRenderCell> {
+    vec![TerminalRenderCell::from_char(fill); columns]
+}
+
+/// Builds a render-canvas matrix initialized to the requested fill glyph.
+pub(super) fn blank_render_cells(
+    rows: usize,
+    columns: usize,
+    fill: char,
+) -> Vec<Vec<TerminalRenderCell>> {
+    (0..rows).map(|_| blank_render_row(columns, fill)).collect()
+}
 
 /// Writes one single-width cell while removing any overlapping wide glyph.
 ///
@@ -23,37 +68,31 @@ pub(crate) const AGENT_LOG_WRAP_COLUMN_CAP: usize = 120;
 /// would still consume two terminal cells when collected into a string and
 /// would shift everything to its right. Clearing both halves keeps the canvas
 /// and the terminal's display-width model aligned.
-pub(super) fn write_single_width_cell(row: &mut [char], column: usize, glyph: char) {
+pub(super) fn write_single_width_cell(row: &mut [TerminalRenderCell], column: usize, glyph: char) {
     if column >= row.len() {
         return;
     }
-    if row[column] == TERMINAL_WIDE_CONTINUATION_CELL && column > 0 {
-        row[column - 1] = ' ';
-        // Clear additional continuation cells to the left for emoji ZWJ
-        // sequences wider than 2 cells.
-        let mut left = column.saturating_sub(2);
-        while left > 0 && row[left] == TERMINAL_WIDE_CONTINUATION_CELL {
-            row[left - 1] = ' ';
-            left = left.saturating_sub(1);
-            if left == 0 {
-                break;
-            }
+    if row[column].continuation {
+        let mut left = column;
+        while left > 0 && row[left].continuation {
+            row[left] = TerminalRenderCell::from_char(' ');
             left = left.saturating_sub(1);
         }
+        row[left] = TerminalRenderCell::from_char(' ');
     }
     // Clear all continuation cells to the right.
     let mut right = column.saturating_add(1);
-    while right < row.len() && row[right] == TERMINAL_WIDE_CONTINUATION_CELL {
-        row[right] = ' ';
+    while right < row.len() && row[right].continuation {
+        row[right] = TerminalRenderCell::from_char(' ');
         right = right.saturating_add(1);
     }
-    row[column] = glyph;
+    row[column] = TerminalRenderCell::from_char(glyph);
 }
 
 /// Writes bounded text into a terminal cell row, marking wide-glyph
 /// continuations with an internal sentinel.
 pub(super) fn write_text_cells(
-    row: &mut [char],
+    row: &mut [TerminalRenderCell],
     column_start: usize,
     max_columns: usize,
     text: &str,
@@ -71,12 +110,11 @@ pub(super) fn write_text_cells(
         if cell >= row.len() {
             break;
         }
-        let ch = grapheme.chars().next().unwrap_or(' ');
-        row[cell] = ch;
+        row[cell] = TerminalRenderCell::from_grapheme(grapheme);
         for continuation in 1..grapheme_width {
             let continuation_cell = cell.saturating_add(continuation);
             if continuation_cell < row.len() {
-                row[continuation_cell] = TERMINAL_WIDE_CONTINUATION_CELL;
+                row[continuation_cell] = TerminalRenderCell::continuation();
             }
         }
         used = used.saturating_add(grapheme_width);
@@ -85,25 +123,13 @@ pub(super) fn write_text_cells(
 
 /// Collects display cells into terminal text while omitting internal wide-cell
 /// continuation sentinels.
-pub(super) fn collect_text_cells(row: Vec<char>) -> String {
+pub(super) fn collect_text_cells(row: Vec<TerminalRenderCell>) -> String {
     let mut output = String::new();
-    let mut index = 0usize;
-    while index < row.len() {
-        let ch = row[index];
-        if ch == TERMINAL_WIDE_CONTINUATION_CELL {
-            index = index.saturating_add(1);
+    for cell in row {
+        if cell.continuation {
             continue;
         }
-        output.push(ch);
-        if row
-            .get(index.saturating_add(1))
-            .is_some_and(|next| *next == TERMINAL_WIDE_CONTINUATION_CELL)
-            && UnicodeWidthChar::width(ch).unwrap_or(0) == 1
-            && terminal_char_width(ch) == 2
-        {
-            output.push('\u{FE0F}');
-        }
-        index = index.saturating_add(1);
+        output.push_str(&cell.text);
     }
     output
 }

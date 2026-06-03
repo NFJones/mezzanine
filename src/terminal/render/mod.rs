@@ -90,9 +90,9 @@ pub(super) use text::{
 };
 
 use text::{
-    clip_style_span, collect_text_cells, fit_styled_width, fit_width, fitted_text_width,
-    offset_style_span, style_span_overlaps_columns, style_span_segments_outside_range,
-    write_single_width_cell, write_text_cells,
+    TerminalRenderCell, blank_render_cells, blank_render_row, clip_style_span, collect_text_cells,
+    fit_styled_width, fit_width, fitted_text_width, offset_style_span, style_span_overlaps_columns,
+    style_span_segments_outside_range, write_single_width_cell, write_text_cells,
 };
 
 /// Defines the DEFAULT PANE FRAME TEMPLATE const used by this subsystem.
@@ -318,7 +318,7 @@ fn rendered_cursor(
     };
     let body_size = window_body_size(window.size, config.window_frames_enabled)?;
     let geometries = if window.zoomed_pane_id() == Some(&active_pane.id) {
-        vec![zoomed_pane_geometry(body_size)]
+        vec![zoomed_pane_geometry(active_index, body_size)]
     } else {
         rendered_pane_geometries(window, config.window_frames_enabled)?
     };
@@ -424,7 +424,7 @@ fn active_pane_render_region(
     };
     let body_size = window_body_size(window.size, config.window_frames_enabled)?;
     let geometries = if window.zoomed_pane_id() == Some(&active_pane.id) {
-        vec![zoomed_pane_geometry(body_size)]
+        vec![zoomed_pane_geometry(active_index, body_size)]
     } else {
         rendered_pane_geometries(window, config.window_frames_enabled)?
     };

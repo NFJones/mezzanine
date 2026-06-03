@@ -33,6 +33,12 @@ use super::{
 /// the same value to request fresh views only while animation is active.
 pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
 
+/// Maximum buffered attached-terminal host bracketed-paste payload.
+///
+/// Malformed terminal paste frames must not swallow ordinary input forever or
+/// grow without bound if the closing delimiter never arrives.
+pub const HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES: usize = 1024 * 1024;
+
 /// Carries Terminal Client Loop Action state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -883,12 +889,12 @@ impl AttachedTerminalClientLoopIo for AttachedTerminalFdLoopIo {
             modes,
             self.previous_output_frame.as_ref(),
         );
+        write_all_attached_terminal_fd(self.output_fd, &frame)?;
         self.previous_output_frame = Some(AttachedTerminalOutputFrameState::new_with_modes(
             lines,
             line_style_spans,
             modes,
         ));
-        write_all_attached_terminal_fd(self.output_fd, &frame)?;
         Ok(frame.len())
     }
 }
@@ -2113,6 +2119,12 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
         if *host_bracketed_paste_active {
             config.prefix_key_pending = false;
             host_bracketed_paste_buffer.extend_from_slice(remaining);
+            if host_bracketed_paste_buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
+                let buffered = std::mem::take(host_bracketed_paste_buffer);
+                *host_bracketed_paste_active = false;
+                actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
+                return Ok(actions);
+            }
             let Some(end_start) =
                 input_sequence_start(host_bracketed_paste_buffer, HOST_BRACKETED_PASTE_END)
             else {
@@ -2148,6 +2160,11 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
                 continue;
             }
             host_bracketed_paste_buffer.extend_from_slice(remaining);
+            if host_bracketed_paste_buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
+                let buffered = std::mem::take(host_bracketed_paste_buffer);
+                actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
+                break;
+            }
             *host_bracketed_paste_active = true;
             break;
         }
@@ -2245,7 +2262,7 @@ enum BatchedMouseSideEffectMode {
 fn apply_batched_mouse_action_side_effects(
     config: &mut TerminalClientLoopConfig,
     action: &TerminalClientLoopAction,
-    mode: BatchedMouseSideEffectMode,
+    _mode: BatchedMouseSideEffectMode,
 ) {
     match action {
         TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. }) => {
@@ -2257,30 +2274,24 @@ fn apply_batched_mouse_action_side_effects(
         TerminalClientLoopAction::HandleMouse(MouseAction::FocusPane(_)) => {
             config.mouse_selection_active = true;
         }
-        TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionStart(_))
-            if mode == BatchedMouseSideEffectMode::ImmediateForwarding =>
-        {
+        TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionStart(_)) => {
             config.mouse_selection_active = true;
         }
         TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionUpdate(_)) => {
             config.mouse_selection_active = true;
         }
-        TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane)
-            if mode == BatchedMouseSideEffectMode::ImmediateForwarding =>
-        {
+        TerminalClientLoopAction::HandleMouse(MouseAction::FinishResizePane) => {
             config.mouse_policy.pane_resize_active = false;
         }
         TerminalClientLoopAction::HandleMouse(MouseAction::CopySelectionFinish(_)) => {
             config.mouse_selection_active = false;
         }
-        TerminalClientLoopAction::HandleMouse(MouseAction::PressWindowAction { action })
-            if mode == BatchedMouseSideEffectMode::ImmediateForwarding =>
-        {
+        TerminalClientLoopAction::HandleMouse(MouseAction::PressWindowAction { action }) => {
             config.frame_context.pressed_window_action = Some(action.clone());
         }
         TerminalClientLoopAction::HandleMouse(
             MouseAction::ReleaseWindowAction { .. } | MouseAction::CancelWindowAction,
-        ) if mode == BatchedMouseSideEffectMode::ImmediateForwarding => {
+        ) => {
             config.frame_context.pressed_window_action = None;
         }
         _ => {}

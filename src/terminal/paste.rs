@@ -533,11 +533,11 @@ pub(super) fn read_host_clipboard_with_commands(
             .stderr(Stdio::null())
             .output()
             .ok()?;
-        output.status.success().then(|| {
-            String::from_utf8_lossy(&output.stdout)
-                .trim_end_matches(['\r', '\n'])
-                .to_string()
-        })
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8(output.stdout).ok())
+            .flatten()
     })
 }
 
@@ -625,4 +625,47 @@ fn host_clipboard_paste_commands() -> Vec<HostClipboardCommand> {
         ),
         HostClipboardCommand::new("pbpaste", Vec::new()),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostClipboardCommand, read_host_clipboard_with_commands};
+
+    /// Verifies host clipboard paste output is delivered exactly on successful
+    /// UTF-8 decode.
+    ///
+    /// Clipboard contents can contain significant trailing newlines, such as
+    /// shell here-doc terminators or intentionally blank final lines. The paste
+    /// reader must not trim those bytes before sending the text to the pane.
+    #[test]
+    fn host_clipboard_read_preserves_trailing_newlines() {
+        let commands = vec![HostClipboardCommand::new(
+            "sh",
+            vec!["-c".to_string(), "printf 'line\\n\\n'".to_string()],
+        )];
+
+        assert_eq!(
+            read_host_clipboard_with_commands(&commands).as_deref(),
+            Some("line\n\n")
+        );
+    }
+
+    /// Verifies invalid host clipboard UTF-8 does not get lossy replacement
+    /// characters pasted into the pane.
+    ///
+    /// Host paste commands expose byte streams, while the current pane-input
+    /// paste path accepts text. Invalid UTF-8 should make that command unusable
+    /// so the caller can continue to the next configured clipboard fallback.
+    #[test]
+    fn host_clipboard_read_skips_invalid_utf8_stdout() {
+        let commands = vec![
+            HostClipboardCommand::new("sh", vec!["-c".to_string(), "printf '\\377'".to_string()]),
+            HostClipboardCommand::new("sh", vec!["-c".to_string(), "printf fallback".to_string()]),
+        ];
+
+        assert_eq!(
+            read_host_clipboard_with_commands(&commands).as_deref(),
+            Some("fallback")
+        );
+    }
 }

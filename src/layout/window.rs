@@ -431,6 +431,13 @@ impl Window {
                 "window size must be positive non-zero cells",
             ));
         }
+        let minimum = self.layout_root.minimum_size();
+        if size.columns < minimum.columns || size.rows < minimum.rows {
+            return Err(MezError::invalid_args(format!(
+                "window size {}x{} is smaller than layout minimum {}x{}",
+                size.columns, size.rows, minimum.columns, minimum.rows
+            )));
+        }
         self.size = size;
         if self.layout_policy_rebalances() {
             self.apply_layout_policy();

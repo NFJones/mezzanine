@@ -2525,6 +2525,7 @@ impl TerminalScreen {
             self.cells[row][column] = ' ';
             self.renditions[row][column] = self.graphic_rendition;
         }
+        self.clear_line_copy_text(row);
         if end_column == self.max_column()
             && let Some(wraps) = self.line_wraps.get_mut(row)
         {

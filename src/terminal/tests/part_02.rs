@@ -30,6 +30,22 @@ fn terminal_screen_resize_preserves_blank_viewport_after_clear_visible_into_hist
     );
 }
 
+/// Verifies terminal erase operations clear hidden copy metadata for rows whose
+/// visible cells were rewritten.
+///
+/// Agent-rendered rows can carry alternate raw copy text. Once a terminal
+/// application erases a row, that stale raw text must not remain available to
+/// copy-mode or scrollback export for the now-blank row.
+#[test]
+fn terminal_screen_erase_line_clears_row_copy_text() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+    screen.line_copy_texts[0] = Some("hidden raw copy".to_string());
+
+    screen.feed(b"\x1b[2K");
+
+    assert_eq!(screen.line_copy_texts[0], None);
+}
+
 /// Verifies terminal full-screen clears detach the visible viewport from the
 /// adjacent scrollback tail while preserving copyable history.
 ///

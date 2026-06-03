@@ -11,7 +11,7 @@ use crate::terminal::{
     GraphicRendition, MouseBorderCell, TerminalFramePosition, TerminalStyleSpan, UiTheme,
 };
 
-use super::{pane_border_rendition, write_single_width_cell};
+use super::{TerminalRenderCell, pane_border_rendition, write_single_width_cell};
 
 /// Returns the rendered cells occupied by mux-managed pane dividers.
 pub fn pane_border_cells_for_geometries(
@@ -375,7 +375,7 @@ fn connect_touching_divider_cells(cells: &mut BTreeMap<(u16, u16), PaneDividerCo
 
 /// Writes pane-divider glyphs into a plain text canvas.
 pub(super) fn draw_pane_dividers(
-    canvas: &mut [Vec<char>],
+    canvas: &mut [Vec<TerminalRenderCell>],
     geometries: &[PaneGeometry],
     include_horizontal: bool,
 ) {
@@ -390,7 +390,7 @@ pub(super) fn draw_pane_dividers(
 
 /// Writes pane-divider glyphs and style spans into a styled text canvas.
 pub(super) fn draw_styled_pane_dividers(
-    text_canvas: &mut [Vec<char>],
+    text_canvas: &mut [Vec<TerminalRenderCell>],
     style_canvas: &mut [Vec<TerminalStyleSpan>],
     geometries: &[PaneGeometry],
     include_horizontal: bool,
@@ -493,6 +493,7 @@ fn divider_cell_touches_active_pane(
 
 #[cfg(test)]
 mod tests {
+    use super::super::blank_render_cells;
     use super::*;
     use crate::ids::IdFactory;
     use crate::layout::SplitDirection;
@@ -510,7 +511,7 @@ mod tests {
         let geometries = window.pane_geometries();
         let rows = usize::from(window.size.rows);
         let columns = usize::from(window.size.columns);
-        let mut text_canvas = vec![vec![' '; columns]; rows];
+        let mut text_canvas = blank_render_cells(rows, columns, ' ');
         let mut style_canvas = vec![Vec::new(); rows];
         let ui_theme = UiTheme::default();
 
@@ -598,7 +599,7 @@ mod tests {
         let geometries = window.pane_geometries();
         let rows = usize::from(window.size.rows);
         let columns = usize::from(window.size.columns);
-        let mut text_canvas = vec![vec![' '; columns]; rows];
+        let mut text_canvas = blank_render_cells(rows, columns, ' ');
         let mut style_canvas = vec![Vec::new(); rows];
         let ui_theme = UiTheme::default();
         let divider = pane_divider_rendition(&ui_theme);

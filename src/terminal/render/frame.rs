@@ -63,7 +63,7 @@ pub(super) fn styled_group_frame_line(
         return None;
     }
     let entries = group_frame_pillbox_entries(frame_context);
-    let mut row = vec![' '; width];
+    let mut row = blank_render_row(width, ' ');
     write_frame_text_cells(
         &mut row,
         0,
@@ -91,7 +91,7 @@ pub(super) fn styled_group_frame_line(
         )
         .collect::<Vec<_>>();
     Some(TerminalStyledLine {
-        text: row.into_iter().collect(),
+        text: collect_text_cells(row),
         style_spans,
         copy_text: None,
     })
@@ -145,7 +145,7 @@ pub(super) fn styled_window_pillbox_line(
         .as_ref()
         .map(|status| status.start.saturating_sub(1))
         .unwrap_or(width);
-    let mut row = vec![' '; width];
+    let mut row = blank_render_row(width, ' ');
     write_frame_text_cells(
         &mut row,
         0,
@@ -184,7 +184,7 @@ pub(super) fn styled_window_pillbox_line(
         )
         .collect::<Vec<_>>();
     TerminalStyledLine {
-        text: row.into_iter().collect(),
+        text: collect_text_cells(row),
         style_spans,
         copy_text: None,
     }
@@ -1021,7 +1021,7 @@ pub(super) fn pane_frame_row_layout(
             right_status_segments: Vec::new(),
         };
     };
-    let mut row = vec![fill; width];
+    let mut row = blank_render_row(width, fill);
     let Some((status_start, status_width)) = right_aligned_status_bounds(&right_status.text, width)
     else {
         let (text, left_text_width) = pane_frame_text_with_fill(&text, width, fill);
@@ -1056,7 +1056,7 @@ pub(super) fn pane_frame_row_layout(
         })
         .collect();
     PaneFrameRowLayout {
-        text: row.into_iter().collect(),
+        text: collect_text_cells(row),
         left_text_width,
         right_status_segments,
     }
@@ -1073,9 +1073,9 @@ pub(super) fn pane_frame_fill_char(template: &str) -> char {
 
 /// Renders pane-frame title text over horizontal border fill.
 pub(super) fn pane_frame_text_with_fill(text: &str, width: usize, fill: char) -> (String, usize) {
-    let mut row = vec![fill; width];
+    let mut row = blank_render_row(width, fill);
     let written_width = write_frame_text_cells(&mut row, 0, width, text);
-    (row.into_iter().collect(), written_width)
+    (collect_text_cells(row), written_width)
 }
 
 /// Extends the pane title pill over the blank separator before right status.
@@ -1091,7 +1091,7 @@ pub(super) fn pane_frame_left_pill_style_width(text_width: usize, available_widt
     }
 }
 
-/// Builds the pane-frame right status, prioritizing scrollback position before
+/// Builds the pane-frame right status, appending scrollback position after
 /// pane-local agent state.
 pub(super) fn pane_frame_right_status(
     window: &Window,
@@ -1101,15 +1101,15 @@ pub(super) fn pane_frame_right_status(
 ) -> Option<RenderedPaneFrameRightStatus> {
     let history_field = "history.position";
     let history_value = pane_frame_field_value(window, pane, frame_context, history_field);
+    let mut right_fields = pane_frame_right_aligned_values(window, pane, frame_context, template);
     if !history_value.is_empty() && !template.contains("#{history.position}") {
-        return Some(render_pane_frame_right_status(&[PaneFrameRightValue {
+        right_fields.push(PaneFrameRightValue {
             field: history_field,
             value: history_value.clone(),
             display: history_value,
-        }]));
+        });
     }
 
-    let right_fields = pane_frame_right_aligned_values(window, pane, frame_context, template);
     (!right_fields.is_empty()).then(|| render_pane_frame_right_status(&right_fields))
 }
 
@@ -1315,11 +1315,11 @@ pub(super) fn render_window_frame_text(
     let Some(status) = window_right_status_layout(frame_context, width) else {
         return fit_width(&text, width);
     };
-    let mut row = vec![' '; width];
+    let mut row = blank_render_row(width, ' ');
     let left_width = status.start.saturating_sub(1);
     write_frame_text_cells(&mut row, 0, left_width, &text);
     write_frame_text_cells(&mut row, status.start, status.width, &status.text);
-    row.into_iter().collect()
+    collect_text_cells(row)
 }
 
 /// Carries Window Status Segment Kind state for this subsystem.
@@ -2272,7 +2272,7 @@ pub(super) fn sanitize_frame_text(value: &str) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn write_merged_pane_frames_on_dividers(
-    canvas: &mut [Vec<char>],
+    canvas: &mut [Vec<TerminalRenderCell>],
     geometries: &[PaneGeometry],
     window: &Window,
     frame_context: &TerminalFrameContext,
@@ -2323,7 +2323,7 @@ pub(super) fn write_merged_pane_frames_on_dividers(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn write_styled_merged_pane_frames_on_dividers(
-    text_canvas: &mut [Vec<char>],
+    text_canvas: &mut [Vec<TerminalRenderCell>],
     style_canvas: &mut [Vec<TerminalStyleSpan>],
     geometries: &[PaneGeometry],
     window: &Window,
@@ -2394,7 +2394,7 @@ pub(super) fn write_styled_merged_pane_frames_on_dividers(
 
 /// Writes a pane frame into a divider row as a complete status-bar region.
 pub(super) fn write_pane_frame_layout_cells(
-    row: &mut [char],
+    row: &mut [TerminalRenderCell],
     column_start: usize,
     max_columns: usize,
     window: &Window,
@@ -2433,7 +2433,7 @@ pub(super) fn right_aligned_status_bounds(status: &str, width: usize) -> Option<
 /// Writes text into a row of terminal cells without padding with spaces.
 /// Returns the number of cells consumed (useful for style span bounds).
 pub(super) fn write_frame_text_cells(
-    row: &mut [char],
+    row: &mut [TerminalRenderCell],
     column_start: usize,
     max_columns: usize,
     text: &str,
@@ -2451,12 +2451,11 @@ pub(super) fn write_frame_text_cells(
         if cell >= row.len() {
             break;
         }
-        let ch = grapheme.chars().next().unwrap_or(' ');
-        row[cell] = ch;
+        row[cell] = TerminalRenderCell::from_grapheme(grapheme);
         for continuation in 1..grapheme_width {
             let continuation_cell = cell.saturating_add(continuation);
             if continuation_cell < row.len() {
-                row[continuation_cell] = ' ';
+                row[continuation_cell] = TerminalRenderCell::continuation();
             }
         }
         used = used.saturating_add(grapheme_width);

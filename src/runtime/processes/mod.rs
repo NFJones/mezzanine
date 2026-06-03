@@ -920,6 +920,8 @@ impl RuntimeSessionService {
         validate_pane_size_for_resize(size)?;
         self.session
             .resize_authoritative_terminal(primary_client_id, size)?;
+        self.mouse_resize_drag_state = None;
+        self.refresh_active_copy_mode_viewports()?;
         let updates = self.sync_tracked_pty_sizes()?;
         self.append_lifecycle_event(
             EventKind::PaneChanged,
@@ -931,6 +933,18 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(updates)
+    }
+
+    /// Refreshes retained copy-mode viewport heights after pane geometry changes.
+    fn refresh_active_copy_mode_viewports(&mut self) -> Result<()> {
+        let pane_ids = self.active_copy_modes.keys().cloned().collect::<Vec<_>>();
+        for pane_id in pane_ids {
+            let viewport_rows = self.copy_mode_viewport_rows_for_pane(&pane_id);
+            if let Some(copy_mode) = self.active_copy_modes.get_mut(&pane_id) {
+                copy_mode.resize_viewport_rows(viewport_rows)?;
+            }
+        }
+        Ok(())
     }
 
     /// Runs the poll pane processes operation for this subsystem.

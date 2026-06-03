@@ -8,6 +8,7 @@
 
 use super::client_loop::{
     AttachedTerminalOutputFrameState, AttachedTerminalOutputModes,
+    HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES,
     compose_terminal_output_style_spans,
     encode_attached_terminal_output_frame_with_keypad_transition,
     encode_attached_terminal_output_frame_with_styles,
@@ -1829,6 +1830,37 @@ fn client_loop_buffers_incomplete_host_bracketed_paste_until_close() {
                 PasteBufferTarget::ChooseInteractively,
             )),
         ]
+    );
+    assert!(!paste_active);
+    assert!(paste_buffer.is_empty());
+}
+
+/// Verifies malformed host bracketed paste frames cannot consume all later
+/// terminal input forever.
+///
+/// A host terminal can deliver the bracketed-paste start marker without the
+/// matching end marker if a paste or terminal helper is interrupted. The
+/// buffered production path must bound retained bytes and recover by forwarding
+/// the accumulated payload once that bound is exceeded.
+#[test]
+fn client_loop_recovers_from_oversized_unterminated_host_bracketed_paste() {
+    let config = TerminalClientLoopConfig::default();
+    let mut paste_active = false;
+    let mut paste_buffer = Vec::new();
+    let mut input = Vec::from(b"\x1b[200~".as_slice());
+    input.extend(vec![b'a'; HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES]);
+
+    let actions = route_client_input_actions_with_host_paste_buffer(
+        &input,
+        &config,
+        &mut paste_active,
+        &mut paste_buffer,
+    )
+    .unwrap();
+
+    assert_eq!(
+        actions,
+        vec![TerminalClientLoopAction::ForwardToPane(input)]
     );
     assert!(!paste_active);
     assert!(paste_buffer.is_empty());

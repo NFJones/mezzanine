@@ -5,7 +5,9 @@
 //! process identity between slots keep the same tree, while operations that add
 //! or remove slots update the tree shape.
 
-use super::{MezError, Pane, PaneGeometry, Result, Size, SplitDirection};
+use super::{
+    MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, Pane, PaneGeometry, Result, Size, SplitDirection,
+};
 
 /// Recursive layout node stored by each window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +103,36 @@ impl LayoutNode {
         self.collect_geometries(0, 0, panes, &mut geometries);
         geometries.sort_by_key(|geometry| geometry.index);
         geometries
+    }
+
+    /// Returns the smallest rectangle that can contain every pane in this tree.
+    pub(super) fn minimum_size(&self) -> Size {
+        match self {
+            Self::Pane { .. } => Size {
+                columns: MIN_PANE_COLUMNS,
+                rows: MIN_PANE_ROWS,
+            },
+            Self::Split {
+                direction,
+                children,
+            } => {
+                let child_sizes = children.iter().map(Self::minimum_size).collect::<Vec<_>>();
+                match direction {
+                    SplitDirection::Vertical => Size {
+                        columns: child_sizes.iter().map(|size| size.columns).sum(),
+                        rows: child_sizes.iter().map(|size| size.rows).max().unwrap_or(1),
+                    },
+                    SplitDirection::Horizontal => Size {
+                        columns: child_sizes
+                            .iter()
+                            .map(|size| size.columns)
+                            .max()
+                            .unwrap_or(1),
+                        rows: child_sizes.iter().map(|size| size.rows).sum(),
+                    },
+                }
+            }
+        }
     }
 
     /// Returns the logical node size derived from pane sizes below this node.

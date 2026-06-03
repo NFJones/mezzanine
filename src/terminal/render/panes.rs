@@ -150,9 +150,10 @@ pub fn render_window_with_pane_frame_template(
     if let Some(rendered) =
         zoomed_pane_render_input(window, pane_inputs, frame_context, pane_frame, body_size)
     {
+        let zoomed_geometry = zoomed_pane_geometry(window.active_pane_index(), body_size);
         let mut lines = render_panes_by_geometry(
             body_size,
-            &[zoomed_pane_geometry(body_size)],
+            &[zoomed_geometry],
             &[rendered],
             window,
             frame_context,
@@ -271,9 +272,10 @@ pub(super) fn render_styled_window_with_pane_frame_template(
         body_size,
         ui_theme,
     ) {
+        let zoomed_geometry = zoomed_pane_geometry(window.active_pane_index(), body_size);
         let mut lines = render_styled_panes_by_geometry(
             body_size,
-            &[zoomed_pane_geometry(body_size)],
+            &[zoomed_geometry],
             &[rendered],
             window,
             frame_context,
@@ -422,9 +424,9 @@ pub(super) fn zoomed_styled_pane_render_input(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn zoomed_pane_geometry(size: Size) -> PaneGeometry {
+pub(super) fn zoomed_pane_geometry(index: usize, size: Size) -> PaneGeometry {
     PaneGeometry {
-        index: 0,
+        index,
         column: 0,
         row: 0,
         columns: size.columns,
@@ -506,8 +508,6 @@ pub fn pane_content_size_for_geometry(
 /// prevents their text and style-span pipelines from drifting apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PaneCanvasPlacement {
-    /// Pane index used to select the already-rendered pane rows.
-    pane_index: usize,
     /// First destination row in the window body canvas.
     row_start: usize,
     /// First destination column in the window body canvas.
@@ -535,7 +535,6 @@ fn pane_canvas_placements(size: Size, geometries: &[PaneGeometry]) -> Vec<PaneCa
                 rows: geometry.rows,
             });
         placements.push(PaneCanvasPlacement {
-            pane_index: geometry.index,
             row_start,
             column_start,
             pane_rows: usize::from(region_size.rows).min(rows.saturating_sub(row_start)),
@@ -561,10 +560,13 @@ pub(super) fn render_panes_by_geometry(
 ) -> Vec<String> {
     let rows = usize::from(size.rows);
     let columns = usize::from(size.columns);
-    let mut canvas = vec![vec![' '; columns]; rows];
+    let mut canvas = blank_render_cells(rows, columns, ' ');
 
-    for placement in pane_canvas_placements(size, geometries) {
-        let Some(pane) = rendered_panes.get(placement.pane_index) else {
+    for (placement_index, placement) in pane_canvas_placements(size, geometries)
+        .into_iter()
+        .enumerate()
+    {
+        let Some(pane) = rendered_panes.get(placement_index) else {
             continue;
         };
         for row_offset in 0..placement.pane_rows {
@@ -607,11 +609,14 @@ pub(super) fn render_styled_panes_by_geometry(
 ) -> Vec<TerminalStyledLine> {
     let rows = usize::from(size.rows);
     let columns = usize::from(size.columns);
-    let mut text_canvas = vec![vec![' '; columns]; rows];
+    let mut text_canvas = blank_render_cells(rows, columns, ' ');
     let mut style_canvas = vec![Vec::new(); rows];
 
-    for placement in pane_canvas_placements(size, geometries) {
-        let Some(pane) = rendered_panes.get(placement.pane_index) else {
+    for (placement_index, placement) in pane_canvas_placements(size, geometries)
+        .into_iter()
+        .enumerate()
+    {
+        let Some(pane) = rendered_panes.get(placement_index) else {
             continue;
         };
         for row_offset in 0..placement.pane_rows {
