@@ -3951,7 +3951,7 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         service
             .primary_display_overlay
             .as_ref()
-            .and_then(|overlay| overlay.search_match_line),
+            .and_then(|overlay| overlay.search_match.map(|search_match| search_match.line_index)),
         Some(1)
     );
 
@@ -3977,7 +3977,7 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         service
             .primary_display_overlay
             .as_ref()
-            .and_then(|overlay| overlay.search_match_line),
+            .and_then(|overlay| overlay.search_match.map(|search_match| search_match.line_index)),
         Some(3)
     );
     assert_eq!(
@@ -4008,7 +4008,7 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         service
             .primary_display_overlay
             .as_ref()
-            .and_then(|overlay| overlay.search_match_line),
+            .and_then(|overlay| overlay.search_match.map(|search_match| search_match.line_index)),
         Some(1)
     );
     assert_eq!(
@@ -4037,7 +4037,7 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         .unwrap();
 
     let overlay = service.primary_display_overlay.as_ref().unwrap();
-    assert_eq!(overlay.search_match_line, Some(1));
+    assert_eq!(overlay.search_match.map(|search_match| search_match.line_index), Some(1));
     assert_eq!(
         overlay.search_status.as_deref(),
         Some("pattern not found: absent")

@@ -1035,8 +1035,8 @@ pub(super) struct RuntimeDisplayOverlay {
     pub(super) search_input: Option<String>,
     /// Last submitted pager search query, reused by empty `/` submissions.
     pub(super) search_query: Option<String>,
-    /// Last line matched by pager search.
-    pub(super) search_match_line: Option<usize>,
+    /// Last text range matched by pager search.
+    pub(super) search_match: Option<RuntimeDisplayOverlaySearchMatch>,
     /// Transient pager search feedback shown in the overlay footer.
     pub(super) search_status: Option<String>,
     /// Active mouse text selection inside overlay content, in overlay-line coordinates.
@@ -1056,6 +1056,21 @@ pub(super) struct RuntimeDisplayOverlay {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) dismiss_on_any_input: bool,
+}
+
+/// Render-cell range for the last submitted command-output pager search match.
+///
+/// The range is measured in display columns within the unprefixed overlay body
+/// line. Rendering applies selector-prefix offsets and viewport clipping later,
+/// so off-screen matches do not style unrelated visible text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RuntimeDisplayOverlaySearchMatch {
+    /// Zero-based overlay line index containing the match.
+    pub(super) line_index: usize,
+    /// Zero-based display column where the match begins inside the body line.
+    pub(super) start_column: usize,
+    /// Display-cell width of the matched text.
+    pub(super) width: usize,
 }
 
 /// One selectable command-output overlay line.

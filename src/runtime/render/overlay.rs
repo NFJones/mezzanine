@@ -1213,8 +1213,20 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
     let body_spans = runtime_display_overlay_body_style_spans(overlay, line_index, max_columns);
     let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line_index);
     let mut spans = Vec::new();
-    let search_rendition = (overlay.search_match_line == Some(line_index) && max_columns > 0)
-        .then(|| ui_theme.colors.copy_selection.rendition());
+    let search_span = overlay.search_match.and_then(|search_match| {
+        if search_match.line_index != line_index || search_match.width == 0 {
+            return None;
+        }
+        let start = prefix_columns.saturating_add(search_match.start_column);
+        if start >= max_columns {
+            return None;
+        }
+        Some(TerminalStyleSpan {
+            start,
+            length: search_match.width.min(max_columns.saturating_sub(start)),
+            rendition: ui_theme.colors.copy_selection.rendition(),
+        })
+    });
     for (selection_index, selection) in overlay.selections.iter().enumerate() {
         if selection.line_index != line_index {
             continue;
@@ -1248,15 +1260,8 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
     for span in body_spans {
         push_or_extend_style_span(&mut spans, span);
     }
-    if let Some(rendition) = search_rendition {
-        push_or_extend_style_span(
-            &mut spans,
-            TerminalStyleSpan {
-                start: prefix_columns,
-                length: max_columns.saturating_sub(prefix_columns),
-                rendition,
-            },
-        );
+    if let Some(search_span) = search_span {
+        push_or_extend_style_span(&mut spans, search_span);
     }
     append_display_overlay_mouse_selection_spans(
         &mut spans,

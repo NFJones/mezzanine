@@ -5,9 +5,9 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::types::{
-    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySelection,
-    RuntimeDisplayOverlaySelectionKind, RuntimeMouseClickState, RuntimePaneAgentStatusSelector,
-    RuntimePrimaryPromptInput,
+    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch,
+    RuntimeDisplayOverlaySelection, RuntimeDisplayOverlaySelectionKind, RuntimeMouseClickState,
+    RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
@@ -338,7 +338,7 @@ impl RuntimeSessionService {
                 scroll_offset: 0,
                 search_input: None,
                 search_query: None,
-                search_match_line: None,
+                search_match: None,
                 search_status: None,
                 mouse_selection: None,
                 selections,
@@ -1009,20 +1009,40 @@ fn runtime_display_overlay_next_search_match(
     overlay: &RuntimeDisplayOverlay,
     query: &str,
     current_line: usize,
-) -> Option<usize> {
+) -> Option<RuntimeDisplayOverlaySearchMatch> {
     if query.is_empty() || overlay.lines.is_empty() {
         return None;
     }
     let start = current_line.saturating_add(1).min(overlay.lines.len());
     overlay.lines[start..]
         .iter()
-        .position(|line| line.contains(query))
-        .map(|index| start.saturating_add(index))
+        .enumerate()
+        .find_map(|(index, line)| {
+            runtime_display_overlay_search_match_on_line(line, query, start.saturating_add(index))
+        })
         .or_else(|| {
             overlay.lines[..start]
                 .iter()
-                .position(|line| line.contains(query))
+                .enumerate()
+                .find_map(|(index, line)| {
+                    runtime_display_overlay_search_match_on_line(line, query, index)
+                })
         })
+}
+
+/// Returns the render-cell range for a query match on one pager line.
+fn runtime_display_overlay_search_match_on_line(
+    line: &str,
+    query: &str,
+    line_index: usize,
+) -> Option<RuntimeDisplayOverlaySearchMatch> {
+    let byte_start = line.find(query)?;
+    let byte_end = byte_start.saturating_add(query.len());
+    Some(RuntimeDisplayOverlaySearchMatch {
+        line_index,
+        start_column: UnicodeWidthStr::width(&line[..byte_start]),
+        width: UnicodeWidthStr::width(&line[byte_start..byte_end]),
+    })
 }
 
 impl RuntimeSessionService {
@@ -1228,17 +1248,18 @@ impl RuntimeSessionService {
             submitted
         };
         let start_line = overlay
-            .search_match_line
+            .search_match
+            .map(|search_match| search_match.line_index)
             .or_else(|| overlay.scroll_offset.checked_sub(1))
             .unwrap_or(overlay.scroll_offset);
-        let Some(match_line) =
+        let Some(search_match) =
             runtime_display_overlay_next_search_match(overlay, &query, start_line)
         else {
             overlay.search_status = Some(format!("pattern not found: {query}"));
             return Ok(true);
         };
-        overlay.search_match_line = Some(match_line);
-        overlay.scroll_offset = match_line;
+        overlay.search_match = Some(search_match);
+        overlay.scroll_offset = search_match.line_index;
         runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
         overlay.search_status = None;
         Ok(true)
@@ -4540,8 +4561,8 @@ mod tests {
         wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
-    use crate::runtime::types::RuntimeDisplayOverlay;
-    use crate::terminal::default_ui_theme;
+    use crate::runtime::types::{RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch};
+    use crate::terminal::{GraphicRendition, TerminalStyleSpan, default_ui_theme};
 
     /// Verifies normal-mode mutation result rendering treats patches as the
     /// only diff-producing file mutation operation.
@@ -5150,7 +5171,7 @@ mod tests {
                 dismiss_on_any_input: false,
                 search_input: None,
                 search_query: None,
-                search_match_line: None,
+                search_match: None,
                 search_status: None,
                 mouse_selection: None,
             },
@@ -5196,7 +5217,7 @@ mod tests {
             dismiss_on_any_input: false,
             search_input: None,
             search_query: None,
-            search_match_line: None,
+            search_match: None,
             search_status: None,
             mouse_selection: None,
         };
@@ -5253,7 +5274,7 @@ mod tests {
             dismiss_on_any_input: false,
             search_input: None,
             search_query: None,
-            search_match_line: None,
+            search_match: None,
             search_status: None,
             mouse_selection: None,
         };
@@ -5310,7 +5331,7 @@ mod tests {
             dismiss_on_any_input: false,
             search_input: None,
             search_query: None,
-            search_match_line: None,
+            search_match: None,
             search_status: None,
             mouse_selection: None,
         };
@@ -5357,6 +5378,113 @@ mod tests {
         assert!(
             first_link_rendition.underline,
             "front-of-line link lost underline: {spans:?}"
+        );
+    }
+
+    /// Verifies pager search highlighting is limited to the matched range.
+    ///
+    /// Search state stores a concrete body-column range instead of just the
+    /// matching line, so rendering should style only the submitted match and
+    /// leave surrounding text with its original body/link rendition.
+    #[test]
+    fn display_overlay_search_highlights_only_matching_columns() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let link_rendition = GraphicRendition {
+            underline: true,
+            foreground: Some(ui_theme.colors.agent_transcript_command.foreground),
+            ..GraphicRendition::default()
+        };
+        let overlay = RuntimeDisplayOverlay {
+            lines: vec!["prefix needle suffix".to_string()],
+            line_style_spans: vec![vec![TerminalStyleSpan {
+                start: 0,
+                length: 20,
+                rendition: link_rendition,
+            }]],
+            scroll_offset: 0,
+            selections: Vec::new(),
+            active_selection_index: None,
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: Some("needle".to_string()),
+            search_match: Some(RuntimeDisplayOverlaySearchMatch {
+                line_index: 0,
+                start_column: 7,
+                width: 6,
+            }),
+            search_status: None,
+            mouse_selection: None,
+        };
+
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        let before_match = rendered_line_rendition_at(&spans, 6);
+        let first_match = rendered_line_rendition_at(&spans, 7);
+        let final_match = rendered_line_rendition_at(&spans, 12);
+        let after_match = rendered_line_rendition_at(&spans, 13);
+
+        assert_eq!(
+            before_match.foreground,
+            Some(ui_theme.colors.agent_transcript_command.foreground),
+            "style before match was overwritten: {spans:?}"
+        );
+        assert!(
+            before_match.underline,
+            "style before match lost underline: {spans:?}"
+        );
+        assert_eq!(
+            first_match,
+            ui_theme.colors.copy_selection.rendition(),
+            "first match cell was not highlighted: {spans:?}"
+        );
+        assert_eq!(
+            final_match,
+            ui_theme.colors.copy_selection.rendition(),
+            "final match cell was not highlighted: {spans:?}"
+        );
+        assert_eq!(
+            after_match.foreground,
+            Some(ui_theme.colors.agent_transcript_command.foreground),
+            "style after match was overwritten: {spans:?}"
+        );
+        assert!(
+            after_match.underline,
+            "style after match lost underline: {spans:?}"
+        );
+    }
+
+    /// Verifies pager search highlighting skips matches outside the visible row.
+    ///
+    /// A match range past the clipped viewport should not emit a fallback row
+    /// highlight, otherwise the visible text appears to match a query that is
+    /// actually off-screen.
+    #[test]
+    fn display_overlay_search_skips_offscreen_match_ranges() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let overlay = RuntimeDisplayOverlay {
+            lines: vec!["visible text then hidden needle".to_string()],
+            line_style_spans: vec![Vec::new()],
+            scroll_offset: 0,
+            selections: Vec::new(),
+            active_selection_index: None,
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: Some("needle".to_string()),
+            search_match: Some(RuntimeDisplayOverlaySearchMatch {
+                line_index: 0,
+                start_column: 25,
+                width: 6,
+            }),
+            search_status: None,
+            mouse_selection: None,
+        };
+
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 12, &ui_theme);
+
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.rendition != ui_theme.colors.copy_selection.rendition()),
+            "off-screen match produced a visible highlight: {spans:?}"
         );
     }
 
