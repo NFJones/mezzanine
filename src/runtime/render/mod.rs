@@ -5477,6 +5477,53 @@ mod tests {
         );
     }
 
+    /// Verifies selected-link styling stops at the selected link boundary.
+    ///
+    /// Active selected-link spans should preserve link foreground and underline
+    /// on the link body without leaking that rendition into the following
+    /// display cell, because cursor presentation and adjacent overlay text are
+    /// composed after the selected-link span list.
+    #[test]
+    fn active_markdown_overlay_link_style_stops_before_following_cell() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("status".to_string()),
+            "[`saved`](mez-agent:%2Fresume%20saved) next",
+            &ui_theme,
+        );
+        let overlay = RuntimeDisplayOverlay {
+            lines: content.lines.clone(),
+            line_style_spans: content.line_style_spans.clone(),
+            scroll_offset: 0,
+            selections: content.selections.clone(),
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match: None,
+            search_status: None,
+            mouse_selection: None,
+        };
+        let selection = &overlay.selections[0];
+        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
+        let following_column = start.saturating_add(selection.width);
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        let following_rendition = rendered_line_rendition_at(&spans, following_column);
+        assert_ne!(
+            following_rendition.foreground,
+            Some(ui_theme.colors.agent_transcript_command.foreground),
+            "link foreground leaked past selected link: {spans:?}"
+        );
+        assert!(
+            !following_rendition.underline,
+            "link underline leaked past selected link: {spans:?}"
+        );
+        assert_eq!(
+            following_rendition.background, None,
+            "active selection background leaked past selected link: {spans:?}"
+        );
+    }
+
     /// Verifies pager search highlighting is limited to the matched range.
     ///
     /// Search state stores a concrete body-column range instead of just the
