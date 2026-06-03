@@ -1177,14 +1177,15 @@ pub(super) fn runtime_display_overlay_selection_rendition(
 /// Returns the selector-gutter rendition for a selectable overlay row.
 ///
 /// The gutter marks the active row, but it is not part of the selectable body
-/// range. Keep its foreground treatment aligned with the selection kind without
-/// applying the active body background, otherwise front-of-line links appear to
-/// shift left into the selector prefix.
+/// range. Keep the selector glyph itself unstyled so active link treatment
+/// begins only on the first body cell; otherwise front-of-line `/resume` links
+/// visibly shift left into the selector prefix even when the body/background
+/// math is correct.
 pub(super) fn runtime_display_overlay_selection_gutter_rendition(
-    ui_theme: &UiTheme,
-    kind: RuntimeDisplayOverlaySelectionKind,
+    _ui_theme: &UiTheme,
+    _kind: RuntimeDisplayOverlaySelectionKind,
 ) -> GraphicRendition {
-    runtime_display_overlay_selection_rendition(ui_theme, kind, false)
+    GraphicRendition::default()
 }
 /// Returns the markdown-style rendition used for command-overlay links.
 pub(super) fn runtime_display_overlay_link_rendition(ui_theme: &UiTheme) -> GraphicRendition {

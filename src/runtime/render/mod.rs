@@ -5455,18 +5455,32 @@ mod tests {
         let gutter_trailing_rendition = rendered_line_rendition_at(&spans, start - 1);
         let first_link_rendition = rendered_line_rendition_at(&spans, start);
         assert_eq!(
-            gutter_rendition.foreground,
-            Some(ui_theme.colors.agent_model.foreground),
-            "gutter lost selection styling: {spans:?}"
+            gutter_rendition.foreground, None,
+            "gutter inherited selected-link foreground styling: {spans:?}"
+        );
+        assert!(
+            !gutter_rendition.bold,
+            "gutter inherited bold link styling: {spans:?}"
+        );
+        assert!(
+            !gutter_rendition.underline,
+            "gutter inherited underline link styling: {spans:?}"
         );
         assert_eq!(
             gutter_rendition.background, None,
             "gutter picked up active body highlight: {spans:?}"
         );
         assert_eq!(
-            gutter_trailing_rendition.foreground,
-            Some(ui_theme.colors.agent_model.foreground),
-            "selector gutter trailing cell lost selection styling: {spans:?}"
+            gutter_trailing_rendition.foreground, None,
+            "selector gutter trailing cell inherited selected-link foreground styling: {spans:?}"
+        );
+        assert!(
+            !gutter_trailing_rendition.bold,
+            "selector gutter trailing cell inherited bold link styling: {spans:?}"
+        );
+        assert!(
+            !gutter_trailing_rendition.underline,
+            "selector gutter trailing cell inherited underline link styling: {spans:?}"
         );
         assert_eq!(
             gutter_trailing_rendition.background, None,
@@ -5481,14 +5495,6 @@ mod tests {
             first_link_rendition.background,
             Some(ui_theme.colors.agent_model.background),
             "front-of-line link lost active body highlight: {spans:?}"
-        );
-        assert!(
-            gutter_rendition.underline,
-            "gutter lost underline: {spans:?}"
-        );
-        assert!(
-            gutter_trailing_rendition.underline,
-            "selector gutter trailing cell lost underline: {spans:?}"
         );
         assert!(
             first_link_rendition.underline,
