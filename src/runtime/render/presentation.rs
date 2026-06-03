@@ -2413,7 +2413,7 @@ pub(super) struct AgentDiffDisplaySection {
     old_label: String,
     new_label: String,
     pub(super) lines: Vec<AgentDiffDisplayLine>,
-    hunk_breaks: Vec<usize>,
+    hunk_headers: Vec<(usize, String)>,
 }
 
 /// Builds readable styled diff display lines from raw shell diff output.
@@ -2475,11 +2475,19 @@ pub(super) fn cleaned_agent_diff_source_lines(text: &str) -> Vec<String> {
         } else {
             strip_agent_diff_prompt_prefix(raw_line)
         };
+        let is_diff_body_line =
+            seen_diff && matches!(line.chars().next(), Some(' ' | '+' | '-' | '\\'));
         let trimmed = line.trim();
-        if trimmed.is_empty() || agent_diff_line_is_prompt_glyph(trimmed) {
+        if trimmed.is_empty() {
+            if is_diff_body_line {
+                lines.push(line.to_string());
+            }
             continue;
         }
-        if agent_diff_line_is_wrapper_traffic(trimmed) {
+        if !is_diff_body_line && agent_diff_line_is_prompt_glyph(trimmed) {
+            continue;
+        }
+        if !is_diff_body_line && agent_diff_line_is_wrapper_traffic(trimmed) {
             continue;
         }
         let starts_diff = trimmed.starts_with("diff --")
@@ -2571,7 +2579,7 @@ pub(super) fn parse_agent_unified_diff_sections(lines: &[String]) -> Vec<AgentDi
             old_label,
             new_label,
             lines: Vec::new(),
-            hunk_breaks: Vec::new(),
+            hunk_headers: Vec::new(),
         };
         while index < lines.len() {
             if index + 1 < lines.len()
@@ -2585,9 +2593,9 @@ pub(super) fn parse_agent_unified_diff_sections(lines: &[String]) -> Vec<AgentDi
                 index += 1;
                 continue;
             };
-            if !section.lines.is_empty() {
-                section.hunk_breaks.push(section.lines.len());
-            }
+            section
+                .hunk_headers
+                .push((section.lines.len(), lines[index].to_string()));
             index += 1;
             while index < lines.len() {
                 let line = &lines[index];
@@ -2672,7 +2680,7 @@ pub(super) fn clean_agent_diff_label(value: &str) -> String {
         .to_string()
 }
 
-/// Renders parsed unified diff sections into compact file summaries.
+/// Renders parsed unified diff sections into visible unified-diff previews.
 pub(super) fn render_agent_unified_diff_sections(
     sections: &[AgentDiffDisplaySection],
     ui_theme: &UiTheme,
@@ -2680,34 +2688,27 @@ pub(super) fn render_agent_unified_diff_sections(
     let mut rendered = Vec::new();
     let syntax_theme = agent_diff_syntax_theme(ui_theme);
     for section in sections {
-        let added = section
-            .lines
-            .iter()
-            .filter(|line| line.marker == '+')
-            .count();
-        let removed = section
-            .lines
-            .iter()
-            .filter(|line| line.marker == '-')
-            .count();
         rendered.push(rendered_agent_diff_plain_line(
             AgentTerminalPresentationStyle::DiffHeader,
-            &format!(
-                "• {} {} (+{} -{})",
-                agent_diff_section_verb(section),
-                agent_diff_section_path(section),
-                added,
-                removed
-            ),
+            &format!("--- {}", section.old_label),
+            ui_theme,
+        ));
+        rendered.push(rendered_agent_diff_plain_line(
+            AgentTerminalPresentationStyle::DiffHeader,
+            &format!("+++ {}", section.new_label),
             ui_theme,
         ));
         let mut highlighter =
             agent_diff_highlighter_for_path(agent_diff_section_path(section), &syntax_theme);
         for (index, line) in section.lines.iter().enumerate() {
-            if section.hunk_breaks.contains(&index) {
+            for (_, hunk_header) in section
+                .hunk_headers
+                .iter()
+                .filter(|(line_index, _)| *line_index == index)
+            {
                 rendered.push(rendered_agent_diff_plain_line(
-                    AgentTerminalPresentationStyle::DiffContext,
-                    "         ⋮",
+                    AgentTerminalPresentationStyle::DiffHeader,
+                    hunk_header,
                     ui_theme,
                 ));
             }
@@ -2721,17 +2722,6 @@ pub(super) fn render_agent_unified_diff_sections(
     rendered
 }
 
-/// Returns a human-oriented verb for a parsed file diff section.
-pub(super) fn agent_diff_section_verb(section: &AgentDiffDisplaySection) -> &'static str {
-    if section.old_label == "/dev/null" {
-        "Created"
-    } else if section.new_label == "/dev/null" {
-        "Deleted"
-    } else {
-        "Edited"
-    }
-}
-
 /// Returns the display path for a parsed file diff section.
 pub(super) fn agent_diff_section_path(section: &AgentDiffDisplaySection) -> &str {
     if section.new_label == "/dev/null" {
@@ -2743,14 +2733,15 @@ pub(super) fn agent_diff_section_path(section: &AgentDiffDisplaySection) -> &str
 
 /// Formats one parsed hunk line with a stable line-number gutter.
 pub(super) fn format_agent_diff_display_line(line: &AgentDiffDisplayLine) -> String {
-    let line_number = match line.marker {
-        '-' => line.old_line,
-        '+' => line.new_line,
-        _ => line.new_line.or(line.old_line),
-    }
-    .map(|line| line.to_string())
-    .unwrap_or_default();
-    format!("{line_number:>8} {}{}", line.marker, line.text)
+    let old_line = line
+        .old_line
+        .map(|line| line.to_string())
+        .unwrap_or_default();
+    let new_line = line
+        .new_line
+        .map(|line| line.to_string())
+        .unwrap_or_default();
+    format!("{old_line:>6} {new_line:>6} {}{}", line.marker, line.text)
 }
 
 /// Renders one parsed hunk line with a diff gutter and file-aware code spans.
@@ -2772,12 +2763,12 @@ pub(super) fn render_agent_diff_display_line(
         &mut rendered.style_spans,
         TerminalStyleSpan {
             start: 0,
-            length: 10,
+            length: rendered.display.chars().count(),
             rendition: marker_rendition,
         },
     );
     if let Some(highlighter) = highlighter {
-        append_agent_syntax_spans(&mut rendered, 10, &line.text, highlighter);
+        append_agent_syntax_spans(&mut rendered, 15, &line.text, highlighter);
     }
     rendered
 }

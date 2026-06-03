@@ -2589,9 +2589,10 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         "{pane_text}"
     );
     assert!(collapsed_agent_wraps.contains("note.txt"), "{pane_text}");
-    assert!(pane_text.contains("• Created"), "{pane_text}");
-    assert!(pane_text.contains("(+2 -0)"), "{pane_text}");
-    assert!(pane_text.contains("       1 +alpha"), "{pane_text}");
+    assert!(pane_text.contains("--- /dev/null"), "{pane_text}");
+    assert!(pane_text.contains("+++ ") && pane_text.contains("note.txt"), "{pane_text}");
+    assert!(pane_text.contains("@@ -0,0 +1,2 @@"), "{pane_text}");
+    assert!(pane_text.contains("            1 +alpha"), "{pane_text}");
     assert!(!pane_text.contains("$ python3 - <<'MEZ_PY'"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");
@@ -2608,7 +2609,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
     assert!(!action_line.style_spans.is_empty());
     let addition_line = styled_lines
         .iter()
-        .find(|line| line.text.contains("       1 +alpha"))
+        .find(|line| line.text.contains("            1 +alpha"))
         .unwrap();
     assert!(
         addition_line
@@ -2729,7 +2730,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let diff_index = pane_text.find("• Created").unwrap_or(usize::MAX);
+    let diff_index = pane_text.find("@@ -0,0 +1,2 @@").unwrap_or(usize::MAX);
     let say_index = pane_text.find("Created note.txt.").unwrap_or(usize::MAX);
     assert!(diff_index < say_index, "{pane_text}");
     assert!(pane_text.contains("Worked for"), "{pane_text}");

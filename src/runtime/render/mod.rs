@@ -4645,13 +4645,47 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "• Edited src/runtime/agent.rs (+2 -2)",
-                "      10  context",
-                "      11 -old",
-                "      11 +new",
-                "         ⋮",
-                "      20 -again",
-                "      20 +done",
+                "--- src/runtime/agent.rs",
+                "+++ src/runtime/agent.rs",
+                "@@ -10,3 +10,3 @@",
+                "    10     10  context",
+                "    11        -old",
+                "           11 +new",
+                "@@ -20,2 +20,2 @@",
+                "    20        -again",
+                "           20 +done",
+            ]
+        );
+    }
+
+    /// Verifies cleaned semantic diff output preserves valid blank context rows
+    /// and body text that resembles Mezzanine shell-wrapper traffic.
+    ///
+    /// Unified diffs encode an unchanged blank line as a single leading space,
+    /// and user changes can legitimately contain strings such as `MEZ_STATUS`.
+    /// The preview cleaner should remove wrapper echoes around the diff without
+    /// making the parsed diff lossy once hunk body parsing has started.
+    #[test]
+    fn readable_agent_diff_display_lines_preserve_diff_body_blank_and_wrapper_text() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let lines = readable_agent_diff_display_lines(
+            "diff -- update file\n--- a/src/config.txt\n+++ b/src/config.txt\n\
+             @@ -1,3 +1,3 @@\n \n-MEZ_STATUS=old\n+unset MEZ_STATUS\n",
+            &ui_theme,
+        )
+        .into_iter()
+        .map(|line| line.display)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec![
+                "--- src/config.txt",
+                "+++ src/config.txt",
+                "@@ -1,3 +1,3 @@",
+                "     1      1  ",
+                "     2        -MEZ_STATUS=old",
+                "            2 +unset MEZ_STATUS",
             ]
         );
     }
@@ -4678,7 +4712,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "       1 +alpha beta gamma"),
+                .any(|line| line == "            1 +alpha beta gamma"),
             "{lines:?}"
         );
         assert!(
@@ -4738,12 +4772,12 @@ mod tests {
             addition
                 .style_spans
                 .iter()
-                .any(|span| span.start >= 10 && span.rendition.foreground.is_some()),
+                .any(|span| span.start >= 15 && span.rendition.foreground.is_some()),
             "{addition:?}"
         );
         assert!(
             addition.style_spans.iter().any(|span| {
-                span.start >= 10
+                span.start >= 15
                     && matches!(
                         span.rendition.foreground,
                         Some(foreground)
@@ -5022,9 +5056,9 @@ mod tests {
             .find(|line| line.display.contains("+new value"))
             .unwrap();
 
-        assert_eq!(addition.display, "       1 +new value");
+        assert_eq!(addition.display, "            1 +new value");
         assert!(
-            addition.style_spans.iter().all(|span| span.start < 10),
+            addition.style_spans.iter().all(|span| span.start == 0),
             "{addition:?}"
         );
     }
@@ -5116,7 +5150,7 @@ mod tests {
         assert!(
             addition.style_spans.iter().any(|span| {
                 span.start == 0
-                    && span.length == 10
+                    && span.length == addition.display.chars().count()
                     && span.rendition.foreground
                         == Some(crate::terminal::TerminalColor::Rgb(1, 2, 3))
             }),
@@ -5125,7 +5159,7 @@ mod tests {
         assert!(
             deletion.style_spans.iter().any(|span| {
                 span.start == 0
-                    && span.length == 10
+                    && span.length == deletion.display.chars().count()
                     && span.rendition.foreground
                         == Some(crate::terminal::TerminalColor::Rgb(4, 5, 6))
             }),
@@ -5133,7 +5167,7 @@ mod tests {
         );
         assert!(
             addition.style_spans.iter().any(|span| {
-                span.start >= 10
+                span.start >= 15
                     && matches!(
                         span.rendition.foreground,
                         Some(
@@ -5149,7 +5183,7 @@ mod tests {
         );
         assert!(
             addition.style_spans.iter().all(|span| {
-                span.start < 10
+                span.start == 0
                     || matches!(
                         span.rendition.foreground,
                         Some(

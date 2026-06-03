@@ -207,17 +207,16 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        pane_text.contains("• Edited src/main.rs (+1 -1)"),
-        "{pane_text}"
-    );
-    assert!(pane_text.contains("       1 +fn new() {}"), "{pane_text}");
+    assert!(pane_text.contains("--- src/main.rs"), "{pane_text}");
+    assert!(pane_text.contains("+++ src/main.rs"), "{pane_text}");
+    assert!(pane_text.contains("@@ -1,1 +1,1 @@"), "{pane_text}");
+    assert!(pane_text.contains("            1 +fn new() {}"), "{pane_text}");
     assert!(!pane_text.contains("diff -- update file"), "{pane_text}");
     let addition_line = styled_lines
         .iter()
-        .find(|line| line.text.contains("       1 +fn new() {}"))
+        .find(|line| line.text.contains("            1 +fn new() {}"))
         .unwrap();
-    let syntax_start = "▐ ".chars().count() + 10;
+    let syntax_start = "▐ ".chars().count() + 15;
     assert!(
         addition_line
             .style_spans
