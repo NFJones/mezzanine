@@ -157,13 +157,11 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
         line_style_spans: Vec::new(),
         selections: Vec::new(),
     };
-    let hidden_links = agent_command_links_in_markdown(markdown);
-    let mut linked_hidden_commands = BTreeSet::new();
     for rendered in render_command_markdown_body_lines(markdown, ui_theme) {
         let AgentRenderedLine {
             display,
             mut style_spans,
-            copy_text: _,
+            copy_text,
         } = rendered;
         let line_index = content.lines.len();
         for (start_column, width, command) in agent_command_links_in_line(&display) {
@@ -175,28 +173,24 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
                 kind: RuntimeDisplayOverlaySelectionKind::Primary,
             });
         }
-        for (label, command) in &hidden_links {
-            if linked_hidden_commands.contains(command) {
-                continue;
-            }
-            if let Some(byte_start) = display.find(label) {
-                let start_column = UnicodeWidthStr::width(&display[..byte_start]);
-                let width = UnicodeWidthStr::width(label.as_str());
+        if let Some(copy_text) = copy_text.as_deref() {
+            for (start_column, width, command) in
+                agent_command_hidden_link_ranges_for_rendered_line(copy_text, &display)
+            {
                 let duplicate = content.selections.iter().any(|selection| {
                     selection.line_index == line_index
                         && selection.start_column == start_column
                         && selection.width == width
-                        && selection.command == *command
+                        && selection.command == command
                 });
                 if !duplicate {
                     content.selections.push(RuntimeDisplayOverlaySelection {
                         line_index,
                         start_column,
                         width,
-                        command: command.clone(),
+                        command,
                         kind: RuntimeDisplayOverlaySelectionKind::Primary,
                     });
-                    linked_hidden_commands.insert(command.clone());
                 }
                 push_or_extend_style_span(
                     &mut style_spans,
@@ -302,28 +296,51 @@ pub(super) fn agent_command_links_in_line(line: &str) -> Vec<(usize, usize, Stri
     links
 }
 
-/// Returns hidden `mez-agent:` command links from source markdown labels.
-pub(super) fn agent_command_links_in_markdown(markdown: &str) -> Vec<(String, String)> {
+/// Returns source-aligned hidden `mez-agent:` link ranges for one rendered row.
+pub(super) fn agent_command_hidden_link_ranges_for_rendered_line(
+    source_line: &str,
+    display: &str,
+) -> Vec<(usize, usize, String)> {
     let mut links = Vec::new();
-    let mut active_link: Option<(String, String)> = None;
-    for event in Parser::new_ext(markdown, Options::all()) {
+    let mut source_cursor = 0usize;
+    let mut display_cursor = 0usize;
+    let mut active_link: Option<(String, Option<usize>)> = None;
+    for event in Parser::new_ext(source_line, Options::all()) {
         match event {
             Event::Start(Tag::Link { dest_url, .. })
                 if agent_command_link_destination(&dest_url).is_some() =>
             {
-                active_link = Some((dest_url.to_string(), String::new()));
+                active_link = Some((dest_url.to_string(), None));
             }
             Event::Text(text) | Event::Code(text) => {
-                if let Some((_, label)) = active_link.as_mut() {
-                    label.push_str(&text);
+                let text = text.as_ref();
+                let Some(relative_start) = source_line[source_cursor..].find(text) else {
+                    continue;
+                };
+                source_cursor = source_cursor
+                    .saturating_add(relative_start)
+                    .saturating_add(text.len());
+                let Some(relative_display_start) = display[display_cursor..].find(text) else {
+                    continue;
+                };
+                let absolute_display_start = display_cursor.saturating_add(relative_display_start);
+                if let Some((_, display_start)) = active_link.as_mut()
+                    && display_start.is_none()
+                {
+                    *display_start = Some(absolute_display_start);
                 }
+                display_cursor = display_cursor
+                    .saturating_add(relative_display_start)
+                    .saturating_add(text.len());
             }
             Event::End(TagEnd::Link) => {
-                if let Some((destination, label)) = active_link.take()
-                    && !label.is_empty()
+                if let Some((destination, Some(display_start))) = active_link.take()
+                    && display_cursor > display_start
                     && let Some(command) = agent_command_link_destination(&destination)
                 {
-                    links.push((label, command));
+                    let start_column = UnicodeWidthStr::width(&display[..display_start]);
+                    let width = UnicodeWidthStr::width(&display[display_start..display_cursor]);
+                    links.push((start_column, width, command));
                 }
             }
             _ => {}
@@ -1113,7 +1130,7 @@ pub(super) fn runtime_display_overlay_selection_rendition(
     rendition.background = None;
     rendition.dim = false;
     if active {
-        rendition.italic = false;
+        rendition.background = Some(pair.background);
     }
     rendition
 }
@@ -1203,6 +1220,43 @@ fn push_style_span_without_coalescing(spans: &mut Vec<TerminalStyleSpan>, span: 
     }
     spans.push(span);
 }
+
+/// Appends active-selection backgrounds over body spans inside a selected range.
+fn append_active_overlay_body_selection_spans(
+    spans: &mut Vec<TerminalStyleSpan>,
+    selection_start: usize,
+    selection_length: usize,
+    selection_rendition: GraphicRendition,
+    body_spans: &[TerminalStyleSpan],
+) {
+    let selection_end = selection_start.saturating_add(selection_length);
+    if selection_start >= selection_end {
+        return;
+    }
+    for body_span in body_spans {
+        let body_start = body_span.start.max(selection_start);
+        let body_end = body_span
+            .start
+            .saturating_add(body_span.length)
+            .min(selection_end);
+        if body_start >= body_end {
+            continue;
+        }
+        let mut rendition = body_span.rendition;
+        rendition.background = selection_rendition.background;
+        if rendition.foreground.is_none() {
+            rendition.foreground = selection_rendition.foreground;
+        }
+        push_style_span_without_coalescing(
+            spans,
+            TerminalStyleSpan {
+                start: body_start,
+                length: body_end.saturating_sub(body_start),
+                rendition,
+            },
+        );
+    }
+}
 /// Returns the fully composed style spans for one rendered overlay line.
 pub(super) fn runtime_display_overlay_rendered_line_style_spans(
     overlay: &RuntimeDisplayOverlay,
@@ -1257,8 +1311,25 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
             );
         }
     }
-    for span in body_spans {
-        push_or_extend_style_span(&mut spans, span);
+    for span in &body_spans {
+        push_or_extend_style_span(&mut spans, *span);
+    }
+    for (selection_index, selection) in overlay.selections.iter().enumerate() {
+        if selection.line_index != line_index
+            || overlay.active_selection_index != Some(selection_index)
+        {
+            continue;
+        }
+        let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
+        if start < max_columns && selection.width > 0 {
+            append_active_overlay_body_selection_spans(
+                &mut spans,
+                start,
+                selection.width.min(max_columns.saturating_sub(start)),
+                runtime_display_overlay_selection_rendition(ui_theme, selection.kind, true),
+                &body_spans,
+            );
+        }
     }
     if let Some(search_span) = search_span {
         push_or_extend_style_span(&mut spans, search_span);

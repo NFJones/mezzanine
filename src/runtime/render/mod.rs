@@ -32,8 +32,6 @@ use super::{
     runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
     runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
-use std::collections::BTreeSet;
-
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 
@@ -956,7 +954,48 @@ fn apply_display_overlay_scroll_delta(
             .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
     }
     runtime_clamp_display_overlay_scroll(overlay, size);
+    runtime_display_overlay_update_active_selection_for_viewport(overlay, size);
     previous != overlay.scroll_offset
+}
+
+/// Returns whether one overlay selection is currently visible in the viewport.
+fn runtime_display_overlay_selection_index_is_visible(
+    overlay: &RuntimeDisplayOverlay,
+    selection_index: usize,
+    size: Size,
+) -> bool {
+    let Some(selection) = overlay.selections.get(selection_index) else {
+        return false;
+    };
+    let page_rows = modal_display_overlay_page_rows(size).max(1);
+    let visible_start = overlay.scroll_offset;
+    let visible_end = visible_start.saturating_add(page_rows);
+    selection.line_index >= visible_start && selection.line_index < visible_end
+}
+
+/// Keeps the active overlay selection executable only when it is visible.
+fn runtime_display_overlay_update_active_selection_for_viewport(
+    overlay: &mut RuntimeDisplayOverlay,
+    size: Size,
+) {
+    if overlay.selections.is_empty() {
+        overlay.active_selection_index = None;
+        return;
+    }
+    if overlay
+        .active_selection_index
+        .is_some_and(|selection_index| {
+            runtime_display_overlay_selection_index_is_visible(overlay, selection_index, size)
+        })
+    {
+        return;
+    }
+    let page_rows = modal_display_overlay_page_rows(size).max(1);
+    let visible_start = overlay.scroll_offset;
+    let visible_end = visible_start.saturating_add(page_rows);
+    overlay.active_selection_index = overlay.selections.iter().position(|selection| {
+        selection.line_index >= visible_start && selection.line_index < visible_end
+    });
 }
 
 /// Returns one display-column slice from a primary display-overlay line.
@@ -985,17 +1024,11 @@ fn runtime_display_overlay_selection_index_at_position(
     line_index: usize,
     column: usize,
 ) -> Option<usize> {
-    let selections = overlay
+    overlay
         .selections
         .iter()
         .enumerate()
         .filter(|(_, selection)| selection.line_index == line_index)
-        .collect::<Vec<_>>();
-    if selections.len() == 1 {
-        return selections.first().map(|(index, _)| *index);
-    }
-    selections
-        .into_iter()
         .find(|(_, selection)| {
             let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
             let end = start.saturating_add(selection.width);
@@ -1125,13 +1158,15 @@ impl RuntimeSessionService {
             RuntimeDisplayOverlayInputAction::EditSearchText
             | RuntimeDisplayOverlayInputAction::EditSearchBackspace => Ok(false),
             RuntimeDisplayOverlayInputAction::SelectActive => {
+                let size = self.session.authoritative_size;
                 let command = self
                     .primary_display_overlay
                     .as_ref()
                     .and_then(|overlay| {
-                        overlay
-                            .active_selection_index
-                            .and_then(|index| overlay.selections.get(index))
+                        let index = overlay.active_selection_index?;
+                        runtime_display_overlay_selection_index_is_visible(overlay, index, size)
+                            .then(|| overlay.selections.get(index))
+                            .flatten()
                     })
                     .map(|selection| selection.command.clone());
                 if let Some(command) = command {
@@ -4561,7 +4596,11 @@ mod tests {
         wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
-    use crate::runtime::types::{RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch};
+    use crate::layout::Size;
+    use crate::runtime::types::{
+        RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch, RuntimeDisplayOverlaySelection,
+        RuntimeDisplayOverlaySelectionKind,
+    };
     use crate::terminal::{GraphicRendition, TerminalStyleSpan, default_ui_theme};
 
     /// Verifies normal-mode mutation result rendering treats patches as the
@@ -5238,9 +5277,10 @@ mod tests {
                 !rendition.inverse,
                 "column {column} became inverse: {spans:?}"
             );
-            assert!(
-                rendition.background.is_none(),
-                "column {column} gained background styling: {spans:?}"
+            assert_eq!(
+                rendition.background,
+                Some(ui_theme.colors.agent_model.background),
+                "column {column} lost active selection background: {spans:?}"
             );
             assert_eq!(
                 rendition.foreground,
@@ -5295,9 +5335,10 @@ mod tests {
                 !rendition.inverse,
                 "column {column} became inverse: {spans:?}"
             );
-            assert!(
-                rendition.background.is_none(),
-                "column {column} gained background styling: {spans:?}"
+            assert_eq!(
+                rendition.background,
+                Some(ui_theme.colors.agent_model.background),
+                "column {column} lost active selection background: {spans:?}"
             );
             assert_eq!(
                 rendition.foreground,
@@ -5516,6 +5557,131 @@ mod tests {
             "{content:?}"
         );
         assert_eq!(content.selections[0].line_index, 0);
+    }
+
+    /// Verifies hidden markdown command links are mapped to their rendered
+    /// occurrence instead of an earlier duplicate plain-text label.
+    ///
+    /// Command-overlay markdown hides `mez-agent:` destinations, so selectable
+    /// metadata must be derived from the source/rendered row pair. A plain text
+    /// occurrence before the actual markdown link should not receive link
+    /// styling or become the mouse target for the hidden command.
+    #[test]
+    fn agent_shell_markdown_overlay_maps_hidden_links_to_exact_rendered_occurrence() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("status".to_string()),
+            "saved before [`saved`](mez-agent:%2Fresume%20saved)",
+            &ui_theme,
+        );
+
+        assert_eq!(content.lines, vec!["saved before saved".to_string()]);
+        assert_eq!(content.selections.len(), 1, "{content:?}");
+        let selection = &content.selections[0];
+        assert_eq!(selection.command, "/resume saved");
+        assert_eq!(selection.line_index, 0);
+        assert_eq!(selection.start_column, "saved before ".len());
+        assert_eq!(selection.width, "saved".len());
+        assert!(
+            content.line_style_spans[0]
+                .iter()
+                .all(|span| span.start != 0),
+            "earlier duplicate text received link styling: {content:?}"
+        );
+    }
+
+    /// Verifies single-link overlay mouse hit testing remains column bounded.
+    ///
+    /// Rows with one selectable command still contain inert gutter, whitespace,
+    /// and descriptive text. Mouse selection should execute only clicks inside
+    /// the advertised choice range, matching multi-chip rows.
+    #[test]
+    fn display_overlay_single_selection_hit_testing_requires_link_bounds() {
+        let overlay = RuntimeDisplayOverlay {
+            lines: vec!["text before [open] after".to_string()],
+            line_style_spans: vec![Vec::new()],
+            scroll_offset: 0,
+            selections: vec![RuntimeDisplayOverlaySelection {
+                line_index: 0,
+                start_column: "text before ".len(),
+                width: "[open]".len(),
+                command: "/open".to_string(),
+                kind: RuntimeDisplayOverlaySelectionKind::Primary,
+            }],
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match: None,
+            search_status: None,
+            mouse_selection: None,
+        };
+        let rendered_start =
+            runtime_display_overlay_rendered_selection_start(&overlay, &overlay.selections[0]);
+
+        assert_eq!(
+            super::runtime_display_overlay_selection_index_at_position(&overlay, 0, 0),
+            None
+        );
+        assert_eq!(
+            super::runtime_display_overlay_selection_index_at_position(
+                &overlay,
+                0,
+                rendered_start.saturating_add(1),
+            ),
+            Some(0)
+        );
+    }
+
+    /// Verifies scrolling moves the active command selection to the visible
+    /// viewport before Enter can execute it.
+    ///
+    /// Mouse-wheel and page-scroll paths should not leave keyboard execution
+    /// armed on an off-screen action after the overlay viewport changes.
+    #[test]
+    fn display_overlay_scroll_keeps_active_selection_visible() {
+        let mut overlay = RuntimeDisplayOverlay {
+            lines: vec![
+                "first".to_string(),
+                "plain".to_string(),
+                "also plain".to_string(),
+                "second".to_string(),
+                "tail".to_string(),
+            ],
+            line_style_spans: vec![Vec::new(); 5],
+            scroll_offset: 0,
+            selections: vec![
+                RuntimeDisplayOverlaySelection {
+                    line_index: 0,
+                    start_column: 0,
+                    width: 5,
+                    command: "/first".to_string(),
+                    kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                },
+                RuntimeDisplayOverlaySelection {
+                    line_index: 3,
+                    start_column: 0,
+                    width: 6,
+                    command: "/second".to_string(),
+                    kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                },
+            ],
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match: None,
+            search_status: None,
+            mouse_selection: None,
+        };
+
+        assert!(super::apply_display_overlay_scroll_delta(
+            &mut overlay,
+            3,
+            Size::new(80, 4).unwrap(),
+        ));
+        assert_eq!(overlay.scroll_offset, 3);
+        assert_eq!(overlay.active_selection_index, Some(1));
     }
 
     /// Verifies compact colon-delimited command display records render as

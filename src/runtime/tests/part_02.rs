@@ -4071,6 +4071,7 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
         .find(|selection| selection.command == "select-window -t @2")
         .expect("work window row should advertise a selectable action");
     let clicked_row = work_selection.line_index.saturating_add(1);
+    let clicked_column = work_selection.start_column.saturating_add(2);
 
     let report = service
         .apply_attached_terminal_step_plan(
@@ -4080,7 +4081,7 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
                     MouseAction::SelectDisplayOverlay {
                         position: CopyPosition {
                             line: clicked_row,
-                            column: 0,
+                            column: clicked_column,
                         },
                     },
                 )],
@@ -4196,7 +4197,8 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
         view.line_style_spans[row].iter().any(|span| {
             span.length == "[paste]".len()
                 && !span.rendition.inverse
-                && span.rendition.background.is_none()
+                && span.rendition.background
+                    == Some(service.ui_theme.colors.agent_reasoning.background)
                 && span.rendition.foreground
                     == Some(service.ui_theme.colors.agent_reasoning.foreground)
                 && span.rendition.bold
