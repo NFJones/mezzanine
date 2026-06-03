@@ -5460,14 +5460,27 @@ mod tests {
             "gutter lost selection styling: {spans:?}"
         );
         assert_eq!(
+            gutter_rendition.background, None,
+            "gutter picked up active body highlight: {spans:?}"
+        );
+        assert_eq!(
             gutter_trailing_rendition.foreground,
             Some(ui_theme.colors.agent_model.foreground),
             "selector gutter trailing cell lost selection styling: {spans:?}"
         );
         assert_eq!(
+            gutter_trailing_rendition.background, None,
+            "selector gutter trailing cell picked up active body highlight: {spans:?}"
+        );
+        assert_eq!(
             first_link_rendition.foreground,
             Some(ui_theme.colors.agent_transcript_command.foreground),
             "front-of-line link styling shifted into the gutter: {spans:?}"
+        );
+        assert_eq!(
+            first_link_rendition.background,
+            Some(ui_theme.colors.agent_model.background),
+            "front-of-line link lost active body highlight: {spans:?}"
         );
         assert!(
             gutter_rendition.underline,

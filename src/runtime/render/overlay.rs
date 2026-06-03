@@ -1174,6 +1174,18 @@ pub(super) fn runtime_display_overlay_selection_rendition(
     }
     rendition
 }
+/// Returns the selector-gutter rendition for a selectable overlay row.
+///
+/// The gutter marks the active row, but it is not part of the selectable body
+/// range. Keep its foreground treatment aligned with the selection kind without
+/// applying the active body background, otherwise front-of-line links appear to
+/// shift left into the selector prefix.
+pub(super) fn runtime_display_overlay_selection_gutter_rendition(
+    ui_theme: &UiTheme,
+    kind: RuntimeDisplayOverlaySelectionKind,
+) -> GraphicRendition {
+    runtime_display_overlay_selection_rendition(ui_theme, kind, false)
+}
 /// Returns the markdown-style rendition used for command-overlay links.
 pub(super) fn runtime_display_overlay_link_rendition(ui_theme: &UiTheme) -> GraphicRendition {
     GraphicRendition {
@@ -1342,10 +1354,9 @@ pub(super) fn runtime_display_overlay_rendered_line_style_spans(
                 TerminalStyleSpan {
                     start: 0,
                     length: prefix_columns.min(max_columns),
-                    rendition: runtime_display_overlay_selection_rendition(
+                    rendition: runtime_display_overlay_selection_gutter_rendition(
                         ui_theme,
                         selection.kind,
-                        true,
                     ),
                 },
             );
