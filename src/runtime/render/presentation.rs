@@ -36,6 +36,45 @@ pub(super) struct AgentRenderedLine {
     pub(super) style_spans: Vec<TerminalStyleSpan>,
     /// Optional raw markdown text to use when copy mode selects this line.
     pub(super) copy_text: Option<String>,
+    /// Structural presentation metadata that must not be inferred from glyphs.
+    pub(super) kind: AgentRenderedLineKind,
+}
+
+/// Structural kind for one rendered presentation row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentRenderedLineKind {
+    /// Ordinary rendered text with no special wrapping behavior.
+    Normal,
+    /// First physical row for one source markdown table row.
+    MarkdownTableRow,
+    /// Continuation physical row for a wrapped source markdown table row.
+    MarkdownTableContinuation,
+    /// Separator row generated from the markdown table delimiter line.
+    MarkdownTableSeparator,
+}
+
+impl AgentRenderedLineKind {
+    /// Returns whether this row is part of markdown table presentation.
+    fn is_markdown_table(self) -> bool {
+        matches!(
+            self,
+            Self::MarkdownTableRow | Self::MarkdownTableContinuation | Self::MarkdownTableSeparator
+        )
+    }
+
+    /// Returns whether this row should consume one raw markdown source line.
+    fn consumes_markdown_source_line(self) -> bool {
+        !matches!(self, Self::MarkdownTableContinuation)
+    }
+
+    /// Returns the row kind to use for a generic wrapped continuation.
+    fn continuation(self) -> Self {
+        if self.is_markdown_table() {
+            Self::MarkdownTableContinuation
+        } else {
+            Self::Normal
+        }
+    }
 }
 
 /// Maximum display width used for agent-rendered transcript presentation.
@@ -359,6 +398,7 @@ pub(super) fn wrapped_prefixed_agent_terminal_lines(
             display,
             style_spans: Vec::new(),
             copy_text: None,
+            kind: AgentRenderedLineKind::Normal,
         })
         .collect::<Vec<_>>();
     wrap_agent_rendered_lines_to_width(lines, display_width, display_width)
@@ -385,6 +425,7 @@ pub(super) fn agent_say_text_is_displayed_patch_block(text: &str) -> bool {
 pub(super) fn render_agent_markdown_body_lines(
     markdown: &str,
     ui_theme: &UiTheme,
+    table_display_width: usize,
 ) -> Vec<AgentRenderedLine> {
     let trimmed = markdown.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
@@ -392,10 +433,16 @@ pub(super) fn render_agent_markdown_body_lines(
             display: "mez> ".to_string(),
             style_spans: Vec::new(),
             copy_text: None,
+            kind: AgentRenderedLineKind::Normal,
         }];
     }
+    let table_body_display_width = table_display_width
+        .saturating_sub(UnicodeWidthStr::width("mez> "))
+        .max(1);
     prefix_agent_rendered_markdown_lines(render_markdown_preserving_source_blank_lines(
-        trimmed, ui_theme,
+        trimmed,
+        ui_theme,
+        Some(table_body_display_width),
     ))
 }
 
@@ -408,7 +455,7 @@ pub(super) fn render_command_markdown_body_lines(
     if trimmed.is_empty() {
         return Vec::new();
     }
-    render_markdown_preserving_source_blank_lines(trimmed, ui_theme)
+    render_markdown_preserving_source_blank_lines(trimmed, ui_theme, None)
 }
 
 /// Wraps rendered markdown presentation lines to the pane-local display width.
@@ -427,7 +474,7 @@ pub(super) fn wrap_agent_rendered_lines_to_width(
     lines
         .into_iter()
         .flat_map(|line| {
-            let effective_width = if markdown_rendered_line_is_table_row(&line.display) {
+            let effective_width = if markdown_rendered_line_is_table_row(&line) {
                 table_display_width
             } else {
                 display_width
@@ -499,6 +546,11 @@ pub(super) fn wrap_agent_rendered_line_to_width(
             display: segment_text,
             style_spans,
             copy_text,
+            kind: if first {
+                line.kind
+            } else {
+                line.kind.continuation()
+            },
         });
         remaining = &remaining[segment.bytes_consumed..];
         display_start = segment.end_column;
@@ -548,6 +600,16 @@ pub(super) fn take_agent_rendered_display_segment(
             end_column: start_column.saturating_add(agent_terminal_text_width(text)),
         });
     }
+    if let Some((_, grapheme)) = UnicodeSegmentation::grapheme_indices(text, true).next()
+        && agent_terminal_grapheme_width(grapheme) > display_width
+    {
+        return Some(AgentRenderedDisplaySegment {
+            text: "…".to_string(),
+            bytes_consumed: grapheme.len(),
+            start_column,
+            end_column: start_column.saturating_add(1),
+        });
+    }
     let mut width = 0usize;
     let mut boundary_consumed = 0usize;
     let mut boundary_width = 0usize;
@@ -571,6 +633,24 @@ pub(super) fn take_agent_rendered_display_segment(
         if width >= display_width {
             break;
         }
+    }
+    if last_space_break.is_none() && boundary_consumed < text.len() {
+        if let Some((_, grapheme)) = UnicodeSegmentation::grapheme_indices(text, true).next()
+            && agent_terminal_grapheme_width(grapheme) > display_width
+        {
+            return Some(AgentRenderedDisplaySegment {
+                text: "…".to_string(),
+                bytes_consumed: grapheme.len(),
+                start_column,
+                end_column: start_column.saturating_add(1),
+            });
+        }
+        return Some(AgentRenderedDisplaySegment {
+            text: text.to_string(),
+            bytes_consumed: text.len(),
+            start_column,
+            end_column: start_column.saturating_add(agent_terminal_text_width(text)),
+        });
     }
     let (text_end, consumed, width) =
         if let Some((space_start, consumed_through_space, break_width)) = last_space_break {
@@ -708,20 +788,9 @@ pub(super) fn markdown_local_continuation_indent_width(display: &str) -> usize {
 /// Returns whether one rendered markdown row is part of a table.
 ///
 /// # Parameters
-/// - `display`: Rendered markdown display text, optionally with an agent label.
-pub(super) fn markdown_rendered_line_is_table_row(display: &str) -> bool {
-    let rest = display.strip_prefix("mez> ").unwrap_or(display);
-    let rest = rest.trim_start();
-    rest.starts_with('┌')
-        || rest.starts_with('┬')
-        || rest.starts_with('┐')
-        || rest.starts_with('│')
-        || rest.starts_with('├')
-        || rest.starts_with('┼')
-        || rest.starts_with('┤')
-        || rest.starts_with('└')
-        || rest.starts_with('┴')
-        || rest.starts_with('┘')
+/// - `line`: Rendered markdown row with structural presentation metadata.
+pub(super) fn markdown_rendered_line_is_table_row(line: &AgentRenderedLine) -> bool {
+    line.kind.is_markdown_table()
 }
 
 /// Returns model-authored markdown without an extra divider row.
@@ -778,35 +847,53 @@ pub(super) fn markdown_rendered_line_copy_text(line: &AgentRenderedLine) -> Stri
 pub(super) fn render_markdown_preserving_source_blank_lines(
     markdown: &str,
     ui_theme: &UiTheme,
+    table_display_width: Option<usize>,
 ) -> Vec<AgentRenderedLine> {
-    let rendered_lines = AgentMarkdownRenderer::render(markdown, ui_theme);
+    let rendered_lines = AgentMarkdownRenderer::render(markdown, ui_theme, table_display_width);
     let source_lines = markdown.lines().collect::<Vec<_>>();
     let nonblank_source_lines = source_lines
         .iter()
         .filter(|line| !line.trim().is_empty())
         .count();
-    if nonblank_source_lines != rendered_lines.len() {
+    let rendered_source_line_count = rendered_lines
+        .iter()
+        .filter(|line| line.kind.consumes_markdown_source_line())
+        .count();
+    if nonblank_source_lines != rendered_source_line_count {
         return insert_blank_lines_above_markdown_headings(rendered_lines);
     }
 
     let mut rendered = rendered_lines.into_iter();
-    let source_aligned_lines = source_lines
-        .into_iter()
-        .filter_map(|source_line| {
-            if source_line.trim().is_empty() {
-                Some(AgentRenderedLine {
-                    display: String::new(),
-                    style_spans: Vec::new(),
-                    copy_text: Some(String::new()),
-                })
-            } else {
-                rendered.next().map(|mut rendered_line| {
-                    rendered_line.copy_text = Some(source_line.to_string());
-                    rendered_line
-                })
+    let mut source_aligned_lines = Vec::new();
+    for source_line in source_lines {
+        if source_line.trim().is_empty() {
+            source_aligned_lines.push(AgentRenderedLine {
+                display: String::new(),
+                style_spans: Vec::new(),
+                copy_text: Some(String::new()),
+                kind: AgentRenderedLineKind::Normal,
+            });
+            continue;
+        }
+        for mut rendered_line in rendered.by_ref() {
+            if rendered_line.kind.consumes_markdown_source_line() {
+                rendered_line.copy_text = Some(source_line.to_string());
+                source_aligned_lines.push(rendered_line);
+                break;
             }
-        })
-        .collect();
+            if rendered_line.copy_text.is_none() {
+                rendered_line.copy_text = Some(AGENT_COPY_SKIP_LINE.to_string());
+            }
+            source_aligned_lines.push(rendered_line);
+        }
+    }
+    source_aligned_lines.extend(rendered.map(|mut rendered_line| {
+        if !rendered_line.kind.consumes_markdown_source_line() && rendered_line.copy_text.is_none()
+        {
+            rendered_line.copy_text = Some(AGENT_COPY_SKIP_LINE.to_string());
+        }
+        rendered_line
+    }));
     insert_blank_lines_above_markdown_headings(source_aligned_lines)
 }
 
@@ -853,6 +940,7 @@ pub(super) fn markdown_blank_line() -> AgentRenderedLine {
         display: String::new(),
         style_spans: Vec::new(),
         copy_text: Some(String::new()),
+        kind: AgentRenderedLineKind::Normal,
     }
 }
 
@@ -904,6 +992,7 @@ pub(super) fn prefix_agent_rendered_markdown_lines(
             display: String::new(),
             style_spans: Vec::new(),
             copy_text: None,
+            kind: AgentRenderedLineKind::Normal,
         }]
     } else {
         lines
@@ -931,7 +1020,11 @@ pub(super) fn prefix_agent_rendered_markdown_lines(
             }
             line.display = format!("{prefix}{}", line.display);
             if let Some(copy_text) = line.copy_text.take() {
-                line.copy_text = Some(format!("{prefix}{copy_text}"));
+                if copy_text == AGENT_COPY_SKIP_LINE {
+                    line.copy_text = Some(copy_text);
+                } else {
+                    line.copy_text = Some(format!("{prefix}{copy_text}"));
+                }
             }
             line
         })
@@ -948,6 +1041,7 @@ pub(super) fn prefix_agent_rendered_markdown_lines(
 pub(super) struct AgentMarkdownRenderer {
     lines: Vec<AgentRenderedLine>,
     current: AgentRenderedLine,
+    table_display_width: Option<usize>,
     active: GraphicRendition,
     style_stack: Vec<GraphicRendition>,
     quote_depth: usize,
@@ -967,7 +1061,11 @@ pub(super) struct AgentMarkdownRenderer {
 
 impl AgentMarkdownRenderer {
     /// Renders markdown using CommonMark plus the common GitHub-style extensions.
-    fn render(markdown: &str, ui_theme: &UiTheme) -> Vec<AgentRenderedLine> {
+    fn render(
+        markdown: &str,
+        ui_theme: &UiTheme,
+        table_display_width: Option<usize>,
+    ) -> Vec<AgentRenderedLine> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_FOOTNOTES);
@@ -982,7 +1080,7 @@ impl AgentMarkdownRenderer {
         options.insert(Options::ENABLE_SUBSCRIPT);
         options.insert(Options::ENABLE_WIKILINKS);
 
-        let mut renderer = Self::new(ui_theme);
+        let mut renderer = Self::new(ui_theme, table_display_width);
         for event in Parser::new_ext(markdown, options) {
             renderer.handle_event(event);
         }
@@ -1069,6 +1167,7 @@ impl AgentMarkdownRenderer {
                 self.start_block();
                 self.table = Some(MarkdownTableState::new(
                     alignments,
+                    self.table_display_width,
                     self.table_alternate_row_foreground,
                 ));
             }
@@ -1424,6 +1523,7 @@ impl AgentMarkdownRenderer {
                 display: String::new(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             },
         );
         self.current_prefix_only = false;
@@ -1444,14 +1544,16 @@ impl AgentMarkdownRenderer {
 
 impl AgentMarkdownRenderer {
     /// Builds an empty markdown renderer for one active UI theme.
-    fn new(ui_theme: &UiTheme) -> Self {
+    fn new(ui_theme: &UiTheme, table_display_width: Option<usize>) -> Self {
         Self {
             lines: Vec::new(),
             current: AgentRenderedLine {
                 display: String::new(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             },
+            table_display_width,
             active: GraphicRendition::default(),
             style_stack: Vec::new(),
             quote_depth: 0,
@@ -1495,13 +1597,19 @@ pub(super) struct MarkdownTableState {
     header_rows: usize,
     /// Whether the parser is currently inside the table head.
     in_head: bool,
+    /// Optional maximum terminal width available for rendered table rows.
+    display_width: Option<usize>,
     /// Foreground used for alternating body rows.
     alternate_row_foreground: TerminalColor,
 }
 
 impl MarkdownTableState {
     /// Builds a table capture state for parser-provided alignments.
-    fn new(alignments: Vec<Alignment>, alternate_row_foreground: TerminalColor) -> Self {
+    fn new(
+        alignments: Vec<Alignment>,
+        display_width: Option<usize>,
+        alternate_row_foreground: TerminalColor,
+    ) -> Self {
         Self {
             alignments,
             rows: Vec::new(),
@@ -1509,6 +1617,7 @@ impl MarkdownTableState {
             current_cell: String::new(),
             header_rows: 0,
             in_head: false,
+            display_width,
             alternate_row_foreground,
         }
     }
@@ -1555,44 +1664,33 @@ impl MarkdownTableState {
         let widths = self.column_widths(column_count);
         let mut lines = Vec::new();
         for (row_index, row) in self.rows.iter().enumerate() {
-            let rendered = self.render_row(row, &widths);
-            let mut line = AgentRenderedLine {
-                display: rendered.clone(),
-                style_spans: Vec::new(),
-                copy_text: Some(rendered),
-            };
-            if row_index < self.header_rows {
-                let length = agent_terminal_text_width(line.display.as_str());
-                if length > 0 {
-                    line.style_spans.push(TerminalStyleSpan {
-                        start: 0,
-                        length,
-                        rendition: GraphicRendition {
-                            bold: true,
-                            ..GraphicRendition::default()
-                        },
-                    });
-                }
-            } else if row_index.saturating_sub(self.header_rows) % 2 == 0 {
-                let length = agent_terminal_text_width(line.display.as_str());
-                if length > 0 {
-                    line.style_spans.push(TerminalStyleSpan {
-                        start: 0,
-                        length,
-                        rendition: GraphicRendition {
-                            foreground: Some(self.alternate_row_foreground),
-                            background: None,
-                            ..GraphicRendition::default()
-                        },
-                    });
-                }
+            let wrapped_cells = self.wrap_row_cells(row, &widths);
+            let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+            for physical_row in 0..row_height {
+                let rendered = self.render_wrapped_row(&wrapped_cells, &widths, physical_row);
+                let mut line = AgentRenderedLine {
+                    display: rendered.clone(),
+                    style_spans: Vec::new(),
+                    copy_text: Some(if physical_row == 0 {
+                        rendered
+                    } else {
+                        AGENT_COPY_SKIP_LINE.to_string()
+                    }),
+                    kind: if physical_row == 0 {
+                        AgentRenderedLineKind::MarkdownTableRow
+                    } else {
+                        AgentRenderedLineKind::MarkdownTableContinuation
+                    },
+                };
+                self.apply_row_style(&mut line, row_index);
+                lines.push(line);
             }
-            lines.push(line);
             if row_index + 1 == self.header_rows {
                 lines.push(AgentRenderedLine {
                     display: self.render_separator(&widths),
                     style_spans: Vec::new(),
                     copy_text: None,
+                    kind: AgentRenderedLineKind::MarkdownTableSeparator,
                 });
             }
         }
@@ -1608,7 +1706,7 @@ impl MarkdownTableState {
 
     /// Computes display widths for each column.
     fn column_widths(&self, column_count: usize) -> Vec<usize> {
-        (0..column_count)
+        let natural_widths = (0..column_count)
             .map(|column| {
                 self.rows
                     .iter()
@@ -1618,20 +1716,173 @@ impl MarkdownTableState {
                     .unwrap_or(0)
                     .max(3)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let Some(display_width) = self.display_width else {
+            return natural_widths;
+        };
+        if Self::table_total_width(&natural_widths) <= display_width {
+            return natural_widths;
+        }
+        Self::bounded_column_widths(&natural_widths, display_width)
     }
 
-    /// Renders one aligned table row.
-    fn render_row(&self, row: &[String], widths: &[usize]) -> String {
-        let cells = widths
+    /// Returns total display width for a rendered table with these content widths.
+    fn table_total_width(widths: &[usize]) -> usize {
+        widths
+            .iter()
+            .sum::<usize>()
+            .saturating_add(widths.len().saturating_mul(3))
+            .saturating_add(1)
+    }
+
+    /// Allocates bounded content widths after box and padding overhead.
+    fn bounded_column_widths(natural_widths: &[usize], display_width: usize) -> Vec<usize> {
+        let column_count = natural_widths.len();
+        if column_count == 0 {
+            return Vec::new();
+        }
+        let structural_width = column_count.saturating_mul(3).saturating_add(1);
+        let available = display_width
+            .saturating_sub(structural_width)
+            .max(column_count);
+        let minimum_width: usize = if available >= column_count.saturating_mul(3) {
+            3
+        } else {
+            1
+        };
+        let mut widths = vec![minimum_width; column_count];
+        let mut remaining = available.saturating_sub(minimum_width.saturating_mul(column_count));
+        while remaining > 0 {
+            let mut advanced = false;
+            for (width, natural_width) in widths.iter_mut().zip(natural_widths.iter()) {
+                if remaining == 0 {
+                    break;
+                }
+                if *width < *natural_width {
+                    *width = width.saturating_add(1);
+                    remaining = remaining.saturating_sub(1);
+                    advanced = true;
+                }
+            }
+            if !advanced {
+                break;
+            }
+        }
+        widths
+    }
+
+    /// Wraps every cell in one markdown source row to its allocated content width.
+    fn wrap_row_cells(&self, row: &[String], widths: &[usize]) -> Vec<Vec<String>> {
+        widths
             .iter()
             .enumerate()
             .map(|(column, width)| {
                 let cell = row.get(column).map(String::as_str).unwrap_or_default();
+                Self::wrap_cell(cell, *width)
+            })
+            .collect()
+    }
+
+    /// Wraps one cell into physical table-row fragments.
+    fn wrap_cell(cell: &str, width: usize) -> Vec<String> {
+        let width = width.max(1);
+        let mut remaining = cell.trim();
+        if remaining.is_empty() {
+            return vec![String::new()];
+        }
+        let mut lines = Vec::new();
+        while !remaining.is_empty() {
+            let (segment, consumed) = Self::take_cell_segment(remaining, width);
+            lines.push(segment);
+            remaining = remaining[consumed..].trim_start();
+        }
+        lines
+    }
+
+    /// Takes one table-cell segment, hard-splitting only when needed for layout.
+    fn take_cell_segment(text: &str, width: usize) -> (String, usize) {
+        if agent_terminal_text_width(text) <= width {
+            return (text.to_string(), text.len());
+        }
+        if let Some((_, grapheme)) = UnicodeSegmentation::grapheme_indices(text, true).next()
+            && agent_terminal_grapheme_width(grapheme) > width
+        {
+            return ("…".to_string(), grapheme.len());
+        }
+        let mut used_width = 0usize;
+        let mut boundary_consumed = 0usize;
+        let mut last_space_break: Option<(usize, usize)> = None;
+        for (index, grapheme) in UnicodeSegmentation::grapheme_indices(text, true) {
+            let grapheme_width = agent_terminal_grapheme_width(grapheme);
+            if used_width > 0 && used_width.saturating_add(grapheme_width) > width {
+                break;
+            }
+            let next_consumed = index.saturating_add(grapheme.len());
+            if grapheme.chars().all(char::is_whitespace) && used_width > 0 {
+                last_space_break = Some((index, next_consumed));
+            }
+            boundary_consumed = next_consumed;
+            used_width = used_width.saturating_add(grapheme_width);
+            if used_width >= width {
+                break;
+            }
+        }
+        if let Some((space_start, consumed_through_space)) = last_space_break {
+            let segment = text[..space_start].trim_end().to_string();
+            if !segment.is_empty() {
+                return (segment, consumed_through_space);
+            }
+        }
+        (text[..boundary_consumed].to_string(), boundary_consumed)
+    }
+
+    /// Renders one physical table row from already wrapped cells.
+    fn render_wrapped_row(
+        &self,
+        cells: &[Vec<String>],
+        widths: &[usize],
+        row_index: usize,
+    ) -> String {
+        let row = widths
+            .iter()
+            .enumerate()
+            .map(|(column, width)| {
+                let cell = cells
+                    .get(column)
+                    .and_then(|lines| lines.get(row_index))
+                    .map(String::as_str)
+                    .unwrap_or_default();
                 self.render_cell(cell, *width, self.alignment(column))
             })
             .collect::<Vec<_>>();
-        format!("│{}│", cells.join("│"))
+        format!("│{}│", row.join("│"))
+    }
+
+    /// Applies header or alternating-row table styling to one physical row.
+    fn apply_row_style(&self, line: &mut AgentRenderedLine, row_index: usize) {
+        let length = agent_terminal_text_width(line.display.as_str());
+        if length == 0 {
+            return;
+        }
+        let rendition = if row_index < self.header_rows {
+            GraphicRendition {
+                bold: true,
+                ..GraphicRendition::default()
+            }
+        } else if row_index.saturating_sub(self.header_rows).is_multiple_of(2) {
+            GraphicRendition {
+                foreground: Some(self.alternate_row_foreground),
+                background: None,
+                ..GraphicRendition::default()
+            }
+        } else {
+            return;
+        };
+        line.style_spans.push(TerminalStyleSpan {
+            start: 0,
+            length,
+            rendition,
+        });
     }
 
     /// Renders one box-drawing table separator row.
@@ -1747,6 +1998,7 @@ pub(super) fn command_preview_terminal_rendered_lines(
                 display,
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             };
             let line_width = agent_terminal_text_width(rendered.display.as_str());
             push_or_extend_style_span(
@@ -2501,6 +2753,7 @@ pub(super) fn render_agent_diff_display_line(
         display,
         style_spans: Vec::new(),
         copy_text: None,
+        kind: AgentRenderedLineKind::Normal,
     };
     push_or_extend_style_span(
         &mut rendered.style_spans,
@@ -2895,6 +3148,7 @@ pub(super) fn rendered_agent_diff_plain_line(
         display,
         style_spans: Vec::new(),
         copy_text: None,
+        kind: AgentRenderedLineKind::Normal,
     };
     push_or_extend_style_span(
         &mut rendered.style_spans,
@@ -2919,6 +3173,7 @@ pub(super) fn bound_agent_diff_display_lines(
                 display: "[mez: diff truncated for pane display]".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             });
             break;
         }
@@ -2928,6 +3183,7 @@ pub(super) fn bound_agent_diff_display_lines(
                 display: "[mez: diff truncated for pane display]".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             });
             break;
         }
@@ -2942,6 +3198,7 @@ pub(super) fn bound_agent_diff_display_lines(
                 display: "[mez: diff truncated for pane display]".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             });
             break;
         }
@@ -3152,6 +3409,7 @@ pub(super) fn agent_action_execution_rendered_line(
         display,
         style_spans,
         copy_text: None,
+        kind: AgentRenderedLineKind::Normal,
     }
 }
 

@@ -2257,7 +2257,7 @@ impl RuntimeSessionService {
         let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
         let body_rendered_lines = wrap_agent_rendered_lines_to_width(
-            render_agent_markdown_body_lines(markdown, &self.ui_theme),
+            render_agent_markdown_body_lines(markdown, &self.ui_theme, table_width),
             frame_width,
             table_width,
         );
@@ -4584,7 +4584,7 @@ fn copy_selection_rendition(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentRenderedLine, agent_action_result_uses_diff_preview,
+        AgentRenderedLine, AgentRenderedLineKind, agent_action_result_uses_diff_preview,
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
         readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
         render_command_markdown_body_lines, rendered_line_rendition_at,
@@ -4903,6 +4903,7 @@ mod tests {
                 display: "mez> alpha beta gamma".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             },
             18,
         )
@@ -4916,15 +4917,19 @@ mod tests {
         );
     }
 
-    /// Verifies markdown presentation hard-wraps long unbroken tokens only after
-    /// preserving the prompt on the first line.
+    /// Verifies markdown presentation preserves an overflowing unbroken token.
+    ///
+    /// The markdown contract asks non-table prose to avoid inserting hard
+    /// splits when there is no usable whitespace boundary, leaving terminal
+    /// soft wrapping to handle the long token.
     #[test]
-    fn markdown_presentation_wraps_unbroken_token_after_prompt() {
+    fn markdown_presentation_preserves_unbroken_token_after_prompt() {
         let wrapped = wrap_agent_rendered_line_to_width(
             AgentRenderedLine {
                 display: "mez> aaaaaaaaaaaaaaaa".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
             },
             12,
         )
@@ -4932,14 +4937,30 @@ mod tests {
         .map(|line| line.display)
         .collect::<Vec<_>>();
 
-        assert_eq!(
-            wrapped,
-            vec![
-                "mez> aaaaaaa".to_string(),
-                "     aaaaaaa".to_string(),
-                "     aa".to_string()
-            ]
-        );
+        assert_eq!(wrapped, vec!["mez> aaaaaaaaaaaaaaaa".to_string()]);
+    }
+
+    /// Verifies a leading grapheme wider than the segment is made representable.
+    ///
+    /// A leading two-cell grapheme cannot fit in a one-cell wrapping segment.
+    /// The wrapper should consume it with a one-cell placeholder instead of
+    /// emitting a row that exceeds the segment before any progress is possible.
+    #[test]
+    fn markdown_presentation_replaces_overwide_leading_grapheme() {
+        let wrapped = wrap_agent_rendered_line_to_width(
+            AgentRenderedLine {
+                display: "漢abc".to_string(),
+                style_spans: Vec::new(),
+                copy_text: None,
+                kind: AgentRenderedLineKind::Normal,
+            },
+            1,
+        )
+        .into_iter()
+        .map(|line| line.display)
+        .collect::<Vec<_>>();
+
+        assert_eq!(wrapped, vec!["…".to_string(), "abc".to_string()]);
     }
 
     /// Verifies command overlay markdown keeps internal `mez-agent:` links

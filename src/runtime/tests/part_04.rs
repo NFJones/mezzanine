@@ -33,6 +33,15 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         pane_text.contains("│"),
         "table should be rendered as terminal presentation: {pane_text}"
     );
+    let table_rows = pane_text
+        .lines()
+        .filter(|line| line.contains('│'))
+        .collect::<Vec<_>>();
+    assert!(table_rows.len() > 3, "table cells should wrap as rows: {pane_text}");
+    assert!(
+        table_rows.iter().all(|line| line.matches('│').count() >= 3),
+        "wrapped table rows should preserve column borders: {table_rows:?}"
+    );
     let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
     let visible_lines = copy_mode.visible_lines();
     let last_visible_index = visible_lines
@@ -621,6 +630,50 @@ fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
     assert!(
         data_row.text.contains("│") && data_row.text.contains(&second_cell),
         "{data_row:?}"
+    );
+}
+
+/// Verifies box-drawing text alone does not opt into table-row wrapping.
+///
+/// Markdown table rows carry structural metadata from the parser. A paragraph
+/// or code-like line that happens to begin with a Unicode table border glyph
+/// must still use the prose presentation width instead of terminal-width table
+/// behavior.
+#[test]
+fn runtime_agent_markdown_box_drawing_paragraph_uses_prose_width() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
+    );
+    let markdown = format!("│ {}", "not-a-table ".repeat(30));
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            &markdown,
+            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    let styled_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let paragraph_lines = styled_lines
+        .iter()
+        .filter(|line| line.text.contains("not-a-table"))
+        .collect::<Vec<_>>();
+
+    assert!(paragraph_lines.len() > 1, "{styled_lines:?}");
+    assert!(
+        paragraph_lines
+            .iter()
+            .all(|line| line.text.chars().count() <= 120),
+        "{paragraph_lines:?}"
     );
 }
 

@@ -162,6 +162,7 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
             display,
             mut style_spans,
             copy_text,
+            ..
         } = rendered;
         let line_index = content.lines.len();
         for (start_column, width, command) in agent_command_links_in_line(&display) {
