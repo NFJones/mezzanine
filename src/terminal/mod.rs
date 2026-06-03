@@ -96,7 +96,9 @@ pub(crate) use client_loop::{
     attached_terminal_restore_presentation_frame, compose_terminal_output_style_spans,
     encode_attached_terminal_output_update_frame_with_styles,
 };
-pub(crate) use copy::AGENT_COPY_SKIP_LINE;
+pub(crate) use copy::{
+    AGENT_COPY_SKIP_LINE, AGENT_COPY_WRAP_CONTINUATION, encode_agent_copy_source_line,
+};
 pub use copy::{CopyMode, CopyPosition, SearchDirection};
 #[cfg(test)]
 pub use fd::poll_attached_terminal_fd_readiness;

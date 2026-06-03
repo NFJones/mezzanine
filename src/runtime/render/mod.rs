@@ -2263,10 +2263,15 @@ impl RuntimeSessionService {
         );
         let body_rendered_count = body_rendered_lines.len();
         let rendered_lines = frame_agent_markdown_lines(body_rendered_lines, frame_width);
-        let raw_copy_lines = prefixed_agent_terminal_lines("mez> ", markdown)
-            .into_iter()
-            .map(|line| format!("{AGENT_TERMINAL_MESSAGE_PREFIX}{line}"))
-            .collect::<Vec<_>>();
+        let trimmed_markdown = markdown.trim_end_matches(['\r', '\n']);
+        let raw_copy_lines = if trimmed_markdown.is_empty() {
+            vec![String::new()]
+        } else {
+            trimmed_markdown
+                .split('\n')
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
         let copy_lines = markdown_block_copy_lines(
             rendered_lines.as_slice(),
             body_rendered_count,

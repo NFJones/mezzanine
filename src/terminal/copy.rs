@@ -19,6 +19,15 @@ const AGENT_COPY_INDICATOR_PREFIX: &str = "▐ ";
 const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
 /// Copy-text marker for presentation-only continuation rows.
 pub(crate) const AGENT_COPY_SKIP_LINE: &str = "\u{1e}mez-copy-skip-line";
+/// Copy-text marker carrying one markdown source-line identity and raw text.
+pub(crate) const AGENT_COPY_SOURCE_LINE_PREFIX: &str = "\u{1e}mez-copy-source-line:";
+/// Copy-text marker for wrapped markdown continuation rows.
+pub(crate) const AGENT_COPY_WRAP_CONTINUATION: &str = "\u{1e}mez-copy-wrap-continuation";
+
+/// Encodes one markdown source-line identity with its raw copy text.
+pub(crate) fn encode_agent_copy_source_line(source_index: usize, copy_line: &str) -> String {
+    format!("{AGENT_COPY_SOURCE_LINE_PREFIX}{source_index}:{copy_line}")
+}
 
 /// Carries Search Direction state for this subsystem.
 ///
@@ -640,6 +649,9 @@ impl CopyMode {
         if copy_line == AGENT_COPY_SKIP_LINE {
             return AGENT_COPY_SKIP_LINE.to_string();
         }
+        if decode_agent_copy_source_line(copy_line).is_some() {
+            return copy_line.clone();
+        }
         let display_end = char_count(display_line);
         if copy_line != display_line {
             if start == 0 && end >= display_end {
@@ -800,14 +812,39 @@ fn next_word_column(line: &str, column: usize) -> usize {
     scalar_index_to_display_column(line, word_end)
 }
 
+/// Decodes one markdown source-line copy marker into its source identity and
+/// raw line text.
+fn decode_agent_copy_source_line(line: &str) -> Option<(usize, &str)> {
+    let encoded = line.strip_prefix(AGENT_COPY_SOURCE_LINE_PREFIX)?;
+    let (source_index, raw_line) = encoded.split_once(':')?;
+    Some((source_index.parse().ok()?, raw_line))
+}
+
 /// Formats copied selection lines by removing display-only agent gutters.
 fn normalize_copied_selection_lines(lines: Vec<String>) -> Vec<String> {
     let mut output = Vec::with_capacity(lines.len());
     let mut agent_run = Vec::new();
+    let mut emitted_markdown_source_lines = Vec::new();
     for line in lines {
         if line == AGENT_COPY_SKIP_LINE {
             continue;
         }
+        let line = if let Some((source_index, raw_line)) = decode_agent_copy_source_line(&line) {
+            if emitted_markdown_source_lines.contains(&source_index) {
+                continue;
+            }
+            emitted_markdown_source_lines.push(source_index);
+            raw_line.to_string()
+        } else {
+            if line
+                .strip_prefix(AGENT_COPY_INDICATOR_PREFIX)
+                .unwrap_or(line.as_str())
+                == "***"
+            {
+                emitted_markdown_source_lines.clear();
+            }
+            line
+        };
         if let Some(stripped) = line.strip_prefix(AGENT_COPY_INDICATOR_PREFIX) {
             agent_run.push(stripped.to_string());
             continue;

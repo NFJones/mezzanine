@@ -14,8 +14,9 @@ use std::{str::FromStr, sync::LazyLock};
 
 use crate::agent::{AgentAction, AgentActionPayload, apply_patch_touched_paths};
 use crate::terminal::{
-    AGENT_COPY_SKIP_LINE, GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
-    UiColorPair, UiTheme, overlay_fixed_column_style_spans, terminal_grapheme_width,
+    AGENT_COPY_SKIP_LINE, AGENT_COPY_WRAP_CONTINUATION, GraphicRendition, TerminalColor,
+    TerminalStyleSpan, TerminalStyledLine, UiColorPair, UiTheme, encode_agent_copy_source_line,
+    overlay_fixed_column_style_spans, terminal_grapheme_width,
 };
 use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 use syntect::easy::HighlightLines;
@@ -539,6 +540,12 @@ pub(super) fn wrap_agent_rendered_line_to_width(
         );
         let copy_text = if first {
             line.copy_text.clone()
+        } else if line
+            .copy_text
+            .as_deref()
+            .is_some_and(|copy_text| copy_text != AGENT_COPY_SKIP_LINE)
+        {
+            Some(AGENT_COPY_WRAP_CONTINUATION.to_string())
         } else if line.copy_text.is_some() {
             Some(AGENT_COPY_SKIP_LINE.to_string())
         } else {
@@ -807,7 +814,7 @@ pub(super) fn frame_agent_markdown_lines(
     framed.push(AgentRenderedLine {
         display: format!("{prefix}{}", "─".repeat(divider_width)),
         style_spans: Vec::new(),
-        copy_text: Some(AGENT_COPY_SKIP_LINE.to_string()),
+        copy_text: Some("***".to_string()),
         kind: AgentRenderedLineKind::MarkdownFrame,
     });
     framed.append(&mut lines);
@@ -820,7 +827,8 @@ pub(super) fn markdown_block_copy_lines(
     _body_rendered_count: usize,
     raw_body_copy_lines: Vec<String>,
 ) -> Vec<String> {
-    let mut raw_lines = raw_body_copy_lines.into_iter();
+    let mut raw_lines = raw_body_copy_lines.into_iter().enumerate();
+    let mut current_source_line = None;
     rendered_lines
         .iter()
         .map(|line| {
@@ -831,12 +839,31 @@ pub(super) fn markdown_block_copy_lines(
             {
                 return AGENT_COPY_SKIP_LINE.to_string();
             }
-            if line.kind.consumes_markdown_source_line()
-                && let Some(raw_line) = raw_lines.next()
-            {
-                return raw_line;
+            if line.kind == AgentRenderedLineKind::MarkdownFrame {
+                return line
+                    .copy_text
+                    .clone()
+                    .unwrap_or_else(|| markdown_rendered_line_copy_text(line));
             }
-            markdown_rendered_line_copy_text(line)
+            if line
+                .copy_text
+                .as_deref()
+                .is_some_and(|copy_text| copy_text == AGENT_COPY_WRAP_CONTINUATION)
+            {
+                return current_source_line
+                    .as_ref()
+                    .map(|(source_index, raw_line): &(usize, String)| {
+                        encode_agent_copy_source_line(*source_index, raw_line.as_str())
+                    })
+                    .unwrap_or_else(|| AGENT_COPY_SKIP_LINE.to_string());
+            }
+            if line.kind.consumes_markdown_source_line()
+                && let Some((source_index, raw_line)) = raw_lines.next()
+            {
+                current_source_line = Some((source_index, raw_line.clone()));
+                return encode_agent_copy_source_line(source_index, raw_line.as_str());
+            }
+            AGENT_COPY_SKIP_LINE.to_string()
         })
         .collect()
 }
@@ -1016,6 +1043,9 @@ pub(super) fn prefix_agent_rendered_markdown_lines(
         .into_iter()
         .map(|mut line| {
             if line.display.is_empty() {
+                if line.copy_text.as_deref() == Some(AGENT_COPY_SKIP_LINE) {
+                    return line;
+                }
                 if line.copy_text.is_some() {
                     line.copy_text = Some(String::new());
                 }

@@ -64,8 +64,134 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         .unwrap();
 
     let copied = copy_mode.copy_selection().unwrap();
-    assert_eq!(copied, markdown);
+    assert_eq!(copied, format!("***\n{markdown}"));
     assert!(!copied.contains('│'), "{copied}");
+}
+
+/// Verifies rendered markdown blocks copy a synthetic frame row as `***`.
+/// 
+/// The spec requires a visible divider above each rendered markdown block, but
+/// copy mode must preserve that frame as markdown thematic-break text instead
+/// of dropping it or copying the Unicode presentation rule.
+#[test]
+fn runtime_agent_markdown_copy_includes_synthetic_frame_row() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+    let markdown = "# Heading";
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            markdown,
+            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains('─'), "{pane_text}");
+    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let visible_lines = copy_mode.visible_lines();
+    let last_visible_index = visible_lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| visible_lines.len().saturating_sub(1));
+    let last_line = copy_mode.scroll_top().saturating_add(last_visible_index);
+    let last_column = visible_lines
+        .get(last_visible_index)
+        .map(|line| line.chars().count())
+        .unwrap_or_default();
+    copy_mode
+        .select_range(
+            CopyPosition { line: 0, column: 0 },
+            CopyPosition {
+                line: last_line,
+                column: last_column,
+            },
+        )
+        .unwrap();
+
+    let copied = copy_mode.copy_selection().unwrap();
+    assert_eq!(copied, "***\n# Heading");
+}
+
+/// Verifies partial and continuation markdown selections preserve raw source.
+/// 
+/// Rendered headings remove markdown syntax and wrapped continuation rows are
+/// presentation-only splits, but copying any visible slice should still return
+/// the original markdown source line exactly once.
+#[test]
+fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
+    );
+    let markdown = "# heading text that wraps";
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            markdown,
+            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let visible_lines = copy_mode.visible_lines();
+    let heading_line_index = visible_lines
+        .iter()
+        .position(|line| line.contains("mez> heading"))
+        .unwrap();
+    let continuation_line_index = visible_lines
+        .iter()
+        .enumerate()
+        .skip(heading_line_index.saturating_add(1))
+        .find(|(_, line)| !line.trim().is_empty())
+        .map(|(index, _)| index)
+        .unwrap();
+    let heading_column_start = visible_lines[heading_line_index].find("heading").unwrap();
+    let continuation_line_width = visible_lines[continuation_line_index].chars().count();
+
+    copy_mode
+        .select_range(
+            CopyPosition {
+                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                column: heading_column_start,
+            },
+            CopyPosition {
+                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                column: heading_column_start.saturating_add("heading".chars().count()),
+            },
+        )
+        .unwrap();
+    assert_eq!(copy_mode.copy_selection().unwrap(), markdown);
+
+    copy_mode
+        .select_range(
+            CopyPosition {
+                line: copy_mode.scroll_top().saturating_add(continuation_line_index),
+                column: 0,
+            },
+            CopyPosition {
+                line: copy_mode.scroll_top().saturating_add(continuation_line_index),
+                column: continuation_line_width,
+            },
+        )
+        .unwrap();
+    assert_eq!(copy_mode.copy_selection().unwrap(), markdown);
 }
 
 /// Verifies plain `mez>` output wraps under the assistant indicator.
