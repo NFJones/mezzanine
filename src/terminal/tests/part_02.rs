@@ -3655,7 +3655,12 @@ fn render_default_window_frame_uses_window_pillbox_context() {
 #[test]
 fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
     let mut ids = IdFactory::default();
-    let window = Window::new(&mut ids, 0, "shell", Size::new(80, 3).unwrap());
+    let window = Window::new(
+        &mut ids,
+        0,
+        "abcdefghijklmnopqrstuvwxZ",
+        Size::new(80, 3).unwrap(),
+    );
     let horizontal_split_action = WindowFrameAction::terminal_button("-", "split-window -h");
     let new_window_action = WindowFrameAction::terminal_button("□", "new-window");
     let frame_context = TerminalFrameContext {
@@ -3669,7 +3674,7 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
         windows: vec![TerminalWindowFrameContext {
             id: "@1".to_string(),
             index: 0,
-            title: "shell".to_string(),
+            title: "abcdefghijklmnopqrstuvwxZ".to_string(),
             active: true,
             subagent: false,
         }],
@@ -3701,6 +3706,17 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
     );
     assert!(!view.lines[2].contains(" Δ"), "{}", view.lines[2]);
     assert_ne!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
+    let status_start = view.lines[2]
+        .find(" ~/repo")
+        .expect("default window status should render the active pane cwd");
+    assert_eq!(
+        view.lines[2]
+            .chars()
+            .nth(status_start.saturating_sub(1)),
+        Some('w'),
+        "window action pills should use every column before the right-status block: {}",
+        view.lines[2]
+    );
     let cells = window_frame_action_pillbox_cells(&frame_context, 2, window.size.columns);
     assert!(
         cells

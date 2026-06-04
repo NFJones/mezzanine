@@ -143,7 +143,7 @@ pub(super) fn styled_window_pillbox_line(
     let right_status = window_right_status_layout(frame_context, width);
     let left_width = right_status
         .as_ref()
-        .map(|status| status.start.saturating_sub(1))
+        .map(|status| status.start)
         .unwrap_or(width);
     let mut row = blank_render_row(width, ' ');
     write_frame_text_cells(
