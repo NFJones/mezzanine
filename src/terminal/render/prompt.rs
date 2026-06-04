@@ -679,6 +679,14 @@ fn wrap_prompt_line_with_cursor_and_shadow(
             if let Some((text_break, consumed_break, spans_at_break)) = last_space_break.take() {
                 let consumed_columns = terminal_text_width(&current[..consumed_break]);
                 if consumed_columns > continuation_indent {
+                    if let Some(cursor_position) = cursor.as_mut()
+                        && cursor_position.0 == chunks.len()
+                        && cursor_position.1 >= consumed_columns
+                    {
+                        cursor_position.0 = cursor_position.0.saturating_add(1);
+                        cursor_position.1 = continuation_indent
+                            .saturating_add(cursor_position.1.saturating_sub(consumed_columns));
+                    }
                     let wrapped = current[..text_break].to_string();
                     let remainder = current[consumed_break..].to_string();
                     chunks.push(wrapped);
@@ -1299,4 +1307,42 @@ fn agent_live_footer_background_is_light(ui_theme: &UiTheme) -> bool {
 /// Builds an RGB gray terminal color.
 fn terminal_gray(level: u8) -> TerminalColor {
     TerminalColor::Rgb(level, level, level)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the wrapped prompt cursor relocates onto the continuation row
+    /// when a later overflow retroactively wraps the word containing the
+    /// cursor.
+    ///
+    /// This regression covers agent-prompt editing in the first columns of a
+    /// wrapped word, which previously left the rendered cursor stranded on the
+    /// prior visual row.
+    #[test]
+    fn wrap_prompt_cursor_tracks_retroactive_whitespace_wrap() {
+        let (chunks, shadow_spans, cursor_row, cursor_column) =
+            wrap_prompt_line_with_cursor_and_shadow("ab cdef", 4, None, 5, 0);
+
+        assert_eq!(chunks, vec!["ab".to_string(), "cdef".to_string()]);
+        assert_eq!(shadow_spans, vec![Vec::new(), Vec::new()]);
+        assert_eq!((cursor_row, cursor_column), (1, 1));
+    }
+
+    /// Verifies a cursor captured at the wrap boundary lands on the
+    /// continuation indent instead of remaining at the consumed trailing space
+    /// position on the previous row.
+    ///
+    /// This edge case keeps prompt cursor placement stable when the wrapped
+    /// remainder is indented for the agent prompt continuation prefix.
+    #[test]
+    fn wrap_prompt_cursor_moves_to_continuation_indent_at_wrap_boundary() {
+        let (chunks, shadow_spans, cursor_row, cursor_column) =
+            wrap_prompt_line_with_cursor_and_shadow("aa bcd", 3, None, 5, 2);
+
+        assert_eq!(chunks, vec!["aa".to_string(), "  bcd".to_string()]);
+        assert_eq!(shadow_spans, vec![Vec::new(), Vec::new()]);
+        assert_eq!((cursor_row, cursor_column), (1, 2));
+    }
 }
