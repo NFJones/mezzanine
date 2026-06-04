@@ -5729,7 +5729,7 @@ mod tests {
         let ui_theme = crate::terminal::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
-            "- [`018f6b3a-1b2c-7000-9000-cafebabefeed`](mez-agent:%2Fresume%20018f6b3a-1b2c-7000-9000-cafebabefeed)\n  - Resume: `/resume 018f6b3a-1b2c-7000-9000-cafebabefeed`",
+            "- [`018f6b3a-1b2c-7000-9000-cafebabefeed`](mez-agent:%2Fresume%20018f6b3a-1b2c-7000-9000-cafebabefeed)",
             &ui_theme,
         );
 

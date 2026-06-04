@@ -2170,7 +2170,6 @@ impl RuntimeSessionService {
                     width.saturating_sub("  - Prompt: ".len())
                 )
             ));
-            lines.push("  - Resume: select the linked session id above.".to_string());
         }
         lines.join("\n")
     }

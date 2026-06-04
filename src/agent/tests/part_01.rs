@@ -4536,6 +4536,11 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("A second owner-localization read is exceptional"));
     assert!(prompt.contains("if replacement or equivalent behavior exists"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
+    assert!(prompt.contains("Relative file paths are always resolved against the active pane working directory"));
+    assert!(prompt.contains("When a user names a relative path"));
+    assert!(prompt.contains("treat it as the active pane working directory joined with that path"));
+    assert!(prompt.contains("When path intent is ambiguous"));
+    assert!(prompt.contains("ask for clarification using the active pane working directory as the resolution base"));
     assert!(prompt.contains("relative to pane current working directory"));
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
     assert!(prompt.contains("use absolute paths above/outside that root"));
