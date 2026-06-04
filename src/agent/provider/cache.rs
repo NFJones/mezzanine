@@ -195,22 +195,31 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
     }
 }
 
-/// Renders user-role input while distinguishing historical transcript entries.
+/// Renders user-role input through a byte-stable prompt wrapper.
 ///
 /// OpenAI receives previous user prompts and the current user prompt through
-/// the same provider role. Historical wrappers keep prior transcript entries
-/// available for follow-up references without making them look like the active
-/// task when the request contains a large replay window.
+/// the same provider role. The wrapper must not depend on whether a prompt is
+/// currently active or replayed from transcript history because the active
+/// prompt becomes a historical transcript entry on the next turn. Keeping those
+/// bytes identical preserves provider prompt-cache continuity while the late
+/// allowed-action surface identifies the latest user prompt as the active task.
 fn openai_user_input_text(message: &ModelMessage) -> String {
     match message.source {
-        ContextSourceKind::Transcript | ContextSourceKind::TranscriptUser => format!(
-            "[historical user transcript]\n\
-             This is prior conversation history, not the active task. Do not answer this message unless the latest user request asks about it.\n\
-             {}",
-            message.content
-        ),
+        ContextSourceKind::Transcript
+        | ContextSourceKind::TranscriptUser
+        | ContextSourceKind::UserInstruction => openai_user_prompt_entry_text(&message.content),
         _ => message.content.clone(),
     }
+}
+
+/// Returns the provider-visible wrapper shared by active and historical user
+/// prompts so the completed turn can be replayed without changing bytes.
+fn openai_user_prompt_entry_text(content: &str) -> String {
+    format!(
+        "[user prompt transcript entry]\n\
+         This is one user prompt in the ordered conversation. The latest user prompt is the active task; earlier user prompts are historical context only unless the latest prompt asks about them.\n\
+         {content}"
+    )
 }
 
 /// Renders Mezzanine tool/action evidence through an OpenAI-supported message

@@ -3604,14 +3604,15 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     assert_eq!(input.len(), 3);
     assert_eq!(input[0]["role"], "user");
     let historical_text = input[0]["content"][0]["text"].as_str().unwrap();
-    assert!(historical_text.contains("[historical user transcript]"));
-    assert!(historical_text.contains("not the active task"));
+    assert!(historical_text.contains("[user prompt transcript entry]"));
+    assert!(historical_text.contains("earlier user prompts are historical context only"));
     assert!(historical_text.contains("Output a large multiline JSON object"));
 
     assert_eq!(input[1]["role"], "user");
     let current_text = input[1]["content"][0]["text"].as_str().unwrap();
+    assert!(current_text.contains("[user prompt transcript entry]"));
+    assert!(current_text.contains("The latest user prompt is the active task"));
     assert!(current_text.contains("Patch the prompt context manager"));
-    assert!(!current_text.contains("[historical user transcript]"));
 
     assert_eq!(input[2]["role"], "developer");
     assert!(
