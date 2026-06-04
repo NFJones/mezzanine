@@ -263,6 +263,44 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies unscoped terminal snapshot resume selects the newest restorable snapshot.
+///
+/// A user-visible `:resume-session --latest` command should be able to restore
+/// the snapshot most recently created by `:snapshot-session` even when the live
+/// daemon has a different session id after restart. Scoping `--latest` to the
+/// current session id made the command unable to find persisted snapshots from
+/// previous daemon sessions, so this regression uses two runtime services that
+/// share one repository root.
+#[test]
+fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_sessions() {
+    let root = temp_root("terminal-snapshot-latest-cross-session");
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut creating_service = test_runtime_service();
+    creating_service.set_snapshot_repository(snapshots.clone());
+    let creating_primary = creating_service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let create = creating_service
+        .execute_terminal_command(&creating_primary, "snapshot-session --name restart-point")
+        .unwrap();
+    assert!(create.contains(r#"\"name\":\"restart-point\""#), "{create}");
+
+    let mut resuming_service = test_runtime_service();
+    resuming_service.set_snapshot_repository(snapshots);
+    let resuming_primary = resuming_service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let resume = resuming_service
+        .execute_terminal_command(&resuming_primary, "resume-session --latest")
+        .unwrap();
+    assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
+    assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that runtime hook diagnostics use the same canonical event label as
 /// hook audit records and hook configuration. This matters because blocked
 /// action payloads and hook failure events are user-visible protocol surfaces

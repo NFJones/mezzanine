@@ -178,7 +178,7 @@ fn runtime_snapshot_resume_command(
     snapshots: &SnapshotRepository,
     selector: &SnapshotResumeSelector,
 ) -> Result<String> {
-    let snapshot_id = runtime_snapshot_id_for_selector(service, snapshots, selector)?;
+    let snapshot_id = runtime_snapshot_id_for_selector(snapshots, selector)?;
     let idempotency_key = format!("terminal-command:resume-session:{snapshot_id}");
     let body = format!(
         r#"{{"jsonrpc":"2.0","id":1,"method":"snapshot/resume","params":{{"snapshot_id":"{}","idempotency_key":"{}"}}}}"#,
@@ -209,33 +209,39 @@ fn dispatch_runtime_snapshot_terminal_command(
 
 /// Resolves a resume-session selector to a concrete snapshot id.
 fn runtime_snapshot_id_for_selector(
-    service: &RuntimeSessionService,
     snapshots: &SnapshotRepository,
     selector: &SnapshotResumeSelector,
 ) -> Result<String> {
     match selector {
         SnapshotResumeSelector::SnapshotId(snapshot_id) => Ok(snapshot_id.clone()),
-        SnapshotResumeSelector::Latest => {
-            runtime_latest_snapshot_id(snapshots, &service.session.id.to_string())
-        }
+        SnapshotResumeSelector::Latest => runtime_latest_snapshot_id(snapshots, None),
         SnapshotResumeSelector::LatestForSession(session_id) => {
-            runtime_latest_snapshot_id(snapshots, session_id)
+            runtime_latest_snapshot_id(snapshots, Some(session_id))
         }
     }
 }
 
-/// Returns the latest restorable snapshot id for a session.
-fn runtime_latest_snapshot_id(snapshots: &SnapshotRepository, session_id: &str) -> Result<String> {
+/// Returns the latest restorable snapshot id, optionally scoped to a session.
+fn runtime_latest_snapshot_id(
+    snapshots: &SnapshotRepository,
+    session_id: Option<&str>,
+) -> Result<String> {
     snapshots
         .list()?
         .into_iter()
-        .filter(|snapshot| snapshot.restorable && snapshot.session_id == session_id)
+        .filter(|snapshot| {
+            snapshot.restorable
+                && session_id.is_none_or(|session_id| snapshot.session_id == session_id)
+        })
         .max_by(runtime_compare_snapshot_recency)
         .map(|snapshot| snapshot.id)
         .ok_or_else(|| {
+            let scope = session_id
+                .map(|session_id| format!(" for session {session_id}"))
+                .unwrap_or_default();
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
-                format!("no restorable snapshot found for session {session_id}"),
+                format!("no restorable snapshot found{scope}"),
             )
         })
 }
