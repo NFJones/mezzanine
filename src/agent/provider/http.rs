@@ -240,7 +240,9 @@ fn provider_http_find_sse_block_separator(body: &[u8]) -> Option<(usize, usize)>
 /// Reports whether one complete SSE event block is terminal.
 fn provider_sse_block_is_terminal(block: &str) -> bool {
     let mut event_name = None;
-    let mut data_lines = Vec::new();
+    let mut data_start = None;
+    let mut data_end = None;
+    let mut data_line_count = 0usize;
     for line in block.lines() {
         if line.is_empty() || line.starts_with(':') {
             continue;
@@ -248,15 +250,21 @@ fn provider_sse_block_is_terminal(block: &str) -> bool {
         if let Some(value) = line.strip_prefix("event:") {
             event_name = Some(value.trim());
         } else if let Some(value) = line.strip_prefix("data:") {
-            data_lines.push(value.trim_start());
+            let data = value.trim_start();
+            let offset = data.as_ptr() as usize - block.as_ptr() as usize;
+            data_start.get_or_insert(offset);
+            data_end = Some(offset.saturating_add(data.len()));
+            data_line_count += 1;
         }
     }
-    if data_lines.is_empty() {
+    let (Some(data_start), Some(data_end)) = (data_start, data_end) else {
         return false;
+    };
+    let data = block[data_start..data_end].trim();
+    if data_line_count == 1 && data == "[DONE]" {
+        return true;
     }
-    let data = data_lines.join("\n");
-    let data = data.trim();
-    if data == "[DONE]" {
+    if data_line_count > 1 && provider_sse_data_lines_equal(block, "[DONE]") {
         return true;
     }
     let event_name_is_terminal = matches!(
@@ -271,6 +279,31 @@ fn provider_sse_block_is_terminal(block: &str) -> bool {
             value.get("type").and_then(serde_json::Value::as_str),
             Some("response.completed" | "response.failed" | "response.incomplete")
         )
+}
+
+/// Reports whether the logical joined SSE data field equals the target
+/// without allocating the joined field contents.
+fn provider_sse_data_lines_equal(block: &str, target: &str) -> bool {
+    let mut target_remaining = target;
+    let mut first = true;
+    for line in block.lines() {
+        let Some(value) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = value.trim_start();
+        if !first {
+            let Some(remaining) = target_remaining.strip_prefix('\n') else {
+                return false;
+            };
+            target_remaining = remaining;
+        }
+        let Some(remaining) = target_remaining.strip_prefix(data) else {
+            return false;
+        };
+        target_remaining = remaining;
+        first = false;
+    }
+    !first && target_remaining.is_empty()
 }
 
 /// Formats a reqwest response-body read error with useful transport details.

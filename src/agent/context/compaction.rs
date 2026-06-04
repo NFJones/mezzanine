@@ -106,13 +106,17 @@ fn compact_model_context_blocks(
     let protected_floor = prepared.len();
     prepared.extend(retained_tail.iter().cloned());
 
-    while model_context_total_words(&prepared) > context_budget_words {
-        if prepared.len() <= protected_floor {
-            break;
+    let mut total_words = model_context_total_words(&prepared);
+    if total_words > context_budget_words && prepared.len() > protected_floor {
+        let mut omitted_end = protected_floor;
+        while total_words > context_budget_words && omitted_end < prepared.len() {
+            let omitted_words = model_context_block_words(&prepared[omitted_end]);
+            report.omitted_blocks += 1;
+            report.omitted_original_words += omitted_words;
+            total_words = total_words.saturating_sub(omitted_words);
+            omitted_end += 1;
         }
-        let omitted = prepared.remove(protected_floor);
-        report.omitted_blocks += 1;
-        report.omitted_original_words += model_context_block_words(&omitted);
+        prepared.drain(protected_floor..omitted_end);
     }
 
     (prepared, report)

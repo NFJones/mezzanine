@@ -29,19 +29,17 @@ impl SnapshotRepository {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn latest(&self, session_id: Option<&str>) -> Result<Option<SnapshotState>> {
-        let mut snapshots = self
+        Ok(self
             .list()?
             .into_iter()
             .filter(|snapshot| {
                 session_id.is_none_or(|session_id| snapshot.session_id == session_id)
             })
-            .collect::<Vec<_>>();
-        snapshots.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(snapshots.pop())
+            .max_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            }))
     }
 
     /// Runs the latest resume plan operation for this subsystem.
