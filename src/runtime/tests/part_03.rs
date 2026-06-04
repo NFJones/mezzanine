@@ -4446,6 +4446,88 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies plain text `say` output does not receive markdown block framing.
+///
+/// Plain `say` output is ordinary assistant transcript text, so it should keep
+/// the `mez> ` speaker prefix while avoiding the synthetic markdown divider
+/// row that is reserved for `text/markdown` presentation blocks.
+#[test]
+fn runtime_agent_plain_say_does_not_render_markdown_divider() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-plain","method":"agent/shell/command","params":{"idempotency_key":"agent-plain-say","input":"render plain text"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let plain = "Plain say output without markdown framing.";
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "plain say response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "say-1".to_string(),
+                    rationale: String::new(),
+                    payload: crate::agent::AgentActionPayload::Say {
+                        status: crate::agent::SayStatus::Final,
+                        text: plain.to_string(),
+                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            .to_string(),
+                    },
+                }],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    let styled_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    assert!(
+        styled_lines
+            .iter()
+            .any(|line| line.text.contains("mez> Plain say output without markdown framing.")),
+        "{styled_lines:?}"
+    );
+    let expected_divider = expected_markdown_block_divider_line(80);
+    assert!(
+        styled_lines
+            .iter()
+            .all(|line| line.text != expected_divider),
+        "{styled_lines:?}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies markdown `say` output is rendered as presentation-only styling.
 ///
 /// The display path should remove visual markdown delimiters and add terminal
