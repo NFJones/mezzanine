@@ -1418,6 +1418,10 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let selector_extra_candidates = self.runtime_command_selector_extra_candidates();
+        let selector_working_directory = self
+            .active_pane_id()
+            .ok()
+            .and_then(|pane_id| self.pane_current_working_directory(&pane_id));
         let Some(prompt_input) = self.primary_prompt_input.as_mut() else {
             return Ok(false);
         };
@@ -1425,6 +1429,9 @@ impl RuntimeSessionService {
             prompt_input
                 .prompt
                 .set_selector_extra_candidates(selector_extra_candidates);
+            prompt_input
+                .prompt
+                .set_selector_working_directory(selector_working_directory);
         }
         let outcomes = if input == b"\x1b" && prompt_input.prompt.reverse_search_active() {
             vec![prompt_input.prompt.apply_terminal_input(input)?]
@@ -1565,6 +1572,7 @@ impl RuntimeSessionService {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
         }
         let selector_extra_candidates = self.runtime_agent_selector_extra_candidates();
+        let selector_working_directory = self.pane_current_working_directory(pane_id);
         let prompt_body_columns = self
             .agent_prompt_editable_body_width(pane_id)
             .unwrap_or(1)
@@ -1579,6 +1587,9 @@ impl RuntimeSessionService {
             state
                 .prompt
                 .set_selector_extra_candidates(selector_extra_candidates);
+            state
+                .prompt
+                .set_selector_working_directory(selector_working_directory);
             if input == b"\x1b" {
                 vec![state.prompt.apply_terminal_input(input)?]
             } else {

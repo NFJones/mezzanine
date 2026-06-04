@@ -6,6 +6,7 @@
 #[cfg(test)]
 use crate::error::Result;
 use crate::selector::{ActiveSelector, SelectorExtraCandidate};
+use std::path::PathBuf;
 
 /// Default number of submitted prompt entries retained by a readline buffer.
 pub const DEFAULT_READLINE_HISTORY_LIMIT: usize = 1000;
@@ -259,6 +260,12 @@ pub struct ReadlinePrompt {
     /// applied so completions can include dynamic objects such as saved agent
     /// conversation ids without making the selector depend on runtime state.
     pub selector_extra_candidates: Vec<SelectorExtraCandidate>,
+    /// Prompt-local working directory used for relative path completion.
+    ///
+    /// Runtime-owned prompt surfaces refresh this value before applying input
+    /// so selector filesystem candidates resolve against the active pane cwd
+    /// instead of the Mez server process working directory.
+    pub selector_working_directory: Option<PathBuf>,
     /// Active incremental reverse history search state, when `Ctrl+R` is open.
     pub(super) reverse_search: Option<ReadlineReverseSearch>,
     /// Display cells available for the editable prompt body, when known.

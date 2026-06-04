@@ -6,8 +6,9 @@
 use crate::error::Result;
 use crate::selector::{
     ActiveSelector, SelectorExtraCandidate, SelectorShadowHint, SelectorSurface,
-    shadow_hint_with_extra,
+    shadow_hint_with_extra_in_working_directory,
 };
+use std::path::PathBuf;
 
 use super::decoder::{
     apply_readline_terminal_input, readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
@@ -26,6 +27,7 @@ impl ReadlinePrompt {
             buffer: ReadlineBuffer::new(),
             selector: None,
             selector_extra_candidates: Vec::new(),
+            selector_working_directory: None,
             reverse_search: None,
             prompt_body_columns: None,
         }
@@ -45,6 +47,12 @@ impl ReadlinePrompt {
         candidates: impl IntoIterator<Item = SelectorExtraCandidate>,
     ) {
         self.selector_extra_candidates = candidates.into_iter().collect();
+    }
+
+    /// Replaces the prompt-local working directory used for relative path
+    /// completion.
+    pub fn set_selector_working_directory(&mut self, working_directory: Option<PathBuf>) {
+        self.selector_working_directory = working_directory;
     }
 
     /// Render the prompt line as plain text for a terminal status/prompt row.
@@ -321,11 +329,12 @@ impl ReadlinePrompt {
     /// on duplicated control-flow logic.
     fn shadow_hint(&self) -> Option<SelectorShadowHint> {
         let surface = self.selector_surface()?;
-        shadow_hint_with_extra(
+        shadow_hint_with_extra_in_working_directory(
             surface,
             self.buffer.line(),
             self.buffer.cursor(),
             &self.selector_extra_candidates,
+            self.selector_working_directory.as_deref(),
         )
     }
 
@@ -372,12 +381,13 @@ impl ReadlinePrompt {
                 selector
             }
             _ => {
-                let Some(selector) = ActiveSelector::start_with_extra(
+                let Some(selector) = ActiveSelector::start_with_extra_in_working_directory(
                     surface,
                     self.buffer.line(),
                     self.buffer.cursor(),
                     reverse,
                     &self.selector_extra_candidates,
+                    self.selector_working_directory.as_deref(),
                 ) else {
                     self.selector = None;
                     return ReadlineOutcome::Noop;

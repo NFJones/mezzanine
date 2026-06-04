@@ -152,7 +152,33 @@ impl ActiveSelector {
         reverse: bool,
         extra_candidates: &[SelectorExtraCandidate],
     ) -> Option<Self> {
-        let plan = plan_selector_with_extra(surface, line, cursor, extra_candidates)?;
+        Self::start_with_extra_in_working_directory(
+            surface,
+            line,
+            cursor,
+            reverse,
+            extra_candidates,
+            None,
+        )
+    }
+
+    /// Starts a selector from the current prompt line with runtime candidates
+    /// resolved relative to one explicit working directory.
+    pub fn start_with_extra_in_working_directory(
+        surface: SelectorSurface,
+        line: &str,
+        cursor: usize,
+        reverse: bool,
+        extra_candidates: &[SelectorExtraCandidate],
+        working_directory: Option<&Path>,
+    ) -> Option<Self> {
+        let plan = plan_selector_with_extra_in_working_directory(
+            surface,
+            line,
+            cursor,
+            extra_candidates,
+            working_directory,
+        )?;
         let selected_index = if reverse {
             plan.candidates.len().saturating_sub(1)
         } else {
@@ -232,9 +258,21 @@ pub fn plan_selector_with_extra(
     cursor: usize,
     extra_candidates: &[SelectorExtraCandidate],
 ) -> Option<SelectorPlan> {
+    plan_selector_with_extra_in_working_directory(surface, line, cursor, extra_candidates, None)
+}
+
+/// Builds a selector plan for the token at `cursor` with runtime candidates
+/// resolved relative to one explicit working directory.
+pub fn plan_selector_with_extra_in_working_directory(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    extra_candidates: &[SelectorExtraCandidate],
+    working_directory: Option<&Path>,
+) -> Option<SelectorPlan> {
     let cursor = clamp_to_char_boundary(line, cursor);
     let context = token_context(line, cursor);
-    let candidates = selector_candidates(surface, &context, extra_candidates);
+    let candidates = selector_candidates(surface, &context, extra_candidates, working_directory);
     let candidates = filter_and_sort_candidates(candidates, &context.query);
     (!candidates.is_empty()).then_some(SelectorPlan {
         replacement_start: context.token_start,
@@ -260,10 +298,28 @@ pub fn shadow_hint_with_extra(
     cursor: usize,
     extra_candidates: &[SelectorExtraCandidate],
 ) -> Option<SelectorShadowHint> {
+    shadow_hint_with_extra_in_working_directory(surface, line, cursor, extra_candidates, None)
+}
+
+/// Builds the current prefix or parameter shadow hint with runtime candidates
+/// resolved relative to one explicit working directory.
+pub fn shadow_hint_with_extra_in_working_directory(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    extra_candidates: &[SelectorExtraCandidate],
+    working_directory: Option<&Path>,
+) -> Option<SelectorShadowHint> {
     let cursor = clamp_to_char_boundary(line, cursor);
     let context = token_context(line, cursor);
-    prefix_shadow_hint(surface, &context, cursor, extra_candidates)
-        .or_else(|| parameter_shadow_hint(surface, &context, cursor))
+    prefix_shadow_hint(
+        surface,
+        &context,
+        cursor,
+        extra_candidates,
+        working_directory,
+    )
+    .or_else(|| parameter_shadow_hint(surface, &context, cursor))
 }
 
 /// Applies a selected candidate to a line according to a selector plan.
@@ -294,6 +350,7 @@ fn prefix_shadow_hint(
     context: &TokenContext,
     cursor: usize,
     extra_candidates: &[SelectorExtraCandidate],
+    working_directory: Option<&Path>,
 ) -> Option<SelectorShadowHint> {
     if cursor != context.token_end {
         return None;
@@ -301,7 +358,7 @@ fn prefix_shadow_hint(
     if context.query.is_empty() {
         return None;
     }
-    let candidates = selector_candidates(surface, context, extra_candidates);
+    let candidates = selector_candidates(surface, context, extra_candidates, working_directory);
     let candidate = filter_and_sort_candidates(candidates, &context.query)
         .into_iter()
         .find(|candidate| {
@@ -518,7 +575,7 @@ fn mezzanine_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
 fn agent_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
     if context.tokens_before.is_empty() {
         if !context.query.is_empty() && !context.query.starts_with('/') {
-            return path_candidates(SelectorSurface::AgentCommand, context);
+            return path_candidates(SelectorSurface::AgentCommand, context, None);
         }
         return baseline_slash_commands()
             .into_iter()
@@ -550,6 +607,7 @@ fn selector_candidates(
     surface: SelectorSurface,
     context: &TokenContext,
     extra_candidates: &[SelectorExtraCandidate],
+    working_directory: Option<&Path>,
 ) -> Vec<SelectorCandidate> {
     let mut candidates = match surface {
         SelectorSurface::MezzanineCommand => mezzanine_candidates(context),
@@ -575,7 +633,7 @@ fn selector_candidates(
             .filter(|extra| extra.surface == surface && extra.command == command)
             .map(|extra| extra.candidate.clone()),
     );
-    candidates.extend(path_candidates(surface, context));
+    candidates.extend(path_candidates(surface, context, working_directory));
     candidates
 }
 
@@ -939,11 +997,16 @@ fn value_candidates(values: &[&str]) -> Vec<SelectorCandidate> {
 /// # Parameters
 /// - `surface`: Prompt surface requesting candidates.
 /// - `context`: Token context at the current cursor.
-fn path_candidates(surface: SelectorSurface, context: &TokenContext) -> Vec<SelectorCandidate> {
+fn path_candidates(
+    surface: SelectorSurface,
+    context: &TokenContext,
+    working_directory: Option<&Path>,
+) -> Vec<SelectorCandidate> {
     if !path_completion_allowed(surface, context) {
         return Vec::new();
     }
-    let (directory, display_prefix, name_prefix) = path_completion_parts(&context.query);
+    let (directory, display_prefix, name_prefix) =
+        path_completion_parts(&context.query, working_directory);
     let Ok(entries) = fs::read_dir(&directory) else {
         return Vec::new();
     };
@@ -1090,7 +1153,10 @@ fn agent_token_introduces_path(token: &str) -> bool {
 ///
 /// # Parameters
 /// - `query`: Current completion query.
-fn path_completion_parts(query: &str) -> (PathBuf, String, String) {
+fn path_completion_parts(
+    query: &str,
+    working_directory: Option<&Path>,
+) -> (PathBuf, String, String) {
     if query == "~" {
         return (expand_home_path("~"), "~/".to_string(), String::new());
     }
@@ -1100,7 +1166,13 @@ fn path_completion_parts(query: &str) -> (PathBuf, String, String) {
         } else if let Some(remainder) = query.strip_prefix('/') {
             (PathBuf::from("/"), "/".to_string(), remainder)
         } else {
-            (PathBuf::from("."), String::new(), query)
+            (
+                working_directory
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from(".")),
+                String::new(),
+                query,
+            )
         };
     if remainder.is_empty() {
         return (directory, display_prefix, String::new());
@@ -1282,7 +1354,7 @@ mod tests {
     use super::{
         ActiveSelector, SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate,
         SelectorSurface, apply_selector_candidate, plan_selector, plan_selector_with_extra,
-        shadow_hint, shadow_hint_with_extra,
+        plan_selector_with_extra_in_working_directory, shadow_hint, shadow_hint_with_extra,
     };
     use std::fs;
     use std::sync::Mutex;
@@ -1418,6 +1490,59 @@ mod tests {
         );
         assert!(
             relative_agent_plan
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == "src/selector.rs")
+        );
+    }
+
+    /// Verifies prompt path completion can resolve relative paths from an
+    /// explicit pane working directory instead of the launcher process cwd.
+    #[test]
+    fn selector_plans_path_candidates_from_explicit_working_directory() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let launch_root =
+            std::env::temp_dir().join(format!("mez-selector-launch-{}", std::process::id()));
+        let pane_root =
+            std::env::temp_dir().join(format!("mez-selector-pane-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&launch_root);
+        let _ = fs::remove_dir_all(&pane_root);
+        fs::create_dir_all(&launch_root).unwrap();
+        fs::create_dir_all(pane_root.join("src")).unwrap();
+        fs::write(pane_root.join("fixture.toml"), "value = true\n").unwrap();
+        fs::write(pane_root.join("src").join("selector.rs"), "// fixture\n").unwrap();
+        std::env::set_current_dir(&launch_root).unwrap();
+
+        let command_plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::MezzanineCommand,
+            "source-file fi",
+            "source-file fi".len(),
+            &[],
+            Some(pane_root.as_path()),
+        )
+        .unwrap();
+        let agent_plan = plan_selector_with_extra_in_working_directory(
+            SelectorSurface::AgentCommand,
+            "inspect src/sel",
+            "inspect src/sel".len(),
+            &[],
+            Some(pane_root.as_path()),
+        )
+        .unwrap();
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(&launch_root);
+        let _ = fs::remove_dir_all(&pane_root);
+
+        assert!(
+            command_plan
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == "fixture.toml")
+        );
+        assert!(
+            agent_plan
                 .candidates
                 .iter()
                 .any(|candidate| candidate.value == "src/selector.rs")
