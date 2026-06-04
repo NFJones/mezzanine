@@ -587,7 +587,11 @@ fn render_wrapped_prompt_layout(
             width,
             continuation_indent,
         );
-    let first_visible_chunk = chunks.len().saturating_sub(max_rows);
+    let max_first_visible_chunk = chunks.len().saturating_sub(max_rows);
+    let first_visible_chunk = cursor_row
+        .saturating_add(1)
+        .saturating_sub(max_rows)
+        .min(max_first_visible_chunk);
     let visible_chunks = chunks
         .iter()
         .skip(first_visible_chunk)

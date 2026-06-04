@@ -12,6 +12,7 @@ use super::types::{
 use unicode_width::UnicodeWidthChar;
 
 const READLINE_PASTE_BLOCK_MARKER_BASE: u32 = 0xf0000;
+const READLINE_PASTE_BLOCK_THRESHOLD_LINES: usize = 6;
 
 /// Returns the shell-style word range surrounding a character column.
 ///
@@ -217,7 +218,9 @@ impl ReadlineBuffer {
     /// Insert text at the cursor.
     pub fn insert_text(&mut self, text: &str) {
         self.leave_history_navigation_for_edit();
-        if text.len() >= READLINE_PASTE_BLOCK_THRESHOLD_BYTES {
+        if text.len() >= READLINE_PASTE_BLOCK_THRESHOLD_BYTES
+            || Self::pasted_text_exceeds_visible_prompt_height(text)
+        {
             self.insert_paste_block(text.to_string());
         } else {
             self.line.insert_str(self.cursor, text);
@@ -753,6 +756,13 @@ impl ReadlineBuffer {
             self.line = text;
             self.cursor = self.line.len();
         }
+    }
+
+    /// Returns whether one pasted payload would exceed the visible prompt height.
+    fn pasted_text_exceeds_visible_prompt_height(text: &str) -> bool {
+        text.split('\n')
+            .nth(READLINE_PASTE_BLOCK_THRESHOLD_LINES)
+            .is_some()
     }
 
     /// Inserts one opaque pasted block at the cursor.

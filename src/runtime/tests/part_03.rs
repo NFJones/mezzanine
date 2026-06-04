@@ -882,6 +882,69 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
     );
 }
 
+/// Verifies compact pasted placeholders are used for bracketed paste payloads
+/// that exceed the visible agent prompt height even when the byte size is small.
+///
+/// Agent prompt rendering only shows up to six input rows. A seven-line
+/// bracketed paste must collapse to the same inline placeholder form as a
+/// large byte paste so surrounding prompt text remains editable and readable.
+#[test]
+fn runtime_agent_prompt_displays_over_height_paste_as_compact_block() {
+    let mut service = test_runtime_service_with_size(Size::new(50, 8).unwrap());
+    let primary = service
+        .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(50, 8).unwrap(), 10).unwrap(),
+    );
+
+    let payload = (1..=7)
+        .map(|index| format!("tiny-line-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut input = Vec::new();
+    input.extend_from_slice(b"prefix ");
+    input.extend_from_slice(b"\x1b[200~");
+    input.extend_from_slice(payload.as_bytes());
+    input.extend_from_slice(b"\x1b[201~ suffix\r");
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("user> prefix [Pasted "), "{pane_text}");
+    assert!(pane_text.contains(" suffix"), "{pane_text}");
+    assert!(!pane_text.contains("tiny-line-7"), "{pane_text}");
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(
+        context
+            .blocks
+            .iter()
+            .any(|block| block.content.contains(&format!("prefix {payload} suffix")))
+    );
+}
+
 /// Verifies large prompt paste blocks can exceed the visible pane area.
 ///
 /// Bracketed paste payloads may arrive split across terminal reads and contain
@@ -1276,6 +1339,70 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
     assert_eq!(prompt_state.prompt.buffer.line(), "abcde fghij klmno");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
     assert_eq!(prompt_state.prompt.buffer.cursor(), "abcde fghij".len());
+}
+
+/// Verifies wrapped agent prompt navigation scrolls the visible prompt window
+/// to keep the editing cursor on-screen.
+///
+/// Agent prompt rendering caps visible input rows at six. Moving upward through
+/// a taller multiline draft must shift the rendered prompt window instead of
+/// leaving the cursor on an off-screen row that cannot be edited in place.
+#[test]
+fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
+    let mut service = test_runtime_service_with_size(Size::new(24, 8).unwrap());
+    let primary = service
+        .attach_primary("primary", true, Size::new(24, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
+    );
+    {
+        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        prompt_state
+            .prompt
+            .buffer
+            .set_line("row1\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7");
+    }
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    assert_eq!(prompt_state.prompt.buffer.cursor(), "row1".len());
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(24, 8).unwrap(),
+            &config,
+        )
+        .unwrap()
+        .unwrap();
+    let view_text = view.lines.join("\n");
+    assert!(view_text.contains("mez> row1"), "{view_text}");
+    assert!(!view_text.contains("row7"), "{view_text}");
 }
 
 /// Verifies pane-local prompt height changes immediately resize only the owning
