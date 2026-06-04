@@ -27,6 +27,7 @@ use crate::MezError;
 use crate::agent::AgentLogLevel;
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 use crate::session::Session;
+use crate::snapshot::SnapshotRepository;
 use crate::subagent::SubagentSpawnRequest;
 use crate::terminal::{
     AttachedTerminalClientStepPlan, ClientViewRole, CopyPosition, DEFAULT_PANE_TERM, HostClipboard,
@@ -197,6 +198,40 @@ fn temp_root(name: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     root
+}
+
+/// Verifies terminal snapshot commands use the live runtime snapshot repository.
+///
+/// The command prompt should no longer return command-layer placeholders for
+/// `snapshot-session` or `resume-session` when a daemon has configured snapshot
+/// storage. This protects the bridge from parsed colon commands to the same
+/// runtime control paths used by JSON-RPC snapshot clients.
+#[test]
+fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
+    let root = temp_root("terminal-snapshot-commands");
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_runtime_service();
+    service.set_snapshot_repository(snapshots);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let create = service
+        .execute_terminal_command(&primary, "snapshot-session --name checkpoint")
+        .unwrap();
+    assert!(create.contains(r#""command":"snapshot-session""#), "{create}");
+    assert!(create.contains(r#""kind":"display""#), "{create}");
+    assert!(create.contains(r#"\"snapshot\""#), "{create}");
+    assert!(create.contains(r#"\"name\":\"checkpoint\""#), "{create}");
+
+    let resume = service
+        .execute_terminal_command(&primary, "resume-session --latest")
+        .unwrap();
+    assert!(resume.contains(r#""command":"resume-session""#), "{resume}");
+    assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
+    assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
+
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies that runtime hook diagnostics use the same canonical event label as

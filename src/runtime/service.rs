@@ -26,10 +26,10 @@ use super::{
     RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
     RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, ScopeRegistry, Session, SessionApprovalStore,
-    SessionMemoryStore, SessionRegistry, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
-    agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
-    compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
-    discover_existing_overlays, discover_project_root,
+    SessionMemoryStore, SessionRegistry, SnapshotRepository, TerminalScreen, ToolDiscoveryCache,
+    TrustDecision, Value, agent_shell_visibility_json_name, apply_registry_update,
+    builtin_subagent_profiles, compare_approval_policy_authority, compose_effective_config,
+    current_unix_seconds, discover_existing_overlays, discover_project_root,
     discover_streamable_http_mcp_server_with_auth_token, ensure_absolute, ensure_no_mez_separator,
     fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
     runtime_agent_auto_sizing_from_config,
@@ -196,6 +196,7 @@ impl RuntimeSessionService {
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
             config_root: None,
+            snapshot_repository: None,
             control_idempotency,
             message_service,
             pane_processes,
@@ -509,6 +510,11 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn set_config_root(&mut self, root: PathBuf) {
         self.config_root = Some(root);
+    }
+
+    /// Sets the snapshot repository used by live terminal snapshot commands.
+    pub fn set_snapshot_repository(&mut self, snapshots: SnapshotRepository) {
+        self.snapshot_repository = Some(snapshots);
     }
 
     /// Runs the replace config layers operation for this subsystem.

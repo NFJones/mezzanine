@@ -412,6 +412,33 @@ pub(super) fn runtime_command_outcome_json(outcome: &CommandOutcome) -> String {
             json_escape(command),
             json_escape(body)
         ),
+        CommandOutcome::SnapshotCreate { command, name } => format!(
+            r#"{{"command":"{}","kind":"snapshot_create","name":{},"body":"runtime snapshot repository required"}}"#,
+            json_escape(command),
+            optional_string_json(name.as_deref())
+        ),
+        CommandOutcome::SnapshotResume { command, selector } => format!(
+            r#"{{"command":"{}","kind":"snapshot_resume","selector":{},"body":"runtime snapshot repository required"}}"#,
+            json_escape(command),
+            runtime_snapshot_resume_selector_json(selector)
+        ),
+    }
+}
+
+/// Renders a snapshot resume selector for runtime command JSON diagnostics.
+fn runtime_snapshot_resume_selector_json(
+    selector: &crate::command::SnapshotResumeSelector,
+) -> String {
+    match selector {
+        crate::command::SnapshotResumeSelector::SnapshotId(snapshot_id) => format!(
+            r#"{{"kind":"snapshot_id","snapshot_id":"{}"}}"#,
+            json_escape(snapshot_id)
+        ),
+        crate::command::SnapshotResumeSelector::Latest => r#"{"kind":"latest"}"#.to_string(),
+        crate::command::SnapshotResumeSelector::LatestForSession(session_id) => format!(
+            r#"{{"kind":"latest_for_session","session_id":"{}"}}"#,
+            json_escape(session_id)
+        ),
     }
 }
 

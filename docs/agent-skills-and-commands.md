@@ -77,7 +77,8 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 | `refresh-client` | Redraw the client. |
 | `refresh-provider-info` | Refresh cached provider model and quota information. |
 | `agent-shell` | Show, hide, or toggle the agent shell for a pane. |
-| `snapshot-session` | Create a structured session snapshot. |
+| `snapshot-session` | Create a structured session snapshot, optionally named with `--name`. |
+| `resume-session` | Resume a snapshot by id or with `--latest [--session id]`. |
 | `save-buffer` | Save a paste buffer. |
 | `clear-history` | Clear bounded pane history. |
 | `search-history` | Search pane history. |

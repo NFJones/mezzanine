@@ -116,7 +116,8 @@ pub(crate) use display::{
 pub use parser::parse_command_sequence;
 pub(crate) use plans::{resize_spec_from_invocation, split_window_selects_new_pane};
 pub use types::{
-    BaselineCommand, BaselineCommandStatus, CommandInvocation, CommandOutcome, baseline_commands,
+    BaselineCommand, BaselineCommandStatus, CommandInvocation, CommandOutcome,
+    SnapshotResumeSelector, baseline_commands,
 };
 
 use display::{
@@ -129,9 +130,9 @@ use display::{
     mcp_add_plan_display, mcp_login_plan_display, mcp_logout_plan_display, mcp_remove_plan_display,
     mcp_retry_plan_display, mcp_status_plan_display, mutated_pane_command_outcome,
     parse_config_command_value, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
-    resume_session_display, save_buffer_display, search_history_display, set_option_args,
+    resume_session_selector, save_buffer_display, search_history_display, set_option_args,
     set_theme_arg, show_default_options, show_messages_display, show_metrics_display,
-    snapshot_session_display,
+    snapshot_session_name,
 };
 use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,

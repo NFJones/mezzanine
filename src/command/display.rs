@@ -6,8 +6,8 @@
 
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
-    KeyValueLine, MezError, Result, Session, baseline_commands, explicit_shell_command_flag,
-    flag_value, mcp_server_id, mcp_transport_target, positional_args,
+    KeyValueLine, MezError, Result, Session, SnapshotResumeSelector, baseline_commands,
+    explicit_shell_command_flag, flag_value, mcp_server_id, mcp_transport_target, positional_args,
     positional_args_before_double_dash, repeated_flag_values, shell_command_after_double_dash,
     shell_command_from_words,
 };
@@ -939,30 +939,39 @@ pub(super) fn pipe_pane_display(invocation: &CommandInvocation) -> String {
     )
 }
 
-/// Runs the snapshot session display operation for this subsystem.
+/// Returns the optional user-visible snapshot name for a snapshot-session command.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn snapshot_session_display(invocation: &CommandInvocation) -> String {
-    let name = flag_value(&invocation.args, "-n")
+pub(super) fn snapshot_session_name(invocation: &CommandInvocation) -> Option<String> {
+    flag_value(&invocation.args, "-n")
         .or_else(|| flag_value(&invocation.args, "--name"))
         .or_else(|| positional_args(invocation).first().copied())
-        .unwrap_or("manual");
-    format!("name={name}:snapshot=not-created:reason=live-control-unavailable")
+        .map(str::to_string)
 }
 
-/// Runs the resume session display operation for this subsystem.
+/// Returns the normalized snapshot selector for a resume-session command.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn resume_session_display(invocation: &CommandInvocation) -> String {
-    let snapshot = positional_args(invocation)
+pub(super) fn resume_session_selector(invocation: &CommandInvocation) -> SnapshotResumeSelector {
+    if let Some(snapshot_id) = flag_value(&invocation.args, "--snapshot") {
+        return SnapshotResumeSelector::SnapshotId(snapshot_id.to_string());
+    }
+    let latest = invocation.args.iter().any(|arg| arg == "--latest");
+    let session_id = flag_value(&invocation.args, "--session");
+    if latest || session_id.is_some() {
+        return match session_id {
+            Some(session_id) => SnapshotResumeSelector::LatestForSession(session_id.to_string()),
+            None => SnapshotResumeSelector::Latest,
+        };
+    }
+    positional_args(invocation)
         .first()
-        .copied()
-        .unwrap_or("latest");
-    format!("snapshot={snapshot}:resume=not-started:reason=live-control-unavailable")
+        .map(|snapshot_id| SnapshotResumeSelector::SnapshotId((*snapshot_id).to_string()))
+        .unwrap_or(SnapshotResumeSelector::Latest)
 }
 
 /// Runs the show messages display operation for this subsystem.

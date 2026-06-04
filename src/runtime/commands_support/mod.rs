@@ -31,7 +31,10 @@ use crate::agent::{
     ContextSourceKind, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
     append_mcp_context, assemble_model_request_with_retained_tail_percent,
 };
+use crate::command::SnapshotResumeSelector;
+use crate::control::ControlConnectionState;
 use crate::layout::SplitDirection;
+use crate::snapshot::{SnapshotRepository, SnapshotState};
 use crate::terminal::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES};
 use std::collections::BTreeMap;
 
@@ -52,20 +55,23 @@ pub(super) fn execute_runtime_command_sequence(
 ) -> Result<Vec<CommandOutcome>> {
     let invocations = parse_command_sequence(input)?;
     let mut outcomes = Vec::with_capacity(invocations.len());
+    let mut active_client_id = primary_client_id.clone();
     for invocation in &invocations {
         if let Some(outcome) =
-            execute_runtime_live_terminal_command(service, primary_client_id, invocation)?
+            execute_runtime_live_terminal_command(service, &active_client_id, invocation)?
         {
             outcomes.push(outcome);
             continue;
         }
         if let Some(outcome) =
-            execute_runtime_layout_terminal_command(service, primary_client_id, invocation)?
+            execute_runtime_layout_terminal_command(service, &active_client_id, invocation)?
         {
             outcomes.push(outcome);
             continue;
         }
-        let outcome = execute_command(&mut service.session, primary_client_id, invocation)?;
+        let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
+        let outcome =
+            resolve_runtime_snapshot_command_outcome(service, &mut active_client_id, outcome)?;
         if runtime_command_requires_pty_sync(invocation) {
             service.sync_tracked_pty_sizes()?;
         }
@@ -86,27 +92,162 @@ pub(super) async fn execute_runtime_command_sequence_async(
 ) -> Result<Vec<CommandOutcome>> {
     let invocations = parse_command_sequence(input)?;
     let mut outcomes = Vec::with_capacity(invocations.len());
+    let mut active_client_id = primary_client_id.clone();
     for invocation in &invocations {
         if let Some(outcome) =
-            execute_runtime_live_terminal_command_async(service, primary_client_id, invocation)
+            execute_runtime_live_terminal_command_async(service, &active_client_id, invocation)
                 .await?
         {
             outcomes.push(outcome);
             continue;
         }
         if let Some(outcome) =
-            execute_runtime_layout_terminal_command(service, primary_client_id, invocation)?
+            execute_runtime_layout_terminal_command(service, &active_client_id, invocation)?
         {
             outcomes.push(outcome);
             continue;
         }
-        let outcome = execute_command(&mut service.session, primary_client_id, invocation)?;
+        let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
+        let outcome =
+            resolve_runtime_snapshot_command_outcome(service, &mut active_client_id, outcome)?;
         if runtime_command_requires_pty_sync(invocation) {
             service.sync_tracked_pty_sizes()?;
         }
         outcomes.push(outcome);
     }
     Ok(outcomes)
+}
+
+/// Resolves typed snapshot command outcomes through the live runtime snapshot repository.
+fn resolve_runtime_snapshot_command_outcome(
+    service: &mut RuntimeSessionService,
+    active_client_id: &mut crate::ids::ClientId,
+    outcome: CommandOutcome,
+) -> Result<CommandOutcome> {
+    match outcome {
+        CommandOutcome::SnapshotCreate { command, name } => {
+            let Some(snapshots) = service.snapshot_repository.clone() else {
+                return Ok(CommandOutcome::SnapshotCreate { command, name });
+            };
+            let body =
+                runtime_snapshot_create_command(service, active_client_id, &snapshots, name)?;
+            Ok(CommandOutcome::Display { command, body })
+        }
+        CommandOutcome::SnapshotResume { command, selector } => {
+            let Some(snapshots) = service.snapshot_repository.clone() else {
+                return Ok(CommandOutcome::SnapshotResume { command, selector });
+            };
+            let body =
+                runtime_snapshot_resume_command(service, active_client_id, &snapshots, &selector)?;
+            Ok(CommandOutcome::Display { command, body })
+        }
+        outcome => Ok(outcome),
+    }
+}
+
+/// Creates a live session snapshot through the same runtime control path as JSON-RPC clients.
+fn runtime_snapshot_create_command(
+    service: &mut RuntimeSessionService,
+    active_client_id: &mut crate::ids::ClientId,
+    snapshots: &SnapshotRepository,
+    name: Option<String>,
+) -> Result<String> {
+    let snapshot_count = snapshots.list()?.len();
+    let idempotency_key = format!(
+        "terminal-command:snapshot-session:{}:{}:{}",
+        service.session.id,
+        current_unix_seconds(),
+        snapshot_count
+    );
+    let name_json = name
+        .as_deref()
+        .map(|name| format!(r#""{}""#, json_escape(name)))
+        .unwrap_or_else(|| "null".to_string());
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"snapshot/create","params":{{"target":{{"default":true}},"name":{},"idempotency_key":"{}"}}}}"#,
+        name_json,
+        json_escape(&idempotency_key)
+    );
+    dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)
+}
+
+/// Resumes a live session snapshot through the runtime snapshot resume control path.
+fn runtime_snapshot_resume_command(
+    service: &mut RuntimeSessionService,
+    active_client_id: &mut crate::ids::ClientId,
+    snapshots: &SnapshotRepository,
+    selector: &SnapshotResumeSelector,
+) -> Result<String> {
+    let snapshot_id = runtime_snapshot_id_for_selector(service, snapshots, selector)?;
+    let idempotency_key = format!("terminal-command:resume-session:{snapshot_id}");
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"snapshot/resume","params":{{"snapshot_id":"{}","idempotency_key":"{}"}}}}"#,
+        json_escape(&snapshot_id),
+        json_escape(&idempotency_key)
+    );
+    dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)
+}
+
+/// Dispatches a snapshot control request and tracks a re-bound primary client after resume.
+fn dispatch_runtime_snapshot_terminal_command(
+    service: &mut RuntimeSessionService,
+    active_client_id: &mut crate::ids::ClientId,
+    snapshots: &SnapshotRepository,
+    body: &str,
+) -> Result<String> {
+    let mut connection = ControlConnectionState::trusted_existing_client(active_client_id.clone());
+    let response = service.dispatch_runtime_control_body_for_connection_with_snapshots(
+        body,
+        &mut connection,
+        snapshots,
+    );
+    if let Some(client_id) = connection.caller_client_id().cloned() {
+        *active_client_id = client_id;
+    }
+    Ok(response)
+}
+
+/// Resolves a resume-session selector to a concrete snapshot id.
+fn runtime_snapshot_id_for_selector(
+    service: &RuntimeSessionService,
+    snapshots: &SnapshotRepository,
+    selector: &SnapshotResumeSelector,
+) -> Result<String> {
+    match selector {
+        SnapshotResumeSelector::SnapshotId(snapshot_id) => Ok(snapshot_id.clone()),
+        SnapshotResumeSelector::Latest => {
+            runtime_latest_snapshot_id(snapshots, &service.session.id.to_string())
+        }
+        SnapshotResumeSelector::LatestForSession(session_id) => {
+            runtime_latest_snapshot_id(snapshots, session_id)
+        }
+    }
+}
+
+/// Returns the latest restorable snapshot id for a session.
+fn runtime_latest_snapshot_id(snapshots: &SnapshotRepository, session_id: &str) -> Result<String> {
+    snapshots
+        .list()?
+        .into_iter()
+        .filter(|snapshot| snapshot.restorable && snapshot.session_id == session_id)
+        .max_by(runtime_compare_snapshot_recency)
+        .map(|snapshot| snapshot.id)
+        .ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                format!("no restorable snapshot found for session {session_id}"),
+            )
+        })
+}
+
+/// Orders snapshots by creation timestamp and id for latest-snapshot selection.
+fn runtime_compare_snapshot_recency(
+    left: &SnapshotState,
+    right: &SnapshotState,
+) -> std::cmp::Ordering {
+    left.created_at
+        .cmp(&right.created_at)
+        .then_with(|| left.id.cmp(&right.id))
 }
 
 /// Executes terminal commands whose layout effects must share the runtime pane

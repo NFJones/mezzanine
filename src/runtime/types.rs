@@ -20,11 +20,11 @@ use super::{
     PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes, PermissionPolicy,
     ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, ScopeRegistry,
     Session, SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
-    SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle,
-    TerminalFramePosition, TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, TranscriptEntry,
-    UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write, delivery_batch_json, effective_uid,
-    encode_control_body, encode_event_notification, encode_mmp_body,
-    execute_streamable_http_exchange, mcp_tools_call_operation,
+    SnapshotRepository, SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration,
+    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
+    ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write,
+    delivery_batch_json, effective_uid, encode_control_body, encode_event_notification,
+    encode_mmp_body, execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::mcp::McpPromptTool;
@@ -3502,6 +3502,12 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) config_root: Option<PathBuf>,
+    /// Stores the snapshot repository used by live terminal snapshot commands.
+    ///
+    /// The field is optional so tests and embedded runtimes that do not provide
+    /// persistent snapshot storage continue to report an explicit runtime
+    /// repository requirement instead of silently writing to an implicit path.
+    pub(super) snapshot_repository: Option<SnapshotRepository>,
     /// Stores the control idempotency value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

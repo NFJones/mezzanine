@@ -28,9 +28,9 @@ use super::{
     parse_command_sequence, parse_config_command_value, paste_buffer_display,
     paste_clipboard_display, persist_command_config_mutation, persist_command_theme_config,
     persist_config_text, persist_mcp_add, persist_mcp_remove, pipe_pane_display, positional_args,
-    resume_session_display, save_buffer_display, search_history_display, set_option_args,
+    resume_session_selector, save_buffer_display, search_history_display, set_option_args,
     set_theme_arg, show_default_options, show_messages_display, show_metrics_display,
-    snapshot_session_display, validate_config_file,
+    snapshot_session_name, validate_config_file,
 };
 
 use std::fs;
@@ -791,13 +791,13 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: pipe_pane_display(invocation),
         }),
-        "snapshot-session" => Ok(CommandOutcome::Display {
+        "snapshot-session" => Ok(CommandOutcome::SnapshotCreate {
             command: invocation.name.clone(),
-            body: snapshot_session_display(invocation),
+            name: snapshot_session_name(invocation),
         }),
-        "resume-session" => Ok(CommandOutcome::Display {
+        "resume-session" => Ok(CommandOutcome::SnapshotResume {
             command: invocation.name.clone(),
-            body: resume_session_display(invocation),
+            selector: resume_session_selector(invocation),
         }),
         "show-messages" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),

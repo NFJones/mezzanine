@@ -131,6 +131,35 @@ pub enum CommandOutcome {
         /// boundary and should remain aligned with the owning type invariant.
         body: String,
     },
+    /// Represents a snapshot creation request that must be satisfied by a
+    /// runtime/control snapshot repository rather than by the generic session
+    /// fallback.
+    SnapshotCreate {
+        /// Stores the command value for this data structure.
+        command: String,
+        /// Stores the optional user-visible snapshot name.
+        name: Option<String>,
+    },
+    /// Represents a snapshot resume request that must be satisfied by a
+    /// runtime/control snapshot repository rather than by the generic session
+    /// fallback.
+    SnapshotResume {
+        /// Stores the command value for this data structure.
+        command: String,
+        /// Stores the requested snapshot selector.
+        selector: SnapshotResumeSelector,
+    },
+}
+
+/// Carries the normalized snapshot selector for `resume-session` commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotResumeSelector {
+    /// Resume the snapshot with this explicit id.
+    SnapshotId(String),
+    /// Resume the latest snapshot visible to the current session target.
+    Latest,
+    /// Resume the latest snapshot for the named session id.
+    LatestForSession(String),
 }
 
 /// Baseline command support level exposed by `list-commands`.

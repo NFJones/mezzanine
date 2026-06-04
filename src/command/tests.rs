@@ -9,9 +9,9 @@
 use super::plans::{CommandPlan, ResizePanePlan, command_plan_from_invocation};
 use super::{
     AuditLog, AuthStore, CommandOutcome, PaneReadinessOverrideStore, PaneReadinessState,
-    baseline_commands, execute_auth_command, execute_command, execute_command_sequence,
-    execute_config_store_command, execute_mark_pane_ready_command, execute_mcp_config_command,
-    parse_command_sequence,
+    SnapshotResumeSelector, baseline_commands, execute_auth_command, execute_command,
+    execute_command_sequence, execute_config_store_command, execute_mark_pane_ready_command,
+    execute_mcp_config_command, parse_command_sequence,
 };
 use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
@@ -1591,31 +1591,53 @@ fn paste_and_history_commands_report_live_terminal_requirements() {
         "target=0:pipe=not-started:command=cat >/tmp/pane.log:reason=live-terminal-state-unavailable"
     );
 
-    let snapshot = display_body(
-        execute_command(
-            &mut session,
-            &primary,
-            &parse_command_sequence("snapshot-session --name checkpoint").unwrap()[0],
-        )
-        .unwrap(),
-    );
-    assert_eq!(
-        snapshot,
-        "name=checkpoint:snapshot=not-created:reason=live-control-unavailable"
-    );
+    let snapshot = execute_command(
+        &mut session,
+        &primary,
+        &parse_command_sequence("snapshot-session --name checkpoint").unwrap()[0],
+    )
+    .unwrap();
+    match snapshot {
+        CommandOutcome::SnapshotCreate { command, name } => {
+            assert_eq!(command, "snapshot-session");
+            assert_eq!(name.as_deref(), Some("checkpoint"));
+        }
+        outcome => panic!("expected snapshot create outcome, got {outcome:?}"),
+    }
 
-    let resume = display_body(
-        execute_command(
-            &mut session,
-            &primary,
-            &parse_command_sequence("resume-session snap-1").unwrap()[0],
-        )
-        .unwrap(),
-    );
-    assert_eq!(
-        resume,
-        "snapshot=snap-1:resume=not-started:reason=live-control-unavailable"
-    );
+    let resume = execute_command(
+        &mut session,
+        &primary,
+        &parse_command_sequence("resume-session snap-1").unwrap()[0],
+    )
+    .unwrap();
+    match resume {
+        CommandOutcome::SnapshotResume { command, selector } => {
+            assert_eq!(command, "resume-session");
+            assert_eq!(
+                selector,
+                SnapshotResumeSelector::SnapshotId("snap-1".to_string())
+            );
+        }
+        outcome => panic!("expected snapshot resume outcome, got {outcome:?}"),
+    }
+
+    let resume_latest = execute_command(
+        &mut session,
+        &primary,
+        &parse_command_sequence("resume-session --latest --session session-1").unwrap()[0],
+    )
+    .unwrap();
+    match resume_latest {
+        CommandOutcome::SnapshotResume { command, selector } => {
+            assert_eq!(command, "resume-session");
+            assert_eq!(
+                selector,
+                SnapshotResumeSelector::LatestForSession("session-1".to_string())
+            );
+        }
+        outcome => panic!("expected latest snapshot resume outcome, got {outcome:?}"),
+    }
 
     let error = execute_command(
         &mut session,
