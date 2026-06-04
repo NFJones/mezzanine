@@ -18,22 +18,19 @@ fn record(id: &str, scope: MemoryScope, content: &str) -> MemoryRecord {
         source: MemorySource::Agent,
         priority: 10,
         content: content.to_string(),
-        explicit_sensitive_consent: false,
     }
 }
 
-/// Verifies persistent memory rejects secrets without explicit consent.
+/// Verifies persistent memory accepts user-managed sensitive content.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn persistent_memory_rejects_secrets_without_explicit_consent() {
+fn persistent_memory_accepts_sensitive_content_without_heuristic_rejection() {
     let record = record("m1", MemoryScope::Global, "api_key = sk-secret");
 
-    let error = record.validate_for_persistence().unwrap_err();
-
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    record.validate_for_persistence().unwrap();
 }
 
 /// Verifies session memory clears records for deleted session.
@@ -96,7 +93,7 @@ fn persistent_memory_can_inspect_edit_export_and_delete() {
 
     assert_eq!(store.inspect("m1").unwrap().content, "prefer cargo test");
     let edited = store
-        .edit_content("m1", "prefer cargo test --all-targets", 12, false)
+        .edit_content("m1", "prefer cargo test --all-targets", 12)
         .unwrap();
     assert_eq!(edited.updated_at_unix_seconds, 12);
     assert!(

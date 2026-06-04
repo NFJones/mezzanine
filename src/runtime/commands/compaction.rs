@@ -348,7 +348,6 @@ impl RuntimeSessionService {
             source: MemorySource::Agent,
             priority: 224,
             content,
-            explicit_sensitive_consent: false,
         })?;
         let remaining_transcript_entries = self
             .agent_shell_store

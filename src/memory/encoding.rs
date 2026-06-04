@@ -111,17 +111,6 @@ pub(super) fn parse_u64(value: &str, label: &str) -> Result<u64> {
         .map_err(|_| MezError::invalid_args(format!("invalid {label}")))
 }
 
-/// Runs the parse bool operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn parse_bool(value: &str) -> Result<bool> {
-    value
-        .parse::<bool>()
-        .map_err(|_| MezError::invalid_args("invalid memory boolean"))
-}
-
 /// Runs the escape field operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

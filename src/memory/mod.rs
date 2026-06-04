@@ -43,12 +43,11 @@ pub use types::{
 };
 
 use encoding::{
-    decode_scope, encode_scope, escape_field, parse_bool, parse_source, parse_u64, source_name,
-    split_fields,
+    decode_scope, encode_scope, escape_field, parse_source, parse_u64, source_name, split_fields,
 };
 use validation::{
-    looks_sensitive, scope_belongs_to_session, set_private_dir_permissions,
-    set_private_file_permissions, validate_non_empty, validate_scope,
+    scope_belongs_to_session, set_private_dir_permissions, set_private_file_permissions,
+    validate_non_empty, validate_scope,
 };
 
 /// Exposes the tests module boundary.

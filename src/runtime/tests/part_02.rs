@@ -3100,7 +3100,6 @@ fn runtime_service_owns_session_memory_and_clears_it_on_kill() {
             source: crate::memory::MemorySource::User,
             priority: 20,
             content: "prefer focused regression tests".to_string(),
-            explicit_sensitive_consent: false,
         })
         .unwrap();
 

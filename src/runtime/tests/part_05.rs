@@ -1739,7 +1739,6 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
             source: crate::memory::MemorySource::User,
             priority: 255,
             content: "generic memory should not be automatic context".to_string(),
-            explicit_sensitive_consent: false,
         })
         .unwrap();
     service
@@ -1754,7 +1753,6 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
             source: crate::memory::MemorySource::Agent,
             priority: 255,
             content: "other compaction should not leak".to_string(),
-            explicit_sensitive_consent: false,
         })
         .unwrap();
     service
@@ -1769,7 +1767,6 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
             source: crate::memory::MemorySource::Agent,
             priority: 128,
             content: "active compact summary".to_string(),
-            explicit_sensitive_consent: false,
         })
         .unwrap();
 

@@ -4,9 +4,8 @@
 //! persistence and session-specific operations in sibling modules.
 
 use super::{
-    BTreeMap, MezError, PathBuf, Result, decode_scope, encode_scope, escape_field, looks_sensitive,
-    parse_bool, parse_source, parse_u64, source_name, split_fields, validate_non_empty,
-    validate_scope,
+    BTreeMap, MezError, PathBuf, Result, decode_scope, encode_scope, escape_field, parse_source,
+    parse_u64, source_name, split_fields, validate_non_empty, validate_scope,
 };
 
 /// Carries Memory Scope state for this subsystem.
@@ -161,11 +160,6 @@ pub struct MemoryRecord {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub content: String,
-    /// Stores the explicit sensitive consent value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub explicit_sensitive_consent: bool,
 }
 
 /// Carries Session Memory Store state for this subsystem.
@@ -244,11 +238,7 @@ impl MemoryRecord {
         }
         validate_scope(&self.scope)?;
         validate_non_empty("memory content", &self.content)?;
-        if persistent && !self.explicit_sensitive_consent && looks_sensitive(&self.content) {
-            return Err(MezError::forbidden(
-                "persistent memory content appears sensitive and requires explicit consent",
-            ));
-        }
+        let _ = persistent;
         Ok(())
     }
 
@@ -266,7 +256,6 @@ impl MemoryRecord {
             self.updated_at_unix_seconds.to_string(),
             source_name(self.source).to_string(),
             self.priority.to_string(),
-            self.explicit_sensitive_consent.to_string(),
             self.content.clone(),
         ]
         .into_iter()
@@ -282,7 +271,7 @@ impl MemoryRecord {
     /// on duplicated control-flow logic.
     pub(super) fn decode(line: &str) -> Result<Self> {
         let fields = split_fields(line)?;
-        if fields.len() != 8 {
+        if fields.len() != 7 {
             return Err(MezError::invalid_args(
                 "memory record has wrong field count",
             ));
@@ -296,8 +285,7 @@ impl MemoryRecord {
             priority: fields[5]
                 .parse::<u8>()
                 .map_err(|_| MezError::invalid_args("invalid memory priority"))?,
-            explicit_sensitive_consent: parse_bool(&fields[6])?,
-            content: fields[7].clone(),
+            content: fields[6].clone(),
         };
         record.validate_for_persistence()?;
         Ok(record)

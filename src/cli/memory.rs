@@ -40,7 +40,6 @@ pub(super) fn run_memory<W: Write>(
             scope,
             content,
             priority,
-            consent,
         } => {
             let scope = parse_memory_scope(&scope)?;
             let now = current_unix_seconds()?;
@@ -52,18 +51,13 @@ pub(super) fn run_memory<W: Write>(
                 source: MemorySource::User,
                 priority,
                 content,
-                explicit_sensitive_consent: consent,
             };
             store.upsert(record)?;
             let output = memory_record_json(&store.inspect(&id)?)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
-        MemoryCliCommand::Edit {
-            id,
-            content,
-            consent,
-        } => {
-            let record = store.edit_content(&id, &content, current_unix_seconds()?, consent)?;
+        MemoryCliCommand::Edit { id, content } => {
+            let record = store.edit_content(&id, &content, current_unix_seconds()?)?;
             let output = memory_record_json(&record)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
@@ -110,9 +104,6 @@ enum MemoryCliCommand {
         /// Memory priority from 0 to 255.
         #[arg(long, default_value_t = 10)]
         priority: u8,
-        /// Confirms explicit sensitive-content consent.
-        #[arg(long)]
-        consent: bool,
     },
     /// Edits the content for one memory record.
     Edit {
@@ -121,9 +112,6 @@ enum MemoryCliCommand {
         /// Replacement memory content text.
         #[arg(long, allow_hyphen_values = true)]
         content: String,
-        /// Confirms explicit sensitive-content consent.
-        #[arg(long)]
-        consent: bool,
     },
     /// Deletes one memory record.
     Delete {
@@ -172,8 +160,6 @@ struct MemoryRecordJson<'a> {
     priority: u8,
     /// Stored memory content.
     content: &'a str,
-    /// Whether the user explicitly consented to sensitive content storage.
-    explicit_sensitive_consent: bool,
 }
 
 impl<'a> From<&'a MemoryRecord> for MemoryRecordJson<'a> {
@@ -186,7 +172,6 @@ impl<'a> From<&'a MemoryRecord> for MemoryRecordJson<'a> {
             source: memory_source_name(record.source),
             priority: record.priority,
             content: &record.content,
-            explicit_sensitive_consent: record.explicit_sensitive_consent,
         }
     }
 }

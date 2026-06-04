@@ -54,23 +54,6 @@ pub(super) fn scope_belongs_to_session(scope: &MemoryScope, session_id: &str) ->
     }
 }
 
-/// Runs the looks sensitive operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn looks_sensitive(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    lower.contains("private key")
-        || lower.contains("api_key")
-        || lower.contains("api key")
-        || lower.contains("password")
-        || lower.contains("token")
-        || lower.contains("credential")
-        || content.contains("sk-")
-        || content.contains('@') && content.contains('.')
-}
-
 /// Runs the validate non empty operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

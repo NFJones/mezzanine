@@ -3927,18 +3927,18 @@ fn memory_cli_adds_inspects_edits_exports_and_deletes_records() {
     let _ = fs::remove_dir_all(home);
 }
 
-/// Verifies memory cli rejects sensitive persistent content without consent.
+/// Verifies memory cli accepts user-managed sensitive persistent content.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn memory_cli_rejects_sensitive_persistent_content_without_consent() {
+fn memory_cli_accepts_sensitive_persistent_content_without_consent_flag() {
     let (env, home) = test_env("memory-sensitive");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    let error = run_with(
+    run_with(
         vec![
             "mez".to_string(),
             "memory".to_string(),
@@ -3954,10 +3954,13 @@ fn memory_cli_rejects_sensitive_persistent_content_without_consent() {
         &mut stdout,
         &mut stderr,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
-    assert!(stdout.is_empty());
+    assert!(
+        String::from_utf8(stdout)
+            .unwrap()
+            .contains("api_key = sk-secret")
+    );
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);

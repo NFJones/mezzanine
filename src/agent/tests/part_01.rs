@@ -2882,7 +2882,6 @@ fn memory_context_appends_after_active_context_in_priority_order() {
             source: crate::memory::MemorySource::User,
             priority: 1,
             content: "low priority".to_string(),
-            explicit_sensitive_consent: false,
         },
         MemoryRecord {
             id: "high".to_string(),
@@ -2895,7 +2894,6 @@ fn memory_context_appends_after_active_context_in_priority_order() {
             source: crate::memory::MemorySource::Agent,
             priority: 9,
             content: "high priority".to_string(),
-            explicit_sensitive_consent: false,
         },
     ];
 
@@ -2922,13 +2920,13 @@ fn memory_context_appends_after_active_context_in_priority_order() {
     assert_eq!(request.messages[2].role, ModelMessageRole::User);
 }
 
-/// Verifies memory context rejects sensitive records without consent.
+/// Verifies memory context accepts user-managed sensitive records.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn memory_context_rejects_sensitive_records_without_consent() {
+fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
@@ -2943,12 +2941,11 @@ fn memory_context_rejects_sensitive_records_without_consent() {
         source: crate::memory::MemorySource::Agent,
         priority: 9,
         content: "api_key = sk-secret".to_string(),
-        explicit_sensitive_consent: false,
     }];
 
-    let error = append_memory_context(context, &records, 1).unwrap_err();
+    let context = append_memory_context(context, &records, 1).unwrap();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(context.blocks[1].content, "api_key = sk-secret");
 }
 
 /// Verifies that MCP prompt context keeps availability visible while deferring

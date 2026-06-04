@@ -7107,6 +7107,10 @@ agent.
 
 The user MUST be able to inspect, edit, export, and delete persistent memory.
 
+Persistent memory storage MUST NOT reject user-managed records solely because
+their content matches a heuristic sensitive-content pattern. Sensitive-content
+handling is an agent-behavior requirement rather than a storage-layer guardrail.
+
 Agents MUST NOT store secrets in persistent memory.
 
 Agents MUST NOT store sensitive terminal output, credentials, private keys,

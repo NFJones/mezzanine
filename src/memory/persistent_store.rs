@@ -93,12 +93,10 @@ impl PersistentMemoryStore {
         id: &str,
         content: impl Into<String>,
         updated_at_unix_seconds: u64,
-        explicit_sensitive_consent: bool,
     ) -> Result<MemoryRecord> {
         let mut record = self.inspect(id)?;
         record.content = content.into();
         record.updated_at_unix_seconds = updated_at_unix_seconds;
-        record.explicit_sensitive_consent = explicit_sensitive_consent;
         self.upsert(record.clone())?;
         Ok(record)
     }
