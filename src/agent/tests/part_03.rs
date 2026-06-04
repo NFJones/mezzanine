@@ -3563,6 +3563,65 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
     );
 }
 
+/// Verifies prior user transcript entries are marked as inactive history.
+///
+/// Large context windows can contain earlier user prompts that would be valid
+/// standalone requests. The OpenAI renderer must keep those prompts available
+/// for references while clearly separating them from the current active task.
+#[test]
+fn openai_responses_request_body_marks_prior_user_history_inactive() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptUser,
+                label: "previous user message".to_string(),
+                content: "Output a large multiline JSON object".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user prompt".to_string(),
+                content: "Patch the prompt context manager".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let body = openai_responses_request_body(&request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let input = value["input"].as_array().unwrap();
+
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[0]["role"], "user");
+    let historical_text = input[0]["content"][0]["text"].as_str().unwrap();
+    assert!(historical_text.contains("[historical user transcript]"));
+    assert!(historical_text.contains("not the active task"));
+    assert!(historical_text.contains("Output a large multiline JSON object"));
+
+    assert_eq!(input[1]["role"], "user");
+    let current_text = input[1]["content"][0]["text"].as_str().unwrap();
+    assert!(current_text.contains("Patch the prompt context manager"));
+    assert!(!current_text.contains("[historical user transcript]"));
+
+    assert_eq!(input[2]["role"], "developer");
+    assert!(
+        input[2]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("latest user prompt is the active task")
+    );
+}
+
 /// Verifies openai responses request body exposes a cache-stable tool list
 /// while forcing the active executable action schema.
 ///
@@ -3646,6 +3705,9 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert!(allowed_surface.contains("cache-stable list"));
     assert!(allowed_surface.contains("active_function_tool=submit_maap_shell_actions"));
     assert!(allowed_surface.contains("Treat [executed result]"));
+    assert!(allowed_surface.contains("latest user prompt is the active task"));
+    assert!(allowed_surface.contains("emit that executable action instead of say final"));
+    assert!(allowed_surface.contains("After a recoverable apply_patch failure"));
     assert!(
         allowed_surface.contains(
             "Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill"

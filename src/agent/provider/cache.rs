@@ -179,7 +179,7 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
             "content": [
                 {
                     "type": "input_text",
-                    "text": message.content
+                    "text": openai_user_input_text(message)
                 }
             ]
         }),
@@ -192,6 +192,24 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
                 }
             ]
         }),
+    }
+}
+
+/// Renders user-role input while distinguishing historical transcript entries.
+///
+/// OpenAI receives previous user prompts and the current user prompt through
+/// the same provider role. Historical wrappers keep prior transcript entries
+/// available for follow-up references without making them look like the active
+/// task when the request contains a large replay window.
+fn openai_user_input_text(message: &ModelMessage) -> String {
+    match message.source {
+        ContextSourceKind::Transcript | ContextSourceKind::TranscriptUser => format!(
+            "[historical user transcript]\n\
+             This is prior conversation history, not the active task. Do not answer this message unless the latest user request asks about it.\n\
+             {}",
+            message.content
+        ),
+        _ => message.content.clone(),
     }
 }
 
@@ -249,11 +267,14 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
              allowed_actions={allowed_actions}\n\
              active_function_tool={selected_tool}\n\
              This controller state is authoritative for action eligibility. \
+             The latest user prompt is the active task; previous user transcript messages are historical context only and must not be answered as new requests. \
              OpenAI may receive a cache-stable list of inactive MAAP tools, but tool_choice selects only active_function_tool for this request. \
              Emit only action objects whose type appears in allowed_actions and is present in the selected function schema. \
              Treat [executed result] and [action_result ...] messages as current execution evidence. If they already satisfy the task, emit say with status final instead of requesting capability or rerunning actions to reconfirm them. \
              Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill. Users can still invoke skills explicitly with $<skill-name> syntax before this request is built. \
              If the needed action type is absent and request_capability appears in allowed_actions, emit request_capability immediately for the needed coarse capability; do not spend the response on a plan or progress message. \
+             When shell_command or apply_patch appears in allowed_actions and local inspection, editing, validation, or patch recovery would advance the task, emit that executable action instead of say final or blocked. \
+             After a recoverable apply_patch failure, use a bounded shell_command read or corrected apply_patch; do not finalize until the patch succeeds or a concrete blocker remains. \
              If no listed action can make progress, emit say with status blocked or final. \
              Disallowed action types are rejected by Mezzanine and waste a recovery attempt.",
             request.interaction_kind.as_str(),
