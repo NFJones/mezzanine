@@ -32,7 +32,7 @@ pub(super) struct PaneAgentStatusSelectorLayoutItem {
 /// Maximum number of model/reasoning picker rows shown at once.
 pub(super) const PANE_AGENT_STATUS_SELECTOR_MAX_ROWS: usize = 30;
 /// Selector marker shown in front of the active command-output overlay row.
-const DISPLAY_OVERLAY_ACTIVE_SELECTOR: &str = "▶ ";
+const DISPLAY_OVERLAY_ACTIVE_SELECTOR: &str = "> ";
 /// Placeholder marker shown in front of inactive selectable overlay rows.
 const DISPLAY_OVERLAY_INACTIVE_SELECTOR: &str = "  ";
 /// Returns a compact MCP server state label for command completion details.

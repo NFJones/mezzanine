@@ -3797,7 +3797,7 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
     let initial_active_row = initial_view
         .lines
         .iter()
-        .position(|line| line.starts_with("▶ "))
+        .position(|line| line.starts_with("> "))
         .expect("overlay should show an active selector gutter");
     assert!(
         initial_view
@@ -3842,7 +3842,7 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
     let moved_active_row = moved_view
         .lines
         .iter()
-        .position(|line| line.starts_with("▶ "))
+        .position(|line| line.starts_with("> "))
         .expect("overlay should keep an active selector gutter after navigation");
     assert_ne!(moved_active_row, initial_active_row, "{moved_view:?}");
     assert!(

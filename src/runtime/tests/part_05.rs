@@ -2906,6 +2906,349 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     let _ = fs::remove_dir_all(cwd);
 }
 
+/// Verifies the live `/resume` picker view starts selected-link styling on the
+/// first visible session-id cell rather than the preceding list separator.
+///
+/// Helper-level overlay span tests can still miss attached-client regressions
+/// if the visible picker row shifts styling after command submission. This
+/// regression opens the real `/resume` picker through the agent-shell prompt
+/// and inspects the rendered client-view row the user actually sees.
+#[test]
+fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-picker-view"));
+    let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+    transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: session_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: crate::transcript::TranscriptRole::User,
+            turn_id: "turn-saved".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: "latest".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 11,
+            role: crate::transcript::TranscriptRole::User,
+            turn_id: "turn-latest".to_string(),
+            agent_id: "agent-%8".to_string(),
+            pane_id: "%8".to_string(),
+            content: "latest prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let visibility = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    let show = if visibility.contains("visibility=visible") {
+        visibility
+    } else {
+        assert!(visibility.contains("visibility=hidden"), "{visibility}");
+        service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap()
+    };
+    assert!(show.contains("visibility=visible"), "{show}");
+    let _ = service.drain_deferred_pane_inputs();
+
+    let submitted = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"/resume\r".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(submitted.forwarded_bytes, 0);
+    assert!(submitted.view_refresh_required);
+    assert!(service.primary_display_overlay.is_some());
+
+    let moved = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(moved.forwarded_bytes, 0);
+    assert!(moved.view_refresh_required);
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.active_selection_index),
+        Some(1)
+    );
+
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let row = view
+        .lines
+        .iter()
+        .position(|line| line.contains(session_id))
+        .expect("resume picker should render the saved session id");
+    let line = &view.lines[row];
+    let start = display_column_for_fragment(line, session_id);
+    let previous_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: line.clone(),
+            style_spans: view.line_style_spans[row].clone(),
+            copy_text: None,
+        },
+        start.saturating_sub(1),
+    );
+    let first_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: line.clone(),
+            style_spans: view.line_style_spans[row].clone(),
+            copy_text: None,
+        },
+        start,
+    );
+
+    assert_ne!(
+        previous_rendition.foreground,
+        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        "resume picker link foreground shifted left in live view: {view:?}"
+    );
+    assert!(
+        !previous_rendition.underline,
+        "resume picker underline shifted left in live view: {view:?}"
+    );
+    assert_ne!(
+        previous_rendition.background,
+        Some(service.ui_theme.colors.agent_model.background),
+        "resume picker active background shifted left in live view: {view:?}"
+    );
+    assert_eq!(
+        first_rendition.foreground,
+        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        "resume picker first session-id cell lost link foreground: {view:?}"
+    );
+    assert!(
+        first_rendition.underline,
+        "resume picker first session-id cell lost underline: {view:?}"
+    );
+    assert_eq!(
+        first_rendition.background,
+        Some(service.ui_theme.colors.agent_model.background),
+        "resume picker first session-id cell lost active background: {view:?}"
+    );
+}
+
+/// Verifies the full attached-terminal presentation path preserves the
+/// selected-link boundary on the live `/resume` picker row.
+///
+/// The picker's rendered client view is only half the path shown to the user.
+/// The attached client converts that view into presentation rows and row-diff
+/// frames before a terminal screen applies the result. This regression covers
+/// that full round trip using the real previous/current picker views so a
+/// one-cell-left shift in the attached output path cannot hide behind helper
+///-level overlay tests.
+#[test]
+fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous_cell() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-picker-frame"));
+    let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+    transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: session_id.to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: crate::transcript::TranscriptRole::User,
+            turn_id: "turn-saved".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: "latest".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 11,
+            role: crate::transcript::TranscriptRole::User,
+            turn_id: "turn-latest".to_string(),
+            agent_id: "agent-%8".to_string(),
+            pane_id: "%8".to_string(),
+            content: "latest prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let visibility = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    let show = if visibility.contains("visibility=visible") {
+        visibility
+    } else {
+        assert!(visibility.contains("visibility=hidden"), "{visibility}");
+        service
+            .execute_terminal_command(&primary, "agent-shell")
+            .unwrap()
+    };
+    assert!(show.contains("visibility=visible"), "{show}");
+    let _ = service.drain_deferred_pane_inputs();
+
+    let submitted = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"/resume\r".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(submitted.forwarded_bytes, 0);
+    assert!(submitted.view_refresh_required);
+    let previous_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+
+    let moved = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
+                output_lines: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(moved.forwarded_bytes, 0);
+    assert!(moved.view_refresh_required);
+    let current_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 24).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+
+    let modes = crate::terminal::AttachedTerminalOutputModes {
+        cursor_visible: current_view.cursor_visible,
+        cursor_blink: current_view.cursor_blink,
+        cursor_blink_interval_ms: current_view.cursor_blink_interval_ms,
+        cursor_row: current_view.cursor_row,
+        cursor_column: current_view.cursor_column,
+        application_keypad: current_view.application_keypad,
+        bracketed_paste: current_view.bracketed_paste,
+        host_mouse_reporting: current_view.host_mouse_reporting,
+        ..crate::terminal::AttachedTerminalOutputModes::default()
+    };
+    let (previous_lines, previous_spans) =
+        crate::terminal::compose_client_presentation_with_styles(&previous_view, None);
+    let (current_lines, current_spans) =
+        crate::terminal::compose_client_presentation_with_styles(&current_view, None);
+    let previous_frame = crate::terminal::encode_attached_terminal_output_update_frame_with_styles(
+        &previous_lines,
+        &previous_spans,
+        None,
+        modes,
+        None,
+    );
+    let previous_state = crate::terminal::AttachedTerminalOutputFrameState::new_with_modes(
+        &previous_lines,
+        &previous_spans,
+        modes,
+    );
+    let update_frame = crate::terminal::encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &current_spans,
+        None,
+        modes,
+        Some(&previous_state),
+    );
+    let mut screen = TerminalScreen::new(Size::new(120, 24).unwrap(), 10).unwrap();
+    screen.feed(&previous_frame);
+    screen.feed(&update_frame);
+
+    let styled_lines = screen.visible_styled_lines();
+    let row = styled_lines
+        .iter()
+        .find(|line| line.text.contains(session_id))
+        .unwrap();
+    let start = display_column_for_fragment(&row.text, session_id);
+    let previous_rendition = styled_line_rendition_at(row, start.saturating_sub(1));
+    let first_rendition = styled_line_rendition_at(row, start);
+
+    assert_ne!(
+        previous_rendition.foreground,
+        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        "resume picker link foreground shifted left after attached frame update: {styled_lines:?}"
+    );
+    assert!(
+        !previous_rendition.underline,
+        "resume picker underline shifted left after attached frame update: {styled_lines:?}"
+    );
+    assert_ne!(
+        previous_rendition.background,
+        Some(service.ui_theme.colors.agent_model.background),
+        "resume picker active background shifted left after attached frame update: {styled_lines:?}"
+    );
+    assert_eq!(
+        first_rendition.foreground,
+        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        "resume picker first session-id cell lost link foreground after attached frame update: {styled_lines:?}"
+    );
+    assert!(
+        first_rendition.underline,
+        "resume picker first session-id cell lost underline after attached frame update: {styled_lines:?}"
+    );
+    assert_eq!(
+        first_rendition.background,
+        Some(service.ui_theme.colors.agent_model.background),
+        "resume picker first session-id cell lost active background after attached frame update: {styled_lines:?}"
+    );
+}
+
 /// Verifies that live agent pane rendering writes a separate durable
 /// presentation log and does not leak presentation-only text into future model
 /// context.

@@ -5409,6 +5409,56 @@ mod tests {
         }
     }
 
+    /// Verifies an active saved-session UUID row does not shift link styling
+    /// onto the preceding bullet separator cell.
+    ///
+    /// `/resume` opens a selectable saved-session pager whose rows render as a
+    /// bullet plus a bold linked UUID label. The selected-link foreground,
+    /// underline, and active background must begin on the first UUID cell
+    /// rather than leaking one column left onto the separator space.
+    #[test]
+    fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+        let content = runtime_agent_shell_markdown_overlay_content(
+            Some("list-sessions".to_string()),
+            &format!("- [**{session_id}**](mez-agent:%2Fresume%20{session_id})"),
+            &ui_theme,
+        );
+        let overlay = RuntimeDisplayOverlay {
+            lines: content.lines.clone(),
+            line_style_spans: content.line_style_spans.clone(),
+            scroll_offset: 0,
+            selections: content.selections.clone(),
+            active_selection_index: Some(0),
+            dismiss_on_any_input: false,
+            search_input: None,
+            search_query: None,
+            search_match: None,
+            search_status: None,
+            mouse_selection: None,
+        };
+        let selection = &overlay.selections[0];
+        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
+        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
+        let previous_rendition = rendered_line_rendition_at(&spans, start.saturating_sub(1));
+
+        assert_ne!(
+            previous_rendition.foreground,
+            Some(ui_theme.colors.agent_transcript_command.foreground),
+            "saved-session link foreground shifted left into the separator cell: {spans:?}"
+        );
+        assert!(
+            !previous_rendition.underline,
+            "saved-session link underline shifted left into the separator cell: {spans:?}"
+        );
+        assert_ne!(
+            previous_rendition.background,
+            Some(ui_theme.colors.agent_model.background),
+            "saved-session active background shifted left into the separator cell: {spans:?}"
+        );
+    }
+
     /// Verifies the active selector gutter stays isolated from a link that
     /// begins at the first visible body column.
     ///

@@ -75,6 +75,23 @@ fn display_column_for_fragment(line: &str, needle: &str) -> usize {
     UnicodeWidthStr::width(&line[..byte_index])
 }
 
+/// Returns the style active at one displayed terminal column.
+///
+/// # Parameters
+/// - `line`: The styled terminal line to inspect.
+/// - `column`: The zero-based display column within the line.
+fn styled_line_rendition_at(
+    line: &TerminalStyledLine,
+    column: usize,
+) -> crate::terminal::GraphicRendition {
+    line.style_spans
+        .iter()
+        .rev()
+        .find(|span| column >= span.start && column < span.start.saturating_add(span.length))
+        .map(|span| span.rendition)
+        .unwrap_or_default()
+}
+
 /// Returns RGB components for true-color test values.
 fn test_rgb_channels(color: TerminalColor) -> (u8, u8, u8) {
     match color {
@@ -2865,6 +2882,129 @@ fn attached_terminal_output_update_rewrites_fully_styled_prompt_continuation_row
     assert!(rendered.contains("\x1b[1;1H\x1b[0m"), "{rendered:?}");
     assert!(rendered.contains("      omega     "), "{rendered:?}");
     assert!(!rendered.contains("\x1b[1;7H\x1b[0momega"), "{rendered:?}");
+}
+
+/// Verifies bounded row-segment updates keep selected-link styling off the
+/// separator cell on a `/resume` picker row.
+///
+/// The live pager moves selection between saved-session rows without a full
+/// redraw. When that happens, the row-differential encoder must preserve the
+/// link foreground, underline, and active background on the first session-id
+/// cell without shifting any of that styling one column left into the bullet
+/// separator.
+#[test]
+fn attached_terminal_output_update_preserves_resume_picker_link_boundary() {
+    let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
+    let link_rendition = GraphicRendition {
+        foreground: Some(TerminalColor::Rgb(230, 195, 132)),
+        bold: true,
+        underline: true,
+        ..GraphicRendition::default()
+    };
+    let active_link_rendition = GraphicRendition {
+        background: Some(TerminalColor::Rgb(122, 168, 159)),
+        ..link_rendition
+    };
+    let previous_lines = vec!["> • latest".to_string(), format!("  • {session_id}")];
+    let current_lines = vec!["  • latest".to_string(), format!("> • {session_id}")];
+    let previous_spans = vec![
+        vec![
+            TerminalStyleSpan {
+                start: 0,
+                length: 2,
+                rendition: GraphicRendition::default(),
+            },
+            TerminalStyleSpan {
+                start: 4,
+                length: "latest".len(),
+                rendition: active_link_rendition,
+            },
+        ],
+        vec![TerminalStyleSpan {
+            start: 4,
+            length: session_id.len(),
+            rendition: link_rendition,
+        }],
+    ];
+    let current_spans = vec![
+        vec![TerminalStyleSpan {
+            start: 4,
+            length: "latest".len(),
+            rendition: link_rendition,
+        }],
+        vec![
+            TerminalStyleSpan {
+                start: 0,
+                length: 2,
+                rendition: GraphicRendition::default(),
+            },
+            TerminalStyleSpan {
+                start: 4,
+                length: session_id.len(),
+                rendition: active_link_rendition,
+            },
+        ],
+    ];
+    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &previous_spans);
+    let modes = AttachedTerminalOutputModes {
+        cursor_visible: false,
+        cursor_blink: false,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let initial_frame = encode_attached_terminal_output_frame_with_styles(
+        &previous_lines,
+        &previous_spans,
+        None,
+        modes,
+    );
+    let update_frame = encode_attached_terminal_output_update_frame_with_styles(
+        &current_lines,
+        &current_spans,
+        None,
+        modes,
+        Some(&previous),
+    );
+    let mut screen = TerminalScreen::new(Size::new(120, 2).unwrap(), 10).unwrap();
+    screen.feed(&initial_frame);
+    screen.feed(&update_frame);
+
+    let styled_lines = screen.visible_styled_lines();
+    let row = styled_lines
+        .iter()
+        .find(|line| line.text.contains(session_id))
+        .unwrap();
+    let start = display_column_for_fragment(&row.text, session_id);
+    let previous_rendition = styled_line_rendition_at(row, start.saturating_sub(1));
+    let first_rendition = styled_line_rendition_at(row, start);
+
+    assert_ne!(
+        previous_rendition.foreground,
+        Some(TerminalColor::Rgb(230, 195, 132)),
+        "resume picker link foreground shifted left after segment update: {styled_lines:?}"
+    );
+    assert!(
+        !previous_rendition.underline,
+        "resume picker underline shifted left after segment update: {styled_lines:?}"
+    );
+    assert_ne!(
+        previous_rendition.background,
+        Some(TerminalColor::Rgb(122, 168, 159)),
+        "resume picker active background shifted left after segment update: {styled_lines:?}"
+    );
+    assert_eq!(
+        first_rendition.foreground,
+        Some(TerminalColor::Rgb(230, 195, 132)),
+        "resume picker first session-id cell lost link foreground after segment update: {styled_lines:?}"
+    );
+    assert!(
+        first_rendition.underline,
+        "resume picker first session-id cell lost underline after segment update: {styled_lines:?}"
+    );
+    assert_eq!(
+        first_rendition.background,
+        Some(TerminalColor::Rgb(122, 168, 159)),
+        "resume picker first session-id cell lost active background after segment update: {styled_lines:?}"
+    );
 }
 
 /// Verifies stable-row attached-terminal updates clear only rows that shrink
