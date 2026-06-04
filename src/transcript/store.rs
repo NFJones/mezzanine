@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self as std_fs, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use tokio::fs::{self as tokio_fs, OpenOptions as TokioOpenOptions};
@@ -31,11 +31,21 @@ use super::types::{
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const SESSION_TRANSCRIPT_FILE_NAME: &str = "history.tsv";
+/// Defines the bounded conversation summary sidecar file name for this subsystem.
+///
+/// The file stores one JSON object with list/resume metadata so saved-session
+/// pickers do not need to decode full transcript histories.
+const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 /// Defines the SESSION PRESENTATION FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const SESSION_PRESENTATION_FILE_NAME: &str = "presentation.tsv";
+/// Defines the presentation sequence index file name for this subsystem.
+///
+/// The file stores the latest durable presentation sequence so new appends can
+/// allocate the next sequence without replaying compressed presentation history.
+const SESSION_PRESENTATION_INDEX_FILE_NAME: &str = "presentation-index.tsv";
 /// Defines the compressed presentation history file name for this subsystem.
 ///
 /// The file is append-only and may contain any number of concatenated zstd
@@ -71,6 +81,11 @@ const DEFAULT_AGENT_PROMPT_HISTORY_LIMIT: usize = 1000;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_TRANSCRIPT_TAIL_READ_BYTES: u64 = 2 * 1024 * 1024;
+/// Defines the default presentation tail read used for bounded replay/index fallback.
+///
+/// This caps resume presentation replay and legacy index recovery to a recent
+/// cleartext tail rather than decoding compressed historical presentation rows.
+const DEFAULT_PRESENTATION_TAIL_READ_BYTES: u64 = 2 * 1024 * 1024;
 /// Defines the cleartext presentation tail size that triggers compression.
 ///
 /// Keeping recent rows cleartext makes ordinary appends simple, while moving
@@ -145,6 +160,7 @@ impl AgentTranscriptStore {
         file.write_all(b"\n")?;
         file.sync_all()?;
         set_private_file_permissions(&path)?;
+        self.write_presentation_index(&entry)?;
         self.compact_presentation_tail_if_needed(&entry.conversation_id)?;
         Ok(())
     }
@@ -187,7 +203,14 @@ impl AgentTranscriptStore {
 
     /// Returns the next append sequence for one presentation log.
     pub fn next_presentation_sequence(&self, conversation_id: &str) -> Result<u64> {
-        let entries = self.inspect_presentation(conversation_id)?;
+        if let Some(sequence) = self.read_presentation_index(conversation_id)? {
+            return Ok(sequence.saturating_add(1));
+        }
+        let entries = self.inspect_recent_presentation(
+            conversation_id,
+            1,
+            DEFAULT_PRESENTATION_TAIL_READ_BYTES,
+        )?;
         Ok(entries
             .last()
             .map(|entry| entry.sequence.saturating_add(1))
@@ -205,7 +228,67 @@ impl AgentTranscriptStore {
         file.write_all(b"\n")?;
         file.sync_all()?;
         set_private_file_permissions(&path)?;
+        self.update_summary_after_append(entry)?;
         Ok(encoded.len().saturating_add(1))
+    }
+
+    /// Reads and decodes the latest cleartext presentation entries without
+    /// loading compressed historical presentation frames.
+    ///
+    /// Resume replay only needs a bounded visible tail. When the cleartext tail
+    /// is empty because all historical rows were compacted, callers receive an
+    /// empty vector and can fall back to transcript metadata or recent text.
+    pub fn inspect_recent_presentation(
+        &self,
+        conversation_id: &str,
+        max_entries: usize,
+        max_bytes: u64,
+    ) -> Result<Vec<AgentPresentationEntry>> {
+        if max_entries == 0 {
+            return Ok(Vec::new());
+        }
+        if max_bytes == 0 {
+            return Err(MezError::invalid_args(
+                "recent presentation byte limit must be non-zero",
+            ));
+        }
+        let path = self.presentation_path_for(conversation_id)?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let mut file = std_fs::File::open(path)?;
+        let length = file.metadata()?.len();
+        let start = length.saturating_sub(max_bytes);
+        let seek_start = if start > 0 {
+            start.saturating_sub(1)
+        } else {
+            0
+        };
+        if seek_start > 0 {
+            file.seek(SeekFrom::Start(seek_start))?;
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        let tail_bytes = if start == 0 {
+            bytes.as_slice()
+        } else if bytes.first().is_some_and(|byte| *byte == b'\n') {
+            &bytes[1..]
+        } else if let Some(newline_index) = bytes.iter().position(|byte| *byte == b'\n') {
+            &bytes[newline_index.saturating_add(1)..]
+        } else {
+            &[]
+        };
+        let text = String::from_utf8_lossy(tail_bytes);
+        let lines = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        let decoded = lines
+            .into_iter()
+            .map(AgentPresentationEntry::decode)
+            .collect::<Result<Vec<_>>>()?;
+        let first = decoded.len().saturating_sub(max_entries);
+        Ok(decoded[first..].to_vec())
     }
 
     /// Moves an oversized cleartext presentation tail into compressed history.
@@ -412,13 +495,25 @@ impl AgentTranscriptStore {
             if !seen.insert(conversation_id.clone()) {
                 continue;
             };
-            let entries = self.inspect(&conversation_id)?;
-            if let Some(summary) = summarize_conversation(entries) {
+            if let Some(summary) = self.summary(&conversation_id)? {
                 summaries.push(summary);
             }
         }
         summaries.sort_by(|left, right| left.conversation_id.cmp(&right.conversation_id));
         Ok(summaries)
+    }
+
+    /// Loads bounded summary metadata for one saved conversation.
+    ///
+    /// New transcript appends maintain a sidecar summary. Legacy sessions fall
+    /// back to decoding the first complete transcript row and a bounded tail so
+    /// list/latest paths avoid whole-transcript decoding.
+    pub fn summary(&self, conversation_id: &str) -> Result<Option<ConversationSummary>> {
+        validate_conversation_id(conversation_id)?;
+        if let Some(summary) = self.read_summary_sidecar(conversation_id)? {
+            return Ok(Some(summary));
+        }
+        self.legacy_bounded_summary(conversation_id)
     }
 
     /// Loads active agent-session metadata for one Mezzanine session id.
@@ -808,6 +903,175 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
+    /// Updates the per-conversation summary sidecar after one transcript append.
+    fn update_summary_after_append(&self, entry: &TranscriptEntry) -> Result<()> {
+        let mut summary = match self.read_summary_sidecar(&entry.conversation_id)? {
+            Some(summary) => summary,
+            None => self
+                .legacy_bounded_summary(&entry.conversation_id)?
+                .unwrap_or_else(|| {
+                    summarize_conversation(vec![entry.clone()])
+                        .expect("single valid transcript entry summarizes")
+                }),
+        };
+        summary.conversation_id = entry.conversation_id.clone();
+        summary.entries = usize::try_from(entry.sequence).unwrap_or(usize::MAX);
+        if summary.first_created_at_unix_seconds == 0 {
+            summary.first_created_at_unix_seconds = entry.created_at_unix_seconds;
+        }
+        summary.last_created_at_unix_seconds = entry.created_at_unix_seconds;
+        summary.last_turn_id = entry.turn_id.clone();
+        summary.agent_id = entry.agent_id.clone();
+        summary.pane_id = entry.pane_id.clone();
+        if summary.directory.is_none() {
+            summary.directory = transcript_entry_directory(entry);
+        } else if let Some(directory) = transcript_entry_project_root(entry) {
+            summary.directory = Some(directory);
+        }
+        if entry.role == super::types::TranscriptRole::User {
+            let preview = bounded_summary_text(&entry.content, 120);
+            if summary.initial_prompt.is_none() {
+                summary.initial_prompt = Some(preview.clone());
+            }
+            summary.latest_user_prompt = Some(preview);
+        }
+        self.write_summary_sidecar(&summary)
+    }
+
+    /// Writes one summary sidecar for saved-session listing and latest lookup.
+    fn write_summary_sidecar(&self, summary: &ConversationSummary) -> Result<()> {
+        let session_dir = self.ensure_session_dir(&summary.conversation_id)?;
+        let path = session_dir.join(SESSION_SUMMARY_FILE_NAME);
+        let encoded = encode_conversation_summary(summary);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        file.write_all(encoded.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        set_private_file_permissions(&path)?;
+        Ok(())
+    }
+
+    /// Reads one summary sidecar when present.
+    fn read_summary_sidecar(&self, conversation_id: &str) -> Result<Option<ConversationSummary>> {
+        let path = self
+            .session_dir_for(conversation_id)?
+            .join(SESSION_SUMMARY_FILE_NAME);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut data = String::new();
+        std_fs::File::open(path)?.read_to_string(&mut data)?;
+        let Some(line) = data.lines().find(|line| !line.trim().is_empty()) else {
+            return Ok(None);
+        };
+        decode_conversation_summary(line).map(Some)
+    }
+
+    /// Builds a summary for older conversations without decoding the whole file.
+    fn legacy_bounded_summary(&self, conversation_id: &str) -> Result<Option<ConversationSummary>> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let first = self.first_transcript_entry(conversation_id)?;
+        let tail = self.inspect_recent(conversation_id, 64, DEFAULT_TRANSCRIPT_TAIL_READ_BYTES)?;
+        let Some(last) = tail.last().or(first.as_ref()) else {
+            return Ok(None);
+        };
+        let first_entry = first.as_ref().unwrap_or(last);
+        let mut directory = first.as_ref().and_then(transcript_entry_directory);
+        for entry in &tail {
+            if let Some(project_root) = transcript_entry_project_root(entry) {
+                directory = Some(project_root);
+            } else if directory.is_none() {
+                directory = transcript_entry_directory(entry);
+            }
+        }
+        let initial_prompt = first
+            .as_ref()
+            .filter(|entry| entry.role == super::types::TranscriptRole::User)
+            .map(|entry| bounded_summary_text(&entry.content, 120));
+        let latest_user_prompt = tail
+            .iter()
+            .rev()
+            .find(|entry| entry.role == super::types::TranscriptRole::User)
+            .map(|entry| bounded_summary_text(&entry.content, 120))
+            .or_else(|| initial_prompt.clone());
+        Ok(Some(ConversationSummary {
+            conversation_id: conversation_id.to_string(),
+            entries: usize::try_from(last.sequence).unwrap_or(usize::MAX),
+            first_created_at_unix_seconds: first_entry.created_at_unix_seconds,
+            last_created_at_unix_seconds: last.created_at_unix_seconds,
+            last_turn_id: last.turn_id.clone(),
+            agent_id: last.agent_id.clone(),
+            pane_id: last.pane_id.clone(),
+            directory,
+            initial_prompt,
+            latest_user_prompt,
+        }))
+    }
+
+    /// Reads the first complete transcript entry for legacy summary fallback.
+    fn first_transcript_entry(&self, conversation_id: &str) -> Result<Option<TranscriptEntry>> {
+        let path = self.existing_transcript_path_for(conversation_id)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let file = std_fs::File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes = reader.read_line(&mut line)?;
+            if bytes == 0 {
+                return Ok(None);
+            }
+            if !line.trim().is_empty() {
+                return TranscriptEntry::decode(line.trim_end_matches(['\r', '\n'])).map(Some);
+            }
+        }
+    }
+
+    /// Writes the latest presentation sequence index.
+    fn write_presentation_index(&self, entry: &AgentPresentationEntry) -> Result<()> {
+        let session_dir = self.ensure_session_dir(&entry.conversation_id)?;
+        let path = session_dir.join(SESSION_PRESENTATION_INDEX_FILE_NAME);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        file.write_all(entry.sequence.to_string().as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        set_private_file_permissions(&path)?;
+        Ok(())
+    }
+
+    /// Reads the latest presentation sequence index when present.
+    fn read_presentation_index(&self, conversation_id: &str) -> Result<Option<u64>> {
+        validate_conversation_id(conversation_id)?;
+        let path = self
+            .session_dir_for(conversation_id)?
+            .join(SESSION_PRESENTATION_INDEX_FILE_NAME);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut data = String::new();
+        std_fs::File::open(path)?.read_to_string(&mut data)?;
+        let value = data.trim();
+        if value.is_empty() {
+            return Ok(None);
+        }
+        value.parse::<u64>().map(Some).map_err(|error| {
+            MezError::invalid_args(format!("presentation index is invalid: {error}"))
+        })
+    }
+
     /// Runs the write prompt history async operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1027,4 +1291,115 @@ impl AgentTranscriptStore {
         }
         Ok(self.root.join(format!("{conversation_id}.tsv")))
     }
+}
+
+/// Encodes one conversation summary sidecar as compact JSON.
+fn encode_conversation_summary(summary: &ConversationSummary) -> String {
+    serde_json::json!({
+        "version": 1,
+        "conversation_id": summary.conversation_id,
+        "entries": summary.entries,
+        "first_created_at_unix_seconds": summary.first_created_at_unix_seconds,
+        "last_created_at_unix_seconds": summary.last_created_at_unix_seconds,
+        "last_turn_id": summary.last_turn_id,
+        "agent_id": summary.agent_id,
+        "pane_id": summary.pane_id,
+        "directory": summary.directory,
+        "initial_prompt": summary.initial_prompt,
+        "latest_user_prompt": summary.latest_user_prompt,
+    })
+    .to_string()
+}
+
+/// Decodes one conversation summary sidecar and validates required fields.
+fn decode_conversation_summary(line: &str) -> Result<ConversationSummary> {
+    let value: serde_json::Value = serde_json::from_str(line).map_err(|error| {
+        MezError::invalid_args(format!("conversation summary decode failed: {error}"))
+    })?;
+    if value.get("version").and_then(|field| field.as_u64()) != Some(1) {
+        return Err(MezError::invalid_args(
+            "conversation summary version is invalid",
+        ));
+    }
+    let conversation_id = required_summary_string(&value, "conversation_id")?;
+    validate_conversation_id(&conversation_id)?;
+    let summary = ConversationSummary {
+        conversation_id,
+        entries: required_summary_u64(&value, "entries")?
+            .try_into()
+            .unwrap_or(usize::MAX),
+        first_created_at_unix_seconds: required_summary_u64(
+            &value,
+            "first_created_at_unix_seconds",
+        )?,
+        last_created_at_unix_seconds: required_summary_u64(&value, "last_created_at_unix_seconds")?,
+        last_turn_id: required_summary_string(&value, "last_turn_id")?,
+        agent_id: required_summary_string(&value, "agent_id")?,
+        pane_id: required_summary_string(&value, "pane_id")?,
+        directory: optional_summary_string(&value, "directory"),
+        initial_prompt: optional_summary_string(&value, "initial_prompt"),
+        latest_user_prompt: optional_summary_string(&value, "latest_user_prompt"),
+    };
+    Ok(summary)
+}
+
+/// Reads one required string from a summary JSON object.
+fn required_summary_string(value: &serde_json::Value, field: &str) -> Result<String> {
+    value
+        .get(field)
+        .and_then(|field| field.as_str())
+        .filter(|field| !field.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| MezError::invalid_args(format!("conversation summary {field} is invalid")))
+}
+
+/// Reads one required u64 from a summary JSON object.
+fn required_summary_u64(value: &serde_json::Value, field: &str) -> Result<u64> {
+    value
+        .get(field)
+        .and_then(|field| field.as_u64())
+        .ok_or_else(|| MezError::invalid_args(format!("conversation summary {field} is invalid")))
+}
+
+/// Reads one optional string from a summary JSON object.
+fn optional_summary_string(value: &serde_json::Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(|field| field.as_str())
+        .filter(|field| !field.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Returns the best directory hint in one transcript entry.
+fn transcript_entry_directory(entry: &TranscriptEntry) -> Option<String> {
+    transcript_entry_project_root(entry).or_else(|| {
+        entry.content.lines().find_map(|line| {
+            line.strip_prefix("cwd=")
+                .or_else(|| line.strip_prefix("working_directory="))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+    })
+}
+
+/// Returns a project-root hint from one transcript entry.
+fn transcript_entry_project_root(entry: &TranscriptEntry) -> Option<String> {
+    entry.content.lines().find_map(|line| {
+        line.strip_prefix("project_root=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+/// Bounds a summary prompt preview without splitting UTF-8 code points.
+fn bounded_summary_text(text: &str, max_chars: usize) -> String {
+    let mut preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if preview.chars().count() <= max_chars {
+        return preview;
+    }
+    preview = preview.chars().take(max_chars.saturating_sub(1)).collect();
+    preview.push('…');
+    preview
 }

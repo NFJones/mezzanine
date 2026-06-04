@@ -221,6 +221,86 @@ fn transcript_store_appends_and_inspects_presentation_entries() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies saved-session listing uses the summary sidecar instead of decoding
+/// the whole transcript after each conversation append.
+///
+/// Resume pickers and `/resume --latest` only need bounded metadata. This
+/// regression corrupts the durable transcript after the summary sidecar exists;
+/// listing must still use the sidecar and avoid the full transcript decode that
+/// would otherwise fail before the saved-session picker can render.
+#[test]
+fn transcript_store_list_uses_summary_sidecar_without_full_decode() {
+    let root = temp_root("summary-sidecar");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut first = entry("conv1", 1, TranscriptRole::System);
+    first.content = "project_root=/workspace/mezzanine".to_string();
+    let mut second = entry("conv1", 2, TranscriptRole::User);
+    second.content = "continue the performance work".to_string();
+
+    store.append(&first).unwrap();
+    store.append(&second).unwrap();
+    fs::write(
+        store.transcript_path("conv1").unwrap(),
+        "not a transcript\n",
+    )
+    .unwrap();
+
+    let summaries = store.list().unwrap();
+
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].conversation_id, "conv1");
+    assert_eq!(summaries[0].entries, 2);
+    assert_eq!(
+        summaries[0].directory.as_deref(),
+        Some("/workspace/mezzanine")
+    );
+    assert_eq!(
+        summaries[0].latest_user_prompt.as_deref(),
+        Some("continue the performance work")
+    );
+    assert!(store.inspect("conv1").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies presentation sequence allocation and bounded replay do not decode
+/// compressed historical presentation frames.
+///
+/// Presentation histories can contain large compressed prefixes. Appending a new
+/// row and resuming the visible tail should depend on the sequence index and the
+/// cleartext tail only, so a corrupt legacy compressed prefix cannot force an
+/// O(history) decode on ordinary append/resume paths.
+#[test]
+fn transcript_store_presentation_index_and_recent_replay_skip_compressed_history() {
+    let root = temp_root("presentation-index");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    store
+        .append_presentation(&large_presentation("conv1", 1))
+        .unwrap();
+    fs::write(
+        store.presentation_compressed_path("conv1").unwrap(),
+        b"not zstd",
+    )
+    .unwrap();
+
+    assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 2);
+    store
+        .append_presentation(&presentation("conv1", 2))
+        .unwrap();
+
+    let recent = store
+        .inspect_recent_presentation("conv1", 10, 1024 * 1024)
+        .unwrap();
+
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].sequence, 2);
+    assert_eq!(store.next_presentation_sequence("conv1").unwrap(), 3);
+    assert!(store.inspect_presentation("conv1").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies recent transcript inspection reads only the requested tail entries
 /// and reports the next append sequence from that bounded tail.
 ///

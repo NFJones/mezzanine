@@ -52,6 +52,7 @@ use crate::readline::ReadlineEdit;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };
+use crate::transcript::ConversationSummary;
 use base64::Engine;
 
 mod compaction;
@@ -76,6 +77,14 @@ pub(super) struct RuntimeAgentShellExit {
 
 /// Conservative per-entry overhead used when estimating transcript replay cost.
 const AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS: usize = 16;
+/// Maximum saved transcript entries to render when `/resume` has no presentation log.
+const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
+/// Maximum transcript bytes to read for `/resume` fallback replay.
+const AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
+/// Maximum persisted presentation rows to replay when resuming an agent shell.
+const AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES: usize = 200;
+/// Maximum cleartext presentation bytes to read when resuming an agent shell.
+const AGENT_RESUME_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Runs the agent shell invalid command response json operation for this subsystem.
 ///
@@ -128,6 +137,16 @@ fn runtime_resume_directory_from_entries(entries: &[TranscriptEntry]) -> Option<
         }
     }
     project_root
+}
+
+/// Returns the saved working directory from bounded conversation metadata.
+fn runtime_resume_directory_from_summary(summary: &ConversationSummary) -> Option<String> {
+    summary
+        .directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Formats saved system transcript metadata for human resume replay.
@@ -1660,14 +1679,29 @@ impl RuntimeSessionService {
             Some(conversation_id) => conversation_id.to_string(),
             None => unreachable!("bare resume returns through list-sessions before store lookup"),
         };
-        let entries = store.inspect(&conversation_id)?;
-        let presentation_entries = store.inspect_presentation(&conversation_id)?;
-        let resume_directory = runtime_resume_directory_from_entries(&entries);
+        let summary = store.summary(&conversation_id)?.ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "conversation transcript not found",
+            )
+        })?;
+        let entries = store.inspect_recent(
+            &conversation_id,
+            AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
+            AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
+        )?;
+        let presentation_entries = store.inspect_recent_presentation(
+            &conversation_id,
+            AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES,
+            AGENT_RESUME_PRESENTATION_REPLAY_BYTES,
+        )?;
+        let resume_directory = runtime_resume_directory_from_summary(&summary)
+            .or_else(|| runtime_resume_directory_from_entries(&entries));
         let (session_id, transcript_entries, visibility) = {
             let session = self.agent_shell_store.bind_conversation(
                 pane_id,
                 &conversation_id,
-                entries.len() as u64,
+                summary.entries as u64,
             )?;
             (
                 session.session_id.clone(),
@@ -1685,7 +1719,7 @@ impl RuntimeSessionService {
         {
             self.set_agent_prompt_display_lines(
                 pane_id,
-                Self::runtime_resume_transcript_display(&entries),
+                Self::runtime_resume_transcript_display(&summary, &entries),
             )?;
         }
         Ok(AgentShellCommandOutcome::Mutated {
@@ -2176,19 +2210,20 @@ impl RuntimeSessionService {
 
     /// Formats a resumed transcript as prompt display lines so the user can
     /// pick up the saved conversation with visible context in the pane.
-    fn runtime_resume_transcript_display(entries: &[TranscriptEntry]) -> Vec<String> {
+    fn runtime_resume_transcript_display(
+        summary: &ConversationSummary,
+        entries: &[TranscriptEntry],
+    ) -> Vec<String> {
         let mut lines = vec!["Resumed Agent Session".to_string()];
         if entries.is_empty() {
             lines.push("No saved transcript entries were found.".to_string());
             return lines;
         }
-        if let Some(first) = entries.first() {
-            lines.push(format!(
-                "Conversation ID: {} | Entries: {} | Resumed: yes",
-                json_escape(&first.conversation_id),
-                entries.len()
-            ));
-        }
+        lines.push(format!(
+            "Conversation ID: {} | Entries: {} | Resumed: yes",
+            json_escape(&summary.conversation_id),
+            summary.entries
+        ));
         lines.push(String::new());
         for entry in entries {
             let content = Self::runtime_resume_entry_display_content(entry);
