@@ -171,44 +171,65 @@ fn provider_http_expects_event_stream(
         .is_some_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
 }
 
-/// Reports whether buffered SSE text already contains a terminal provider event.
-fn provider_http_body_has_terminal_sse_event(body: &[u8]) -> bool {
-    let Ok(body) = std::str::from_utf8(body) else {
-        return false;
-    };
-    let mut remaining = body;
-    while let Some(separator_index) = provider_http_find_sse_block_separator(remaining) {
-        let block = &remaining[..separator_index];
-        if provider_sse_block_is_terminal(block) {
+/// Tracks incremental terminal-event detection for one buffered SSE body.
+#[derive(Debug, Default)]
+struct ProviderSseTerminalDetector {
+    scanned_bytes: usize,
+    terminal_seen: bool,
+}
+
+impl ProviderSseTerminalDetector {
+    /// Reports whether buffered SSE text already contains a terminal provider
+    /// event while scanning each completed event block at most once.
+    fn has_terminal_event(&mut self, body: &[u8]) -> bool {
+        if self.terminal_seen {
             return true;
         }
-        remaining = &remaining[separator_index..];
-        if let Some(stripped) = remaining.strip_prefix("\r\n\r\n") {
-            remaining = stripped;
-        } else if let Some(stripped) = remaining.strip_prefix("\n\n") {
-            remaining = stripped;
-        } else {
-            break;
+        if self.scanned_bytes > body.len() {
+            self.scanned_bytes = 0;
         }
+        while self.scanned_bytes < body.len() {
+            let remaining = &body[self.scanned_bytes..];
+            let Some((separator_index, separator_len)) =
+                provider_http_find_sse_block_separator(remaining)
+            else {
+                break;
+            };
+            let block_end = self.scanned_bytes + separator_index;
+            let Ok(block) = std::str::from_utf8(&body[self.scanned_bytes..block_end]) else {
+                self.scanned_bytes = block_end + separator_len;
+                continue;
+            };
+            self.scanned_bytes = block_end + separator_len;
+            if provider_sse_block_is_terminal(block) {
+                self.terminal_seen = true;
+                return true;
+            }
+        }
+        false
     }
-    false
+}
+
+/// Reports whether buffered SSE text already contains a terminal provider event.
+fn provider_http_body_has_terminal_sse_event(body: &[u8]) -> bool {
+    ProviderSseTerminalDetector::default().has_terminal_event(body)
 }
 
 /// Locates the next complete SSE block separator without allocating a
 /// normalized copy of the buffered provider body.
-fn provider_http_find_sse_block_separator(body: &str) -> Option<usize> {
-    let bytes = body.as_bytes();
+fn provider_http_find_sse_block_separator(body: &[u8]) -> Option<(usize, usize)> {
+    let bytes = body;
     let mut index = 0;
     while index + 1 < bytes.len() {
         match bytes[index] {
-            b'\n' if bytes[index + 1] == b'\n' => return Some(index),
+            b'\n' if bytes[index + 1] == b'\n' => return Some((index, 2)),
             b'\r'
                 if index + 3 < bytes.len()
                     && bytes[index + 1] == b'\n'
                     && bytes[index + 2] == b'\r'
                     && bytes[index + 3] == b'\n' =>
             {
-                return Some(index);
+                return Some((index, 4));
             }
             _ => index += 1,
         }
@@ -711,6 +732,33 @@ mod provider_transport_tests {
         assert!(!provider_http_body_has_terminal_sse_event(
             delimited_but_invalid.as_bytes()
         ));
+    }
+
+    /// Verifies terminal SSE detection keeps incremental progress across
+    /// provider chunks.
+    ///
+    /// Large agent responses can contain many small SSE delta events before a
+    /// terminal response event. The transport detector must not revisit already
+    /// completed event blocks after each chunk, because that makes long streams
+    /// quadratic and duplicates JSON parsing/allocation work.
+    #[test]
+    fn provider_transport_terminal_sse_detector_scans_completed_blocks_once() {
+        let mut detector = ProviderSseTerminalDetector::default();
+        let mut body = b"event: response.output_text.delta\n\
+            data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n"
+            .to_vec();
+
+        assert!(!detector.has_terminal_event(&body));
+        let scanned_after_first_event = detector.scanned_bytes;
+        assert_eq!(scanned_after_first_event, body.len());
+
+        body.extend_from_slice(b"event: response.completed\n");
+        assert!(!detector.has_terminal_event(&body));
+        assert_eq!(detector.scanned_bytes, scanned_after_first_event);
+
+        body.extend_from_slice(b"data: {\"type\":\"response.completed\"}\n\n");
+        assert!(detector.has_terminal_event(&body));
+        assert_eq!(detector.scanned_bytes, body.len());
     }
 
     /// Verifies terminal SSE detection accepts CRLF-delimited event blocks
