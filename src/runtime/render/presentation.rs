@@ -802,26 +802,18 @@ pub(super) fn markdown_rendered_line_is_table_row(line: &AgentRenderedLine) -> b
     line.kind.is_markdown_table()
 }
 
-/// Adds the synthetic visual frame row required above markdown blocks.
+/// Keeps rendered markdown rows in the ordinary assistant transcript flow.
+///
+/// Assistant `say` output should not synthesize an extra divider row before the
+/// rendered body, even when the body uses markdown presentation styling.
 pub(super) fn frame_agent_markdown_lines(
-    mut lines: Vec<AgentRenderedLine>,
-    display_width: usize,
+    lines: Vec<AgentRenderedLine>,
+    _display_width: usize,
 ) -> Vec<AgentRenderedLine> {
-    let prefix = "mez> ";
-    let prefix_width = UnicodeWidthStr::width(prefix);
-    let divider_width = display_width.saturating_sub(prefix_width).max(1);
-    let mut framed = Vec::with_capacity(lines.len().saturating_add(1));
-    framed.push(AgentRenderedLine {
-        display: format!("{prefix}{}", "─".repeat(divider_width)),
-        style_spans: Vec::new(),
-        copy_text: Some("***".to_string()),
-        kind: AgentRenderedLineKind::MarkdownFrame,
-    });
-    framed.append(&mut lines);
-    framed
+    lines
 }
 
-/// Builds copy text lines for a framed markdown block.
+/// Builds copy text lines for rendered markdown presentation.
 pub(super) fn markdown_block_copy_lines(
     rendered_lines: &[AgentRenderedLine],
     _body_rendered_count: usize,

@@ -64,17 +64,17 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         .unwrap();
 
     let copied = copy_mode.copy_selection().unwrap();
-    assert_eq!(copied, format!("***\n{markdown}"));
+    assert_eq!(copied, markdown);
     assert!(!copied.contains('│'), "{copied}");
 }
 
-/// Verifies rendered markdown blocks copy a synthetic frame row as `***`.
+/// Verifies rendered markdown blocks no longer copy a synthetic frame row.
 /// 
-/// The spec requires a visible divider above each rendered markdown block, but
-/// copy mode must preserve that frame as markdown thematic-break text instead
-/// of dropping it or copying the Unicode presentation rule.
+/// Markdown `say` output now stays in the ordinary assistant transcript flow
+/// without an extra divider line, so copy mode should preserve only the raw
+/// markdown source instead of inventing a thematic-break row.
 #[test]
-fn runtime_agent_markdown_copy_includes_synthetic_frame_row() {
+fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
@@ -98,30 +98,30 @@ fn runtime_agent_markdown_copy_includes_synthetic_frame_row() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains('─'), "{pane_text}");
+    assert!(!pane_text.contains('─'), "{pane_text}");
     let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    copy_mode.scroll_to_top();
     let visible_lines = copy_mode.visible_lines();
-    let last_visible_index = visible_lines
+    let heading_line_index = visible_lines
         .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .unwrap_or_else(|| visible_lines.len().saturating_sub(1));
-    let last_line = copy_mode.scroll_top().saturating_add(last_visible_index);
-    let last_column = visible_lines
-        .get(last_visible_index)
-        .map(|line| line.chars().count())
-        .unwrap_or_default();
+        .position(|line| line.contains("Heading"))
+        .unwrap();
+    let heading_line_width = visible_lines[heading_line_index].chars().count();
     copy_mode
         .select_range(
-            CopyPosition { line: 0, column: 0 },
             CopyPosition {
-                line: last_line,
-                column: last_column,
+                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                column: 0,
+            },
+            CopyPosition {
+                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                column: heading_line_width,
             },
         )
         .unwrap();
 
     let copied = copy_mode.copy_selection().unwrap();
-    assert_eq!(copied, "***\n# Heading");
+    assert_eq!(copied, "# Heading");
 }
 
 /// Verifies partial and continuation markdown selections preserve raw source.
@@ -133,11 +133,11 @@ fn runtime_agent_markdown_copy_includes_synthetic_frame_row() {
 fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line() {
     let mut service = test_runtime_service();
     service
-        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .attach_primary("primary", true, Size::new(24, 12).unwrap(), 120)
         .unwrap();
     service.pane_screens.insert(
         "%1".to_string(),
-        TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
+        TerminalScreen::new(Size::new(24, 12).unwrap(), 120).unwrap(),
     );
     let markdown = "# heading text that wraps";
 
@@ -150,10 +150,11 @@ fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line
         .unwrap();
 
     let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    copy_mode.scroll_to_top();
     let visible_lines = copy_mode.visible_lines();
     let heading_line_index = visible_lines
         .iter()
-        .position(|line| line.contains("mez> heading"))
+        .position(|line| line.contains("heading"))
         .unwrap();
     let continuation_line_index = visible_lines
         .iter()

@@ -4635,13 +4635,27 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
     assert!(
         styled_lines
             .iter()
-            .all(|line| line.text != expected_divider),
+            .all(|line| {
+                line.text != expected_divider
+                    && !line.text.contains("mez> ---------")
+                    && !line.text.contains("mez> ─")
+            }),
         "{styled_lines:?}"
     );
 
     let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
     let scroll_top = copy_mode.scroll_top();
     let visible_lines = copy_mode.visible_lines();
+    assert!(
+        visible_lines
+            .iter()
+            .all(|line| {
+                line != &expected_divider
+                    && !line.contains("mez> ---------")
+                    && !line.contains("mez> ─")
+            }),
+        "{visible_lines:?}"
+    );
     let first_line = visible_lines
         .iter()
         .position(|line| line.contains("mez> Important and underlined"))
