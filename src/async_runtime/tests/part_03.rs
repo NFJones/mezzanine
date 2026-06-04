@@ -3808,6 +3808,87 @@ async fn async_attached_terminal_service_does_not_flush_stale_pending_output_bef
     assert!(exit.commands_processed >= 7);
 }
 
+/// Verifies that output writability for an unsuperseded partial frame only
+/// flushes retained bytes and does not ask the actor to compose another frame.
+///
+/// Slow foreground clients can leave encoded bytes pending after the latest
+/// rendered frame. When no render invalidation is queued, the service should
+/// treat writable output as flush readiness rather than as a redraw trigger.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_service_flushes_idle_pending_output_without_redraw() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let write_count = StdArc::new(AtomicUsize::new(0));
+    let write_notify = StdArc::new(tokio::sync::Notify::new());
+    let pending_output_bytes = StdArc::new(AtomicUsize::new(0));
+    let flushes = StdArc::new(AtomicUsize::new(0));
+
+    let client = async {
+        let service_handle = handle.clone();
+        let service_primary = primary.clone();
+        let service_write_count = write_count.clone();
+        let service_write_notify = write_notify.clone();
+        let service_pending_output_bytes = pending_output_bytes.clone();
+        let service_flushes = flushes.clone();
+        let service_task = tokio::spawn(async move {
+            let mut io = SupersedablePendingOutputIo::new(
+                service_write_count,
+                service_write_notify,
+                service_pending_output_bytes,
+                service_flushes,
+            );
+            run_async_attached_terminal_client_service(
+                &service_handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Primary,
+                    client_id: service_primary.clone(),
+                    primary_client_id: Some(service_primary),
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
+                },
+                AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+                |_| Ok(None),
+            )
+            .await
+        });
+
+        write_notify.notified().await;
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+        pending_output_bytes.store(1024, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+
+        let report = tokio::time::timeout(Duration::from_millis(1), service_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.batches, 2);
+        assert_eq!(report.loop_report.output_frames, 1);
+        assert_eq!(report.loop_report.partial_writes, 1);
+        assert_eq!(write_count.load(Ordering::SeqCst), 1);
+        assert_eq!(flushes.load(Ordering::SeqCst), 1);
+        assert_eq!(pending_output_bytes.load(Ordering::SeqCst), 1024);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.render_client_frame_requests, 1);
+    assert!(exit.commands_processed >= 5);
+}
+
 /// Verifies that a closed foreground terminal output endpoint is treated as a
 /// normal hangup instead of bubbling a `BrokenPipe` I/O error to the top-level
 /// CLI error handler during clean primary shutdown or terminal teardown.

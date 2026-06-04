@@ -11,7 +11,8 @@ use super::{
     AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
     AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
     AttachedTerminalFdRole, ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
-    MezError, MouseAction, Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
+    DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction, Result,
+    RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
     RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, TerminalClientLoopAction,
     empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
@@ -210,6 +211,7 @@ where
         )
         .await?;
         render_requested = false;
+        let pending_output_flush = matches!(wake, AttachedTerminalBatchWake::PendingOutputFlush);
         let size_check_only = matches!(
             wake,
             AttachedTerminalBatchWake::TerminalSizeCheck | AttachedTerminalBatchWake::StateChanged
@@ -219,6 +221,7 @@ where
                 readiness,
                 invalidate_output_frame,
             } => (readiness, invalidate_output_frame),
+            AttachedTerminalBatchWake::PendingOutputFlush => (Vec::new(), false),
             AttachedTerminalBatchWake::TerminalSizeCheck
             | AttachedTerminalBatchWake::StateChanged => (Vec::new(), false),
         };
@@ -242,6 +245,26 @@ where
             resized_this_batch = true;
         }
         if size_check_only && !resized_this_batch {
+            continue;
+        }
+        if pending_output_flush && !resized_this_batch {
+            let flush = io
+                .flush_pending_output(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES)
+                .await?;
+            report.batches = report.batches.saturating_add(1);
+            report.loop_report.bytes_written = report
+                .loop_report
+                .bytes_written
+                .saturating_add(flush.bytes_written);
+            report.loop_report.pending_output_bytes = flush.pending_bytes;
+            if flush.is_partial() {
+                report.loop_report.partial_writes =
+                    report.loop_report.partial_writes.saturating_add(1);
+            } else if flush.bytes_written > 0 {
+                report.loop_report.output_frames =
+                    report.loop_report.output_frames.saturating_add(1);
+                render_limiter.mark_flushed();
+            }
             continue;
         }
         if resized_this_batch {
@@ -455,6 +478,12 @@ enum AttachedTerminalBatchWake {
         /// Whether retained differential output must be discarded first.
         invalidate_output_frame: bool,
     },
+    /// Wake only to flush retained bytes from an already-composed output frame.
+    ///
+    /// This keeps terminal write readiness separate from render invalidation so
+    /// slow clients can complete an unsuperseded partial frame without asking
+    /// the runtime actor to compose a new view.
+    PendingOutputFlush,
     /// Wake only to compare the attached terminal's current dimensions.
     ///
     /// This lets foreground clients notice terminal-emulator resize or zoom
@@ -552,10 +581,31 @@ where
         }
 
         if io.pending_output_bytes() > 0 {
-            return Ok(AttachedTerminalBatchWake::Readiness {
-                readiness: io.poll_readiness().await?,
-                invalidate_output_frame: false,
-            });
+            let mut readiness = io.poll_readiness().await?;
+            if readiness
+                .iter()
+                .any(attached_terminal_readiness_is_readable_input_or_control)
+            {
+                ensure_output_readiness(&mut readiness);
+                return Ok(AttachedTerminalBatchWake::Readiness {
+                    readiness,
+                    invalidate_output_frame: false,
+                });
+            }
+            if readiness.iter().any(|ready| {
+                ready.role == AttachedTerminalFdRole::Output && (ready.hangup || ready.error)
+            }) {
+                return Ok(AttachedTerminalBatchWake::Readiness {
+                    readiness,
+                    invalidate_output_frame: false,
+                });
+            }
+            if readiness
+                .iter()
+                .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable)
+            {
+                return Ok(AttachedTerminalBatchWake::PendingOutputFlush);
+            }
         }
 
         tokio::select! {
