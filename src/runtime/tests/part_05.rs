@@ -2968,6 +2968,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"/resume\r".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2984,6 +2985,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -3129,6 +3131,7 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"/resume\r".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -3152,6 +3155,7 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),

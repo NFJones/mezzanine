@@ -3795,6 +3795,7 @@ impl RuntimeSessionService {
         let step = AttachedTerminalClientStepPlan {
             actions,
             output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
             input_hangup: false,
             output_hangup: false,
             error_roles: Vec::new(),

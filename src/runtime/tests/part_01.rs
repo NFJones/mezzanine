@@ -3987,6 +3987,7 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -4029,6 +4030,7 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(input.clone())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),

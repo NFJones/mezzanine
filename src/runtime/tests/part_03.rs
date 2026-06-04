@@ -24,6 +24,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"help\r".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -43,6 +44,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
                     b"list-buffers\r".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -71,6 +73,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x12".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -87,6 +90,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -128,6 +132,7 @@ fn runtime_primary_command_prompt_mcp_retry_autocompletes_configured_server_id()
                     TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
                 ],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -170,6 +175,7 @@ fn runtime_primary_command_prompt_escape_cancels_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x12".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -191,6 +197,7 @@ fn runtime_primary_command_prompt_escape_cancels_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -229,6 +236,7 @@ fn runtime_primary_command_prompt_accepts_encoded_ctrl_r_history_search() {
                     b"\x1b[114;5u".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -281,6 +289,7 @@ fn runtime_primary_error_overlay_dismisses_on_any_input() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -312,6 +321,7 @@ fn runtime_destructive_prefix_prompts_include_explicit_force() {
             TerminalClientLoopAction::ExecuteMux(MuxAction::KillPaneAfterConfirmation),
         ],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -371,6 +381,7 @@ fn runtime_applies_default_prefix_mux_actions() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ExecuteMux(MuxAction::CyclePane)],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -396,6 +407,7 @@ fn runtime_applies_default_prefix_mux_actions() {
             TerminalClientLoopAction::ExecuteMux(MuxAction::SwapPanePrevious),
         ],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -498,6 +510,7 @@ fn runtime_keyboard_focus_pane_requests_diff_redraw() {
                     PaneFocusDirection::Down,
                 ))],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -547,6 +560,7 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
                     MouseAction::FocusPaneOnly(CopyPosition { line: 4, column: 0 }),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -590,6 +604,7 @@ fn runtime_double_click_copies_readline_word_under_pointer() {
                         CopyPosition { line: 0, column: 7 },
                     ))],
                     output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
                     input_hangup: false,
                     output_hangup: false,
                     error_roles: Vec::new(),
@@ -652,6 +667,7 @@ fn runtime_attached_mux_action_toggles_agent_shell_state() {
             MuxAction::ToggleAgentShell,
         )],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -701,6 +717,7 @@ fn runtime_agent_shell_toggle_syncs_process_size_with_reserved_prompt_rows() {
             MuxAction::ToggleAgentShell,
         )],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -766,6 +783,7 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
             b"summarize\nmore\r".to_vec(),
         )],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -847,6 +865,7 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
     let step = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -919,6 +938,7 @@ fn runtime_agent_prompt_displays_over_height_paste_as_compact_block() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -985,6 +1005,7 @@ fn runtime_agent_prompt_preserves_large_split_paste_beyond_visible_area() {
                 &AttachedTerminalClientStepPlan {
                     actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
                     output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
                     input_hangup: false,
                     output_hangup: false,
                     error_roles: Vec::new(),
@@ -1048,6 +1069,7 @@ fn runtime_agent_prompt_accepts_encoded_ctrl_r_history_search() {
                     b"\x1b[27;5;114~".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1087,6 +1109,7 @@ fn runtime_agent_prompt_escape_clears_input_without_hiding_shell() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1108,6 +1131,7 @@ fn runtime_agent_prompt_escape_clears_input_without_hiding_shell() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"next".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1152,6 +1176,7 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x12".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1173,6 +1198,7 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1230,6 +1256,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1249,6 +1276,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[B".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1264,6 +1292,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1276,6 +1305,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1326,6 +1356,7 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1378,6 +1409,7 @@ fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
                     b"\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1442,6 +1474,7 @@ fn runtime_agent_prompt_height_resize_is_pane_local() {
                     b"alpha beta gamma delta".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1506,6 +1539,7 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1bOA".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1562,6 +1596,7 @@ fn runtime_agent_prompt_up_moves_within_multiline_draft_before_history() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -1603,6 +1638,7 @@ fn runtime_agent_prompt_allows_navigation_and_other_pane_input() {
             TerminalClientLoopAction::ForwardToPane(input.clone()),
         ],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -1645,6 +1681,7 @@ fn runtime_attached_agent_prompt_logs_invalid_state_errors_non_modally() {
     let step = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::ForwardToPane(b"/stop\r".to_vec())],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -1908,6 +1945,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x04".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2018,6 +2056,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x04".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2256,6 +2295,7 @@ fn runtime_agent_prompt_escape_preserves_running_turn() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2308,6 +2348,7 @@ fn runtime_agent_prompt_ctrl_c_interrupts_running_turn() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x03".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2355,6 +2396,7 @@ fn runtime_agent_prompt_escape_keeps_empty_idle_shell_visible() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2394,6 +2436,7 @@ fn runtime_agent_prompt_ctrl_c_requires_second_press_when_idle() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x03".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2426,6 +2469,7 @@ fn runtime_agent_prompt_ctrl_c_requires_second_press_when_idle() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x03".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2465,6 +2509,7 @@ fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
                     b"draft text".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2489,6 +2534,7 @@ fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x03".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2515,6 +2561,7 @@ fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x03".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2563,6 +2610,7 @@ fn runtime_agent_shell_exit_pending_blocks_foreground_input() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"leak\r".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2613,6 +2661,7 @@ fn runtime_agent_prompt_ctrl_l_clears_pane_buffer() {
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x0c".to_vec())],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2677,6 +2726,7 @@ fn runtime_agent_prompt_resume_autocompletes_saved_session_uuid() {
                     TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
                 ],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2739,6 +2789,7 @@ fn runtime_agent_prompt_personality_autocompletes_configured_profile() {
                     TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
                 ],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2793,6 +2844,7 @@ fn runtime_agent_prompt_list_mcp_autocompletes_configured_server_id() {
                     TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
                 ],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),
@@ -2955,6 +3007,7 @@ fn runtime_control_dispatches_agent_shell_command_for_visible_shell() {
             MuxAction::ToggleAgentShell,
         )],
         output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
         input_hangup: false,
         output_hangup: false,
         error_roles: Vec::new(),
@@ -3965,6 +4018,7 @@ fn runtime_agent_shell_single_line_display_logs_to_pane_without_overlay() {
                     b"/approval\r".to_vec(),
                 )],
                 output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
                 input_hangup: false,
                 output_hangup: false,
                 error_roles: Vec::new(),

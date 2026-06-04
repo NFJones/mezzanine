@@ -2078,6 +2078,12 @@ fn attached_terminal_client_step_routes_input_and_composes_output() {
     );
     assert_eq!(plan.output_lines.len(), 3);
     assert_eq!(plan.output_lines[2], "ready       ");
+    assert_eq!(plan.output_line_style_spans.len(), 3);
+    assert!(plan.output_line_style_spans[0].is_empty());
+    assert!(plan.output_line_style_spans[1].is_empty());
+    assert_eq!(plan.output_line_style_spans[2].len(), 1);
+    assert_eq!(plan.output_line_style_spans[2][0].start, 0);
+    assert_eq!(plan.output_line_style_spans[2][0].length, 12);
     assert!(!plan.input_hangup);
     assert!(plan.error_roles.is_empty());
 }

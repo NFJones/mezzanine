@@ -1887,6 +1887,7 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
                 MuxAction::SplitPaneVertical,
             )],
             output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
             input_hangup: false,
             output_hangup: false,
             error_roles: Vec::new(),
@@ -1938,6 +1939,7 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
         let step = AttachedTerminalClientStepPlan {
             actions: vec![TerminalClientLoopAction::ForwardToPane(b"hello\n".to_vec())],
             output_lines: Vec::new(),
+            output_line_style_spans: Vec::new(),
             input_hangup: false,
             output_hangup: false,
             error_roles: Vec::new(),

@@ -461,6 +461,11 @@ pub struct AttachedTerminalClientStepPlan {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub output_lines: Vec<String>,
+    /// Stores the output line style spans value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub output_line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Stores the input hangup value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1185,6 +1190,7 @@ fn normalized_style_span_rows(
 /// previews can match rows already visible in an unfocused pane, and reusing
 /// those render-owned spans can apply hidden or overlay attributes to unrelated
 /// output.
+#[cfg(test)]
 pub(crate) fn compose_terminal_output_style_spans(
     output_lines: &[String],
     rendered: Option<&(RenderedClientView, Option<ClientStatusLine>)>,
@@ -2736,16 +2742,17 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
         ));
     }
 
-    let output_lines = if output_writable {
-        view.map(|view| compose_client_presentation_with_styles(view, status).0)
+    let (output_lines, output_line_style_spans) = if output_writable {
+        view.map(|view| compose_client_presentation_with_styles(view, status))
             .unwrap_or_default()
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
     Ok(AttachedTerminalClientStepPlan {
         actions,
         output_lines,
+        output_line_style_spans,
         input_hangup,
         output_hangup,
         error_roles,
@@ -2851,7 +2858,7 @@ where
                     .bytes_written
                     .saturating_add(io.write_styled_output_with_modes(
                         &step.output_lines,
-                        &compose_terminal_output_style_spans(&step.output_lines, rendered.as_ref()),
+                        &step.output_line_style_spans,
                         output_modes,
                     )?);
             report.output_frames = report.output_frames.saturating_add(1);
