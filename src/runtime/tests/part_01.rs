@@ -166,6 +166,35 @@ fn test_runtime_service_with_size(size: Size) -> RuntimeSessionService {
     RuntimeServiceFixture::new().size(size).build()
 }
 
+/// Verifies recent message-log detail rows wrap to the pane width with an
+/// indented continuation row.
+///
+/// The `show-messages` command renders diagnostics and lifecycle events in a
+/// modal display. Long payloads should stay readable in narrow panes instead
+/// of depending on host-terminal soft wrapping, and continuation rows should be
+/// visually tied to the original log line.
+#[test]
+fn runtime_show_messages_wraps_logged_rows_with_indented_continuations() {
+    let mut service = test_runtime_service_with_size(Size::new(48, 24).unwrap());
+    service
+        .append_runtime_diagnostic_event(
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu".to_string(),
+        )
+        .unwrap();
+
+    let body = super::commands_support::runtime_show_messages_display(&service);
+    let detail_lines = body.lines().skip(1).collect::<Vec<_>>();
+
+    assert!(
+        detail_lines.iter().any(|line| line.starts_with("    ")),
+        "expected an indented continuation row in {body:?}"
+    );
+    assert!(
+        detail_lines.iter().all(|line| UnicodeWidthStr::width(*line) <= 48),
+        "message rows should fit the pane width: {body:?}"
+    );
+}
+
 /// Resolves a bash binary for tests that need to exercise interactive bash
 /// parent-shell behavior rather than the fallback POSIX shell.
 fn bash_path_for_tests() -> Option<PathBuf> {

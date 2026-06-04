@@ -35,7 +35,7 @@ use crate::command::SnapshotResumeSelector;
 use crate::control::ControlConnectionState;
 use crate::layout::SplitDirection;
 use crate::snapshot::{SnapshotRepository, SnapshotState};
-use crate::terminal::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES};
+use crate::terminal::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES, wrap_agent_log_lines};
 use std::collections::BTreeMap;
 
 pub(super) use keybindings::*;
@@ -2161,6 +2161,7 @@ pub(super) fn runtime_choose_buffer_display(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_show_messages_display(service: &RuntimeSessionService) -> String {
+    let terminal_width = service.session.authoritative_size.columns;
     let pending_observers = service
         .session
         .observers()
@@ -2217,6 +2218,7 @@ pub(super) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
             0,
             "source=runtime-event-log status=unavailable",
             &summary,
+            terminal_width,
             status_lines,
         );
     };
@@ -2226,6 +2228,7 @@ pub(super) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
             0,
             "source=runtime-event-log status=empty",
             &summary,
+            terminal_width,
             status_lines,
         );
     }
@@ -2250,7 +2253,13 @@ pub(super) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
             })
             .collect::<Vec<_>>(),
     );
-    runtime_show_messages_body(events.len(), "source=runtime-event-log", &summary, lines)
+    runtime_show_messages_body(
+        events.len(),
+        "source=runtime-event-log",
+        &summary,
+        terminal_width,
+        lines,
+    )
 }
 /// Formats one runtime histogram summary and bucket listing for pager output.
 fn runtime_metrics_histogram_lines(
@@ -2703,14 +2712,43 @@ fn runtime_show_messages_body(
     messages: usize,
     status: &str,
     summary: &str,
+    terminal_width: u16,
     lines: Vec<String>,
 ) -> String {
     let header = format!("messages={messages} {status} {summary}");
     if lines.is_empty() {
         header
     } else {
-        format!("{header}\n{}", lines.join("\n"))
+        let wrapped = wrap_show_messages_lines(&lines, terminal_width);
+        format!("{header}\n{}", wrapped.join("\n"))
     }
+}
+
+/// Wraps message-log detail rows to the configured terminal width.
+///
+/// The first physical row keeps the normal message text. Continuation rows are
+/// indented by four spaces so long log entries remain readable without losing
+/// their association with the preceding row.
+fn wrap_show_messages_lines(lines: &[String], terminal_width: u16) -> Vec<String> {
+    lines
+        .iter()
+        .flat_map(|line| {
+            let continuation_width = terminal_width.saturating_sub(4).max(1);
+            wrap_agent_log_lines(std::slice::from_ref(line), terminal_width)
+                .into_iter()
+                .enumerate()
+                .flat_map(move |(index, wrapped)| {
+                    if index == 0 {
+                        vec![wrapped]
+                    } else {
+                        wrap_agent_log_lines(std::slice::from_ref(&wrapped), continuation_width)
+                            .into_iter()
+                            .map(|continued| format!("    {continued}"))
+                            .collect::<Vec<_>>()
+                    }
+                })
+        })
+        .collect()
 }
 
 /// on duplicated control-flow logic.
