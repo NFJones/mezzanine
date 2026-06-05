@@ -1447,7 +1447,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_tools: &available_mcp_tools,
             };
             let execution = runner
-                .run_turn_async(&mut ledger, turn.clone(), context)
+                .run_turn_async_ref(&mut ledger, turn.clone(), &context)
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1466,7 +1466,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_tools: &available_mcp_tools,
             };
             let execution = runner
-                .run_turn_async(&mut ledger, turn.clone(), context)
+                .run_turn_async_ref(&mut ledger, turn.clone(), &context)
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1485,7 +1485,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_tools: &available_mcp_tools,
             };
             let execution = runner
-                .run_turn_async(&mut ledger, turn.clone(), context)
+                .run_turn_async_ref(&mut ledger, turn.clone(), &context)
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;

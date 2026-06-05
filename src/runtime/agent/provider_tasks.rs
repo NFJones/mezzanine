@@ -304,11 +304,6 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let context = self
-            .agent_turn_contexts
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let available_mcp_servers = mcp_summary
             .available_tools
             .iter()

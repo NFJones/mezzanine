@@ -74,11 +74,6 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let context = self
-            .agent_turn_contexts
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let available_mcp_servers = mcp_summary
             .available_tools
             .iter()
@@ -162,7 +157,7 @@ impl RuntimeSessionService {
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
             };
-            match runner.run_turn(&mut provider_ledger, turn.clone(), provider_context.clone()) {
+            match runner.run_turn_ref(&mut provider_ledger, turn.clone(), &provider_context) {
                 Ok(execution) => break execution,
                 Err(error) => {
                     self.append_agent_trace_provider_error(
@@ -339,11 +334,6 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let context = self
-            .agent_turn_contexts
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let available_mcp_servers = mcp_summary
             .available_tools
             .iter()
@@ -395,7 +385,7 @@ impl RuntimeSessionService {
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
             };
-            match runner.run_turn(&mut provider_ledger, turn.clone(), provider_context.clone()) {
+            match runner.run_turn_ref(&mut provider_ledger, turn.clone(), &provider_context) {
                 Ok(execution) => break execution,
                 Err(error) => {
                     self.append_agent_trace_provider_error(

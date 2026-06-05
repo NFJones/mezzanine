@@ -84,8 +84,21 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: AgentContext,
     ) -> Result<AgentTurnExecution> {
+        self.run_turn_ref(ledger, turn, &context)
+    }
+
+    /// Executes the `run_turn` operation with a borrowed context.
+    ///
+    /// Callers that keep large active-turn contexts in runtime storage can
+    /// avoid cloning those blocks before request assembly.
+    pub fn run_turn_ref(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+    ) -> Result<AgentTurnExecution> {
         ledger.start_turn(turn.clone())?;
-        let mut request = assemble_model_request(&self.model_profile, &turn, &context)?;
+        let mut request = assemble_model_request(&self.model_profile, &turn, context)?;
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
@@ -422,8 +435,21 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: AgentContext,
     ) -> Result<AgentTurnExecution> {
+        self.run_turn_async_ref(ledger, turn, &context).await
+    }
+
+    /// Executes the `run_turn_async` operation with a borrowed context.
+    ///
+    /// Provider workers use this entry point so queued dispatches do not clone
+    /// large prompt contexts again immediately before request assembly.
+    pub async fn run_turn_async_ref(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+    ) -> Result<AgentTurnExecution> {
         ledger.start_turn(turn.clone())?;
-        let mut request = assemble_model_request(&self.model_profile, &turn, &context)?;
+        let mut request = assemble_model_request(&self.model_profile, &turn, context)?;
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
