@@ -81,8 +81,9 @@ use style::{
     push_or_extend_style_span,
 };
 pub(crate) use text::{
-    agent_log_wrap_width, overlay_fixed_column_style_spans, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
+    TerminalEmojiWidth, agent_log_wrap_width, overlay_fixed_column_style_spans,
+    set_terminal_emoji_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    wrap_agent_log_lines,
 };
 pub(super) use text::{
     char_count, line_slice, normalize_selection, search_backward, search_forward,

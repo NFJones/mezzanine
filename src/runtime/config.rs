@@ -31,6 +31,7 @@ use super::{
     unix_seconds_to_rfc3339, valid_color_alias_name, validate_config_text,
 };
 use crate::agent::effective_provider_api;
+use crate::terminal::TerminalEmojiWidth;
 
 // Runtime config parsing and project trust helpers.
 
@@ -1320,6 +1321,27 @@ pub(super) fn runtime_terminal_cursor_blink_interval_ms_from_config(root: &Value
         ));
     }
     Ok(interval)
+}
+
+/// Returns the configured emoji status-glyph width policy for terminal
+/// measurement.
+pub(super) fn runtime_terminal_emoji_width_from_config(root: &Value) -> Result<TerminalEmojiWidth> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(TerminalEmojiWidth::Wide);
+    };
+    let Some(value) = terminal.get("emoji_width") else {
+        return Ok(TerminalEmojiWidth::Wide);
+    };
+    let Some(emoji_width) = runtime_json_string(Some(value)) else {
+        return Err(MezError::config("terminal.emoji_width must be a string"));
+    };
+    match emoji_width {
+        "wide" => Ok(TerminalEmojiWidth::Wide),
+        "narrow" => Ok(TerminalEmojiWidth::Narrow),
+        _ => Err(MezError::config(
+            "terminal.emoji_width must be wide or narrow",
+        )),
+    }
 }
 
 /// Runs the runtime terminal resize debounce ms from config operation for this subsystem.
@@ -3702,9 +3724,9 @@ pub(super) fn optional_i32_json(value: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::terminal_text_width;
+    use crate::terminal::{TerminalEmojiWidth, terminal_text_width};
 
-    use super::runtime_fit_status_line;
+    use super::{runtime_fit_status_line, runtime_terminal_emoji_width_from_config};
 
     /// Verifies that fitting ASCII text truncates to the requested display width.
     #[test]
@@ -3738,6 +3760,35 @@ mod tests {
     fn fits_zero_width_returns_empty() {
         assert_eq!(runtime_fit_status_line("hello", 0), "");
         assert_eq!(runtime_fit_status_line("ＡＢ", 0), "");
+    }
+
+    /// Verifies that runtime configuration parses the terminal emoji-width
+    /// compatibility policy and rejects unsupported values. This protects the
+    /// pane renderer from silently falling back to the wrong width model when a
+    /// user opts into one-cell text fallback status glyphs.
+    #[test]
+    fn parses_terminal_emoji_width_policy_from_config() {
+        assert_eq!(
+            runtime_terminal_emoji_width_from_config(&serde_json::json!({
+                "terminal": {
+                    "emoji_width": "narrow"
+                }
+            }))
+            .unwrap(),
+            TerminalEmojiWidth::Narrow
+        );
+        assert_eq!(
+            runtime_terminal_emoji_width_from_config(&serde_json::json!({})).unwrap(),
+            TerminalEmojiWidth::Wide
+        );
+        assert!(
+            runtime_terminal_emoji_width_from_config(&serde_json::json!({
+                "terminal": {
+                    "emoji_width": "auto"
+                }
+            }))
+            .is_err()
+        );
     }
 
     /// Verifies that narrow characters pad to the exact display width while

@@ -353,6 +353,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "focus_events",
     "nested_multiplexer",
     "passthrough",
+    "emoji_width",
     "reduced_motion",
     "resize_debounce_ms",
     "render_rate_limit_fps",

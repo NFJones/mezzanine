@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `8`. On launch, Mezzanine migrates an
+The current config schema version is `10`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -60,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `8` | Config schema version. Do not change this. |
+| `version` | integer | `10` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -112,6 +112,7 @@ entry is shown.
 | `terminal.focus_events` | boolean | `true` | Enable focus event reporting when supported. |
 | `terminal.nested_multiplexer` | string | `"auto"` | Nested multiplexer handling mode. |
 | `terminal.passthrough` | boolean | `false` | Allow broader terminal passthrough behavior when configured. |
+| `terminal.emoji_width` | string | `"wide"` | Emoji status-glyph width policy: `wide` for two-cell emoji renderers, `narrow` for one-cell text fallback terminals. |
 | `terminal.reduced_motion` | boolean | `false` | Disable optional frame/status animations. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
 | `terminal.render_rate_limit_fps` | integer | `5` | Maximum burst render frames per second; `0` disables render rate limiting. |

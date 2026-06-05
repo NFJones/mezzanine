@@ -735,7 +735,8 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 9"));
+    assert!(plan.text.contains("version = 10"));
+    assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(
         plan.text
             .contains("provider_refresh_leeway_seconds = 86400")
@@ -788,7 +789,11 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"9".to_string()));
+    assert_eq!(values.get("version"), Some(&"10".to_string()));
+    assert_eq!(
+        values.get("terminal.emoji_width"),
+        Some(&"wide".to_string())
+    );
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"86400".to_string())
@@ -861,7 +866,11 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"9".to_string()));
+    assert_eq!(values.get("version"), Some(&"10".to_string()));
+    assert_eq!(
+        values.get("terminal.emoji_width"),
+        Some(&"wide".to_string())
+    );
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"86400".to_string())
@@ -905,7 +914,11 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"9".to_string()));
+    assert_eq!(values.get("version"), Some(&"10".to_string()));
+    assert_eq!(
+        values.get("terminal.emoji_width"),
+        Some(&"wide".to_string())
+    );
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"86400".to_string())
@@ -917,6 +930,37 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
     assert_eq!(
         values.get("model_profiles.deepseek-fast.context_window_tokens"),
         Some(&"1000000".to_string())
+    );
+}
+
+/// Verifies that the v10 terminal emoji-width migration backfills the new
+/// default without overriding an explicit user-selected narrow fallback. This
+/// keeps existing users on the default wide policy while preserving deliberate
+/// terminal/font compatibility choices.
+#[test]
+fn migrates_terminal_emoji_width_default_to_current_schema() {
+    let missing = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 9\n[terminal]\nterm = \"screen-256color\"\n",
+    )
+    .unwrap();
+    let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
+    assert_eq!(missing_values.get("version"), Some(&"10".to_string()));
+    assert_eq!(
+        missing_values.get("terminal.emoji_width"),
+        Some(&"wide".to_string())
+    );
+
+    let explicit = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 9\n[terminal]\nemoji_width = \"narrow\"\n",
+    )
+    .unwrap();
+    let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
+    assert_eq!(explicit_values.get("version"), Some(&"10".to_string()));
+    assert_eq!(
+        explicit_values.get("terminal.emoji_width"),
+        Some(&"narrow".to_string())
     );
 }
 
@@ -1647,7 +1691,7 @@ fn rejects_invalid_terminal_term_and_profile_values() {
 fn rejects_invalid_terminal_presentation_values() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nreduced_motion = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
+        "[terminal]\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nreduced_motion = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
         ConfigScope::Primary,
     );
 
@@ -1663,6 +1707,10 @@ fn rejects_invalid_terminal_presentation_values() {
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.reduced_motion"
             && diagnostic.message == "terminal.reduced_motion must be true or false"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "terminal.emoji_width"
+            && diagnostic.message == "terminal.emoji_width must be wide or narrow"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.cursor_blink_interval_ms"

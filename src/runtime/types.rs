@@ -29,7 +29,7 @@ use super::{
 use crate::error::MezErrorKind;
 use crate::mcp::McpPromptTool;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
-use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalStyleSpan};
+use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth, TerminalStyleSpan};
 use secrecy::ExposeSecret;
 use tokio::io::AsyncWriteExt;
 
@@ -3812,6 +3812,11 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) terminal_cursor_blink_interval_ms: u64,
+    /// Stores the terminal emoji status-glyph width policy value.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) terminal_emoji_width: TerminalEmojiWidth,
     /// Stores the terminal resize debounce ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -1110,6 +1110,19 @@ placement MUST NOT apply a separate font-specific glyph-width heuristic that
 can disagree with the screen model and shift the visible cursor away from that
 next-input cell.
 
+The active terminal compatibility settings MUST select a single emoji
+status-glyph width policy shared by terminal screen storage, pane/window
+composition, attached-client differential redraws, prompt fitting, and copy-mode
+coordinate calculation. The default policy MUST measure emoji-presentation
+status glyphs with the Unicode terminal width expected by two-cell emoji
+renderers. A documented narrow policy MUST be available for host terminals or
+font stacks that render simple emoji/text status glyphs such as `✅`, `⚠️`, and
+`✔️` through one-cell monochrome text fallback fonts. The narrow policy MUST
+measure simple text-fallback status glyph scalars and their text/emoji
+variation-selector sequences as one display cell while preserving the normal
+two-cell width of complex emoji clusters such as regional-indicator flags,
+skin-tone modifier sequences, and ZWJ emoji.
+
 The default terminal compatibility profile MUST target xterm-compatible
 behavior.
 
@@ -2327,7 +2340,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 8 is the current configuration schema version for this
+schema version 10 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2356,9 +2369,14 @@ creation.
 The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
-`passthrough`, `reduced_motion`, `resize_debounce_ms`,
+`passthrough`, `emoji_width`, `reduced_motion`, `resize_debounce_ms`,
 `render_rate_limit_fps`, `cursor_style`, `cursor_blink`, and
 `cursor_blink_interval_ms`.
+
+`terminal.emoji_width` MUST default to `wide`. It MUST accept `wide` and
+`narrow`. `wide` MUST preserve the default Unicode emoji-presentation width
+behavior. `narrow` MUST select the one-cell text-fallback status-glyph policy
+defined by the active terminal compatibility settings.
 
 `terminal.reduced_motion` MUST default to false. When true, optional
 frame/status animations MUST render as static UI while preserving the same
@@ -2379,6 +2397,9 @@ The version 1 to version 2 primary-config migration MUST treat
 `terminal.nested_multiplexer`. When both keys are present, the canonical
 `terminal.nested_multiplexer` setting MUST take precedence and the alias MUST
 be removed before layer composition.
+
+The version 9 to version 10 primary-config migration MUST add
+`terminal.emoji_width = "wide"` when absent.
 
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with

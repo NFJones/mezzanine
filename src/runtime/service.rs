@@ -55,7 +55,8 @@ use super::{
     runtime_subagent_wait_policy_from_config, runtime_terminal_clipboard_from_config,
     runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
-    runtime_terminal_cursor_style_from_config, runtime_terminal_reduced_motion_from_config,
+    runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
+    runtime_terminal_reduced_motion_from_config,
     runtime_terminal_render_rate_limit_fps_from_config,
     runtime_terminal_resize_debounce_ms_from_config, runtime_terminal_term_from_config,
     runtime_ui_theme_from_config, runtime_window_frame_position_from_config,
@@ -191,6 +192,8 @@ impl RuntimeSessionService {
             .iter()
             .map(|window| (window.id.to_string(), created_at_unix_seconds))
             .collect::<BTreeMap<_, _>>();
+        let terminal_emoji_width = crate::terminal::TerminalEmojiWidth::Wide;
+        crate::terminal::set_terminal_emoji_width(terminal_emoji_width);
         Ok(Self {
             session,
             window_created_at_unix_seconds,
@@ -263,6 +266,7 @@ impl RuntimeSessionService {
             terminal_cursor_style: crate::terminal::TerminalCursorStyle::Block,
             terminal_cursor_blink: false,
             terminal_cursor_blink_interval_ms: 500,
+            terminal_emoji_width,
             terminal_resize_debounce_ms: 200,
             terminal_render_rate_limit_fps: 5,
             terminal_reduced_motion: false,
@@ -727,6 +731,7 @@ impl RuntimeSessionService {
         let terminal_cursor_blink = runtime_terminal_cursor_blink_from_config(&structured)?;
         let terminal_cursor_blink_interval_ms =
             runtime_terminal_cursor_blink_interval_ms_from_config(&structured)?;
+        let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
         let terminal_resize_debounce_ms =
             runtime_terminal_resize_debounce_ms_from_config(&structured)?;
         let terminal_render_rate_limit_fps =
@@ -762,6 +767,8 @@ impl RuntimeSessionService {
         self.terminal_cursor_style = terminal_cursor_style;
         self.terminal_cursor_blink = terminal_cursor_blink;
         self.terminal_cursor_blink_interval_ms = terminal_cursor_blink_interval_ms;
+        self.terminal_emoji_width = terminal_emoji_width;
+        crate::terminal::set_terminal_emoji_width(terminal_emoji_width);
         self.terminal_resize_debounce_ms = terminal_resize_debounce_ms;
         self.terminal_render_rate_limit_fps = terminal_render_rate_limit_fps;
         self.terminal_reduced_motion = terminal_reduced_motion;

@@ -84,6 +84,7 @@ Contributing in this repository? See [Contributor Notes](#contributor-notes).
   - [Does the agent automatically see my terminal screen?](#does-the-agent-automatically-see-my-terminal-screen)
   - [Where should API keys go?](#where-should-api-keys-go)
   - [Can I configure a different shell executable?](#can-i-configure-a-different-shell-executable)
+  - [Why do status glyphs shift pane text?](#why-do-status-glyphs-shift-pane-text)
   - [How do project instructions work?](#how-do-project-instructions-work)
   - [How do project config overlays become trusted?](#how-do-project-config-overlays-become-trusted)
   - [What happens when a command needs approval?](#what-happens-when-a-command-needs-approval)
@@ -528,6 +529,14 @@ secret material in config files.
 No. Mezzanine resolves the shell from `$SHELL` when it is absolute and
 executable, otherwise from `/bin/sh`. Config may adjust shell mode and
 environment, but not the executable path.
+
+### Why do status glyphs shift pane text?
+
+Some host terminals render emoji-presentation status glyphs through one-cell
+text fallback fonts instead of two-cell emoji fonts. Set
+`terminal.emoji_width = "narrow"` when your terminal/font stack uses that
+fallback; keep the default `"wide"` for terminals that render those glyphs as
+two-cell emoji.
 
 ### How do project instructions work?
 

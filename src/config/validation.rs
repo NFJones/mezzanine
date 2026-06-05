@@ -480,6 +480,13 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 Some("terminal.cursor_style must be block, underline, or bar".to_string())
             }
         }
+        "terminal.emoji_width" => {
+            if matches!(value, "wide" | "narrow") {
+                None
+            } else {
+                Some("terminal.emoji_width must be wide or narrow".to_string())
+            }
+        }
         "terminal.cursor_blink" | "terminal.reduced_motion" => {
             if matches!(value, "true" | "false") {
                 None

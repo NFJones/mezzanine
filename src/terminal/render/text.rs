@@ -7,11 +7,66 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use crate::error::{MezError, Result};
 use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
 
 /// Maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const AGENT_LOG_WRAP_COLUMN_CAP: usize = 120;
+
+const TERMINAL_EMOJI_WIDTH_WIDE: u8 = 0;
+const TERMINAL_EMOJI_WIDTH_NARROW: u8 = 1;
+
+static TERMINAL_EMOJI_WIDTH: AtomicU8 = AtomicU8::new(TERMINAL_EMOJI_WIDTH_WIDE);
+
+/// Selects how emoji-presentation status symbols are measured in terminal
+/// display cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalEmojiWidth {
+    /// Measure emoji-presentation symbols with the Unicode terminal width used
+    /// by terminals that render these glyphs as two-cell emoji.
+    Wide,
+    /// Measure text-fallback emoji status symbols as one cell for host
+    /// terminals that render them through a monochrome/text font fallback.
+    Narrow,
+}
+
+impl TerminalEmojiWidth {
+    /// Returns the atomic storage representation for this width policy.
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::Wide => TERMINAL_EMOJI_WIDTH_WIDE,
+            Self::Narrow => TERMINAL_EMOJI_WIDTH_NARROW,
+        }
+    }
+
+    /// Builds a width policy from its atomic storage representation.
+    fn from_u8(value: u8) -> Self {
+        match value {
+            TERMINAL_EMOJI_WIDTH_NARROW => Self::Narrow,
+            _ => Self::Wide,
+        }
+    }
+}
+
+/// Applies the process-wide terminal emoji width policy.
+///
+/// Mezzanine uses one attached-terminal compatibility policy for all terminal
+/// renderers in the process. Keeping this at the shared width helper boundary
+/// ensures screen storage, pane composition, row diffing, prompt fitting, and
+/// copy-mode coordinates stay aligned.
+///
+/// # Parameters
+/// - `width`: The emoji status glyph width policy to use.
+pub(crate) fn set_terminal_emoji_width(width: TerminalEmojiWidth) {
+    TERMINAL_EMOJI_WIDTH.store(width.as_u8(), Ordering::Relaxed);
+}
+
+/// Returns the active process-wide terminal emoji width policy.
+pub(crate) fn terminal_emoji_width() -> TerminalEmojiWidth {
+    TerminalEmojiWidth::from_u8(TERMINAL_EMOJI_WIDTH.load(Ordering::Relaxed))
+}
 
 /// One display-cell slot in a Mezzanine-owned render canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -497,10 +552,7 @@ fn char_column_at_byte(value: &str, byte_index: usize) -> usize {
 
 /// Returns the terminal display width of one Unicode scalar.
 pub(in crate::terminal) fn terminal_char_width(ch: char) -> usize {
-    if terminal_scalar_has_emoji_presentation_width(ch) {
-        return 2;
-    }
-    UnicodeWidthChar::width(ch).unwrap_or(0)
+    terminal_char_width_for_emoji_width(ch, terminal_emoji_width())
 }
 
 /// Returns the display width of one Unicode grapheme cluster.
@@ -512,11 +564,45 @@ pub(in crate::terminal) fn terminal_char_width(ch: char) -> usize {
 /// # Parameters
 /// - `grapheme`: The extended grapheme cluster to measure.
 pub(crate) fn terminal_grapheme_width(grapheme: &str) -> usize {
+    terminal_grapheme_width_for_emoji_width(grapheme, terminal_emoji_width())
+}
+
+/// Returns the display width of one Unicode scalar under an explicit emoji
+/// status glyph width policy.
+///
+/// # Parameters
+/// - `ch`: The Unicode scalar to measure.
+/// - `emoji_width`: The compatibility policy selected for status glyphs.
+fn terminal_char_width_for_emoji_width(ch: char, emoji_width: TerminalEmojiWidth) -> usize {
+    if emoji_width == TerminalEmojiWidth::Narrow && terminal_scalar_has_text_fallback_width(ch) {
+        return 1;
+    }
+    if emoji_width == TerminalEmojiWidth::Wide && terminal_scalar_has_emoji_presentation_width(ch) {
+        return 2;
+    }
+    UnicodeWidthChar::width(ch).unwrap_or(0)
+}
+
+/// Returns the display width of one Unicode grapheme cluster under an explicit
+/// emoji status glyph width policy.
+///
+/// # Parameters
+/// - `grapheme`: The extended grapheme cluster to measure.
+/// - `emoji_width`: The compatibility policy selected for status glyphs.
+fn terminal_grapheme_width_for_emoji_width(
+    grapheme: &str,
+    emoji_width: TerminalEmojiWidth,
+) -> usize {
+    if emoji_width == TerminalEmojiWidth::Narrow
+        && let Some(width) = narrow_text_fallback_grapheme_width(grapheme)
+    {
+        return width;
+    }
     let mut chars = grapheme.chars();
     if let Some(ch) = chars.next()
         && chars.next().is_none()
     {
-        return terminal_char_width(ch);
+        return terminal_char_width_for_emoji_width(ch, emoji_width);
     }
     UnicodeWidthStr::width(grapheme).min(2)
 }
@@ -558,9 +644,81 @@ fn terminal_scalar_has_emoji_presentation_width(ch: char) -> bool {
     UnicodeWidthStr::width(emoji_presentation.as_str()) == 2
 }
 
+/// Returns whether a scalar has a one-cell text fallback presentation.
+///
+/// This identifies emoji-capable status symbols such as `✅` whose default
+/// Unicode width is two cells but whose text-presentation variation sequence is
+/// one cell. It is used only by the explicit narrow compatibility policy.
+///
+/// # Parameters
+/// - `ch`: The Unicode scalar whose text-presentation width is being checked.
+fn terminal_scalar_has_text_fallback_width(ch: char) -> bool {
+    if ch.is_ascii() || !terminal_scalar_is_text_fallback_status_symbol(ch) {
+        return false;
+    }
+    let mut text_presentation = String::new();
+    text_presentation.push(ch);
+    text_presentation.push('\u{FE0E}');
+    UnicodeWidthStr::width(text_presentation.as_str()) == 1
+}
+
+/// Returns whether a scalar belongs to the simple symbol ranges commonly used
+/// for terminal status marks.
+///
+/// The narrow compatibility policy intentionally targets status symbols instead
+/// of every pictographic emoji. High-plane emoji such as `👍` therefore keep
+/// their default two-cell width even if a text-presentation sequence exists.
+///
+/// # Parameters
+/// - `ch`: The Unicode scalar being classified.
+fn terminal_scalar_is_text_fallback_status_symbol(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x203C
+            | 0x2049
+            | 0x2139
+            | 0x2194..=0x21AA
+            | 0x231A..=0x23FF
+            | 0x24C2
+            | 0x24D8
+            | 0x25AA..=0x25FE
+            | 0x2600..=0x27BF
+            | 0x2934..=0x2935
+            | 0x2B00..=0x2BFF
+            | 0x3030
+            | 0x303D
+            | 0x3297..=0x3299
+    )
+}
+
+/// Returns the one-cell width for simple emoji/text variation sequences under
+/// the narrow compatibility policy.
+///
+/// Complex emoji clusters such as flags, skin-tone sequences, keycaps, and ZWJ
+/// sequences keep the default grapheme width because terminals that support
+/// those clusters normally allocate them as a single two-cell glyph.
+///
+/// # Parameters
+/// - `grapheme`: The extended grapheme cluster to measure.
+fn narrow_text_fallback_grapheme_width(grapheme: &str) -> Option<usize> {
+    let mut chars = grapheme.chars();
+    let base = chars.next()?;
+    let variation = chars.next()?;
+    if chars.next().is_some() || !matches!(variation, '\u{FE0E}' | '\u{FE0F}') {
+        return None;
+    }
+    Some(terminal_char_width_for_emoji_width(
+        base,
+        TerminalEmojiWidth::Narrow,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{agent_log_wrap_width, fit_styled_width, terminal_text_width, wrap_agent_log_text};
+    use super::{
+        TerminalEmojiWidth, agent_log_wrap_width, fit_styled_width,
+        terminal_grapheme_width_for_emoji_width, terminal_text_width, wrap_agent_log_text,
+    };
     use crate::terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
     /// Verifies agent log wrapping uses the pane width until the global cap
@@ -617,6 +775,37 @@ mod tests {
     #[test]
     fn terminal_text_width_counts_mixed_fullwidth_text_and_emoji_clusters() {
         assert_eq!(terminal_text_width("ｓ 👍🏻 🇪🇺"), 8);
+    }
+
+    /// Verifies the narrow terminal emoji-width compatibility policy measures
+    /// simple emoji/text status glyphs as one cell when a host terminal renders
+    /// them through text fallback fonts. This directly covers the status marks
+    /// that otherwise leave pane dividers and following text shifted by one
+    /// display cell on one-cell fallback terminals.
+    #[test]
+    fn terminal_text_width_narrow_policy_counts_status_glyph_fallbacks_as_one_cell() {
+        for grapheme in ["✅", "✅︎", "⚠", "⚠️", "⚠︎", "✔", "✔️", "✔︎"] {
+            assert_eq!(
+                terminal_grapheme_width_for_emoji_width(grapheme, TerminalEmojiWidth::Narrow),
+                1,
+                "{grapheme}"
+            );
+        }
+    }
+
+    /// Verifies the narrow status-glyph compatibility policy does not collapse
+    /// non-status emoji or complex emoji clusters such as skin-tone modifiers,
+    /// regional-indicator flags, and ZWJ emoji. Those clusters still occupy one
+    /// two-cell terminal span in terminals that render them successfully.
+    #[test]
+    fn terminal_text_width_narrow_policy_keeps_complex_emoji_clusters_wide() {
+        for grapheme in ["👍", "👍🏻", "🇪🇺", "👨‍💻", "1️⃣"] {
+            assert_eq!(
+                terminal_grapheme_width_for_emoji_width(grapheme, TerminalEmojiWidth::Narrow),
+                2,
+                "{grapheme}"
+            );
+        }
     }
 
     /// Verifies the 120-column cap is applied even when the active pane is

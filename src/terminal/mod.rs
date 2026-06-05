@@ -173,8 +173,8 @@ pub use theme::{
 use client_loop::borrow_raw_fd;
 use keys::{MAX_OSC_STRING_BYTES, parse_key_chord_bytes};
 pub(crate) use render::{
-    agent_log_wrap_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
-    wrap_agent_log_lines,
+    TerminalEmojiWidth, agent_log_wrap_width, set_terminal_emoji_width, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
 };
 use render::{
     char_count, line_slice, normalize_selection, search_backward, search_forward,
