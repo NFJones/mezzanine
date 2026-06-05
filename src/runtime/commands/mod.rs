@@ -3568,6 +3568,9 @@ impl RuntimeSessionService {
                 "an agent loop is already active for this pane",
             ));
         }
+        if fresh_context {
+            let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
+        }
         self.agent_loops_by_pane.insert(
             pane_id.to_string(),
             RuntimeAgentLoopState {
@@ -3636,52 +3639,52 @@ impl RuntimeSessionService {
         assessment: &str,
     ) -> Result<Option<RuntimeAgentPromptTurnStart>> {
         let normalized = assessment.trim();
-        if normalized == "Task complete." {
-            self.agent_loops_by_pane.remove(pane_id);
-            self.append_agent_status_text_to_terminal_buffer(pane_id, "loop: completed")?;
-            return Ok(None);
-        }
         let Some(mut state) = self.agent_loops_by_pane.get(pane_id).cloned() else {
             return Ok(None);
         };
-        if normalized == "Task complete." && !state.observed_patch_free_iteration {
-            state.last_assessment = Some(
-                "run at least one completed `/loop` work iteration without any `apply_patch` action before returning `Task complete.`"
-                    .to_string(),
-            );
-            if state.iteration >= state.max_iterations {
-                self.agent_loops_by_pane.remove(pane_id);
-                self.append_agent_status_text_to_terminal_buffer(
-                    pane_id,
-                    &format!(
-                        "loop: reached iteration limit {}/{}; last assessment: {}",
-                        state.iteration,
-                        state.max_iterations,
-                        state.last_assessment.as_deref().unwrap_or_default()
-                    ),
-                )?;
-                return Ok(None);
+        if normalized == "Task complete." {
+            if !state.observed_patch_free_iteration {
+                state.last_assessment = Some(
+                    "run at least one completed `/loop` work iteration without any `apply_patch` action before returning `Task complete.`"
+                        .to_string(),
+                );
+                if state.iteration >= state.max_iterations {
+                    self.agent_loops_by_pane.remove(pane_id);
+                    self.append_agent_status_text_to_terminal_buffer(
+                        pane_id,
+                        &format!(
+                            "loop: reached iteration limit {}/{}; last assessment: {}",
+                            state.iteration,
+                            state.max_iterations,
+                            state.last_assessment.as_deref().unwrap_or_default()
+                        ),
+                    )?;
+                    return Ok(None);
+                }
+                state.iteration = state.iteration.saturating_add(1);
+                self.agent_loops_by_pane
+                    .insert(pane_id.to_string(), state.clone());
+                if state.fresh_context {
+                    let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
+                }
+                let started = self.start_agent_loop_work_turn(pane_id)?;
+                let status_text = if state.fresh_context {
+                    format!(
+                        "loop: continuing fresh iteration {}/{}",
+                        state.iteration, state.max_iterations
+                    )
+                } else {
+                    format!(
+                        "loop: continuing iteration {}/{}",
+                        state.iteration, state.max_iterations
+                    )
+                };
+                self.append_agent_status_text_to_terminal_buffer(pane_id, &status_text)?;
+                return Ok(Some(started));
             }
-            state.iteration = state.iteration.saturating_add(1);
-            self.agent_loops_by_pane
-                .insert(pane_id.to_string(), state.clone());
-            if state.fresh_context {
-                let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
-            }
-            let started = self.start_agent_loop_work_turn(pane_id)?;
-            let status_text = if state.fresh_context {
-                format!(
-                    "loop: continuing fresh iteration {}/{}",
-                    state.iteration, state.max_iterations
-                )
-            } else {
-                format!(
-                    "loop: continuing iteration {}/{}",
-                    state.iteration, state.max_iterations
-                )
-            };
-            self.append_agent_status_text_to_terminal_buffer(pane_id, &status_text)?;
-            return Ok(Some(started));
+            self.agent_loops_by_pane.remove(pane_id);
+            self.append_agent_status_text_to_terminal_buffer(pane_id, "loop: completed")?;
+            return Ok(None);
         }
         state.last_assessment = Some(normalized.to_string());
         if state.iteration >= state.max_iterations {

@@ -3385,6 +3385,75 @@ fn runtime_agent_shell_new_command_starts_fresh_conversation() {
     assert_eq!(session.visibility, AgentShellVisibility::Visible);
 }
 
+/// Verifies `/loop --new` rotates the pane to a fresh conversation before the
+/// first work iteration starts.
+///
+/// This regression keeps the first loop turn from inheriting transcript context
+/// from an earlier pane-local attempt when the command requested fresh context.
+#[test]
+fn runtime_agent_loop_new_flag_starts_first_iteration_in_fresh_conversation() {
+    let mut service = test_runtime_service();
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "previous-conversation", 7)
+        .unwrap();
+    let old_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let outcome = service
+        .execute_agent_shell_loop_command("%1", "/loop --new review this document")
+        .unwrap();
+
+    assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert_ne!(session.session_id, old_session);
+    assert_eq!(session.transcript_entries, 0);
+    assert_eq!(session.visibility, AgentShellVisibility::Visible);
+}
+
+/// Verifies `/loop` rejects `Task complete.` until a completed patch-free work
+/// iteration has happened.
+///
+/// This regression keeps the controller from returning to the user as soon as
+/// an assessment says the task is complete while the required reevaluation pass
+/// is still missing.
+#[test]
+fn runtime_agent_loop_completion_waits_for_patch_free_iteration() {
+    let mut service = test_runtime_service();
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    service.agent_loops_by_pane.insert(
+        "%1".to_string(),
+        crate::runtime::RuntimeAgentLoopState {
+            pane_id: "%1".to_string(),
+            original_prompt: "fix the bug".to_string(),
+            observed_patch_free_iteration: false,
+            fresh_context: false,
+            iteration: 1,
+            max_iterations: 8,
+            last_assessment: None,
+        },
+    );
+
+    let started = service
+        .continue_agent_loop_after_assessment_text("%1", "Task complete.")
+        .unwrap();
+
+    assert!(started.is_some());
+    let state = service.agent_loops_by_pane.get("%1").unwrap();
+    assert_eq!(state.iteration, 2);
+    assert_eq!(
+        state.last_assessment.as_deref(),
+        Some(
+            "run at least one completed `/loop` work iteration without any `apply_patch` action before returning `Task complete.`"
+        )
+    );
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.
