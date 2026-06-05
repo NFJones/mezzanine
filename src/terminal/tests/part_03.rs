@@ -325,15 +325,52 @@ fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
 
     screen.feed("\x1b[31m▐ mez> \x1b[0mabc✔️d".as_bytes());
 
-    assert_eq!(screen.visible_lines()[0], "▐ mez> abc✔ d");
+    assert_eq!(screen.visible_lines()[0], "▐ mez> abc✔️d");
     assert!(
         screen.visible_lines()[1].trim().is_empty(),
         "{:?}",
         screen.visible_lines()
     );
-    assert!(
-        screen.visible_lines()[1].trim().is_empty(),
-        "{:?}",
-        screen.visible_lines()
-    );
+}
+
+/// Verifies live terminal-screen rows preserve multi-scalar emoji-presentation
+/// graphemes before the render canvas sees them. This protects against the
+/// scalar-cell regression where `⚠️` was reduced to bare `⚠`, causing host
+/// terminals to advance one fewer column than Mezzanine's width accounting.
+#[test]
+fn terminal_screen_preserves_warning_sign_variation_selector() {
+    let mut screen = TerminalScreen::new(Size::new(7, 2).unwrap(), 10).unwrap();
+
+    screen.feed("ab⚠️cd".as_bytes());
+
+    assert_eq!(screen.visible_lines()[0], "ab⚠️cd");
+    assert_eq!(screen.visible_styled_lines()[0].text, "ab⚠️cd");
+}
+
+/// Verifies clearing a column inside a wide multi-scalar grapheme removes the
+/// whole grapheme footprint. Without explicit continuation sentinels, erasing
+/// the second display column of `⚠️` can leave a stale leading scalar behind.
+#[test]
+fn terminal_screen_erases_warning_sign_continuation_footprint() {
+    let mut screen = TerminalScreen::new(Size::new(7, 2).unwrap(), 10).unwrap();
+
+    screen.feed("ab⚠️cd".as_bytes());
+    screen.feed(b"\x1b[4G\x1b[X");
+
+    assert_eq!(screen.visible_lines()[0], "ab  cd");
+}
+
+/// Verifies styled visible-row restoration round-trips complete grapheme text.
+/// Snapshot and resize restoration use `write_styled_line_to_row`, so this
+/// catches the previous behavior that stored only the first scalar from each
+/// restored grapheme cluster.
+#[test]
+fn terminal_screen_restores_styled_lines_with_complete_graphemes() {
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
+    let lines = vec![TerminalStyledLine::plain("ab⚠️cd".to_string())];
+
+    screen.restore_normal_styled_content(&[], &lines);
+
+    assert_eq!(screen.visible_lines()[0], "ab⚠️cd");
+    assert_eq!(screen.visible_styled_lines()[0].text, "ab⚠️cd");
 }

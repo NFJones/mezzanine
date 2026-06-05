@@ -8,8 +8,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::error::{MezError, Result};
-use crate::layout::Size;
-use crate::terminal::{CopyPosition, GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
+use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
 
 /// Maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const AGENT_LOG_WRAP_COLUMN_CAP: usize = 120;
@@ -130,66 +129,6 @@ pub(super) fn collect_text_cells(row: Vec<TerminalRenderCell>) -> String {
             continue;
         }
         output.push_str(&cell.text);
-    }
-    output
-}
-
-/// Builds a blank terminal cell canvas for the given size.
-pub(in crate::terminal) fn blank_cells(size: Size) -> Vec<Vec<char>> {
-    (0..size.rows).map(|_| blank_row(size.columns)).collect()
-}
-
-/// Builds one blank terminal cell row with the requested column count.
-pub(in crate::terminal) fn blank_row(columns: u16) -> Vec<char> {
-    vec![' '; usize::from(columns)]
-}
-
-/// Converts a cell row into trimmed terminal text.
-pub(in crate::terminal) fn trim_row(row: &[char]) -> String {
-    row.iter().collect::<String>().trim_end().to_string()
-}
-
-/// Collects screen cells into terminal text, omitting wide-character continuation
-/// cells.
-///
-/// The terminal screen stores wide characters as a leading glyph followed by
-/// `' '` continuation cells with the same rendition. These continuation
-/// cells inflate display-width measurements and produce unwanted extra
-/// spacing in rendered output. This function detects continuation cells by
-/// inspecting both cell characters and renditions, stripping them from the
-/// output so downstream measurement and rendering operate on semantic content
-/// widths.
-///
-/// When `trim_trailing_whitespace` is true, trailing whitespace is removed
-/// from the output. This is appropriate for plain-text rendering where blank
-/// trailing cells carry no meaning. Styled outputs should pass `false` so
-/// that trailing cells with non-default graphic renditions are preserved.
-pub(in crate::terminal) fn collect_screen_cells(
-    cells: &[char],
-    renditions: &[GraphicRendition],
-    trim_trailing_whitespace: bool,
-) -> String {
-    let mut output = String::new();
-    let mut index = 0usize;
-    while index < cells.len() {
-        let ch = cells[index];
-        if ch == ' '
-            && index > 0
-            && terminal_char_width(cells[index.saturating_sub(1)]) > 1
-            && renditions.get(index).copied().unwrap_or_default()
-                == renditions
-                    .get(index.saturating_sub(1))
-                    .copied()
-                    .unwrap_or_default()
-        {
-            index = index.saturating_add(1);
-            continue;
-        }
-        output.push(ch);
-        index = index.saturating_add(1);
-    }
-    if trim_trailing_whitespace {
-        output = output.trim_end().to_string();
     }
     output
 }

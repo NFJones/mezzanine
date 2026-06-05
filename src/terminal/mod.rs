@@ -177,8 +177,8 @@ pub(crate) use render::{
     wrap_agent_log_lines,
 };
 use render::{
-    blank_cells, blank_row, char_count, collect_screen_cells, line_slice, normalize_selection,
-    search_backward, search_forward, terminal_char_width, trim_row, validate_copy_position,
+    char_count, line_slice, normalize_selection, search_backward, search_forward,
+    terminal_char_width, validate_copy_position,
 };
 
 /// Exposes the tests module boundary.

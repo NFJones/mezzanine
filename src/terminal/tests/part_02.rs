@@ -727,7 +727,7 @@ fn terminal_screen_replaces_invalid_utf8_without_breaking_layout() {
     assert_eq!(screen.visible_lines()[0], "ok \u{fffd} done");
 }
 
-/// Verifies terminal screen documents combining mark boundary behavior.
+/// Verifies terminal screen preserves combining marks in live rows.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -738,7 +738,7 @@ fn terminal_screen_documents_combining_mark_boundary_behavior() {
 
     screen.feed("e\u{301}x".as_bytes());
 
-    assert_eq!(screen.visible_lines()[0], "ex");
+    assert_eq!(screen.visible_lines()[0], "e\u{301}x");
     assert_eq!(screen.cursor_state().column, 2);
 }
 

@@ -6,9 +6,8 @@
 
 use super::{
     AGENT_COPY_SKIP_LINE, BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer,
-    MAX_OSC_STRING_BYTES, Result, Size, blank_cells, blank_row, collect_screen_cells,
-    terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
-    trim_row,
+    MAX_OSC_STRING_BYTES, Result, Size, terminal_char_width, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width,
 };
 
 // Terminal screen parser, OSC events, and alternate-screen state.
@@ -49,6 +48,82 @@ struct StyledPrefixCell {
     width: usize,
     /// Graphic rendition applied to the cell.
     rendition: GraphicRendition,
+}
+
+/// One display cell in the live terminal screen buffer.
+///
+/// Leading cells store the complete grapheme cluster that should be emitted
+/// for that display position. Extra columns occupied by a wide grapheme are
+/// explicit continuation sentinels, so multi-scalar clusters survive the live
+/// screen path without being reduced to their first Unicode scalar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TerminalScreenCell {
+    /// Complete grapheme cluster stored at a leading display cell.
+    text: String,
+    /// Whether this cell is a continuation column for a previous wide glyph.
+    continuation: bool,
+}
+
+impl TerminalScreenCell {
+    /// Builds a blank leading screen cell.
+    fn blank() -> Self {
+        Self {
+            text: " ".to_string(),
+            continuation: false,
+        }
+    }
+
+    /// Builds a wide-grapheme continuation sentinel.
+    fn continuation() -> Self {
+        Self {
+            text: String::new(),
+            continuation: true,
+        }
+    }
+
+    /// Builds a leading cell containing complete terminal text.
+    fn text(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            continuation: false,
+        }
+    }
+
+    /// Returns whether the cell is a default blank leading cell.
+    fn is_blank(&self) -> bool {
+        !self.continuation && self.text == " "
+    }
+
+    /// Returns the display width occupied by this cell's leading text.
+    fn width(&self) -> usize {
+        if self.continuation {
+            0
+        } else {
+            terminal_grapheme_width(&self.text)
+        }
+    }
+}
+
+/// Builds a screen-sized cell grid initialized to blank leading cells.
+fn blank_screen_cells(size: Size) -> Vec<Vec<TerminalScreenCell>> {
+    (0..size.rows)
+        .map(|_| blank_screen_row(size.columns))
+        .collect()
+}
+
+/// Builds one row initialized to blank leading cells.
+fn blank_screen_row(columns: u16) -> Vec<TerminalScreenCell> {
+    vec![TerminalScreenCell::blank(); usize::from(columns)]
+}
+
+/// Builds a screen-sized cell grid initialized to blank leading cells.
+fn blank_cells(size: Size) -> Vec<Vec<TerminalScreenCell>> {
+    blank_screen_cells(size)
+}
+
+/// Builds one row initialized to blank leading cells.
+fn blank_row(columns: u16) -> Vec<TerminalScreenCell> {
+    blank_screen_row(columns)
 }
 
 /// Carries Alternate Screen State state for this subsystem.
@@ -635,7 +710,7 @@ pub struct TerminalScreen {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) cells: Vec<Vec<char>>,
+    pub(super) cells: Vec<Vec<TerminalScreenCell>>,
     /// Stores the renditions value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -984,7 +1059,7 @@ impl TerminalScreen {
             .min(cells.first().map(Vec::len).unwrap_or_default());
         for (row_index, row) in cells.iter_mut().enumerate().take(rows) {
             let source_row = row_index.saturating_add(row_offset);
-            row[..columns].copy_from_slice(&self.cells[source_row][..columns]);
+            row[..columns].clone_from_slice(&self.cells[source_row][..columns]);
             renditions[row_index][..columns]
                 .copy_from_slice(&self.renditions[source_row][..columns]);
             line_wraps[row_index] = self.line_wraps.get(source_row).copied().unwrap_or(false);
@@ -1252,6 +1327,131 @@ impl TerminalScreen {
         }
     }
 
+    /// Returns the leading cell column for the grapheme occupying `column`.
+    fn leading_column_for_cell(&self, row: usize, column: usize) -> Option<usize> {
+        let row_cells = self.cells.get(row)?;
+        if row_cells.is_empty() {
+            return None;
+        }
+        let mut leading_column = column.min(row_cells.len().saturating_sub(1));
+        while leading_column > 0
+            && row_cells
+                .get(leading_column)
+                .is_some_and(|cell| cell.continuation)
+        {
+            leading_column = leading_column.saturating_sub(1);
+        }
+        Some(leading_column)
+    }
+
+    /// Clears the complete grapheme footprint touching one display column.
+    fn clear_cell_footprint(&mut self, row: usize, column: usize, rendition: GraphicRendition) {
+        let Some(leading_column) = self.leading_column_for_cell(row, column) else {
+            return;
+        };
+        let width = self.cells[row][leading_column].width().max(1);
+        let end = leading_column
+            .saturating_add(width)
+            .min(self.cells[row].len());
+        for clear_column in leading_column..end {
+            self.cells[row][clear_column] = TerminalScreenCell::blank();
+            self.renditions[row][clear_column] = rendition;
+        }
+    }
+
+    /// Repairs continuation sentinels after column insertion or deletion.
+    fn repair_row_continuations(&mut self, row: usize) {
+        let Some(row_cells) = self.cells.get(row) else {
+            return;
+        };
+        let columns = row_cells.len();
+        let mut column = 0usize;
+        while column < columns {
+            if self.cells[row][column].continuation {
+                self.cells[row][column] = TerminalScreenCell::blank();
+                column = column.saturating_add(1);
+                continue;
+            }
+            let width = self.cells[row][column].width();
+            if width <= 1 {
+                column = column.saturating_add(1);
+                continue;
+            }
+            if column.saturating_add(width) > columns {
+                for clear_column in column..columns {
+                    self.cells[row][clear_column] = TerminalScreenCell::blank();
+                }
+                break;
+            }
+            let rendition = self.renditions[row][column];
+            for offset in 1..width {
+                self.cells[row][column.saturating_add(offset)] = TerminalScreenCell::continuation();
+                self.renditions[row][column.saturating_add(offset)] = rendition;
+            }
+            column = column.saturating_add(width);
+        }
+    }
+
+    /// Extends the previous leading cell when a scalar completes its grapheme.
+    fn try_extend_previous_grapheme(&mut self, ch: char) -> bool {
+        let Some(row_cells) = self.cells.get(self.cursor.row) else {
+            return false;
+        };
+        if row_cells.is_empty() {
+            return false;
+        }
+        let start_column = if self.wrap_pending {
+            self.cursor.column.min(row_cells.len().saturating_sub(1))
+        } else if let Some(column) = self.cursor.column.checked_sub(1) {
+            column.min(row_cells.len().saturating_sub(1))
+        } else {
+            return false;
+        };
+        let Some(leading_column) = self.leading_column_for_cell(self.cursor.row, start_column)
+        else {
+            return false;
+        };
+        if self.cells[self.cursor.row][leading_column].is_blank() {
+            return false;
+        }
+        let mut candidate = self.cells[self.cursor.row][leading_column].text.clone();
+        candidate.push(ch);
+        let mut graphemes = terminal_graphemes(&candidate);
+        if graphemes.next() != Some(candidate.as_str()) || graphemes.next().is_some() {
+            return false;
+        }
+        let old_width = self.cells[self.cursor.row][leading_column].width().max(1);
+        let new_width = terminal_grapheme_width(&candidate);
+        if new_width == 0 || leading_column.saturating_add(new_width) > row_cells.len() {
+            return false;
+        }
+
+        self.clear_line_copy_text(self.cursor.row);
+        self.cells[self.cursor.row][leading_column] = TerminalScreenCell::text(&candidate);
+        let rendition = self.renditions[self.cursor.row][leading_column];
+        for offset in 1..new_width {
+            self.cells[self.cursor.row][leading_column.saturating_add(offset)] =
+                TerminalScreenCell::continuation();
+            self.renditions[self.cursor.row][leading_column.saturating_add(offset)] = rendition;
+        }
+        for offset in new_width..old_width {
+            let column = leading_column.saturating_add(offset);
+            if column < self.cells[self.cursor.row].len() {
+                self.cells[self.cursor.row][column] = TerminalScreenCell::blank();
+                self.renditions[self.cursor.row][column] = rendition;
+            }
+        }
+        let next_column = leading_column.saturating_add(new_width);
+        if next_column > self.max_column() {
+            self.cursor.column = leading_column;
+            self.wrap_pending = true;
+        } else {
+            self.cursor.column = next_column;
+            self.wrap_pending = false;
+        }
+        true
+    }
+
     /// Runs the last significant row operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1265,7 +1465,9 @@ impl TerminalScreen {
                 cells
                     .iter()
                     .zip(renditions.iter())
-                    .any(|(ch, rendition)| *ch != ' ' || *rendition != GraphicRendition::default())
+                    .any(|(cell, rendition)| {
+                        !cell.is_blank() || *rendition != GraphicRendition::default()
+                    })
             })
     }
 
@@ -1280,7 +1482,7 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn visible_lines(&self) -> Vec<String> {
-        self.cells.iter().map(|row| trim_row(row)).collect()
+        self.cells.iter().map(|row| trim_screen_row(row)).collect()
     }
 
     /// Returns visible lines with non-default SGR style spans preserved.
@@ -2046,7 +2248,11 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn print(&mut self, ch: char) {
-        let width = terminal_char_width(ch);
+        if self.try_extend_previous_grapheme(ch) {
+            return;
+        }
+        let text = ch.to_string();
+        let width = terminal_grapheme_width(&text);
         if width == 0 {
             return;
         }
@@ -2057,13 +2263,18 @@ impl TerminalScreen {
             self.wrap_to_next_line();
         }
         self.clear_line_copy_text(self.cursor.row);
-        self.cells[self.cursor.row][self.cursor.column] = ch;
-        self.renditions[self.cursor.row][self.cursor.column] = self.graphic_rendition;
+        let row = self.cursor.row;
+        let column = self.cursor.column;
+        for target_column in column..column.saturating_add(width).min(self.cells[row].len()) {
+            self.clear_cell_footprint(row, target_column, self.graphic_rendition);
+        }
+        self.cells[row][column] = TerminalScreenCell::text(&text);
+        self.renditions[row][column] = self.graphic_rendition;
         for offset in 1..width {
-            let column = self.cursor.column.saturating_add(offset);
+            let column = column.saturating_add(offset);
             if column <= self.max_column() {
-                self.cells[self.cursor.row][column] = ' ';
-                self.renditions[self.cursor.row][column] = self.graphic_rendition;
+                self.cells[row][column] = TerminalScreenCell::continuation();
+                self.renditions[row][column] = self.graphic_rendition;
             }
         }
         let next_column = self.cursor.column.saturating_add(width);
@@ -2224,12 +2435,20 @@ impl TerminalScreen {
         let width = usize::from(self.size.columns);
         let count = count.min(width.saturating_sub(column));
         self.clear_line_copy_text(row);
+        if count > 0
+            && self.cells[row]
+                .get(column)
+                .is_some_and(|cell| cell.continuation)
+        {
+            self.clear_cell_footprint(row, column, self.graphic_rendition);
+        }
         for _ in 0..count {
-            self.cells[row].insert(column, ' ');
+            self.cells[row].insert(column, TerminalScreenCell::blank());
             self.renditions[row].insert(column, self.graphic_rendition);
             self.cells[row].truncate(width);
             self.renditions[row].truncate(width);
         }
+        self.repair_row_continuations(row);
     }
 
     /// Runs the delete chars operation for this subsystem.
@@ -2244,12 +2463,20 @@ impl TerminalScreen {
         let width = usize::from(self.size.columns);
         let count = count.min(width.saturating_sub(column));
         self.clear_line_copy_text(row);
+        if count > 0
+            && self.cells[row]
+                .get(column)
+                .is_some_and(|cell| cell.continuation)
+        {
+            self.clear_cell_footprint(row, column, self.graphic_rendition);
+        }
         for _ in 0..count {
             self.cells[row].remove(column);
             self.renditions[row].remove(column);
-            self.cells[row].push(' ');
+            self.cells[row].push(TerminalScreenCell::blank());
             self.renditions[row].push(self.graphic_rendition);
         }
+        self.repair_row_continuations(row);
     }
 
     /// Runs the erase chars operation for this subsystem.
@@ -2265,7 +2492,8 @@ impl TerminalScreen {
             .saturating_add(count.saturating_sub(1))
             .min(self.max_column());
         for column in start..=end {
-            self.cells[row][column] = ' ';
+            self.clear_cell_footprint(row, column, self.graphic_rendition);
+            self.cells[row][column] = TerminalScreenCell::blank();
             self.renditions[row][column] = self.graphic_rendition;
         }
         self.clear_line_copy_text(row);
@@ -2526,7 +2754,8 @@ impl TerminalScreen {
     pub(super) fn erase_line_range(&mut self, row: usize, start_column: usize, end_column: usize) {
         let end_column = end_column.min(self.max_column());
         for column in start_column.min(end_column)..=end_column {
-            self.cells[row][column] = ' ';
+            self.clear_cell_footprint(row, column, self.graphic_rendition);
+            self.cells[row][column] = TerminalScreenCell::blank();
             self.renditions[row][column] = self.graphic_rendition;
         }
         self.clear_line_copy_text(row);
@@ -2669,7 +2898,8 @@ impl TerminalScreen {
         let mut prefix = Vec::new();
         for expected in AGENT_TRANSCRIPT_GUTTER_PREFIX.chars() {
             let width = terminal_char_width(expected);
-            if width == 0 || cells.get(column).copied()? != expected {
+            let cell = cells.get(column)?;
+            if width == 0 || cell.continuation || cell.text != expected.to_string() {
                 return None;
             }
             prefix.push(StyledPrefixCell {
@@ -2699,11 +2929,12 @@ impl TerminalScreen {
                 return;
             }
             self.clear_line_copy_text(self.cursor.row);
-            self.cells[self.cursor.row][self.cursor.column] = cell.ch;
+            let text = cell.ch.to_string();
+            self.cells[self.cursor.row][self.cursor.column] = TerminalScreenCell::text(&text);
             self.renditions[self.cursor.row][self.cursor.column] = cell.rendition;
             for offset in 1..cell.width {
                 let column = self.cursor.column.saturating_add(offset);
-                self.cells[self.cursor.row][column] = ' ';
+                self.cells[self.cursor.row][column] = TerminalScreenCell::continuation();
                 self.renditions[self.cursor.row][column] = cell.rendition;
             }
             self.cursor.column = self.cursor.column.saturating_add(cell.width);
@@ -2725,19 +2956,21 @@ fn blank_rendition_row(columns: u16, rendition: GraphicRendition) -> Vec<Graphic
 
 /// Builds a visible styled line from one terminal row and optional copy source.
 fn styled_line_from_row_with_copy_text(
-    cells: &[char],
+    cells: &[TerminalScreenCell],
     renditions: &[GraphicRendition],
     copy_text: Option<String>,
 ) -> TerminalStyledLine {
     let visible_columns = cells
         .iter()
         .zip(renditions.iter())
-        .rposition(|(ch, rendition)| *ch != ' ' || *rendition != GraphicRendition::default())
+        .rposition(|(cell, rendition)| {
+            !cell.is_blank() || *rendition != GraphicRendition::default()
+        })
         .map(|index| index.saturating_add(1))
         .unwrap_or_default();
     let limited_cells = &cells[..visible_columns.min(cells.len())];
     let limited_renditions = &renditions[..visible_columns.min(renditions.len())];
-    let text = collect_screen_cells(limited_cells, limited_renditions, false);
+    let text = collect_screen_cell_text(limited_cells, false);
     let mut style_spans = Vec::new();
     let mut cell = 0usize;
     let mut display_column = 0usize;
@@ -2748,18 +2981,15 @@ fn styled_line_from_row_with_copy_text(
             .copied()
             .unwrap_or_else(GraphicRendition::default);
 
-        // Skip continuation cells for span calculations.
-        if is_continuation_cell(limited_cells, limited_renditions, cell) {
+        if limited_cells[cell].continuation {
             cell = cell.saturating_add(1);
             continue;
         }
 
         let span_start = display_column;
-        let mut span_width = terminal_char_width(limited_cells[cell]);
+        let mut span_width = limited_cells[cell].width().max(1);
         cell = cell.saturating_add(1);
 
-        // Extend the span over consecutive cells with the same rendition,
-        // skipping continuation cells and accumulating their display widths.
         while cell < limited_cells.len()
             && limited_renditions
                 .get(cell)
@@ -2767,11 +2997,11 @@ fn styled_line_from_row_with_copy_text(
                 .unwrap_or_else(GraphicRendition::default)
                 == rendition
         {
-            if is_continuation_cell(limited_cells, limited_renditions, cell) {
+            if limited_cells[cell].continuation {
                 cell = cell.saturating_add(1);
                 continue;
             }
-            span_width = span_width.saturating_add(terminal_char_width(limited_cells[cell]));
+            span_width = span_width.saturating_add(limited_cells[cell].width().max(1));
             cell = cell.saturating_add(1);
         }
 
@@ -2793,23 +3023,31 @@ fn styled_line_from_row_with_copy_text(
     }
 }
 
-/// Returns whether a screen cell is a wide-character continuation.
-///
-/// Continuation cells are `' '` cells that follow a wide character and carry
-/// the same graphic rendition. The terminal parser writes them as placeholders
-/// that occupy the second column of a two-cell glyph.
-fn is_continuation_cell(cells: &[char], renditions: &[GraphicRendition], index: usize) -> bool {
-    if index == 0 || cells[index] != ' ' {
-        return false;
+/// Collects leading screen-cell text while omitting continuation sentinels.
+fn collect_screen_cell_text(
+    cells: &[TerminalScreenCell],
+    trim_trailing_whitespace: bool,
+) -> String {
+    let mut output = String::new();
+    for cell in cells {
+        if !cell.continuation {
+            output.push_str(&cell.text);
+        }
     }
-    if terminal_char_width(cells[index.saturating_sub(1)]) <= 1 {
-        return false;
+    if trim_trailing_whitespace {
+        output = output.trim_end().to_string();
     }
-    renditions.get(index).copied().unwrap_or_default()
-        == renditions
-            .get(index.saturating_sub(1))
-            .copied()
-            .unwrap_or_default()
+    output
+}
+
+/// Collects one visible row as plain text, trimming terminal padding.
+fn trim_screen_row(cells: &[TerminalScreenCell]) -> String {
+    let visible_columns = cells
+        .iter()
+        .rposition(|cell| !cell.is_blank())
+        .map(|index| index.saturating_add(1))
+        .unwrap_or_default();
+    collect_screen_cell_text(&cells[..visible_columns.min(cells.len())], true)
 }
 
 /// Runs the write styled line to row operation for this subsystem.
@@ -2819,7 +3057,7 @@ fn is_continuation_cell(cells: &[char], renditions: &[GraphicRendition], index: 
 /// on duplicated control-flow logic.
 fn write_styled_line_to_row(
     line: &TerminalStyledLine,
-    cells: &mut [char],
+    cells: &mut [TerminalScreenCell],
     renditions: &mut [GraphicRendition],
 ) {
     let columns = cells.len();
@@ -2829,12 +3067,11 @@ fn write_styled_line_to_row(
         if width == 0 || column.saturating_add(width) > columns {
             break;
         }
-        let ch = grapheme.chars().next().unwrap_or(' ');
         let rendition = styled_line_rendition_at(line, column);
-        cells[column] = ch;
+        cells[column] = TerminalScreenCell::text(grapheme);
         renditions[column] = rendition;
         for offset in 1..width {
-            cells[column.saturating_add(offset)] = ' ';
+            cells[column.saturating_add(offset)] = TerminalScreenCell::continuation();
             renditions[column.saturating_add(offset)] = rendition;
         }
         column = column.saturating_add(width);
