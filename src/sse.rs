@@ -21,31 +21,69 @@ pub(crate) struct SseEvent {
 /// Empty blocks, comments, and blocks without `data:` fields are ignored. The
 /// parser accepts LF and CRLF input and leaves field-specific validation to the
 /// caller so provider and MCP policies can differ intentionally.
-pub(crate) fn parse_sse_events(body: &str, missing_message: &'static str) -> Result<Vec<SseEvent>> {
-    let mut events = Vec::new();
-    for block in body.replace("\r\n", "\n").split("\n\n") {
-        let mut name = None;
-        let mut data_lines = Vec::new();
-        for line in block.lines() {
-            if line.is_empty() || line.starts_with(':') {
-                continue;
+pub(crate) fn parse_sse_events_with<F>(
+    body: &str,
+    missing_message: &'static str,
+    mut on_event: F,
+) -> Result<()>
+where
+    F: FnMut(Option<&str>, &str) -> Result<()>,
+{
+    let mut saw_event = false;
+    let mut name = None;
+    let mut data = String::new();
+    let mut has_data = false;
+
+    for raw_line in body.split('\n') {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if line.is_empty() {
+            if has_data {
+                saw_event = true;
+                on_event(name.as_deref(), data.as_str())?;
             }
-            if let Some(value) = line.strip_prefix("event:") {
-                name = Some(value.trim().to_string());
-            } else if let Some(value) = line.strip_prefix("data:") {
-                data_lines.push(value.trim_start().to_string());
-            }
+            name = None;
+            data.clear();
+            has_data = false;
+            continue;
         }
-        if !data_lines.is_empty() {
-            events.push(SseEvent {
-                name,
-                data: data_lines.join("\n"),
-            });
+        if line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            name = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            if has_data {
+                data.push('\n');
+            }
+            data.push_str(value.trim_start());
+            has_data = true;
         }
     }
-    if events.is_empty() {
+
+    if has_data {
+        saw_event = true;
+        on_event(name.as_deref(), data.as_str())?;
+    }
+    if !saw_event {
         return Err(MezError::invalid_state(missing_message));
     }
+    Ok(())
+}
+
+/// Parses SSE event blocks from one complete response body.
+///
+/// Empty blocks, comments, and blocks without `data:` fields are ignored. The
+/// parser accepts LF and CRLF input and leaves field-specific validation to the
+/// caller so provider and MCP policies can differ intentionally.
+pub(crate) fn parse_sse_events(body: &str, missing_message: &'static str) -> Result<Vec<SseEvent>> {
+    let mut events = Vec::new();
+    parse_sse_events_with(body, missing_message, |name, data| {
+        events.push(SseEvent {
+            name: name.map(str::to_string),
+            data: data.to_string(),
+        });
+        Ok(())
+    })?;
     Ok(events)
 }
 
@@ -69,5 +107,20 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].name.as_deref(), Some("message"));
         assert_eq!(events[0].data, "{\"a\":1}\n{\"b\":2}");
+    }
+
+    /// Verifies the shared parser also flushes a final event without a blank-line terminator.
+    ///
+    /// Streaming HTTP peers can end the body immediately after the last `data:`
+    /// line. The shared syntax parser still needs to surface that event without
+    /// requiring an extra separator block.
+    #[test]
+    fn parses_unterminated_final_sse_event() {
+        let events = parse_sse_events("event: message\ndata: {\"done\":true}", "missing events")
+            .expect("SSE event should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name.as_deref(), Some("message"));
+        assert_eq!(events[0].data, "{\"done\":true}");
     }
 }
