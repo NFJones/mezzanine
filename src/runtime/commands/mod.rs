@@ -87,8 +87,26 @@ const AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES: usize = 200;
 /// Maximum cleartext presentation bytes to read when resuming an agent shell.
 const AGENT_RESUME_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Parses optional `/loop` controller flags from the user-supplied argument body.
+fn runtime_agent_loop_command_args(args: &str) -> (bool, &str) {
+    let trimmed = args.trim();
+    let Some(first) = trimmed.split_whitespace().next() else {
+        return (false, trimmed);
+    };
+    if first == "--new" {
+        return (true, trimmed[first.len()..].trim_start());
+    }
+    (false, trimmed)
+}
+
 /// Builds the provider-visible prompt for one `/loop` work iteration.
 fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
+    if state.fresh_context {
+        return format!(
+            "{}\n\n[loop controller]\nInspect the problem again carefully and fulfill the original user prompt normally. Start from this prompt alone without assuming knowledge of any previous attempt.",
+            state.original_prompt
+        );
+    }
     let remaining = state
         .last_assessment
         .as_deref()
@@ -3534,7 +3552,8 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("loop command must be submitted as an agent slash command")
         })?;
-        let original_prompt = invocation.args.trim();
+        let (fresh_context, original_prompt) = runtime_agent_loop_command_args(&invocation.args);
+        let original_prompt = original_prompt.trim();
         if original_prompt.is_empty() {
             return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
         }
@@ -3548,6 +3567,7 @@ impl RuntimeSessionService {
             RuntimeAgentLoopState {
                 pane_id: pane_id.to_string(),
                 original_prompt: original_prompt.to_string(),
+                fresh_context,
                 iteration: 1,
                 max_iterations: self.agent_loop_limit.max(1),
                 last_assessment: None,
@@ -3564,10 +3584,11 @@ impl RuntimeSessionService {
         Ok(AgentShellCommandOutcome::Mutated {
             command: "loop".to_string(),
             body: format!(
-                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} state={}",
+                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} fresh_context={} state={}",
                 pane_id,
                 started.turn_id,
                 self.agent_loop_limit.max(1),
+                fresh_context,
                 runtime_agent_turn_state_name(started.state)
             ),
             visibility,
@@ -3631,14 +3652,22 @@ impl RuntimeSessionService {
         state.iteration = state.iteration.saturating_add(1);
         self.agent_loops_by_pane
             .insert(pane_id.to_string(), state.clone());
+        if state.fresh_context {
+            let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
+        }
         let started = self.start_agent_loop_work_turn(pane_id)?;
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!(
+        let status_text = if state.fresh_context {
+            format!(
+                "loop: continuing fresh iteration {}/{}",
+                state.iteration, state.max_iterations
+            )
+        } else {
+            format!(
                 "loop: continuing iteration {}/{}",
                 state.iteration, state.max_iterations
-            ),
-        )?;
+            )
+        };
+        self.append_agent_status_text_to_terminal_buffer(pane_id, &status_text)?;
         Ok(Some(started))
     }
 
@@ -4500,5 +4529,44 @@ mod tests {
                 content: "context-word ".repeat(content_words),
             })
             .collect()
+    }
+
+    /// Verifies `/loop` accepts an optional leading `--new` flag before the
+    /// original prompt body so the runtime can prune prior context between
+    /// work iterations without changing the user-authored task text.
+    #[test]
+    fn runtime_agent_loop_command_args_parses_optional_new_flag() {
+        assert_eq!(
+            runtime_agent_loop_command_args("--new review this document"),
+            (true, "review this document")
+        );
+        assert_eq!(
+            runtime_agent_loop_command_args("  --new   review this document  "),
+            (true, "review this document")
+        );
+        assert_eq!(
+            runtime_agent_loop_command_args("review this document"),
+            (false, "review this document")
+        );
+    }
+
+    /// Verifies `/loop --new` hides prior-attempt controller hints from the
+    /// next work prompt so the model restarts from the original task alone
+    /// instead of inheriting iteration numbers or earlier assessments.
+    #[test]
+    fn runtime_agent_loop_work_prompt_omits_prior_attempt_context_in_new_mode() {
+        let prompt = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
+            pane_id: "%1".to_string(),
+            original_prompt: "review this document".to_string(),
+            fresh_context: true,
+            iteration: 3,
+            max_iterations: 8,
+            last_assessment: Some("fix the remaining inconsistency".to_string()),
+        });
+
+        assert!(prompt.contains("review this document"), "{prompt}");
+        assert!(prompt.contains("Start from this prompt alone"), "{prompt}");
+        assert!(!prompt.contains("Previous loop assessment"), "{prompt}");
+        assert!(!prompt.contains("work iteration 3/8"), "{prompt}");
     }
 }

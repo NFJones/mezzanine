@@ -3466,11 +3466,13 @@ pub struct RuntimeAgentLoopState {
     pub pane_id: String,
     /// Original user prompt supplied after `/loop`.
     pub original_prompt: String,
+    /// Whether each new work iteration should prune prior conversation context.
+    pub fresh_context: bool,
     /// One-based work iteration currently being evaluated or executed.
     pub iteration: usize,
     /// Maximum number of work iterations allowed before the loop stops.
     pub max_iterations: usize,
-    /// Latest non-`yes` assessment returned by the model, if any.
+    /// Latest incomplete assessment returned by the model, if any.
     pub last_assessment: Option<String>,
 }
 
