@@ -68,6 +68,8 @@ pub const DEFAULT_AGENT_ROUTING: bool = false;
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 /// Default number of successive shell commands before nudging implementation.
 pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 3;
+/// Default maximum number of work iterations a `/loop` command may run.
+pub const DEFAULT_AGENT_LOOP_LIMIT: usize = 8;
 /// Default router profile for automatic model and reasoning sizing.
 pub const DEFAULT_AUTO_SIZING_ROUTER_PROFILE: &str = "auto-size-router";
 /// Default small target profile for automatic model and reasoning sizing.
@@ -3444,6 +3446,43 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub available_mcp_tools: Vec<McpPromptTool>,
+    /// Optional `/loop` controller metadata for this provider turn.
+    pub loop_turn: Option<RuntimeAgentLoopTurn>,
+}
+
+/// Identifies the role of one runtime turn owned by a `/loop` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeAgentLoopTurnKind {
+    /// A normal work iteration that should attempt to satisfy the original prompt.
+    Work,
+    /// A bounded assessment turn that asks whether the loop goal is complete.
+    Assessment,
+}
+
+/// Runtime-owned state for one active `/loop` command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentLoopState {
+    /// Pane whose visible agent shell owns the loop.
+    pub pane_id: String,
+    /// Original user prompt supplied after `/loop`.
+    pub original_prompt: String,
+    /// One-based work iteration currently being evaluated or executed.
+    pub iteration: usize,
+    /// Maximum number of work iterations allowed before the loop stops.
+    pub max_iterations: usize,
+    /// Latest non-`yes` assessment returned by the model, if any.
+    pub last_assessment: Option<String>,
+}
+
+/// Metadata attached to a loop-owned agent turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentLoopTurn {
+    /// Pane whose active loop owns the turn.
+    pub pane_id: String,
+    /// Role this turn plays in the loop controller.
+    pub kind: RuntimeAgentLoopTurnKind,
+    /// One-based work iteration associated with this turn.
+    pub iteration: usize,
 }
 
 /// Provider-backed conversation compaction queued outside the actor.
@@ -4025,6 +4064,12 @@ pub struct RuntimeSessionService {
     /// The runtime uses this as advisory context only; it must not block shell
     /// execution because legitimate audits can require long inspection runs.
     pub(super) agent_implementation_pressure_after_shell_actions: usize,
+    /// Maximum number of work iterations for one `/loop` command.
+    pub(super) agent_loop_limit: usize,
+    /// Active `/loop` controller state keyed by pane id.
+    pub(super) agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
+    /// Loop metadata keyed by runtime agent turn id.
+    pub(super) agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
     /// Stores the agent turn shell dispatch history value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

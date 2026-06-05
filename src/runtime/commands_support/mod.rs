@@ -4080,6 +4080,7 @@ pub(super) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.routing"
                 | "agents.action_failure_retry_limit"
                 | "agents.implementation_pressure_after_shell_actions"
+                | "agents.loop_limit"
                 | "agents.shell_only"
                 | "agents.subagent_placement"
                 | "agents.subagent_wait_policy"

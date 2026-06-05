@@ -11,9 +11,9 @@ use super::super::ModelProvider;
 #[cfg(test)]
 use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
-    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, McpPromptTool, MezError,
-    ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage, PathScopes,
-    PermissionPolicy, Result, SessionApprovalStore, assemble_model_request,
+    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet,
+    McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage,
+    PathScopes, PermissionPolicy, Result, SessionApprovalStore, assemble_model_request,
 };
 #[cfg(test)]
 use super::super::{MarkerToken, McpToolCallPlan, Path};
@@ -97,8 +97,25 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
+        self.run_turn_ref_with_allowed_actions(ledger, turn, context, None)
+    }
+
+    /// Executes a borrowed-context turn with an optional controller-selected
+    /// initial action surface.
+    #[cfg(test)]
+    pub fn run_turn_ref_with_allowed_actions(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+        allowed_actions: Option<AllowedActionSet>,
+    ) -> Result<AgentTurnExecution> {
         ledger.start_turn(turn.clone())?;
         let mut request = assemble_model_request(&self.model_profile, &turn, context)?;
+        if let Some(allowed_actions) = allowed_actions {
+            request.interaction_kind = ModelInteractionKind::ActionExecution;
+            request.allowed_actions = allowed_actions;
+        }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
@@ -448,8 +465,25 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
+        self.run_turn_async_ref_with_allowed_actions(ledger, turn, context, None)
+            .await
+    }
+
+    /// Executes a borrowed-context async turn with an optional
+    /// controller-selected initial action surface.
+    pub async fn run_turn_async_ref_with_allowed_actions(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+        allowed_actions: Option<AllowedActionSet>,
+    ) -> Result<AgentTurnExecution> {
         ledger.start_turn(turn.clone())?;
         let mut request = assemble_model_request(&self.model_profile, &turn, context)?;
+        if let Some(allowed_actions) = allowed_actions {
+            request.interaction_kind = ModelInteractionKind::ActionExecution;
+            request.allowed_actions = allowed_actions;
+        }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;

@@ -459,6 +459,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "routing",
     "action_failure_retry_limit",
     "implementation_pressure_after_shell_actions",
+    "loop_limit",
     "custom_system_prompt",
     "default_personality",
     "auto_sizing",

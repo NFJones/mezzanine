@@ -2470,6 +2470,7 @@ The `history` table MUST support `lines`, `rotate_lines`, `persist`, and
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `shell_only`, `compaction_raw_retention_percent`, `routing`,
 `action_failure_retry_limit`, `implementation_pressure_after_shell_actions`,
+`loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, `max_depth`,
@@ -2490,6 +2491,10 @@ and MUST default to `3`. It defines the gentle shell-command inspection
 pressure threshold; runtime-owned inspection pressure MUST escalate to medium at
 the greater of `6` or twice the configured threshold, and to strong at the
 greater of `10` or three times the configured threshold.
+`agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
+bounds the number of work iterations a single `/loop` command may run before
+Mezzanine stops automatic continuation and reports that the iteration limit was
+reached.
 
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,

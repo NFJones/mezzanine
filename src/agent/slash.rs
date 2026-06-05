@@ -226,6 +226,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
         slash("routing", &[], SlashCommandEffect::PolicyMutation, true),
         slash("personality", &[], SlashCommandEffect::PolicyMutation, true),
+        slash("loop", &[], SlashCommandEffect::SessionMutation, false),
         slash("stop", &[], SlashCommandEffect::BackgroundJobMutation, true),
         slash("fork", &[], SlashCommandEffect::SessionMutation, false),
         slash("resume", &[], SlashCommandEffect::SessionMutation, false),

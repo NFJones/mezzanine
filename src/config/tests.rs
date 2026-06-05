@@ -745,6 +745,7 @@ auto_reasoning_enabled = true
         plan.text
             .contains("implementation_pressure_after_shell_actions = 3")
     );
+    assert!(plan.text.contains("loop_limit = 8"));
     assert!(plan.text.contains("context_window_tokens = 1000000"));
     assert!(plan.text.contains("nested_multiplexer = \"disabled\""));
     assert!(!plan.text.contains("nested_muxxer"));
@@ -802,6 +803,7 @@ fn migrates_json_primary_config_to_current_schema() {
         values.get("agents.implementation_pressure_after_shell_actions"),
         Some(&"3".to_string())
     );
+    assert_eq!(values.get("agents.loop_limit"), Some(&"8".to_string()));
     assert!(!values.contains_key("agents.auto_compact"));
     assert!(!values.contains_key("agents.auto_compact_threshold"));
     assert_eq!(
@@ -1484,6 +1486,28 @@ fn rejects_invalid_implementation_pressure_after_shell_actions_values() {
         validation.diagnostics[0].path,
         "agents.implementation_pressure_after_shell_actions"
     );
+    assert!(
+        validation.diagnostics[0]
+            .message
+            .contains("positive integer")
+    );
+}
+
+/// Verifies rejects invalid agent loop iteration limits.
+///
+/// A zero loop limit would make `/loop` unable to perform even the initial work
+/// iteration while still accepting a command whose purpose is bounded automatic
+/// continuation, so validation requires a positive integer.
+#[test]
+fn rejects_invalid_agent_loop_limit_values() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nloop_limit = 0\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(!validation.valid);
+    assert_eq!(validation.diagnostics[0].path, "agents.loop_limit");
     assert!(
         validation.diagnostics[0]
             .message

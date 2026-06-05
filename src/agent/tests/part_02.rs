@@ -351,6 +351,7 @@ fn slash_command_registry_contains_required_baseline_commands() {
         "logout",
         "list-mcp",
         "model",
+        "loop",
         "stop",
         "fork",
         "resume",
@@ -433,6 +434,13 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     assert_eq!(directive.name, "directive");
     assert_eq!(directive.args, "focus on regressions");
     assert_eq!(directive.effect, SlashCommandEffect::SessionMutation);
+    let loop_command = parse_slash_command("/loop review the docs")
+        .unwrap()
+        .unwrap();
+    assert_eq!(loop_command.name, "loop");
+    assert_eq!(loop_command.args, "review the docs");
+    assert_eq!(loop_command.effect, SlashCommandEffect::SessionMutation);
+    assert!(!loop_command.queueable_while_running);
     assert_eq!(
         parse_slash_command("/sessions").unwrap_err().kind(),
         crate::error::MezErrorKind::InvalidArgs

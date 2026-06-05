@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::types::{RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind};
 use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, AgentTurnRecord,
@@ -85,6 +86,36 @@ const AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 const AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES: usize = 200;
 /// Maximum cleartext presentation bytes to read when resuming an agent shell.
 const AGENT_RESUME_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Builds the provider-visible prompt for one `/loop` work iteration.
+fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
+    let remaining = state
+        .last_assessment
+        .as_deref()
+        .filter(|assessment| !assessment.trim().is_empty())
+        .map(|assessment| {
+            format!(
+                "\n\nPrevious loop assessment said more work remains:\n{assessment}\n\nContinue from that assessment without repeating completed work unless necessary."
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{}\n\n[loop controller]\nThis is `/loop` work iteration {}/{}. Fulfill the original user prompt normally.{}",
+        state.original_prompt, state.iteration, state.max_iterations, remaining
+    )
+}
+
+/// Builds the provider-visible prompt for one `/loop` completion assessment.
+fn runtime_agent_loop_assessment_prompt(
+    state: &RuntimeAgentLoopState,
+    work_result: &str,
+) -> String {
+    format!(
+        "[loop controller assessment]\nOriginal user prompt:\n{}\n\nLatest completed work result:\n{}\n\nCritically compare the latest completed work against the original prompt. If the prompt is fully satisfied, return exactly one final `say` action whose text is exactly `yes`. If anything remains, return exactly one final `say` action briefly stating the remaining work. Do not request capabilities or perform work in this assessment turn.",
+        state.original_prompt,
+        work_result.trim()
+    )
+}
 
 /// Runs the agent shell invalid command response json operation for this subsystem.
 ///
@@ -1000,6 +1031,12 @@ impl RuntimeSessionService {
                     let title_outcome =
                         self.execute_agent_shell_title_command(primary_client_id, &pane_id, input)?;
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&title_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "loop"
+                {
+                    let loop_outcome = self.execute_agent_shell_loop_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&loop_outcome))
                 } else if let Some(AgentShellCommandOutcome::Display { command, .. }) =
                     outcome.as_ref()
                     && command == "status"
@@ -3486,6 +3523,151 @@ impl RuntimeSessionService {
         prompt: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
         self.start_agent_prompt_turn_inner(pane_id, prompt, None)
+    }
+
+    /// Starts a `/loop` command by creating the first loop-owned work turn.
+    pub(super) fn execute_agent_shell_loop_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("loop command must be submitted as an agent slash command")
+        })?;
+        let original_prompt = invocation.args.trim();
+        if original_prompt.is_empty() {
+            return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
+        }
+        if self.agent_loops_by_pane.contains_key(pane_id) {
+            return Err(MezError::conflict(
+                "an agent loop is already active for this pane",
+            ));
+        }
+        self.agent_loops_by_pane.insert(
+            pane_id.to_string(),
+            RuntimeAgentLoopState {
+                pane_id: pane_id.to_string(),
+                original_prompt: original_prompt.to_string(),
+                iteration: 1,
+                max_iterations: self.agent_loop_limit.max(1),
+                last_assessment: None,
+            },
+        );
+        let started = match self.start_agent_loop_work_turn(pane_id) {
+            Ok(started) => started,
+            Err(error) => {
+                self.agent_loops_by_pane.remove(pane_id);
+                return Err(error);
+            }
+        };
+        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "loop".to_string(),
+            body: format!(
+                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} state={}",
+                pane_id,
+                started.turn_id,
+                self.agent_loop_limit.max(1),
+                runtime_agent_turn_state_name(started.state)
+            ),
+            visibility,
+        })
+    }
+
+    /// Starts an internal assessment turn after one loop work iteration.
+    pub(in crate::runtime) fn start_agent_loop_assessment_turn(
+        &mut self,
+        pane_id: &str,
+        work_result: &str,
+    ) -> Result<Option<RuntimeAgentPromptTurnStart>> {
+        let Some(state) = self.agent_loops_by_pane.get(pane_id).cloned() else {
+            return Ok(None);
+        };
+        let prompt = runtime_agent_loop_assessment_prompt(&state, work_result);
+        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None)?;
+        self.agent_loop_turns.insert(
+            started.turn_id.clone(),
+            RuntimeAgentLoopTurn {
+                pane_id: pane_id.to_string(),
+                kind: RuntimeAgentLoopTurnKind::Assessment,
+                iteration: state.iteration,
+            },
+        );
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &started.turn_id,
+            &format!("loop assessment queued iteration={}", state.iteration),
+        )?;
+        Ok(Some(started))
+    }
+
+    /// Applies the assessment response and starts another loop iteration when needed.
+    pub(in crate::runtime) fn continue_agent_loop_after_assessment_text(
+        &mut self,
+        pane_id: &str,
+        assessment: &str,
+    ) -> Result<Option<RuntimeAgentPromptTurnStart>> {
+        let normalized = assessment.trim();
+        if normalized.eq_ignore_ascii_case("yes") {
+            self.agent_loops_by_pane.remove(pane_id);
+            self.append_agent_status_text_to_terminal_buffer(pane_id, "loop: completed")?;
+            return Ok(None);
+        }
+        let Some(mut state) = self.agent_loops_by_pane.get(pane_id).cloned() else {
+            return Ok(None);
+        };
+        state.last_assessment = Some(normalized.to_string());
+        if state.iteration >= state.max_iterations {
+            self.agent_loops_by_pane.remove(pane_id);
+            self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!(
+                    "loop: reached iteration limit {}/{}; last assessment: {}",
+                    state.iteration, state.max_iterations, normalized
+                ),
+            )?;
+            return Ok(None);
+        }
+        state.iteration = state.iteration.saturating_add(1);
+        self.agent_loops_by_pane
+            .insert(pane_id.to_string(), state.clone());
+        let started = self.start_agent_loop_work_turn(pane_id)?;
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            &format!(
+                "loop: continuing iteration {}/{}",
+                state.iteration, state.max_iterations
+            ),
+        )?;
+        Ok(Some(started))
+    }
+
+    /// Starts one loop-owned work turn using the current pane loop state.
+    fn start_agent_loop_work_turn(&mut self, pane_id: &str) -> Result<RuntimeAgentPromptTurnStart> {
+        let state = self
+            .agent_loops_by_pane
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("agent loop state is unavailable"))?;
+        let prompt = runtime_agent_loop_work_prompt(&state);
+        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None)?;
+        self.agent_loop_turns.insert(
+            started.turn_id.clone(),
+            RuntimeAgentLoopTurn {
+                pane_id: pane_id.to_string(),
+                kind: RuntimeAgentLoopTurnKind::Work,
+                iteration: state.iteration,
+            },
+        );
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &started.turn_id,
+            &format!(
+                "loop work queued iteration={} limit={}",
+                state.iteration, state.max_iterations
+            ),
+        )?;
+        Ok(started)
     }
 
     /// Injects user steering input into the currently running pane turn.

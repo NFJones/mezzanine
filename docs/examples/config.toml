@@ -168,6 +168,7 @@ compaction_raw_retention_percent = 10
 routing = false
 action_failure_retry_limit = 5
 implementation_pressure_after_shell_actions = 3
+loop_limit = 8
 custom_system_prompt = ""
 default_personality = ""
 subagent_placement = "new-window"

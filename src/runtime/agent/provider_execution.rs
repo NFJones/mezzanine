@@ -7,6 +7,8 @@
 //! one focused implementation unit.
 
 use super::*;
+#[cfg(test)]
+use crate::agent::AllowedActionSet;
 
 impl RuntimeSessionService {
     /// Runs the execute agent turn with provider operation for this subsystem.
@@ -142,6 +144,13 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
+        let loop_allowed_actions = self
+            .agent_loop_turns
+            .get(&turn.turn_id)
+            .and_then(|loop_turn| match loop_turn.kind {
+                RuntimeAgentLoopTurnKind::Assessment => Some(AllowedActionSet::say_only()),
+                RuntimeAgentLoopTurnKind::Work => None,
+            });
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -157,7 +166,12 @@ impl RuntimeSessionService {
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
             };
-            match runner.run_turn_ref(&mut provider_ledger, turn.clone(), &provider_context) {
+            match runner.run_turn_ref_with_allowed_actions(
+                &mut provider_ledger,
+                turn.clone(),
+                &provider_context,
+                loop_allowed_actions.clone(),
+            ) {
                 Ok(execution) => break execution,
                 Err(error) => {
                     self.append_agent_trace_provider_error(
@@ -370,6 +384,13 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
+        let loop_allowed_actions = self
+            .agent_loop_turns
+            .get(&turn.turn_id)
+            .and_then(|loop_turn| match loop_turn.kind {
+                RuntimeAgentLoopTurnKind::Assessment => Some(AllowedActionSet::say_only()),
+                RuntimeAgentLoopTurnKind::Work => None,
+            });
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -385,7 +406,12 @@ impl RuntimeSessionService {
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
             };
-            match runner.run_turn_ref(&mut provider_ledger, turn.clone(), &provider_context) {
+            match runner.run_turn_ref_with_allowed_actions(
+                &mut provider_ledger,
+                turn.clone(),
+                &provider_context,
+                loop_allowed_actions.clone(),
+            ) {
                 Ok(execution) => break execution,
                 Err(error) => {
                     self.append_agent_trace_provider_error(
@@ -895,6 +921,35 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Continues or stops an active `/loop` controller after one owned turn settles.
+    fn follow_up_agent_loop_after_terminal_execution(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let Some(loop_turn) = self.agent_loop_turns.remove(&turn.turn_id) else {
+            return Ok(());
+        };
+        if execution.terminal_state != AgentTurnState::Completed {
+            self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+            return Ok(());
+        }
+        let assistant_text = assistant_context_content_for_execution(execution);
+        match loop_turn.kind {
+            RuntimeAgentLoopTurnKind::Work => {
+                let _ =
+                    self.start_agent_loop_assessment_turn(&loop_turn.pane_id, &assistant_text)?;
+            }
+            RuntimeAgentLoopTurnKind::Assessment => {
+                let _ = self.continue_agent_loop_after_assessment_text(
+                    &loop_turn.pane_id,
+                    &assistant_text,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the apply agent provider execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1046,6 +1101,7 @@ impl RuntimeSessionService {
                 execution.terminal_state,
                 "provider_execution_settled",
             )?;
+            self.follow_up_agent_loop_after_terminal_execution(turn, &execution)?;
         } else {
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
@@ -1297,6 +1353,7 @@ impl RuntimeSessionService {
                 execution.terminal_state,
                 "provider_execution_settled",
             )?;
+            self.follow_up_agent_loop_after_terminal_execution(turn, &execution)?;
         } else {
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);

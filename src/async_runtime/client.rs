@@ -21,15 +21,15 @@ use super::{
 };
 use crate::agent::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
-    AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderErrorRetryClass, ReqwestProviderHttpTransport,
+    AgentTurnState, AllowedActionSet, AsyncModelProvider, ContextSourceKind, ModelMessage,
+    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderErrorRetryClass, ReqwestProviderHttpTransport,
     execute_network_action_with_transport_async, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
 use crate::ids::AgentId;
-use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
+use crate::runtime::{RuntimeAgentLoopTurnKind, runtime_execute_auto_sizing_with_async_provider};
 use crate::terminal::{TerminalFdInterest, TerminalStyleSpan};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -1326,9 +1326,16 @@ async fn execute_runtime_agent_provider_dispatch(
         subagent_scope,
         available_mcp_servers,
         available_mcp_tools,
+        loop_turn,
     } = dispatch;
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
     let mut selected_auto_sizing_profile: Option<ModelProfile> = None;
+    let loop_allowed_actions = loop_turn
+        .as_ref()
+        .and_then(|loop_turn| match loop_turn.kind {
+            RuntimeAgentLoopTurnKind::Assessment => Some(AllowedActionSet::say_only()),
+            RuntimeAgentLoopTurnKind::Work => None,
+        });
     if let Some(auto_sizing) = auto_sizing.as_ref()
         && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
     {
@@ -1447,7 +1454,12 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_tools: &available_mcp_tools,
             };
             let execution = runner
-                .run_turn_async_ref(&mut ledger, turn.clone(), &context)
+                .run_turn_async_ref_with_allowed_actions(
+                    &mut ledger,
+                    turn.clone(),
+                    &context,
+                    loop_allowed_actions.clone(),
+                )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1466,7 +1478,12 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_tools: &available_mcp_tools,
             };
             let execution = runner
-                .run_turn_async_ref(&mut ledger, turn.clone(), &context)
+                .run_turn_async_ref_with_allowed_actions(
+                    &mut ledger,
+                    turn.clone(),
+                    &context,
+                    loop_allowed_actions.clone(),
+                )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1485,7 +1502,12 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_tools: &available_mcp_tools,
             };
             let execution = runner
-                .run_turn_async_ref(&mut ledger, turn.clone(), &context)
+                .run_turn_async_ref_with_allowed_actions(
+                    &mut ledger,
+                    turn.clone(),
+                    &context,
+                    loop_allowed_actions.clone(),
+                )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
