@@ -6,7 +6,7 @@
 
 use super::types::{RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind};
 use super::{
-    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext,
+    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext, AgentId,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, AgentTurnRecord,
     AgentTurnState, BTreeMap, BTreeSet, BlockedApprovalRequest, BlockedApprovalState, Command,
     CommandInvocation, ConfigFormat, ConfigScope, ContextBlock, ContextSourceKind,

@@ -282,6 +282,7 @@ impl AsyncRuntimeSessionActor {
                 scheduled_provider_claim_timers: Default::default(),
                 next_provider_claim_timer_generation: 0,
                 provider_retry_attempts: Default::default(),
+                provider_output_limit_compaction_turns: Default::default(),
                 scheduled_pane_pipe_health_timers: Default::default(),
                 next_pane_pipe_health_timer_generation: 0,
                 scheduled_idle_cleanup_timer: None,
@@ -1570,15 +1571,19 @@ impl AsyncRuntimeSessionActor {
     /// Returns agent turns whose progress currently depends on actor-owned
     /// scheduling state instead of service-owned runtime state.
     ///
-    /// Provider retry timers are intentionally held outside
-    /// `RuntimeSessionService`, so service-level reconciliation must be told
-    /// that these turns still have a valid path to progress.
+    /// Provider retry timers and automatic output-limit compaction dispatch are
+    /// intentionally held outside ordinary service-owned provider tasks, so
+    /// service-level reconciliation must be told that these turns still have a
+    /// valid path to progress.
     fn actor_owned_agent_progress_turn_ids(&self) -> std::collections::BTreeSet<String> {
-        self.provider_retry_attempts
+        let mut turn_ids: std::collections::BTreeSet<String> = self
+            .provider_retry_attempts
             .keys()
             .chain(self.scheduled_provider_retry_timers.keys())
             .cloned()
-            .collect()
+            .collect();
+        turn_ids.extend(self.service.agent_compaction_resume_turn_ids());
+        turn_ids
     }
 
     /// Runs the queue pending provider dispatch side effects operation for this subsystem.
@@ -2016,8 +2021,45 @@ impl AsyncRuntimeSessionActor {
                     application.side_effects.extend(claim_cancellations);
                     return Ok(application);
                 }
+                let retry_class = provider_error_retry_class_from_parts(
+                    provider_event_error_kind(&kind),
+                    &message,
+                    provider_failure_json.as_deref(),
+                );
+                if matches!(retry_class, ProviderErrorRetryClass::OutputLimit)
+                    && !self
+                        .provider_output_limit_compaction_turns
+                        .contains(turn_id.as_str())
+                {
+                    let error = provider_event_error_from_parts(
+                        &kind,
+                        &message,
+                        provider_failure_json.as_deref(),
+                        provider_raw_text.as_deref(),
+                    );
+                    if self
+                        .service
+                        .queue_agent_output_limit_recovery_compaction(&agent_id, &turn_id, &error)?
+                    {
+                        self.provider_retry_attempts.remove(turn_id.as_str());
+                        self.scheduled_provider_retry_timers
+                            .remove(turn_id.as_str());
+                        self.provider_output_limit_compaction_turns
+                            .insert(turn_id.clone());
+                        let mut side_effects =
+                            self.render_side_effects(RenderInvalidationReason::FullRedraw);
+                        side_effects.extend(self.pending_provider_dispatch_side_effects()?);
+                        side_effects.extend(claim_cancellations);
+                        return Ok(RuntimeEventApplication {
+                            applied: true,
+                            side_effects,
+                        });
+                    }
+                }
                 self.provider_retry_attempts.remove(turn_id.as_str());
                 self.scheduled_provider_retry_timers
+                    .remove(turn_id.as_str());
+                self.provider_output_limit_compaction_turns
                     .remove(turn_id.as_str());
                 self.service
                     .apply_agent_provider_failed_event(
@@ -2050,6 +2092,8 @@ impl AsyncRuntimeSessionActor {
                 self.service.clear_claimed_agent_provider_task(&turn_id);
                 self.provider_retry_attempts.remove(turn_id.as_str());
                 self.scheduled_provider_retry_timers
+                    .remove(turn_id.as_str());
+                self.provider_output_limit_compaction_turns
                     .remove(turn_id.as_str());
                 let applied = self
                     .service
@@ -2087,13 +2131,17 @@ impl AsyncRuntimeSessionActor {
                 .service
                 .apply_agent_compaction_failed_event(&pane_id, &message)?,
         };
+        let mut side_effects = if applied {
+            self.render_side_effects(RenderInvalidationReason::FullRedraw)
+        } else {
+            Vec::new()
+        };
+        if applied {
+            side_effects.extend(self.pending_provider_dispatch_side_effects()?);
+        }
         Ok(RuntimeEventApplication {
             applied,
-            side_effects: if applied {
-                self.render_side_effects(RenderInvalidationReason::FullRedraw)
-            } else {
-                Vec::new()
-            },
+            side_effects,
         })
     }
 

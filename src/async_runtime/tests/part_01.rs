@@ -3431,6 +3431,208 @@ max_output_tokens = 4096
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies exhausted output-limit retries queue automatic compaction instead
+/// of failing the running turn.
+///
+/// OpenAI Responses can finish with `response.incomplete` and
+/// `incomplete_details.reason=max_output_tokens` after spending the output
+/// budget on reasoning. The actor first uses the bounded provider retry path.
+/// Once that budget is exhausted, it should queue model-backed conversation
+/// compaction so the same task can resume from compacted context rather than
+/// recording a terminal MAAP failure.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_queues_compaction_after_output_limit_retry_exhaustion() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "async-output-limit-auto-compaction".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "openai"
+default_model_profile = "default"
+[providers.openai]
+kind = "openai"
+models = ["gpt-test"]
+default_model = "gpt-test"
+[model_profiles.default]
+provider = "openai"
+model = "gpt-test"
+max_output_tokens = 4096
+context_window_tokens = 128000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_root = std::env::temp_dir().join(format!(
+        "mez-async-output-limit-auto-compact-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&transcript_root).unwrap();
+    let transcript_store = AgentTranscriptStore::new(transcript_root);
+    for sequence in 1..=6 {
+        transcript_store
+            .append(&crate::transcript::TranscriptEntry {
+                conversation_id: "async-output-limit-auto".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: crate::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("durable prior output-limit entry {sequence}"),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "async-output-limit-auto", 6)
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "continue the implementation")
+        .unwrap();
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
+    let expected_turn = pending[0].turn_id.clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+
+    let client = async {
+        let retry_delays = [1_000, 2_000, 4_000, 8_000, 16_000];
+        for (index, expected_delay_ms) in retry_delays.into_iter().enumerate() {
+            let mut failure = RuntimeEventBatch::new();
+            failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+                agent_id: expected_agent.clone(),
+                turn_id: expected_turn.clone(),
+                kind: "invalid_state".to_string(),
+                message: "OpenAI stream returned an incomplete response: max_output_tokens"
+                    .to_string(),
+                provider_failure_json: Some(
+                    r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#.to_string(),
+                ),
+                provider_raw_text: None,
+            }));
+            let failure_report = handle.submit_runtime_events(failure).await.unwrap();
+            assert_eq!(failure_report.accepted, 1);
+            assert_eq!(failure_report.applied, 1);
+
+            let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
+            let retry_key = timer_effects
+                .iter()
+                .find_map(|effect| match effect {
+                    RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                        if key.kind == RuntimeTimerKind::ProviderRetry =>
+                    {
+                        assert_eq!(*delay_ms, expected_delay_ms);
+                        Some(key.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
+            assert_eq!(retry_key.owner_id, expected_turn);
+            assert_eq!(retry_key.generation, (index + 1) as u64);
+
+            let mut retry = RuntimeEventBatch::new();
+            retry.push(RuntimeEvent::Timer(TimerEvent {
+                key: retry_key,
+                now_ms: expected_delay_ms,
+            }));
+            let retry_report = handle.submit_runtime_events(retry).await.unwrap();
+            assert_eq!(retry_report.accepted, 1);
+            assert_eq!(retry_report.applied, 1);
+
+            let dispatches = handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap();
+            assert!(dispatches.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::DispatchAgentProvider { turn_id, .. }
+                    if turn_id == &expected_turn
+            )));
+        }
+
+        let mut exhausted = RuntimeEventBatch::new();
+        exhausted.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id: expected_agent,
+            turn_id: expected_turn.clone(),
+            kind: "invalid_state".to_string(),
+            message: "OpenAI stream returned an incomplete response: max_output_tokens".to_string(),
+            provider_failure_json: Some(
+                r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#.to_string(),
+            ),
+            provider_raw_text: None,
+        }));
+        let exhausted_report = handle.submit_runtime_events(exhausted).await.unwrap();
+        assert_eq!(exhausted_report.accepted, 1);
+        assert_eq!(exhausted_report.applied, 1);
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "exhausted output-limit recovery should not schedule another retry timer"
+        );
+
+        let dispatches = handle
+            .drain_agent_provider_dispatch_side_effects(8)
+            .await
+            .unwrap();
+        assert!(dispatches.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+        )));
+        assert!(
+            handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .is_empty(),
+            "provider work should wait until compaction completion refreshes context"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    let pane_text = exit
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("provider output-limit retries exhausted; compacting conversation"),
+        "{pane_text}"
+    );
+    assert!(!pane_text.contains("agent: turn turn-"), "{pane_text}");
+    assert_eq!(
+        exit.service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.running_turn_id.as_deref()),
+        Some(expected_turn.as_str())
+    );
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies idle cleanup does not fail turns whose only progress path is an
 /// actor-owned provider retry timer.
 ///

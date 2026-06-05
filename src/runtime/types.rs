@@ -3510,6 +3510,8 @@ pub struct RuntimeAgentCompactionTask {
     pub model_profile: ModelProfile,
     /// Provider request submitted by the async compaction worker.
     pub request: ModelRequest,
+    /// Running turn to requeue after this compaction completes.
+    pub resume_turn_id: Option<String>,
 }
 
 /// Claimed model compaction dispatch owned by an async provider worker.

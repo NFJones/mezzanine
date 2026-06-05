@@ -1562,6 +1562,164 @@ max_output_tokens = 4096
     );
 }
 
+/// Verifies automatic output-limit compaction refreshes a running turn and
+/// queues provider continuation.
+///
+/// The first recovery stage for `response.incomplete/max_output_tokens` keeps
+/// the active-turn context intact and asks for a compact MAAP retry. If that
+/// bounded retry budget is exhausted, the runtime queues model-backed
+/// conversation compaction while the turn remains running. Completion must
+/// replace raw transcript replay with compact memory, retain the recent raw
+/// tail, preserve the running turn, and queue provider work for the same task.
+#[test]
+fn runtime_output_limit_auto_compaction_completion_requeues_running_turn() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "output-limit-auto-compaction".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-output-limit-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-output-limit-test]
+provider = "runtime-batch"
+model = "test"
+max_output_tokens = 4096
+context_window_tokens = 128000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_root = std::env::temp_dir().join(format!(
+        "mez-runtime-output-limit-auto-compact-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&transcript_root).unwrap();
+    let transcript_store = AgentTranscriptStore::new(transcript_root);
+    for sequence in 1..=4 {
+        transcript_store
+            .append(&crate::transcript::TranscriptEntry {
+                conversation_id: "output-limit-auto".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: crate::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("durable prior output-limit entry {sequence}"),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "output-limit-auto", 4)
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-output-limit-auto-compact","method":"agent/shell/command","params":{"idempotency_key":"agent-output-limit-auto-compact","input":"continue with the current implementation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks
+        .push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic same-turn result".to_string(),
+            content: "same-turn result must survive compaction refresh".to_string(),
+        });
+    let error = MezError::invalid_state(
+        "OpenAI stream returned an incomplete response: max_output_tokens",
+    )
+    .with_provider_failure_json(r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#);
+
+    let queued = service
+        .queue_agent_output_limit_recovery_compaction(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+        )
+        .unwrap();
+
+    assert!(queued);
+    assert!(
+        service
+            .pending_agent_compaction_tasks
+            .get("%1")
+            .and_then(|task| task.resume_turn_id.as_deref())
+            == Some("turn-1")
+    );
+    assert!(!service.pending_agent_provider_tasks.contains("turn-1"));
+
+    complete_runtime_test_compaction(&mut service, "%1", "summary after output-limit exhaustion");
+
+    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.running_turn_id.as_deref()),
+        Some("turn-1")
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_entries,
+        3
+    );
+    let stored_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        stored_context.contains("summary after output-limit exhaustion"),
+        "{stored_context}"
+    );
+    assert!(
+        stored_context.contains("Conversation compaction occurred before this turn"),
+        "{stored_context}"
+    );
+    assert!(
+        stored_context.contains("durable prior output-limit entry 4"),
+        "{stored_context}"
+    );
+    assert!(
+        !stored_context.contains("durable prior output-limit entry 1"),
+        "{stored_context}"
+    );
+    assert!(
+        stored_context.contains("same-turn result must survive compaction refresh"),
+        "{stored_context}"
+    );
+}
+
 /// Verifies routing context-limit recovery budgets against the smallest
 /// possible main-provider target before a router decision has been stored.
 ///

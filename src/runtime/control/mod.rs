@@ -7,8 +7,8 @@ mod configuration;
 mod subagents;
 use super::{
     AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentShellVisibility, AgentTurnLedger,
-    ApprovalDecision, ApprovalDecisionScopePersistence, ApprovalGrant, ApprovalScope,
-    AttachedTerminalClientStepPlan, AuditActor, AuditRecord, BlockedApprovalRequest,
+    AgentTurnState, ApprovalDecision, ApprovalDecisionScopePersistence, ApprovalGrant,
+    ApprovalScope, AttachedTerminalClientStepPlan, AuditActor, AuditRecord, BlockedApprovalRequest,
     BlockedApprovalState, ClientRole, ClientState, ClientViewRole, CommandRule, CommandRuleScope,
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigScope, ContextBlock,
     ContextSourceKind, ControlConnectionState, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
@@ -146,6 +146,23 @@ fn runtime_agent_transcript_context_blocks(
         });
     }
     blocks
+}
+
+/// Returns true for context blocks owned by transcript replay or compact memory.
+fn runtime_context_block_is_compaction_refresh_owned(block: &ContextBlock) -> bool {
+    match block.source {
+        ContextSourceKind::Transcript
+        | ContextSourceKind::TranscriptUser
+        | ContextSourceKind::TranscriptTool => true,
+        ContextSourceKind::TranscriptAssistant => block
+            .label
+            .starts_with("previous assistant message for pane "),
+        ContextSourceKind::Memory => {
+            block.label == "conversation compaction notice"
+                || block.label.starts_with("memory compact-")
+        }
+        _ => false,
+    }
 }
 
 /// Maps a stored transcript role to a model-context source that preserves the
@@ -1142,6 +1159,97 @@ impl RuntimeSessionService {
             content: "Conversation compaction occurred before this turn. Older durable transcript entries were summarized into compact memory, and only the retained recent raw tail remains exact. Treat the summary as lossy; use targeted shell, search, or capture actions if older exact details are needed."
                 .to_string(),
         })
+    }
+
+    /// Refreshes transcript and compact-memory context for a running turn.
+    ///
+    /// Automatic provider recovery can compact a pane conversation while the
+    /// active turn remains running. The provider retry must then see the newly
+    /// written summary and shorter transcript tail without discarding same-turn
+    /// action results, steering, rationale ledgers, or execution pressure.
+    pub(in crate::runtime) fn refresh_running_turn_context_after_conversation_compaction(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<bool> {
+        let Some(turn) = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if turn.state != AgentTurnState::Running {
+            return Ok(false);
+        }
+        let Some(session) = self.agent_shell_store.get(&turn.pane_id).cloned() else {
+            return Ok(false);
+        };
+        if session.running_turn_id.as_deref() != Some(turn_id) {
+            return Ok(false);
+        }
+
+        let mut refreshed_blocks = Vec::new();
+        if let Some(store) = self.agent_transcript_store.as_ref()
+            && session.transcript_entries > 0
+        {
+            let transcript_context_entries =
+                runtime_transcript_context_entry_limit(session.transcript_entries);
+            match store.inspect_recent(
+                &session.session_id,
+                transcript_context_entries,
+                AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
+            ) {
+                Ok(entries) if !entries.is_empty() => {
+                    refreshed_blocks.extend(runtime_agent_transcript_context_blocks(
+                        &turn.pane_id,
+                        &entries,
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let context_memory_records = self.model_context_memory_records_for_pane(&turn.pane_id);
+        if let Some(block) =
+            Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
+        {
+            refreshed_blocks.push(block);
+        }
+        let refreshed_context = append_memory_context(
+            AgentContext::new(refreshed_blocks)?,
+            &context_memory_records,
+            1,
+        )?;
+        let refreshed_blocks = refreshed_context.blocks;
+
+        let Some(existing_context) = self.agent_turn_contexts.get(turn_id).cloned() else {
+            return Ok(false);
+        };
+        let mut blocks = existing_context.blocks;
+        blocks.retain(|block| !runtime_context_block_is_compaction_refresh_owned(block));
+        let insert_at = blocks
+            .iter()
+            .position(|block| {
+                block.source == ContextSourceKind::UserInstruction && block.label == "user prompt"
+            })
+            .unwrap_or(blocks.len());
+        for (offset, block) in refreshed_blocks.into_iter().enumerate() {
+            blocks.insert(insert_at + offset, block);
+        }
+        let refreshed_block_count = blocks.len();
+        self.agent_turn_contexts
+            .insert(turn_id.to_string(), AgentContext::new(blocks)?);
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            turn_id,
+            &format!(
+                "context refreshed reason=conversation_compaction_completed blocks={refreshed_block_count}"
+            ),
+        )?;
+        Ok(true)
     }
 
     /// Runs the create live snapshot operation for this subsystem.

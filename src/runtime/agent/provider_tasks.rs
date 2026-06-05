@@ -599,6 +599,53 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Queues a running provider turn after automatic compaction recovery.
+    ///
+    /// This is used after an output-limit failure triggers model-backed
+    /// conversation compaction. The turn remains running, but its provider
+    /// context has been refreshed to include compacted memory and the shorter
+    /// raw transcript tail before the next provider request is dispatched.
+    pub(crate) fn queue_agent_provider_recovery_task_after_compaction(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<bool> {
+        let Some(turn) = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+        else {
+            self.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(false);
+        };
+        if turn.state != AgentTurnState::Running {
+            self.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(false);
+        }
+        if !self.agent_turn_model_profiles.contains_key(turn_id) {
+            return Err(MezError::invalid_state(
+                "runtime agent turn has no model profile",
+            ));
+        }
+        self.pending_agent_provider_tasks
+            .insert(turn_id.to_string());
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            turn_id,
+            "provider_task queued reason=provider_output_limit_compaction_completed",
+        )?;
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"running","provider_retry":"ready","recovery":"output_limit_compaction"}}"#,
+                json_escape(&turn.pane_id),
+                json_escape(turn_id)
+            ),
+        )?;
+        Ok(true)
+    }
+
     /// Applies an async provider-worker failure event through actor-owned
     /// runtime ingress.
     ///

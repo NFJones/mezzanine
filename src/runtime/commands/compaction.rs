@@ -22,7 +22,7 @@ impl RuntimeSessionService {
                 "compact command does not accept arguments",
             ));
         }
-        self.queue_agent_shell_compaction_with_model(pane_id, "manual")
+        self.queue_agent_shell_compaction_with_model(pane_id, "manual", None)
     }
 
     /// Queues model-backed conversation compaction and marks the pane active.
@@ -35,6 +35,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         source: &str,
+        resume_turn_id: Option<&str>,
     ) -> Result<AgentShellCommandOutcome> {
         let (conversation_id, transcript_entries, visibility, running_turn_id) = {
             let session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
@@ -50,7 +51,9 @@ impl RuntimeSessionService {
                 session.running_turn_id.clone(),
             )
         };
-        if let Some(turn_id) = running_turn_id {
+        if let Some(turn_id) = running_turn_id
+            && resume_turn_id != Some(turn_id.as_str())
+        {
             return Err(MezError::conflict(format!(
                 "cannot compact conversation while turn {turn_id} is running"
             )));
@@ -98,7 +101,7 @@ impl RuntimeSessionService {
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let retained_tail_percent = self.agent_compaction_raw_retention_percent;
-        let retained_transcript_entries = if source == "manual" {
+        let retained_transcript_entries = if source == "manual" || resume_turn_id.is_some() {
             runtime_compact_forced_retained_transcript_entries(
                 transcript_entries,
                 &transcript_records,
@@ -168,6 +171,7 @@ impl RuntimeSessionService {
                 model_profile_name: model_profile_name.clone(),
                 model_profile: model_profile.clone(),
                 request,
+                resume_turn_id: resume_turn_id.map(str::to_string),
             },
         );
         self.append_agent_status_text_to_terminal_buffer(
@@ -212,7 +216,67 @@ impl RuntimeSessionService {
                 "compact command does not accept arguments",
             ));
         }
-        self.queue_agent_shell_compaction_with_model(pane_id, "manual")
+        self.queue_agent_shell_compaction_with_model(pane_id, "manual", None)
+    }
+
+    /// Queues internal output-limit recovery compaction for a running turn.
+    ///
+    /// Provider `max_output_tokens` exhaustion can leave a running turn with a
+    /// request shape that repeatedly burns its output budget before producing a
+    /// valid MAAP batch. This helper uses the same model-backed conversation
+    /// compactor as `/compact`, but it is runtime-owned and resumes the active
+    /// turn after the compacted memory is written.
+    pub(crate) fn queue_agent_output_limit_recovery_compaction(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        error: &MezError,
+    ) -> Result<bool> {
+        let Some(turn) = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+        else {
+            self.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(false);
+        };
+        if turn.agent_id != agent_id.as_str() {
+            return Err(MezError::invalid_args(
+                "agent provider recovery agent id does not match turn",
+            ));
+        }
+        if turn.state != AgentTurnState::Running {
+            self.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(false);
+        }
+        if self.agent_compacting_panes.contains_key(&turn.pane_id) {
+            return Ok(false);
+        }
+        let outcome = self.queue_agent_shell_compaction_with_model(
+            &turn.pane_id,
+            "provider-output-limit",
+            Some(turn_id),
+        )?;
+        self.pending_agent_provider_tasks.remove(turn_id);
+        self.append_agent_status_text_to_terminal_buffer(
+            &turn.pane_id,
+            &format!(
+                "agent: provider output-limit retries exhausted; compacting conversation before continuing error_kind={}",
+                runtime_mezzanine_error_code(error.kind())
+            ),
+        )?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            turn_id,
+            &format!(
+                "provider_request recovery_queued reason=provider_output_limit_compaction error_kind={} outcome={}",
+                runtime_mezzanine_error_code(error.kind()),
+                runtime_compaction_outcome_name(&outcome)
+            ),
+        )?;
+        Ok(matches!(outcome, AgentShellCommandOutcome::Mutated { .. }))
     }
 
     /// Returns pane ids with queued model-backed compaction tasks.
@@ -220,6 +284,20 @@ impl RuntimeSessionService {
         self.pending_agent_compaction_tasks
             .keys()
             .cloned()
+            .collect()
+    }
+
+    /// Returns running turns waiting on model-backed compaction before retry.
+    ///
+    /// Automatic output-limit recovery keeps the turn running while an async
+    /// compaction worker summarizes the pane transcript. Actor-owned idle
+    /// cleanup uses these ids as valid progress paths until compaction reports
+    /// completion or failure.
+    pub(crate) fn agent_compaction_resume_turn_ids(&self) -> Vec<String> {
+        self.pending_agent_compaction_tasks
+            .values()
+            .chain(self.claimed_agent_compaction_tasks.values())
+            .filter_map(|task| task.resume_turn_id.clone())
             .collect()
     }
 
@@ -360,6 +438,18 @@ impl RuntimeSessionService {
                 memory_id, task.summarized_entries, remaining_transcript_entries, task.source
             ),
         )?;
+        if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
+            let refreshed =
+                self.refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
+            if refreshed {
+                self.queue_agent_provider_recovery_task_after_compaction(resume_turn_id)?;
+                self.append_agent_trace_turn_event(
+                    pane_id,
+                    resume_turn_id,
+                    "provider_request recovery_resuming reason=provider_output_limit_compaction_completed",
+                )?;
+            }
+        }
         Ok(true)
     }
 
@@ -369,14 +459,14 @@ impl RuntimeSessionService {
         pane_id: &str,
         message: &str,
     ) -> Result<bool> {
-        let had_task = self
-            .pending_agent_compaction_tasks
-            .remove(pane_id)
-            .is_some()
-            || self
-                .claimed_agent_compaction_tasks
-                .remove(pane_id)
-                .is_some()
+        let pending_task = self.pending_agent_compaction_tasks.remove(pane_id);
+        let claimed_task = self.claimed_agent_compaction_tasks.remove(pane_id);
+        let resume_turn_id = claimed_task
+            .as_ref()
+            .or(pending_task.as_ref())
+            .and_then(|task| task.resume_turn_id.clone());
+        let had_task = pending_task.is_some()
+            || claimed_task.is_some()
             || self.agent_compacting_panes.remove(pane_id).is_some();
         if had_task {
             self.append_agent_status_text_to_terminal_buffer(
@@ -384,7 +474,42 @@ impl RuntimeSessionService {
                 &format!("agent: compact failed during provider request: {message}"),
             )?;
         }
+        if let Some(resume_turn_id) = resume_turn_id {
+            self.fail_running_turn_after_output_limit_compaction_failure(&resume_turn_id, message)?;
+        }
         Ok(had_task)
+    }
+
+    /// Fails a turn whose automatic output-limit compaction could not finish.
+    fn fail_running_turn_after_output_limit_compaction_failure(
+        &mut self,
+        turn_id: &str,
+        message: &str,
+    ) -> Result<()> {
+        let Some(turn) = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if turn.state != AgentTurnState::Running {
+            return Ok(());
+        }
+        let Some(model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned() else {
+            return Ok(());
+        };
+        let error = MezError::invalid_state(format!(
+            "automatic output-limit compaction failed before provider retry: {message}"
+        ));
+        self.fail_agent_turn_for_provider_error(
+            &turn,
+            &model_profile.provider,
+            &model_profile,
+            &error,
+        )
     }
 
     /// Runs the inspect agent shell transcript for compaction operation for this subsystem.
@@ -404,6 +529,15 @@ impl RuntimeSessionService {
             Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(error),
         }
+    }
+}
+
+/// Returns a compact diagnostic name for a compaction queue outcome.
+fn runtime_compaction_outcome_name(outcome: &AgentShellCommandOutcome) -> &'static str {
+    match outcome {
+        AgentShellCommandOutcome::Mutated { .. } => "queued",
+        AgentShellCommandOutcome::Display { .. } => "skipped",
+        AgentShellCommandOutcome::RequiresRuntime { .. } => "requires-runtime",
     }
 }
 

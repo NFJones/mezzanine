@@ -5832,9 +5832,15 @@ When an OpenAI-compatible stream ends with `response.incomplete` and
 failure as output-token exhaustion rather than input context pressure. It SHOULD
 retry the active turn through the provider retry path with temporary compact
 output guidance and an escalated `max_output_tokens` request budget when
-possible. It MUST NOT trigger context compaction for this failure class, and it
-MUST NOT persist the incomplete provider output as an assistant answer unless
-bounded recovery is exhausted and the turn is being failed.
+possible. If bounded output-limit retries are exhausted while the same turn is
+still running, Mezzanine SHOULD queue model-backed conversation compaction for
+the pane, keep the turn running while compaction is pending, refresh the active
+turn's provider context from compacted memory plus the retained raw transcript
+tail after compaction completes, and then continue the same provider turn.
+Automatic output-limit compaction MUST be bounded to avoid an infinite
+compact/retry loop. Mezzanine MUST NOT persist the incomplete provider output
+as an assistant answer unless bounded recovery and automatic compaction recovery
+are exhausted or unavailable and the turn is being failed.
 
 When a persisted provider access token has expiration metadata and a refresh
 credential-store reference, Mezzanine SHOULD attempt a background refresh during

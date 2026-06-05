@@ -273,6 +273,11 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) provider_retry_attempts: HashMap<String, u32>,
+    /// Tracks turns that already used automatic output-limit compaction.
+    ///
+    /// This bounds recovery for Responses API incomplete/max_output_tokens
+    /// failures so one pathological turn cannot compact and retry forever.
+    pub(super) provider_output_limit_compaction_turns: HashSet<String>,
     /// Stores the scheduled pane pipe health timers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
