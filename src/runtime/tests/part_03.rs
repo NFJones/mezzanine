@@ -3393,6 +3393,10 @@ fn runtime_agent_shell_new_command_starts_fresh_conversation() {
 #[test]
 fn runtime_agent_loop_new_flag_starts_first_iteration_in_fresh_conversation() {
     let mut service = test_runtime_service();
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service
+        .pane_screens
+        .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
     service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
     service
         .agent_shell_store_mut()
@@ -3414,6 +3418,9 @@ fn runtime_agent_loop_new_flag_starts_first_iteration_in_fresh_conversation() {
     assert_ne!(session.session_id, old_session);
     assert_eq!(session.transcript_entries, 0);
     assert_eq!(session.visibility, AgentShellVisibility::Visible);
+    let pane_text = service.pane_screen("%1").unwrap().visible_lines().join("\n");
+    assert!(pane_text.contains("user> /loop --new review this document"), "{pane_text}");
+    service.pane_processes_mut().terminate_all().unwrap();
 }
 
 /// Verifies `/loop` rejects `Task complete.` until a completed patch-free work

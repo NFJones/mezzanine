@@ -3568,6 +3568,7 @@ impl RuntimeSessionService {
                 "an agent loop is already active for this pane",
             ));
         }
+        self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
         if fresh_context {
             let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
         }
