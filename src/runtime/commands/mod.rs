@@ -128,10 +128,16 @@ fn runtime_agent_loop_assessment_prompt(
     state: &RuntimeAgentLoopState,
     work_result: &str,
 ) -> String {
+    let completion_gate = if state.observed_patch_free_iteration {
+        ""
+    } else {
+        "\n\nYou must not return `Task complete.` yet because `/loop` requires at least one completed work iteration without any `apply_patch` action before returning to the user. If the latest work used `apply_patch`, briefly state the remaining work needed to perform that patch-free reevaluation pass."
+    };
     format!(
-        "[loop controller assessment]\nOriginal user prompt:\n{}\n\nLatest completed work result:\n{}\n\nInspect the problem again, including any effects of the latest completed work, so you can catch newly introduced issues. Then critically compare the latest completed work against the original prompt. If the prompt is fully satisfied, return exactly one final `say` action whose text is exactly `Task complete.`. If anything remains, return exactly one final `say` action briefly stating the remaining work. Do not request capabilities or perform work in this assessment turn.",
+        "[loop controller assessment]\nOriginal user prompt:\n{}\n\nLatest completed work result:\n{}\n\nInspect the problem again, including any effects of the latest completed work, so you can catch newly introduced issues. Then critically compare the latest completed work against the original prompt. If the prompt is fully satisfied, return exactly one final `say` action whose text is exactly `Task complete.`. If anything remains, return exactly one final `say` action briefly stating the remaining work. Do not request capabilities or perform work in this assessment turn.{}",
         state.original_prompt,
-        work_result.trim()
+        work_result.trim(),
+        completion_gate,
     )
 }
 
@@ -3567,6 +3573,7 @@ impl RuntimeSessionService {
             RuntimeAgentLoopState {
                 pane_id: pane_id.to_string(),
                 original_prompt: original_prompt.to_string(),
+                observed_patch_free_iteration: false,
                 fresh_context,
                 iteration: 1,
                 max_iterations: self.agent_loop_limit.max(1),
@@ -3637,6 +3644,45 @@ impl RuntimeSessionService {
         let Some(mut state) = self.agent_loops_by_pane.get(pane_id).cloned() else {
             return Ok(None);
         };
+        if normalized == "Task complete." && !state.observed_patch_free_iteration {
+            state.last_assessment = Some(
+                "run at least one completed `/loop` work iteration without any `apply_patch` action before returning `Task complete.`"
+                    .to_string(),
+            );
+            if state.iteration >= state.max_iterations {
+                self.agent_loops_by_pane.remove(pane_id);
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &format!(
+                        "loop: reached iteration limit {}/{}; last assessment: {}",
+                        state.iteration,
+                        state.max_iterations,
+                        state.last_assessment.as_deref().unwrap_or_default()
+                    ),
+                )?;
+                return Ok(None);
+            }
+            state.iteration = state.iteration.saturating_add(1);
+            self.agent_loops_by_pane
+                .insert(pane_id.to_string(), state.clone());
+            if state.fresh_context {
+                let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
+            }
+            let started = self.start_agent_loop_work_turn(pane_id)?;
+            let status_text = if state.fresh_context {
+                format!(
+                    "loop: continuing fresh iteration {}/{}",
+                    state.iteration, state.max_iterations
+                )
+            } else {
+                format!(
+                    "loop: continuing iteration {}/{}",
+                    state.iteration, state.max_iterations
+                )
+            };
+            self.append_agent_status_text_to_terminal_buffer(pane_id, &status_text)?;
+            return Ok(Some(started));
+        }
         state.last_assessment = Some(normalized.to_string());
         if state.iteration >= state.max_iterations {
             self.agent_loops_by_pane.remove(pane_id);
@@ -4558,6 +4604,7 @@ mod tests {
         let prompt = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
+            observed_patch_free_iteration: false,
             fresh_context: true,
             iteration: 3,
             max_iterations: 8,
@@ -4568,5 +4615,67 @@ mod tests {
         assert!(prompt.contains("Start from this prompt alone"), "{prompt}");
         assert!(!prompt.contains("Previous loop assessment"), "{prompt}");
         assert!(!prompt.contains("work iteration 3/8"), "{prompt}");
+    }
+
+    /// Verifies `/loop` assessment prompts forbid immediate completion until a
+    /// completed work iteration has finished without any `apply_patch` action.
+    ///
+    /// This regression keeps the controller from returning to the user right
+    /// after a patching pass, forcing at least one reevaluation-only loop.
+    #[test]
+    fn runtime_agent_loop_assessment_prompt_requires_patch_free_iteration_before_completion() {
+        let prompt = runtime_agent_loop_assessment_prompt(
+            &RuntimeAgentLoopState {
+                pane_id: "%1".to_string(),
+                original_prompt: "fix the bug".to_string(),
+                observed_patch_free_iteration: false,
+                fresh_context: false,
+                iteration: 1,
+                max_iterations: 8,
+                last_assessment: None,
+            },
+            "patched the owner file",
+        );
+
+        assert!(
+            prompt.contains(
+                "requires at least one completed work iteration without any `apply_patch` action"
+            ),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("must not return `Task complete.` yet"),
+            "{prompt}"
+        );
+    }
+
+    /// Verifies `/loop` assessment prompts stop adding the completion gate once
+    /// a patch-free work iteration has already completed.
+    ///
+    /// This keeps later assessment turns free to finish normally after the
+    /// required reevaluation-only pass has happened.
+    #[test]
+    fn runtime_agent_loop_assessment_prompt_allows_completion_after_patch_free_iteration() {
+        let prompt = runtime_agent_loop_assessment_prompt(
+            &RuntimeAgentLoopState {
+                pane_id: "%1".to_string(),
+                original_prompt: "fix the bug".to_string(),
+                observed_patch_free_iteration: true,
+                fresh_context: false,
+                iteration: 2,
+                max_iterations: 8,
+                last_assessment: Some("reevaluate after the patch".to_string()),
+            },
+            "confirmed the change without further edits",
+        );
+
+        assert!(
+            prompt.contains("If the prompt is fully satisfied"),
+            "{prompt}"
+        );
+        assert!(
+            !prompt.contains("must not return `Task complete.` yet"),
+            "{prompt}"
+        );
     }
 }

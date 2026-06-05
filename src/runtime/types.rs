@@ -3466,6 +3466,9 @@ pub struct RuntimeAgentLoopState {
     pub pane_id: String,
     /// Original user prompt supplied after `/loop`.
     pub original_prompt: String,
+    /// Whether any completed work iteration has finished without using an
+    /// `apply_patch` action.
+    pub observed_patch_free_iteration: bool,
     /// Whether each new work iteration should prune prior conversation context.
     pub fresh_context: bool,
     /// One-based work iteration currently being evaluated or executed.

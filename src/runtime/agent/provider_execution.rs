@@ -10,6 +10,18 @@ use super::*;
 #[cfg(test)]
 use crate::agent::AllowedActionSet;
 
+/// Returns true when a completed work turn finished without any `apply_patch`
+/// action results.
+///
+/// `/loop` uses this to require at least one reevaluation pass that does not
+/// mutate files before the controller may accept completion.
+fn runtime_execution_is_patch_free(execution: &AgentTurnExecution) -> bool {
+    !execution
+        .action_results
+        .iter()
+        .any(|result| result.action_type == "apply_patch")
+}
+
 impl RuntimeSessionService {
     /// Runs the execute agent turn with provider operation for this subsystem.
     ///
@@ -937,6 +949,10 @@ impl RuntimeSessionService {
         let assistant_text = assistant_context_content_for_execution(execution);
         match loop_turn.kind {
             RuntimeAgentLoopTurnKind::Work => {
+                if let Some(state) = self.agent_loops_by_pane.get_mut(&loop_turn.pane_id) {
+                    state.observed_patch_free_iteration |=
+                        runtime_execution_is_patch_free(execution);
+                }
                 let _ =
                     self.start_agent_loop_assessment_turn(&loop_turn.pane_id, &assistant_text)?;
             }
