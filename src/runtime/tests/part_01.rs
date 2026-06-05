@@ -26,7 +26,7 @@ use super::{
 use crate::MezError;
 use crate::agent::AgentLogLevel;
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
-use crate::session::Session;
+use crate::session::{Session, SessionState};
 use crate::snapshot::SnapshotRepository;
 use crate::subagent::SubagentSpawnRequest;
 use crate::terminal::{
@@ -297,6 +297,48 @@ fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_session
         .unwrap();
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies `:resume-session --latest` revives a detached snapshot into a live
+/// running session before restored pane restart begins.
+///
+/// Snapshot payloads preserve detached lifecycle state so users can resume a
+/// saved detached daemon later. The live resume path must still mark the
+/// restored session running before it restarts panes, otherwise the hierarchy
+/// installs and the first restart step crashes on the live-session guard.
+#[test]
+fn runtime_terminal_snapshot_resume_latest_revives_detached_snapshot_session() {
+    let root = temp_root("terminal-snapshot-resume-detached-state");
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut creating_service = test_runtime_service();
+    creating_service.set_snapshot_repository(snapshots.clone());
+    let creating_primary = creating_service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let create = creating_service
+        .execute_terminal_command(&creating_primary, "snapshot-session --name detached-restart")
+        .unwrap();
+    assert!(create.contains(r#"\"name\":\"detached-restart\""#), "{create}");
+
+    creating_service
+        .detach_primary(&creating_primary, Size::new(80, 24).unwrap())
+        .unwrap();
+
+    let mut resuming_service = test_runtime_service();
+    resuming_service.set_snapshot_repository(snapshots);
+    let resuming_primary = resuming_service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let resume = resuming_service
+        .execute_terminal_command(&resuming_primary, "resume-session --latest")
+        .unwrap();
+    assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
+    assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
+    assert_eq!(resuming_service.session.state, SessionState::Running);
 
     let _ = fs::remove_dir_all(root);
 }

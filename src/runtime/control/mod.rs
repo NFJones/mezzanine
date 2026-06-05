@@ -2759,6 +2759,7 @@ impl RuntimeSessionService {
         self.mcp_transports.clear();
 
         self.session = session;
+        self.session.state = crate::session::SessionState::Running;
         let restored_at = current_unix_seconds();
         self.created_at_unix_seconds = restored_at;
         self.last_attach_at_unix_seconds = None;
