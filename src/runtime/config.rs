@@ -32,6 +32,7 @@ use super::{
 };
 use crate::agent::effective_provider_api;
 use crate::terminal::TerminalEmojiWidth;
+use crate::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
 
 // Runtime config parsing and project trust helpers.
 
@@ -1208,6 +1209,30 @@ pub(super) fn runtime_history_limit_from_config(root: &Value) -> Result<usize> {
         .map_err(|_| MezError::config("history.lines is too large for this platform"))?;
     if limit == 0 {
         return Err(MezError::config("history.lines must be greater than zero"));
+    }
+    Ok(limit)
+}
+
+/// Reads the configured saved agent conversation retention limit.
+pub(super) fn runtime_saved_agent_session_limit_from_config(root: &Value) -> Result<usize> {
+    let Some(history) = runtime_json_object(root, "history") else {
+        return Ok(DEFAULT_SAVED_AGENT_SESSION_LIMIT);
+    };
+    let Some(value) = history.get("saved_sessions_limit") else {
+        return Ok(DEFAULT_SAVED_AGENT_SESSION_LIMIT);
+    };
+    let Some(limit) = value.as_u64() else {
+        return Err(MezError::config(
+            "history.saved_sessions_limit must be a positive integer",
+        ));
+    };
+    let limit = usize::try_from(limit).map_err(|_| {
+        MezError::config("history.saved_sessions_limit is too large for this platform")
+    })?;
+    if limit == 0 {
+        return Err(MezError::config(
+            "history.saved_sessions_limit must be greater than zero",
+        ));
     }
     Ok(limit)
 }

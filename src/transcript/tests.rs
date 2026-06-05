@@ -328,6 +328,47 @@ fn transcript_store_inspects_recent_entries_and_next_sequence_from_tail() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies saved conversation retention deletes aged-out sessions only after
+/// a new conversation is persisted.
+///
+/// `/resume` uses saved transcript summaries rather than full transcript
+/// decoding. This regression keeps the picker bounded by pruning the oldest
+/// saved conversation directory when appending a fresh conversation beyond the
+/// configured retention limit.
+#[test]
+fn transcript_store_prunes_oldest_saved_sessions_when_limit_exceeded() {
+    let root = temp_root("saved-session-retention");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_saved_sessions_limit(2)
+        .unwrap();
+    let mut old = entry("conv-old", 1, TranscriptRole::User);
+    old.created_at_unix_seconds = 10;
+    let mut middle = entry("conv-middle", 1, TranscriptRole::User);
+    middle.created_at_unix_seconds = 20;
+    let mut new = entry("conv-new", 1, TranscriptRole::User);
+    new.created_at_unix_seconds = 30;
+
+    store.append(&old).unwrap();
+    store.append(&middle).unwrap();
+    store.append(&new).unwrap();
+
+    let summaries = store.list().unwrap();
+    let retained = summaries
+        .iter()
+        .map(|summary| summary.conversation_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(retained, vec!["conv-middle", "conv-new"]);
+    assert!(!root.join("conv-old").exists());
+    assert!(root.join("conv-middle").exists());
+    assert!(root.join("conv-new").exists());
+    assert!(store.inspect("conv-old").is_err());
+    assert_eq!(store.inspect("conv-middle").unwrap()[0], middle);
+    assert_eq!(store.inspect("conv-new").unwrap()[0], new);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that async transcript append and shared prompt-history writes use
 /// the same durable layout and decoding behavior as the synchronous store API.
 #[tokio::test]

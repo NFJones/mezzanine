@@ -51,9 +51,9 @@ use super::{
     runtime_pane_frame_visible_fields_from_config, runtime_pane_frames_enabled_from_config,
     runtime_parse_approval_policy, runtime_permission_policy_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
-    runtime_provider_registry_from_config, runtime_subagent_profiles_from_config,
-    runtime_subagent_wait_policy_from_config, runtime_terminal_clipboard_from_config,
-    runtime_terminal_cursor_blink_from_config,
+    runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
+    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
+    runtime_terminal_clipboard_from_config, runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_reduced_motion_from_config,
@@ -716,6 +716,7 @@ impl RuntimeSessionService {
         let structured = runtime_effective_config_value(&self.config_layers)?;
         let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
         let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
+        let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
         let terminal_term = runtime_terminal_term_from_config(&structured)?;
         let window_frames_enabled = runtime_window_frames_enabled_from_config(&structured)?;
         let window_frame_template = runtime_window_frame_template_from_config(&structured)?;
@@ -755,6 +756,9 @@ impl RuntimeSessionService {
         };
         self.terminal_history_limit = terminal_history_limit;
         self.terminal_history_rotate_lines = terminal_history_rotate_lines;
+        if let Some(store) = self.agent_transcript_store.as_mut() {
+            store.set_saved_sessions_limit(saved_agent_session_limit)?;
+        }
         self.terminal_term = terminal_term;
         self.window_frames_enabled = window_frames_enabled;
         self.window_frame_template = window_frame_template;

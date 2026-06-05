@@ -2462,10 +2462,11 @@ palette. `set-option theme.active <name>` MUST remain an equivalent lower-level
 live configuration mutation for immediate rendering, but it is not required to
 persist the selected theme to disk.
 
-The `history` table MUST support `lines`, `rotate_lines`, `persist`, and
-`search_mode`.
+The `history` table MUST support `lines`, `rotate_lines`,
+`saved_sessions_limit`, `persist`, and `search_mode`.
 `history.lines` MUST default to `10000`.
 `history.rotate_lines` MUST default to `1000`.
+`history.saved_sessions_limit` MUST default to `100`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `shell_only`, `compaction_raw_retention_percent`, `routing`,
@@ -7015,6 +7016,9 @@ conversations.
 The `/resume` command MUST provide an interactive picker for saved
 conversations or snapshots. Agent prompt completion for `/resume` MUST include
 saved conversation UUIDs from the active transcript store.
+The active transcript store MUST retain at most the configured most recent
+saved agent conversations for `/resume`; conversations older than that limit
+MUST be deleted when a new conversation is created.
 
 When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
 conversation transcript into subsequent model context, MUST replay saved

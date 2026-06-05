@@ -92,17 +92,46 @@ const DEFAULT_PRESENTATION_TAIL_READ_BYTES: u64 = 2 * 1024 * 1024;
 /// larger historical tails into concatenated zstd frames bounds disk usage.
 const PRESENTATION_CLEAR_TAIL_COMPACT_BYTES: u64 = 256 * 1024;
 
+/// Maximum saved agent conversations retained by default for `/resume`.
+pub const DEFAULT_SAVED_AGENT_SESSION_LIMIT: usize = 100;
+
 impl AgentTranscriptStore {
     /// Creates a store under the standard config-root agent-session directory.
     pub fn under_config_root(config_root: impl Into<PathBuf>) -> Self {
         Self {
             root: config_root.into().join("agent-sessions"),
+            saved_sessions_limit: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
         }
     }
 
     /// Creates a store rooted at a specific directory.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            saved_sessions_limit: DEFAULT_SAVED_AGENT_SESSION_LIMIT,
+        }
+    }
+
+    /// Returns this store with a configured saved-conversation retention limit.
+    pub fn with_saved_sessions_limit(mut self, limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "saved agent session limit must be greater than zero",
+            ));
+        }
+        self.saved_sessions_limit = limit;
+        Ok(self)
+    }
+
+    /// Updates the configured saved-conversation retention limit.
+    pub fn set_saved_sessions_limit(&mut self, limit: usize) -> Result<()> {
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "saved agent session limit must be greater than zero",
+            ));
+        }
+        self.saved_sessions_limit = limit;
+        Ok(())
     }
 
     /// Returns the root directory used by this store.
@@ -220,6 +249,7 @@ impl AgentTranscriptStore {
     /// Appends one transcript entry and returns the encoded byte count.
     fn append_one(&self, entry: &TranscriptEntry) -> Result<usize> {
         entry.validate()?;
+        let new_conversation = !self.conversation_exists(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
         let encoded = entry.encode()?;
@@ -229,6 +259,9 @@ impl AgentTranscriptStore {
         file.sync_all()?;
         set_private_file_permissions(&path)?;
         self.update_summary_after_append(entry)?;
+        if new_conversation {
+            self.prune_saved_sessions_over_limit()?;
+        }
         Ok(encoded.len().saturating_add(1))
     }
 
@@ -330,6 +363,7 @@ impl AgentTranscriptStore {
     /// Appends one transcript entry through Tokio filesystem I/O.
     async fn append_one_async(&self, entry: &TranscriptEntry) -> Result<usize> {
         entry.validate()?;
+        let new_conversation = !self.conversation_exists(&entry.conversation_id)?;
         self.ensure_session_dir_async(&entry.conversation_id)
             .await?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
@@ -343,6 +377,10 @@ impl AgentTranscriptStore {
         file.write_all(b"\n").await?;
         file.sync_all().await?;
         set_private_file_permissions_async(&path).await?;
+        self.update_summary_after_append(entry)?;
+        if new_conversation {
+            self.prune_saved_sessions_over_limit()?;
+        }
         Ok(encoded.len().saturating_add(1))
     }
 
@@ -1070,6 +1108,28 @@ impl AgentTranscriptStore {
         value.parse::<u64>().map(Some).map_err(|error| {
             MezError::invalid_args(format!("presentation index is invalid: {error}"))
         })
+    }
+
+    /// Deletes oldest saved conversations until the configured resume cap holds.
+    fn prune_saved_sessions_over_limit(&self) -> Result<()> {
+        let mut summaries = self.list()?;
+        if summaries.len() <= self.saved_sessions_limit {
+            return Ok(());
+        }
+        summaries.sort_by(|left, right| {
+            left.last_created_at_unix_seconds
+                .cmp(&right.last_created_at_unix_seconds)
+                .then_with(|| {
+                    left.first_created_at_unix_seconds
+                        .cmp(&right.first_created_at_unix_seconds)
+                })
+                .then_with(|| left.conversation_id.cmp(&right.conversation_id))
+        });
+        let delete_count = summaries.len().saturating_sub(self.saved_sessions_limit);
+        for summary in summaries.into_iter().take(delete_count) {
+            self.delete(&summary.conversation_id)?;
+        }
+        Ok(())
     }
 
     /// Runs the write prompt history async operation for this subsystem.

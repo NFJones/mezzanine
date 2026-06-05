@@ -141,7 +141,7 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             pattern: "history.<key>",
             purpose: "Adjust scrollback retention and history behavior.",
             value_type: "integer, boolean, or string",
-            format: "lines/rotate_lines are integers, persist is boolean, search_mode is a string enum.",
+            format: "lines/rotate_lines/saved_sessions_limit are integers, persist is boolean, search_mode is a string enum.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -445,7 +445,13 @@ pub(super) const THEME_KEYS: &[&str] = &["active", "aliases", "colors"];
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const HISTORY_KEYS: &[&str] = &["lines", "rotate_lines", "persist", "search_mode"];
+pub(super) const HISTORY_KEYS: &[&str] = &[
+    "lines",
+    "rotate_lines",
+    "saved_sessions_limit",
+    "persist",
+    "search_mode",
+];
 
 /// Defines the AGENT KEYS const used by this subsystem.
 ///

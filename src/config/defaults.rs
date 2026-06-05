@@ -169,6 +169,7 @@ syntax_operator_bg = "#1f1f28"
 [history]
 lines = 10000
 rotate_lines = 1000
+saved_sessions_limit = 100
 persist = true
 search_mode = "literal"
 

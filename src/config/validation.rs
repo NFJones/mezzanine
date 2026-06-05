@@ -342,6 +342,7 @@ pub fn validate_config_text(
     for (path, value) in values {
         if path == "history.lines"
             || path == "history.rotate_lines"
+            || path == "history.saved_sessions_limit"
             || path == "agents.max_concurrent_agents"
             || path == "agents.max_root_subagents"
             || path == "agents.max_subagents_per_subagent"

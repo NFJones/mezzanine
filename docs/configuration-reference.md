@@ -341,6 +341,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | --- | --- | --- | --- |
 | `history.lines` | integer | `10000` | Maximum retained history lines per pane. |
 | `history.rotate_lines` | integer | `1000` | Number of old lines to evict on overflow. |
+| `history.saved_sessions_limit` | integer | `100` | Maximum saved agent conversations listed by `/resume`; older saved sessions are deleted when new conversations are created. |
 | `history.persist` | boolean | `true` | Persist retained history across supported restarts. |
 | `history.search_mode` | string | `"literal"` | Default history search mode. |
 

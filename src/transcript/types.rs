@@ -146,4 +146,6 @@ pub struct AgentTranscriptStore {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) root: PathBuf,
+    /// Maximum saved conversations retained for resume listing and loading.
+    pub(super) saved_sessions_limit: usize,
 }

@@ -276,7 +276,7 @@ Useful slash commands include:
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
 | `/stop`        | Interrupt the active turn.                            |
 | `/new`         | Start a fresh conversation for the pane.              |
-| `/resume`      | Resume a saved conversation.                          |
+| `/resume`      | Resume one of the most recent saved conversations.    |
 | `/compact`     | Compact conversation context.                         |
 | `/exit`        | Hide the agent shell.                                 |
 

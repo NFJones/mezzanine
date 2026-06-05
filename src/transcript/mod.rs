@@ -43,3 +43,5 @@ pub use types::{
 /// declaration makes the boundary available to the crate.
 #[cfg(test)]
 mod tests;
+
+pub use store::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
