@@ -3880,6 +3880,64 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     }));
 }
 
+/// Verifies that the pane working-directory field used by window status and
+/// explicit pane frame templates is compacted to the final three path segments.
+///
+/// The default window footer places `pane.pwd` at the left edge of the
+/// right-status region, so deep project paths must not crowd out command pills
+/// and clock fields. Explicit pane templates share the same named field and
+/// must keep the same display contract for scrollback-aware pane frames.
+#[test]
+fn render_pane_pwd_fields_compact_deep_paths_to_three_segments() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 1, "work", Size::new(120, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let frame_context = TerminalFrameContext {
+        windows: vec![TerminalWindowFrameContext {
+            id: "@2".to_string(),
+            index: 1,
+            title: "work".to_string(),
+            active: true,
+            subagent: false,
+        }],
+        panes: BTreeMap::from([(
+            pane_id,
+            TerminalPaneFrameContext {
+                current_working_directory: Some("/var/tmp/a/b/c/d".to_string()),
+                ..TerminalPaneFrameContext::default()
+            },
+        )]),
+        window_status: Some(TerminalWindowStatusContext {
+            template: DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
+            active_pane_working_directory: Some("~/Documents/a/b/c/d".to_string()),
+            system_uptime: "2d 03h 04m".to_string(),
+            datetime_local: "2026-05-05 10:11:12".to_string(),
+        }),
+        ..TerminalFrameContext::default()
+    };
+    let inputs = vec![PaneRenderInput {
+        pane_id: window.panes()[0].id.to_string(),
+        lines: vec!["body".to_string()],
+    }];
+
+    let rendered = render_window_with_pane_frame_template(
+        &window,
+        &inputs,
+        &frame_context,
+        TerminalFrameRenderOptions::plain(
+            true,
+            DEFAULT_WINDOW_FRAME_TEMPLATE,
+            TerminalFramePosition::Bottom,
+        ),
+        TerminalFrameRenderOptions::plain(true, "#{pane.pwd}", TerminalFramePosition::Top),
+    )
+    .unwrap();
+
+    assert_eq!(rendered[0].trim_end(), "…/b/c/d");
+    assert!(rendered[2].contains(" …/b/c/d "), "{}", rendered[2]);
+    assert!(!rendered[2].contains("~/Documents/a"), "{}", rendered[2]);
+}
+
 /// Verifies that split-pane box drawing glyphs carry only a foreground color
 /// and use the active-pane border color when the glyph encloses the active
 /// pane. Background fill remains reserved for text spans on frame bars.

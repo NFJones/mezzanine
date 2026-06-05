@@ -1267,6 +1267,34 @@ pub(super) fn pane_frame_right_aligned_segment_value(field: &str, value: &str) -
     value.to_string()
 }
 
+/// Compacts a home-relative or absolute pane working-directory display path to
+/// the last three path segments when the displayed depth exceeds that limit.
+pub(super) fn compact_pane_working_directory(value: &str) -> String {
+    let mut prefix = "";
+    let mut path = value;
+    if let Some(rest) = value.strip_prefix("~/") {
+        prefix = "~/";
+        path = rest;
+    } else if value == "~" || value == "/" {
+        return value.to_string();
+    } else if let Some(rest) = value.strip_prefix('/') {
+        prefix = "/";
+        path = rest;
+    }
+
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() <= 3 {
+        return format!("{prefix}{path}");
+    }
+    format!(
+        "…/{}",
+        segments[segments.len().saturating_sub(3)..].join("/")
+    )
+}
+
 /// Runs the render window frame template operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1639,12 +1667,12 @@ pub(super) fn window_status_field_value(
             Some(WindowStatusSegmentKind::DateTime),
         ),
         "pane.pwd" => (
-            sanitize_frame_text(
+            sanitize_frame_text(&compact_pane_working_directory(
                 status
                     .active_pane_working_directory
                     .as_deref()
                     .unwrap_or_default(),
-            ),
+            )),
             Some(WindowStatusSegmentKind::DateTime),
         ),
         _ => (String::new(), None),
@@ -2193,6 +2221,7 @@ pub(super) fn pane_frame_field_value(
                 .unwrap_or_default(),
             "pane.pwd" => {
                 optional_pane_context_value(pane_context, |ctx| &ctx.current_working_directory)
+                    .map(|value| compact_pane_working_directory(&value))
                     .unwrap_or_default()
             }
             "pane.mode" => optional_pane_context_value(pane_context, |ctx| &ctx.mode)
