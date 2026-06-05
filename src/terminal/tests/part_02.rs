@@ -3861,7 +3861,8 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     assert!(view.lines[2].contains(" ~/repo "));
     assert!(view.lines[2].find(" ~/repo ").unwrap() < view.lines[2].find(" + ").unwrap());
     assert!(view.lines[2].contains(" 2d 03h 04m "));
-    assert!(view.lines[2].contains(" 2026-05-05 10:11:12"));
+    assert!(view.lines[2].contains(" 2026-05-05 10:11:12 "));
+    assert!(view.lines[2].ends_with(" 2026-05-05 10:11:12  "));
     assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let uptime_start_bytes = view.lines[2].find(" 2d 03h 04m ").unwrap();
     let uptime_start = UnicodeWidthStr::width(&view.lines[2][..uptime_start_bytes]);
@@ -3870,12 +3871,12 @@ fn render_window_status_uses_right_aligned_themed_segments() {
             && span.start == uptime_start
             && span.length == " 2d 03h 04m ".len()
     }));
-    let datetime_start_bytes = view.lines[2].find(" 2026-05-05 10:11:12").unwrap();
+    let datetime_start_bytes = view.lines[2].find(" 2026-05-05 10:11:12 ").unwrap();
     let datetime_start = UnicodeWidthStr::width(&view.lines[2][..datetime_start_bytes]);
     assert!(view.line_style_spans[2].iter().any(|span| {
         span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
             && span.start == datetime_start
-            && span.length == " 2026-05-05 10:11:12".len()
+            && span.length == " 2026-05-05 10:11:12 ".len()
     }));
 }
 
