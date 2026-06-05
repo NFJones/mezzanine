@@ -112,6 +112,7 @@ Common slash commands:
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context. |
+| `/loop` | Re-run a prompt with critical self-review until the model reports `Task complete.` or the loop limit is reached. |
 | `/new` | Start a fresh pane conversation. |
 | `/resume` | Resume a saved pane conversation. |
 | `/stop` | Interrupt the active turn. |

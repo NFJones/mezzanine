@@ -95,12 +95,12 @@ fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
         .filter(|assessment| !assessment.trim().is_empty())
         .map(|assessment| {
             format!(
-                "\n\nPrevious loop assessment said more work remains:\n{assessment}\n\nContinue from that assessment without repeating completed work unless necessary."
+                "\n\nPrevious loop assessment said more work remains:\n{assessment}\n\nInspect the problem again, including any effects of your previous work, and continue from that assessment without repeating completed work unless necessary."
             )
         })
         .unwrap_or_default();
     format!(
-        "{}\n\n[loop controller]\nThis is `/loop` work iteration {}/{}. Fulfill the original user prompt normally.{}",
+        "{}\n\n[loop controller]\nThis is `/loop` work iteration {}/{}. Inspect the problem again even if you already inspected it before so you can catch newly introduced issues, then fulfill the original user prompt normally.{}",
         state.original_prompt, state.iteration, state.max_iterations, remaining
     )
 }
@@ -111,7 +111,7 @@ fn runtime_agent_loop_assessment_prompt(
     work_result: &str,
 ) -> String {
     format!(
-        "[loop controller assessment]\nOriginal user prompt:\n{}\n\nLatest completed work result:\n{}\n\nCritically compare the latest completed work against the original prompt. If the prompt is fully satisfied, return exactly one final `say` action whose text is exactly `yes`. If anything remains, return exactly one final `say` action briefly stating the remaining work. Do not request capabilities or perform work in this assessment turn.",
+        "[loop controller assessment]\nOriginal user prompt:\n{}\n\nLatest completed work result:\n{}\n\nInspect the problem again, including any effects of the latest completed work, so you can catch newly introduced issues. Then critically compare the latest completed work against the original prompt. If the prompt is fully satisfied, return exactly one final `say` action whose text is exactly `Task complete.`. If anything remains, return exactly one final `say` action briefly stating the remaining work. Do not request capabilities or perform work in this assessment turn.",
         state.original_prompt,
         work_result.trim()
     )
@@ -3608,7 +3608,7 @@ impl RuntimeSessionService {
         assessment: &str,
     ) -> Result<Option<RuntimeAgentPromptTurnStart>> {
         let normalized = assessment.trim();
-        if normalized.eq_ignore_ascii_case("yes") {
+        if normalized == "Task complete." {
             self.agent_loops_by_pane.remove(pane_id);
             self.append_agent_status_text_to_terminal_buffer(pane_id, "loop: completed")?;
             return Ok(None);
