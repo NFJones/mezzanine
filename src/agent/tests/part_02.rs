@@ -441,13 +441,6 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     assert_eq!(loop_command.args, "review the docs");
     assert_eq!(loop_command.effect, SlashCommandEffect::SessionMutation);
     assert!(!loop_command.queueable_while_running);
-    let fresh_loop_command = parse_slash_command("/loop --new review the docs")
-        .unwrap()
-        .unwrap();
-    assert_eq!(fresh_loop_command.name, "loop");
-    assert_eq!(fresh_loop_command.args, "--new review the docs");
-    assert_eq!(fresh_loop_command.effect, SlashCommandEffect::SessionMutation);
-    assert!(!fresh_loop_command.queueable_while_running);
     assert_eq!(
         parse_slash_command("/sessions").unwrap_err().kind(),
         crate::error::MezErrorKind::InvalidArgs

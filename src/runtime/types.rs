@@ -3455,8 +3455,6 @@ pub struct RuntimeAgentProviderDispatch {
 pub enum RuntimeAgentLoopTurnKind {
     /// A normal work iteration that should attempt to satisfy the original prompt.
     Work,
-    /// A bounded assessment turn that asks whether the loop goal is complete.
-    Assessment,
 }
 
 /// Runtime-owned state for one active `/loop` command.
@@ -3466,17 +3464,15 @@ pub struct RuntimeAgentLoopState {
     pub pane_id: String,
     /// Original user prompt supplied after `/loop`.
     pub original_prompt: String,
-    /// Whether any completed work iteration has finished without using an
-    /// `apply_patch` action.
-    pub observed_patch_free_iteration: bool,
-    /// Whether each new work iteration should prune prior conversation context.
-    pub fresh_context: bool,
+    /// Parent conversation id that each fresh loop iteration must fork from.
+    pub parent_conversation_id: String,
+    /// Prompt-cache lineage to retain while rebinding the pane onto each fresh
+    /// loop iteration fork.
+    pub parent_prompt_cache_lineage_id: Option<String>,
     /// One-based work iteration currently being evaluated or executed.
     pub iteration: usize,
     /// Maximum number of work iterations allowed before the loop stops.
     pub max_iterations: usize,
-    /// Latest incomplete assessment returned by the model, if any.
-    pub last_assessment: Option<String>,
 }
 
 /// Metadata attached to a loop-owned agent turn.

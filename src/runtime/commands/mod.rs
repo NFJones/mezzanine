@@ -87,57 +87,11 @@ const AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES: usize = 200;
 /// Maximum cleartext presentation bytes to read when resuming an agent shell.
 const AGENT_RESUME_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Parses optional `/loop` controller flags from the user-supplied argument body.
-fn runtime_agent_loop_command_args(args: &str) -> (bool, &str) {
-    let trimmed = args.trim();
-    let Some(first) = trimmed.split_whitespace().next() else {
-        return (false, trimmed);
-    };
-    if first == "--new" {
-        return (true, trimmed[first.len()..].trim_start());
-    }
-    (false, trimmed)
-}
-
 /// Builds the provider-visible prompt for one `/loop` work iteration.
 fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
-    if state.fresh_context {
-        return format!(
-            "{}\n\n[loop controller]\nInspect the problem again carefully and fulfill the original user prompt normally. Start from this prompt alone without assuming knowledge of any previous attempt.",
-            state.original_prompt
-        );
-    }
-    let remaining = state
-        .last_assessment
-        .as_deref()
-        .filter(|assessment| !assessment.trim().is_empty())
-        .map(|assessment| {
-            format!(
-                "\n\nPrevious loop assessment said more work remains:\n{assessment}\n\nInspect the problem again, including any effects of your previous work, and continue from that assessment without repeating completed work unless necessary."
-            )
-        })
-        .unwrap_or_default();
     format!(
-        "{}\n\n[loop controller]\nThis is `/loop` work iteration {}/{}. Inspect the problem again even if you already inspected it before so you can catch newly introduced issues, then fulfill the original user prompt normally.{}",
-        state.original_prompt, state.iteration, state.max_iterations, remaining
-    )
-}
-
-/// Builds the provider-visible prompt for one `/loop` completion assessment.
-fn runtime_agent_loop_assessment_prompt(
-    state: &RuntimeAgentLoopState,
-    work_result: &str,
-) -> String {
-    let completion_gate = if state.observed_patch_free_iteration {
-        ""
-    } else {
-        "\n\nYou must not return `Task complete.` yet because `/loop` requires at least one completed work iteration without any `apply_patch` action before returning to the user. If the latest work used `apply_patch`, briefly state the remaining work needed to perform that patch-free reevaluation pass."
-    };
-    format!(
-        "[loop controller assessment]\nOriginal user prompt:\n{}\n\nLatest completed work result:\n{}\n\nInspect the problem again, including any effects of the latest completed work, so you can catch newly introduced issues. Then critically compare the latest completed work against the original prompt. If the prompt is fully satisfied, return exactly one final `say` action whose text is exactly `Task complete.`. If anything remains, return exactly one final `say` action briefly stating the remaining work. Do not request capabilities or perform work in this assessment turn.{}",
-        state.original_prompt,
-        work_result.trim(),
-        completion_gate,
+        "{}\n\n[loop controller]\nInspect the problem again carefully and fulfill the original user prompt normally. Start from this prompt alone without assuming knowledge of any previous attempt.",
+        state.original_prompt
     )
 }
 
@@ -3558,8 +3512,7 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("loop command must be submitted as an agent slash command")
         })?;
-        let (fresh_context, original_prompt) = runtime_agent_loop_command_args(&invocation.args);
-        let original_prompt = original_prompt.trim();
+        let original_prompt = invocation.args.trim();
         if original_prompt.is_empty() {
             return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
         }
@@ -3569,19 +3522,23 @@ impl RuntimeSessionService {
             ));
         }
         self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
-        if fresh_context {
-            let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
-        }
+        let parent_session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "agent shell session not found for pane",
+            )
+        })?;
+        let parent_conversation_id = parent_session.session_id.clone();
+        let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
         self.agent_loops_by_pane.insert(
             pane_id.to_string(),
             RuntimeAgentLoopState {
                 pane_id: pane_id.to_string(),
                 original_prompt: original_prompt.to_string(),
-                observed_patch_free_iteration: false,
-                fresh_context,
+                parent_conversation_id: parent_conversation_id.clone(),
+                parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
                 iteration: 1,
                 max_iterations: self.agent_loop_limit.max(1),
-                last_assessment: None,
             },
         );
         let started = match self.start_agent_loop_work_turn(pane_id) {
@@ -3595,139 +3552,45 @@ impl RuntimeSessionService {
         Ok(AgentShellCommandOutcome::Mutated {
             command: "loop".to_string(),
             body: format!(
-                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} fresh_context={} state={}",
+                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} parent_conversation={} state={}",
                 pane_id,
                 started.turn_id,
                 self.agent_loop_limit.max(1),
-                fresh_context,
+                parent_conversation_id,
                 runtime_agent_turn_state_name(started.state)
             ),
             visibility,
         })
     }
 
-    /// Starts an internal assessment turn after one loop work iteration.
-    pub(in crate::runtime) fn start_agent_loop_assessment_turn(
-        &mut self,
-        pane_id: &str,
-        work_result: &str,
-    ) -> Result<Option<RuntimeAgentPromptTurnStart>> {
-        let Some(state) = self.agent_loops_by_pane.get(pane_id).cloned() else {
-            return Ok(None);
-        };
-        let prompt = runtime_agent_loop_assessment_prompt(&state, work_result);
-        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None)?;
-        self.agent_loop_turns.insert(
-            started.turn_id.clone(),
-            RuntimeAgentLoopTurn {
-                pane_id: pane_id.to_string(),
-                kind: RuntimeAgentLoopTurnKind::Assessment,
-                iteration: state.iteration,
-            },
-        );
-        self.append_agent_trace_turn_event(
-            pane_id,
-            &started.turn_id,
-            &format!("loop assessment queued iteration={}", state.iteration),
-        )?;
-        Ok(Some(started))
-    }
-
-    /// Applies the assessment response and starts another loop iteration when needed.
-    pub(in crate::runtime) fn continue_agent_loop_after_assessment_text(
-        &mut self,
-        pane_id: &str,
-        assessment: &str,
-    ) -> Result<Option<RuntimeAgentPromptTurnStart>> {
-        let normalized = assessment.trim();
-        let Some(mut state) = self.agent_loops_by_pane.get(pane_id).cloned() else {
-            return Ok(None);
-        };
-        if normalized == "Task complete." {
-            if !state.observed_patch_free_iteration {
-                state.last_assessment = Some(
-                    "run at least one completed `/loop` work iteration without any `apply_patch` action before returning `Task complete.`"
-                        .to_string(),
-                );
-                if state.iteration >= state.max_iterations {
-                    self.agent_loops_by_pane.remove(pane_id);
-                    self.append_agent_status_text_to_terminal_buffer(
-                        pane_id,
-                        &format!(
-                            "loop: reached iteration limit {}/{}; last assessment: {}",
-                            state.iteration,
-                            state.max_iterations,
-                            state.last_assessment.as_deref().unwrap_or_default()
-                        ),
-                    )?;
-                    return Ok(None);
-                }
-                state.iteration = state.iteration.saturating_add(1);
-                self.agent_loops_by_pane
-                    .insert(pane_id.to_string(), state.clone());
-                if state.fresh_context {
-                    let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
-                }
-                let started = self.start_agent_loop_work_turn(pane_id)?;
-                let status_text = if state.fresh_context {
-                    format!(
-                        "loop: continuing fresh iteration {}/{}",
-                        state.iteration, state.max_iterations
-                    )
-                } else {
-                    format!(
-                        "loop: continuing iteration {}/{}",
-                        state.iteration, state.max_iterations
-                    )
-                };
-                self.append_agent_status_text_to_terminal_buffer(pane_id, &status_text)?;
-                return Ok(Some(started));
-            }
-            self.agent_loops_by_pane.remove(pane_id);
-            self.append_agent_status_text_to_terminal_buffer(pane_id, "loop: completed")?;
-            return Ok(None);
-        }
-        state.last_assessment = Some(normalized.to_string());
-        if state.iteration >= state.max_iterations {
-            self.agent_loops_by_pane.remove(pane_id);
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!(
-                    "loop: reached iteration limit {}/{}; last assessment: {}",
-                    state.iteration, state.max_iterations, normalized
-                ),
-            )?;
-            return Ok(None);
-        }
-        state.iteration = state.iteration.saturating_add(1);
-        self.agent_loops_by_pane
-            .insert(pane_id.to_string(), state.clone());
-        if state.fresh_context {
-            let _ = self.agent_shell_store.start_new_conversation(pane_id)?;
-        }
-        let started = self.start_agent_loop_work_turn(pane_id)?;
-        let status_text = if state.fresh_context {
-            format!(
-                "loop: continuing fresh iteration {}/{}",
-                state.iteration, state.max_iterations
-            )
-        } else {
-            format!(
-                "loop: continuing iteration {}/{}",
-                state.iteration, state.max_iterations
-            )
-        };
-        self.append_agent_status_text_to_terminal_buffer(pane_id, &status_text)?;
-        Ok(Some(started))
-    }
-
     /// Starts one loop-owned work turn using the current pane loop state.
-    fn start_agent_loop_work_turn(&mut self, pane_id: &str) -> Result<RuntimeAgentPromptTurnStart> {
+    pub(in crate::runtime) fn start_agent_loop_work_turn(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<RuntimeAgentPromptTurnStart> {
         let state = self
             .agent_loops_by_pane
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent loop state is unavailable"))?;
+        let store = self
+            .agent_transcript_store
+            .clone()
+            .ok_or_else(|| MezError::invalid_state("agent transcript store is unavailable"))?;
+        let summary = store.fork(
+            &state.parent_conversation_id,
+            &Self::runtime_new_agent_conversation_id(),
+            current_unix_seconds().max(1),
+        )?;
+        let (session_id, transcript_entries) = {
+            let session = self.agent_shell_store.bind_conversation_with_lineage(
+                pane_id,
+                &summary.conversation_id,
+                summary.entries as u64,
+                state.parent_prompt_cache_lineage_id.clone(),
+            )?;
+            (session.session_id.clone(), session.transcript_entries)
+        };
         let prompt = runtime_agent_loop_work_prompt(&state);
         let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None)?;
         self.agent_loop_turns.insert(
@@ -3742,8 +3605,12 @@ impl RuntimeSessionService {
             pane_id,
             &started.turn_id,
             &format!(
-                "loop work queued iteration={} limit={}",
-                state.iteration, state.max_iterations
+                "loop work queued iteration={} limit={} parent_conversation={} conversation_id={} entries={}",
+                state.iteration,
+                state.max_iterations,
+                state.parent_conversation_id,
+                session_id,
+                transcript_entries
             ),
         )?;
         Ok(started)
@@ -4581,105 +4448,32 @@ mod tests {
             .collect()
     }
 
-    /// Verifies `/loop` accepts an optional leading `--new` flag before the
-    /// original prompt body so the runtime can prune prior context between
-    /// work iterations without changing the user-authored task text.
+    /// Verifies `/loop` work prompts remain identical across iterations so the
+    /// model restarts from the original task instead of inheriting prior loop
+    /// attempt context.
     #[test]
-    fn runtime_agent_loop_command_args_parses_optional_new_flag() {
-        assert_eq!(
-            runtime_agent_loop_command_args("--new review this document"),
-            (true, "review this document")
-        );
-        assert_eq!(
-            runtime_agent_loop_command_args("  --new   review this document  "),
-            (true, "review this document")
-        );
-        assert_eq!(
-            runtime_agent_loop_command_args("review this document"),
-            (false, "review this document")
-        );
-    }
-
-    /// Verifies `/loop --new` hides prior-attempt controller hints from the
-    /// next work prompt so the model restarts from the original task alone
-    /// instead of inheriting iteration numbers or earlier assessments.
-    #[test]
-    fn runtime_agent_loop_work_prompt_omits_prior_attempt_context_in_new_mode() {
-        let prompt = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
+    fn runtime_agent_loop_work_prompt_stays_fresh_across_iterations() {
+        let first = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
-            observed_patch_free_iteration: false,
-            fresh_context: true,
+            parent_conversation_id: "parent-conversation".to_string(),
+            parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
+            iteration: 1,
+            max_iterations: 8,
+        });
+        let later = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
+            pane_id: "%1".to_string(),
+            original_prompt: "review this document".to_string(),
+            parent_conversation_id: "parent-conversation".to_string(),
+            parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
             max_iterations: 8,
-            last_assessment: Some("fix the remaining inconsistency".to_string()),
         });
 
-        assert!(prompt.contains("review this document"), "{prompt}");
-        assert!(prompt.contains("Start from this prompt alone"), "{prompt}");
-        assert!(!prompt.contains("Previous loop assessment"), "{prompt}");
-        assert!(!prompt.contains("work iteration 3/8"), "{prompt}");
-    }
-
-    /// Verifies `/loop` assessment prompts forbid immediate completion until a
-    /// completed work iteration has finished without any `apply_patch` action.
-    ///
-    /// This regression keeps the controller from returning to the user right
-    /// after a patching pass, forcing at least one reevaluation-only loop.
-    #[test]
-    fn runtime_agent_loop_assessment_prompt_requires_patch_free_iteration_before_completion() {
-        let prompt = runtime_agent_loop_assessment_prompt(
-            &RuntimeAgentLoopState {
-                pane_id: "%1".to_string(),
-                original_prompt: "fix the bug".to_string(),
-                observed_patch_free_iteration: false,
-                fresh_context: false,
-                iteration: 1,
-                max_iterations: 8,
-                last_assessment: None,
-            },
-            "patched the owner file",
-        );
-
-        assert!(
-            prompt.contains(
-                "requires at least one completed work iteration without any `apply_patch` action"
-            ),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains("must not return `Task complete.` yet"),
-            "{prompt}"
-        );
-    }
-
-    /// Verifies `/loop` assessment prompts stop adding the completion gate once
-    /// a patch-free work iteration has already completed.
-    ///
-    /// This keeps later assessment turns free to finish normally after the
-    /// required reevaluation-only pass has happened.
-    #[test]
-    fn runtime_agent_loop_assessment_prompt_allows_completion_after_patch_free_iteration() {
-        let prompt = runtime_agent_loop_assessment_prompt(
-            &RuntimeAgentLoopState {
-                pane_id: "%1".to_string(),
-                original_prompt: "fix the bug".to_string(),
-                observed_patch_free_iteration: true,
-                fresh_context: false,
-                iteration: 2,
-                max_iterations: 8,
-                last_assessment: Some("reevaluate after the patch".to_string()),
-            },
-            "confirmed the change without further edits",
-        );
-
-        assert!(
-            prompt.contains("If the prompt is fully satisfied"),
-            "{prompt}"
-        );
-        assert!(
-            !prompt.contains("must not return `Task complete.` yet"),
-            "{prompt}"
-        );
+        assert_eq!(first, later);
+        assert!(first.contains("review this document"), "{first}");
+        assert!(first.contains("Start from this prompt alone"), "{first}");
+        assert!(!first.contains("work iteration 3/8"), "{first}");
+        assert!(!first.contains("Previous loop assessment"), "{first}");
     }
 }

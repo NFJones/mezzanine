@@ -7,8 +7,6 @@
 //! one focused implementation unit.
 
 use super::*;
-#[cfg(test)]
-use crate::agent::AllowedActionSet;
 
 /// Returns true when a completed work turn finished without any `apply_patch`
 /// action results.
@@ -156,13 +154,7 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let loop_allowed_actions = self
-            .agent_loop_turns
-            .get(&turn.turn_id)
-            .and_then(|loop_turn| match loop_turn.kind {
-                RuntimeAgentLoopTurnKind::Assessment => Some(AllowedActionSet::say_only()),
-                RuntimeAgentLoopTurnKind::Work => None,
-            });
+        let loop_allowed_actions = None;
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -396,13 +388,7 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let loop_allowed_actions = self
-            .agent_loop_turns
-            .get(&turn.turn_id)
-            .and_then(|loop_turn| match loop_turn.kind {
-                RuntimeAgentLoopTurnKind::Assessment => Some(AllowedActionSet::say_only()),
-                RuntimeAgentLoopTurnKind::Work => None,
-            });
+        let loop_allowed_actions = None;
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -946,20 +932,45 @@ impl RuntimeSessionService {
             self.agent_loops_by_pane.remove(&loop_turn.pane_id);
             return Ok(());
         }
-        let assistant_text = assistant_context_content_for_execution(execution);
         match loop_turn.kind {
             RuntimeAgentLoopTurnKind::Work => {
-                if let Some(state) = self.agent_loops_by_pane.get_mut(&loop_turn.pane_id) {
-                    state.observed_patch_free_iteration |=
-                        runtime_execution_is_patch_free(execution);
+                if runtime_execution_is_patch_free(execution) {
+                    self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &loop_turn.pane_id,
+                        &format!(
+                            "loop: completed after patch-free iteration {}/{}",
+                            loop_turn.iteration,
+                            self.agent_loop_limit.max(1)
+                        ),
+                    )?;
+                    return Ok(());
                 }
-                let _ =
-                    self.start_agent_loop_assessment_turn(&loop_turn.pane_id, &assistant_text)?;
-            }
-            RuntimeAgentLoopTurnKind::Assessment => {
-                let _ = self.continue_agent_loop_after_assessment_text(
+                let Some(mut state) = self.agent_loops_by_pane.get(&loop_turn.pane_id).cloned()
+                else {
+                    return Ok(());
+                };
+                if state.iteration >= state.max_iterations {
+                    self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &loop_turn.pane_id,
+                        &format!(
+                            "loop: reached iteration limit {}/{} after apply_patch work",
+                            state.iteration, state.max_iterations
+                        ),
+                    )?;
+                    return Ok(());
+                }
+                state.iteration = state.iteration.saturating_add(1);
+                self.agent_loops_by_pane
+                    .insert(loop_turn.pane_id.clone(), state.clone());
+                let _ = self.start_agent_loop_work_turn(&loop_turn.pane_id)?;
+                self.append_agent_status_text_to_terminal_buffer(
                     &loop_turn.pane_id,
-                    &assistant_text,
+                    &format!(
+                        "loop: continuing fresh iteration {}/{}",
+                        state.iteration, state.max_iterations
+                    ),
                 )?;
             }
         }

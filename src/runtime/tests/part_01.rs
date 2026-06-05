@@ -36,7 +36,7 @@ use crate::terminal::{
     UI_COLOR_SLOT_NAMES,
 };
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
-use crate::transcript::AgentTranscriptStore;
+use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
 use base64::Engine;
 use std::cell::RefCell;
 use std::os::unix::fs::PermissionsExt;

@@ -2499,16 +2499,13 @@ reached.
 
 The `/loop` slash command MUST describe itself in help output as an iterative
 work command rather than a generic slash-command placeholder. `/loop` MUST
-accept an optional leading `--new` flag before the user prompt body. When
-present, Mezzanine MUST prune prior model-visible conversation context before
-starting each new work iteration after the first so the next work turn starts
-from the original prompt alone without inheriting prior-attempt transcript
-context. Each `/loop` iteration prompt and each internal completion assessment
-MUST instruct the model to inspect the problem again, including the effects of
-previous work, so it can catch newly introduced issues. Internal `/loop`
-completion assessments MUST treat only the exact final `say` text `Task
-complete.` as completion; other responses MUST continue or stop at the
-configured loop limit as incomplete.
+start every work iteration from a fresh context forked from the parent pane
+conversation that invoked the loop. Each fork MUST use the same parent
+conversation, so later work turns cannot see prior `/loop` attempts or loop
+controller assessments. Mezzanine MUST continue running fresh work iterations
+after any completed iteration that emitted an `apply_patch` action, and MUST
+terminate the loop after the first completed work iteration that emitted no
+`apply_patch` actions or when the configured loop limit is reached.
 
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,
