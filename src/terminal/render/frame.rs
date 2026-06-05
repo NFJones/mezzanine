@@ -1451,11 +1451,13 @@ pub(super) fn window_right_status_layout(
     }
     let rendered = render_window_status_template(frame_context, status);
     let text = rendered.text.trim_end().to_string();
-    let status_width = fitted_text_width(&text, width);
+    let status_limit = width.saturating_sub(usize::from(width > 1));
+    let status_width = fitted_text_width(&text, status_limit);
     if status_width == 0 {
         return None;
     }
-    let start = width.saturating_sub(status_width);
+    let trailing_padding = usize::from(width > status_width);
+    let start = width.saturating_sub(status_width.saturating_add(trailing_padding));
     let segments = rendered
         .segments
         .into_iter()

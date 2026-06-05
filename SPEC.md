@@ -873,6 +873,9 @@ edge cell when doing so would be vulnerable to host-terminal autowrap
 truncation.
 
 The default window frame MUST support a configurable right-aligned status line.
+When terminal width permits, the window right-status region MUST leave at least
+one trailing frame-fill cell visible so the status area does not occupy the
+terminal edge cell and become vulnerable to host-terminal edge clipping.
 The generated default configuration MUST display padded window command buttons
 for `split-window -h`, `split-window`, `new-window`, `new-group`, and
 `agent-shell`, followed by `system.uptime` and `datetime.local`, in that status

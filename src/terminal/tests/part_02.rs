@@ -3650,8 +3650,9 @@ fn render_default_window_frame_uses_window_pillbox_context() {
 }
 
 /// Verifies that the window status bar renders single-cell action pills
-/// with mouse-addressable geometry and a distinct pressed style. This protects
-/// the templated controls as clickable terminal UI rather than passive text.
+/// with mouse-addressable geometry, a distinct pressed style, and a trailing
+/// safety column. This protects the templated controls as clickable terminal
+/// UI rather than passive text while avoiding host-terminal edge-cell clipping.
 #[test]
 fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
     let mut ids = IdFactory::default();
@@ -3705,16 +3706,13 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
         view.lines[2]
     );
     assert!(!view.lines[2].contains(" Δ"), "{}", view.lines[2]);
-    assert_ne!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
+    assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let status_start = view.lines[2]
         .find(" ~/repo")
         .expect("default window status should render the active pane cwd");
-    assert_eq!(
-        view.lines[2]
-            .chars()
-            .nth(status_start.saturating_sub(1)),
-        Some('w'),
-        "window action pills should use every column before the right-status block: {}",
+    assert!(
+        status_start < usize::from(window.size.columns).saturating_sub(1),
+        "window status should leave the final column as frame fill: {}",
         view.lines[2]
     );
     let cells = window_frame_action_pillbox_cells(&frame_context, 2, window.size.columns);
@@ -3864,6 +3862,7 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     assert!(view.lines[2].find(" ~/repo ").unwrap() < view.lines[2].find(" + ").unwrap());
     assert!(view.lines[2].contains(" 2d 03h 04m "));
     assert!(view.lines[2].contains(" 2026-05-05 10:11:12"));
+    assert_eq!(view.lines[2].chars().last(), Some(' '), "{}", view.lines[2]);
     let uptime_start_bytes = view.lines[2].find(" 2d 03h 04m ").unwrap();
     let uptime_start = UnicodeWidthStr::width(&view.lines[2][..uptime_start_bytes]);
     assert!(view.line_style_spans[2].iter().any(|span| {
