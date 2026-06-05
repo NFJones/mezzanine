@@ -2307,11 +2307,17 @@ pub fn flush_runtime_event_wakeup<S>(
 where
     S: RuntimeEventFanoutSink,
 {
-    let mut delivered = 0usize;
+    if wakeup.events.is_empty() {
+        return Ok(0);
+    }
+    let mut frame = Vec::new();
     for event in &wakeup.events {
         let notification = encode_event_notification(event);
-        let frame = encode_control_body(&notification);
-        sink.send_frame(&wakeup.connection_id, &frame)?;
+        frame.extend_from_slice(&encode_control_body(&notification));
+    }
+    sink.send_frame(&wakeup.connection_id, &frame)?;
+    let mut delivered = 0usize;
+    for event in &wakeup.events {
         connections.mark_delivered(&wakeup.connection_id, event.id)?;
         delivered += 1;
     }

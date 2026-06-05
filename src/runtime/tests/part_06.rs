@@ -3981,3 +3981,65 @@ fn runtime_unrecovered_apply_patch_failure_uses_generic_line_for_fragments() {
         ]
     );
 }
+
+/// Verifies runtime event fanout batches all ready event notifications for one
+/// connection into a single sink write while still advancing the per-connection
+/// delivery cursor for each visible event.
+///
+/// High-volume event streams can otherwise perform one write per event per
+/// connection, so this regression protects the fanout path from regressing to
+/// O(events × clients) write calls when a bounded replay batch is ready.
+#[test]
+fn runtime_event_fanout_batches_frames_per_connection() {
+    struct RecordingEventSink {
+        frames: Vec<(String, Vec<u8>)>,
+    }
+
+    impl crate::runtime::RuntimeEventFanoutSink for RecordingEventSink {
+        fn send_frame(&mut self, connection_id: &str, frame: &[u8]) -> crate::Result<()> {
+            self.frames
+                .push((connection_id.to_string(), frame.to_vec()));
+            Ok(())
+        }
+    }
+
+    let mut event_log = crate::event::EventLog::new(8, 1024).unwrap();
+    event_log
+        .append(
+            crate::event::EventKind::Diagnostic,
+            Some("session".to_string()),
+            crate::event::EventVisibility::SessionView,
+            r#"{"message":"first"}"#,
+        )
+        .unwrap();
+    event_log
+        .append(
+            crate::event::EventKind::Diagnostic,
+            Some("session".to_string()),
+            crate::event::EventVisibility::SessionView,
+            r#"{"message":"second"}"#,
+        )
+        .unwrap();
+
+    let mut connections = crate::runtime::RuntimeEventConnectionTable::default();
+    connections
+        .attach("event-connection", crate::event::EventAudience::Primary, true, 0)
+        .unwrap();
+    let wakeups = connections.wakeups(Some(&event_log), 10);
+
+    let mut sink = RecordingEventSink { frames: Vec::new() };
+    let delivered = crate::runtime::flush_runtime_event_wakeups(
+        &mut connections,
+        &wakeups,
+        &mut sink,
+    )
+    .unwrap();
+
+    assert_eq!(delivered, 2);
+    assert_eq!(sink.frames.len(), 1);
+    assert_eq!(sink.frames[0].0, "event-connection");
+    let batched = String::from_utf8(sink.frames[0].1.clone()).unwrap();
+    assert!(batched.contains(r#""message":"first""#), "{batched}");
+    assert!(batched.contains(r#""message":"second""#), "{batched}");
+    assert!(connections.wakeups(Some(&event_log), 10).is_empty());
+}
