@@ -3,6 +3,8 @@
 //! Repository methods own manifest and payload paths, listing, inspection,
 //! deletion, and idempotent creation from live sessions.
 
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -47,12 +49,16 @@ impl SnapshotRepository {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn write(&self, manifest: &SnapshotManifest) -> Result<PathBuf> {
-        manifest.write_to_dir(&self.root)
+        let path = manifest.write_to_dir(&self.root)?;
+        self.write_latest_indexes(&manifest.state)?;
+        Ok(path)
     }
 
     /// Writes a snapshot manifest through Tokio filesystem APIs.
     pub async fn write_async(&self, manifest: &SnapshotManifest) -> Result<PathBuf> {
-        manifest.write_to_dir_async(&self.root).await
+        let path = manifest.write_to_dir_async(&self.root).await?;
+        self.write_latest_indexes(&manifest.state)?;
+        Ok(path)
     }
 
     /// Runs the write payload operation for this subsystem.
@@ -220,6 +226,7 @@ impl SnapshotRepository {
         let manifest = SnapshotManifest::read_from_file(&path)?;
         fs::remove_file(&path)?;
         self.remove_payload_if_local(&manifest)?;
+        self.rebuild_latest_indexes()?;
         Ok(true)
     }
 
@@ -235,6 +242,7 @@ impl SnapshotRepository {
         };
         tokio::fs::remove_file(&path).await?;
         self.remove_payload_if_local_async(&manifest).await?;
+        self.rebuild_latest_indexes()?;
         Ok(true)
     }
 
@@ -371,6 +379,7 @@ impl SnapshotRepository {
             contains_agent_transcripts,
             contains_raw_credentials: false,
             active_approvals_restored: false,
+            restart_required_panes: plan.restart_required_panes,
         };
 
         self.write_payload(snapshot_id, &payload)?;
@@ -433,6 +442,7 @@ impl SnapshotRepository {
             contains_agent_transcripts,
             contains_raw_credentials: false,
             active_approvals_restored: false,
+            restart_required_panes: plan.restart_required_panes,
         };
 
         self.write_payload_async(snapshot_id, &payload).await?;
@@ -463,6 +473,137 @@ impl SnapshotRepository {
     fn payload_path(&self, snapshot_id: &str) -> Result<PathBuf> {
         validate_snapshot_id(snapshot_id)?;
         Ok(self.root.join(format!("{snapshot_id}.payload")))
+    }
+
+    /// Returns the snapshot selected by the persisted latest index, when present.
+    ///
+    /// The helper keeps latest lookups on the small index file instead of
+    /// requiring callers to enumerate and parse every manifest on hot paths.
+    pub(crate) fn latest_from_index(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<SnapshotState>> {
+        let Some(snapshot_id) = self.read_latest_index(session_id)? else {
+            return Ok(None);
+        };
+        let manifest = self.inspect(&snapshot_id)?;
+        if session_id.is_none_or(|session_id| manifest.state.session_id == session_id) {
+            Ok(Some(manifest.state))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Compares two snapshot states by the repository latest ordering.
+    ///
+    /// Timestamps are primary, with snapshot ids as deterministic tie breakers
+    /// so indexes and fallback scans choose the same candidate.
+    pub(crate) fn compare_latest_snapshots(
+        left: &SnapshotState,
+        right: &SnapshotState,
+    ) -> Ordering {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    }
+
+    /// Rebuilds the latest snapshot indexes from current manifests.
+    ///
+    /// Repository writes and deletes call this so lookup paths can inspect one
+    /// bounded index file before falling back to a full manifest scan.
+    fn rebuild_latest_indexes(&self) -> Result<()> {
+        let snapshots = self.list()?;
+        self.write_latest_index_file(&snapshots)
+    }
+
+    /// Refreshes latest indexes after a successful manifest write.
+    fn write_latest_indexes(&self, _state: &SnapshotState) -> Result<()> {
+        self.rebuild_latest_indexes()
+    }
+
+    /// Returns the filesystem path for the latest snapshot index.
+    fn latest_index_path(&self) -> PathBuf {
+        self.root.join("latest.index")
+    }
+
+    /// Reads one snapshot id from the latest index file.
+    fn read_latest_index(&self, session_id: Option<&str>) -> Result<Option<String>> {
+        let data = match fs::read_to_string(self.latest_index_path()) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        for line in data.lines() {
+            if session_id.is_none() {
+                if let Some(snapshot_id) = line.strip_prefix("all\t") {
+                    validate_snapshot_id(snapshot_id)?;
+                    return Ok(Some(snapshot_id.to_string()));
+                }
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("session\t") else {
+                continue;
+            };
+            let Some((indexed_session_id, snapshot_id)) = rest.split_once('\t') else {
+                continue;
+            };
+            if Some(indexed_session_id) == session_id {
+                validate_snapshot_id(snapshot_id)?;
+                return Ok(Some(snapshot_id.to_string()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Writes the latest index file for global and per-session lookups.
+    fn write_latest_index_file(&self, snapshots: &[SnapshotState]) -> Result<()> {
+        let path = self.latest_index_path();
+        if snapshots.is_empty() {
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+            return Ok(());
+        }
+
+        let mut latest_all: Option<&SnapshotState> = None;
+        let mut latest_by_session: BTreeMap<&str, &SnapshotState> = BTreeMap::new();
+        for snapshot in snapshots {
+            if latest_all.is_none_or(|latest| {
+                Self::compare_latest_snapshots(latest, snapshot) == Ordering::Less
+            }) {
+                latest_all = Some(snapshot);
+            }
+            let entry = latest_by_session
+                .entry(snapshot.session_id.as_str())
+                .or_insert(snapshot);
+            if Self::compare_latest_snapshots(entry, snapshot) == Ordering::Less {
+                *entry = snapshot;
+            }
+        }
+
+        fs::create_dir_all(&self.root)?;
+        set_private_dir_permissions(&self.root)?;
+        let mut output = String::new();
+        if let Some(snapshot) = latest_all {
+            output.push_str("all\t");
+            output.push_str(&snapshot.id);
+            output.push('\n');
+        }
+        for (session_id, snapshot) in latest_by_session {
+            output.push_str("session\t");
+            output.push_str(session_id);
+            output.push('\t');
+            output.push_str(&snapshot.id);
+            output.push('\n');
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        file.write_all(output.as_bytes())?;
+        set_private_file_permissions(&path)?;
+        Ok(())
     }
 
     /// Runs the remove payload if local operation for this subsystem.

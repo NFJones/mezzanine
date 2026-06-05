@@ -96,7 +96,7 @@ impl SnapshotManifest {
     /// on duplicated control-flow logic.
     fn encode(&self) -> String {
         format!(
-            "id={}\nversion={}\nsession_id={}\nname={}\ncreated_at={}\nkind={:?}\nrestorable={}\nwindow_count={}\npane_count={}\nlimitations={}\nstorage_ref={}\ncontains_terminal_history={}\ncontains_agent_transcripts={}\ncontains_raw_credentials={}\nactive_approvals_restored={}\n",
+            "id={}\nversion={}\nsession_id={}\nname={}\ncreated_at={}\nkind={:?}\nrestorable={}\nwindow_count={}\npane_count={}\nlimitations={}\nstorage_ref={}\ncontains_terminal_history={}\ncontains_agent_transcripts={}\ncontains_raw_credentials={}\nactive_approvals_restored={}\nrestart_required_panes={}\n",
             self.state.id,
             self.state.version,
             self.state.session_id,
@@ -112,6 +112,7 @@ impl SnapshotManifest {
             self.contains_agent_transcripts,
             self.contains_raw_credentials,
             self.active_approvals_restored,
+            manifest_string_array(&self.restart_required_panes),
         )
     }
 
@@ -169,6 +170,12 @@ impl SnapshotManifest {
             contains_agent_transcripts: parse_bool(required(&map, "contains_agent_transcripts")?)?,
             contains_raw_credentials: parse_bool(required(&map, "contains_raw_credentials")?)?,
             active_approvals_restored: parse_bool(required(&map, "active_approvals_restored")?)?,
+            restart_required_panes: map
+                .get("restart_required_panes")
+                .copied()
+                .map(parse_string_array)
+                .transpose()?
+                .unwrap_or_default(),
         };
         manifest.validate_for_persistence()?;
         Ok(manifest)

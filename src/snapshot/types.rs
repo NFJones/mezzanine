@@ -139,6 +139,11 @@ pub struct SnapshotManifest {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub active_approvals_restored: bool,
+    /// Stores the restart required panes value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub restart_required_panes: Vec<String>,
 }
 
 /// Carries Snapshot Repository state for this subsystem.

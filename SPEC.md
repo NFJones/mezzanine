@@ -5520,7 +5520,9 @@ be one of `info`, `warning`, or `error`. It MAY include `path`, `line`,
 `SnapshotState` MUST include `id`, `version`, `session_id`, `name`,
 `created_at`, `kind`, `restorable`, `window_count`, `pane_count`,
 `limitations`, and `storage_ref`. `kind` MUST be one of `live`, `manual`,
-`automatic`, or `crash_recovery`.
+`automatic`, or `crash_recovery`. Persisted snapshot manifests MUST include
+enough resume-plan metadata, including restart-required pane ids, for plan-only
+flows to avoid loading the snapshot payload.
 
 `McpServerState` MUST include `id`, `version`, `name`, `state`, `configured`,
 `blacklisted`, `transport`, `tools`, `last_checked_at`, and `diagnostics`.

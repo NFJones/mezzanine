@@ -44,6 +44,7 @@ fn manifest() -> SnapshotManifest {
         contains_agent_transcripts: true,
         contains_raw_credentials: false,
         active_approvals_restored: false,
+        restart_required_panes: Vec::new(),
     }
 }
 
@@ -203,12 +204,51 @@ fn snapshot_repository_selects_latest_snapshot_by_session() {
     repo.write(&new).unwrap();
     repo.write(&other).unwrap();
 
+    let latest_index = fs::read_to_string(root.join("latest.index")).unwrap();
+
     assert_eq!(
         repo.latest(Some("$target")).unwrap().unwrap().id,
         "snap-new"
     );
     assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-other");
     assert!(repo.latest(Some("$missing")).unwrap().is_none());
+    assert!(latest_index.contains("all\tsnap-other\n"));
+    assert!(latest_index.contains("session\t$target\tsnap-new\n"));
+
+    repo.delete("snap-other").unwrap();
+    assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-new");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies snapshot resume plans are served from manifest metadata.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn snapshot_resume_plan_uses_manifest_metadata_without_payload() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-resume-plan-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut manifest = manifest();
+    manifest.state.window_count = 2;
+    manifest.state.pane_count = 3;
+    manifest.state.limitations = vec!["pane primary processes must be restarted".to_string()];
+    manifest.state.storage_ref = "missing.payload".to_string();
+    manifest.restart_required_panes = vec!["%1".to_string(), "%2".to_string()];
+    repo.write(&manifest).unwrap();
+
+    let plan = repo.resume_plan("snap-1").unwrap();
+
+    assert_eq!(plan.session_id, "$1");
+    assert_eq!(plan.window_count, 2);
+    assert_eq!(plan.pane_count, 3);
+    assert_eq!(plan.restart_required_panes, vec!["%1", "%2"]);
+    assert_eq!(plan.limitations, manifest.state.limitations);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -402,7 +442,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     repo.write_payload("snap-1", &payload).unwrap();
     let encoded = fs::read_to_string(root.join("snap-1.payload")).unwrap();
     let loaded = repo.inspect_payload("snap-1").unwrap();
-    let plan = repo.resume_plan("snap-1").unwrap();
+    let plan = payload.resume_plan();
 
     assert!(encoded.starts_with("payload_version\t4\n"));
     assert!(encoded.contains("\nwindow_layout\t@1\t"));

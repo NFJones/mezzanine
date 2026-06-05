@@ -2314,6 +2314,7 @@ fn snapshot_list_reads_local_snapshot_repository() {
             contains_agent_transcripts: false,
             contains_raw_credentials: false,
             active_approvals_restored: false,
+            restart_required_panes: Vec::new(),
         })
         .unwrap();
     let mut stdout = Vec::new();

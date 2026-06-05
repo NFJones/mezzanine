@@ -19,8 +19,14 @@ impl SnapshotRepository {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn resume_plan(&self, snapshot_id: &str) -> Result<SnapshotResumePlan> {
-        let payload = self.inspect_payload(snapshot_id)?;
-        Ok(payload.resume_plan())
+        let manifest = self.inspect(snapshot_id)?;
+        Ok(SnapshotResumePlan {
+            session_id: manifest.state.session_id,
+            window_count: manifest.state.window_count,
+            pane_count: manifest.state.pane_count,
+            restart_required_panes: manifest.restart_required_panes,
+            limitations: manifest.state.limitations,
+        })
     }
 
     /// Runs the latest operation for this subsystem.
@@ -29,17 +35,16 @@ impl SnapshotRepository {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn latest(&self, session_id: Option<&str>) -> Result<Option<SnapshotState>> {
+        if let Some(snapshot) = self.latest_from_index(session_id)? {
+            return Ok(Some(snapshot));
+        }
         Ok(self
             .list()?
             .into_iter()
             .filter(|snapshot| {
                 session_id.is_none_or(|session_id| snapshot.session_id == session_id)
             })
-            .max_by(|left, right| {
-                left.created_at
-                    .cmp(&right.created_at)
-                    .then_with(|| left.id.cmp(&right.id))
-            }))
+            .max_by(Self::compare_latest_snapshots))
     }
 
     /// Runs the latest resume plan operation for this subsystem.
