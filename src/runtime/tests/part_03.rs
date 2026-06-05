@@ -4562,14 +4562,15 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
 }
 
 /// Verifies visible-pane user prompt transcript lines wrap to the bounded pane
-/// width with a fifth-column hanging indent for continuation rows.
+/// width with a sixth-column hanging indent for continuation rows.
 ///
 /// Long user-entered transcript lines should use the same bounded renderer as
 /// other visible pane logs so they stay within the pane width or the 120-column
-/// cap. Wrapped continuation rows keep a shallow hanging indent instead of
-/// repeating the `user> ` label so the copied transcript remains readable.
+/// cap. Wrapped continuation rows align with the `mez> ` continuation column
+/// instead of repeating the `user> ` label so the copied transcript remains
+/// readable.
 #[test]
-fn runtime_user_prompt_logs_wrap_with_fifth_column_hanging_indent() {
+fn runtime_user_prompt_logs_wrap_with_sixth_column_hanging_indent() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(24, 24).unwrap(), 120)
@@ -4601,11 +4602,11 @@ fn runtime_user_prompt_logs_wrap_with_fifth_column_hanging_indent() {
         "{user_lines:#?}"
     );
     assert!(
-        user_lines.iter().any(|line| line == "▐     gamma delta"),
+        user_lines.iter().any(|line| line == "▐      gamma delta"),
         "{user_lines:#?}"
     );
     assert!(
-        user_lines.iter().any(|line| line == "▐     epsilon"),
+        user_lines.iter().any(|line| line == "▐      epsilon"),
         "{user_lines:#?}"
     );
     service.pane_processes_mut().terminate_all().unwrap();

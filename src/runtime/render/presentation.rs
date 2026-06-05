@@ -728,7 +728,7 @@ pub(super) fn rendered_line_continuation_indent(display: &str, display_width: us
         return " ".repeat(10.min(display_width.saturating_sub(1)));
     }
     if display.starts_with("user> ") {
-        return " ".repeat(4.min(display_width.saturating_sub(1)));
+        return " ".repeat(5.min(display_width.saturating_sub(1)));
     }
     let prompt = "mez> ";
     let indent_width = if let Some(rest) = display.strip_prefix(prompt) {
