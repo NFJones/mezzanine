@@ -20,6 +20,10 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Use output tokens carefully"));
     assert!(prompt.contains("Prioritize accuracy over agreement"));
     assert!(prompt.contains("if the user's premise conflicts with evidence"));
+    assert!(prompt.contains("separate observed facts backed by current action results"));
+    assert!(prompt.contains("from source-backed inference, assumptions, and unresolved uncertainty"));
+    assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
+    assert!(prompt.contains("otherwise label the statement as a hypothesis, an inference, or current file state"));
     assert!(prompt.contains("smallest complete response that advances the task"));
     assert!(prompt.contains("Use shell_command for local inspection"));
     assert!(prompt.contains("prefer repository patterns"));
@@ -39,6 +43,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("If the user asks for a plan tied to repository state"));
     assert!(prompt.contains("produce an evidence-backed solution plan"));
     assert!(prompt.contains("instead of a plan to start investigating"));
+    assert!(prompt.contains("The plan MUST cite the inspected artifact"));
+    assert!(prompt.contains("distinguish observed facts from inference or assumption"));
+    assert!(prompt.contains("Do not present an uninspected hypothesis as an established root cause"));
     assert!(prompt.contains("If the user asks for a review"));
     assert!(prompt.contains("default to code-review mode"));
     assert!(prompt.contains("do not implement fixes unless the user asks"));

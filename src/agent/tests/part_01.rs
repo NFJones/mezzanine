@@ -4284,7 +4284,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v22"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v23"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4355,6 +4355,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("put immediate intent in the batch rationale"));
     assert!(prompt.contains("If you already gave one evidence-based but non-executing answer about likely behavior"));
     assert!(prompt.contains("default to inspect, edit, or validate"));
+    assert!(prompt.contains("The plan MUST cite the inspected artifact"));
+    assert!(prompt.contains("distinguish observed facts from inference or assumption"));
+    assert!(prompt.contains("Do not present an uninspected hypothesis as an established root cause"));
     assert!(!prompt.contains("pair any brief plan"));
     assert!(prompt.contains("For long-running tasks, keep one task-level goal"));
     assert!(prompt.contains("Break broad work into dependency-aware slices"));
@@ -4373,6 +4376,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("update specs, docs, examples, or tests"));
     assert!(prompt.contains("Success claims about file changes must trace"));
     assert!(prompt.contains("failed mutations plus later reads prove only current file state"));
+    assert!(prompt.contains("separate observed facts backed by current action results"));
+    assert!(prompt.contains("from source-backed inference, assumptions, and unresolved uncertainty"));
+    assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
     assert!(prompt.contains("prefer repository patterns"));
     assert!(prompt.contains("preserve unrelated user worktree changes"));
     assert!(prompt.contains("Terminal work MUST be an executable action"));
