@@ -62,6 +62,15 @@ const RUNTIME_READINESS_PROBE_TIMEOUT_MS: u64 = 5_000;
 /// the pane look hung even though no user command has actually started.
 const RUNTIME_SHELL_TRANSACTION_START_TIMEOUT_MS: u64 = 30_000;
 
+/// Returns the user's home directory when it is available and usable as a
+/// pane process start directory.
+fn runtime_home_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+}
+
 /// Runs the runtime running shell transaction kind name operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -205,7 +214,7 @@ impl RuntimeSessionService {
         for descriptor in descriptors {
             let restored_screen = self.pane_screens.get(descriptor.pane_id.as_str()).cloned();
             let start_directory = self.restored_pane_start_directory(descriptor.pane_id.as_str());
-            let started = self.start_pane_process_with_start_directory(
+            let started = self.start_restored_pane_process_with_best_effort_directory(
                 descriptor,
                 explicit_command,
                 start_directory.as_deref(),
@@ -229,6 +238,40 @@ impl RuntimeSessionService {
         Ok(starts)
     }
 
+    /// Starts one restored pane while treating its snapshot working directory
+    /// as best-effort state rather than a resume-critical invariant.
+    fn start_restored_pane_process_with_best_effort_directory(
+        &mut self,
+        descriptor: PaneDescriptor,
+        explicit_command: Option<&str>,
+        start_directory: Option<&Path>,
+    ) -> Result<PaneProcessStart> {
+        match self.start_pane_process_with_start_directory(
+            descriptor.clone(),
+            explicit_command,
+            start_directory,
+        ) {
+            Ok(started) => Ok(started),
+            Err(error) if start_directory.is_some() => {
+                let home_directory = runtime_home_directory();
+                self.append_lifecycle_event(
+                    EventKind::Diagnostic,
+                    format!(
+                        r#"{{"pane_id":"{}","diagnostic":"snapshot resume pane cwd unavailable; retrying from home","error":"{}"}}"#,
+                        json_escape(descriptor.pane_id.as_str()),
+                        json_escape(&error.to_string())
+                    ),
+                )?;
+                self.start_pane_process_with_start_directory(
+                    descriptor,
+                    explicit_command,
+                    home_directory.as_deref(),
+                )
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Returns the start directory for a restored pane's fresh shell.
     fn restored_pane_start_directory(&self, pane_id: &str) -> Option<PathBuf> {
         self.session
@@ -236,12 +279,7 @@ impl RuntimeSessionService {
             .and_then(|metadata| metadata.current_working_directory.as_deref())
             .map(PathBuf::from)
             .filter(|directory| directory.is_dir())
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .filter(|home| !home.is_empty())
-                    .map(PathBuf::from)
-                    .filter(|home| home.is_dir())
-            })
+            .or_else(runtime_home_directory)
     }
 
     /// Runs the seed terminal screens from snapshot payload operation for this subsystem.

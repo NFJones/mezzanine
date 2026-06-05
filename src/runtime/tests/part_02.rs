@@ -3285,6 +3285,74 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     poll_until_exit(&mut service);
 }
 
+/// Verifies runtime snapshot resume treats saved pane working directories as
+/// best-effort metadata when fresh pane process startup cannot use them.
+///
+/// A snapshot can contain a directory that existed during restore planning but
+/// becomes unusable when the fresh pane process starts. Resume must keep the
+/// restored layout and names, retry the pane from the user's home directory,
+/// and leave the restored session usable instead of unwinding after topology
+/// installation.
+#[test]
+fn runtime_service_restarts_restored_panes_from_home_when_saved_cwd_fails() {
+    let root = temp_root("runtime-restored-pane-cwd-fallback");
+    let inaccessible_cwd = root.join("inaccessible-cwd");
+    fs::create_dir_all(&inaccessible_cwd).unwrap();
+    let original_permissions = fs::metadata(&inaccessible_cwd).unwrap().permissions();
+    fs::set_permissions(&inaccessible_cwd, fs::Permissions::from_mode(0o000)).unwrap();
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    assert!(home.is_dir());
+
+    let original = test_session();
+    let mut payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
+    payload.name = "restored-name".to_string();
+    payload.windows[0].name = "saved-window".to_string();
+    payload.windows[0].panes[0].title = "saved-pane".to_string();
+    payload.windows[0].panes[0].current_working_directory =
+        Some(inaccessible_cwd.to_string_lossy().into_owned());
+    let restored = Session::from_snapshot_payload(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        &payload,
+    )
+    .unwrap();
+    let pane_id = restored.active_window().unwrap().active_pane().id.clone();
+    let mut service = RuntimeSessionService::with_event_log(
+        restored,
+        PathBuf::from("/tmp/mez-1000/restored-cwd-fallback.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+
+    let starts = service
+        .restart_restored_pane_processes(Some("true"))
+        .unwrap();
+
+    assert_eq!(starts.len(), 1);
+    assert_eq!(service.session().name, "restored-name");
+    assert_eq!(service.session().active_window().unwrap().name, "saved-window");
+    assert_eq!(
+        service.session().active_window().unwrap().active_pane().title,
+        "saved-pane"
+    );
+    assert_eq!(
+        service.pane_current_working_directory(pane_id.as_str()).as_deref(),
+        Some(home.as_path())
+    );
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary);
+    assert!(events.iter().any(|event| {
+        event.payload.contains("snapshot resume pane cwd unavailable; retrying from home")
+    }));
+
+    poll_until_exit(&mut service);
+    fs::set_permissions(&inaccessible_cwd, original_permissions).unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies runtime service starts processes for created windows and panes.
 ///
 /// This regression scenario documents the behavior being protected so a

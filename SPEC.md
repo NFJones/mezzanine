@@ -6940,9 +6940,11 @@ Mezzanine MUST support resuming the most recent snapshot for a session.
 Mezzanine MUST support selecting a snapshot to resume.
 
 When resuming a snapshot, Mezzanine MUST reconstruct the saved group, window,
-and pane layout and MUST start fresh pane shells in the saved pane current
-working directories. If a saved directory is unavailable, resume MUST fall back
-to the user's home directory when available.
+pane layout, names, and pane current working directories as best-effort state.
+Fresh pane shells SHOULD start in the saved pane current working directories.
+If a saved directory is unavailable or cannot be used to start a fresh pane
+shell, resume MUST fall back to the user's home directory when available and
+MUST leave the resumed session running.
 
 Snapshot resume MUST NOT reconnect, reattach, or reload the pane shell
 processes from the snapshotted session. Fresh pane shells created by snapshot
