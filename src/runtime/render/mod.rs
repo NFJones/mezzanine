@@ -1981,11 +1981,13 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
     ) -> Result<()> {
-        let lines = prefixed_agent_terminal_lines("user> ", prompt);
-        self.append_agent_terminal_lines_to_buffer(
+        let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let rendered_lines = wrapped_prefixed_agent_terminal_lines("user> ", prompt, display_width);
+        self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
-            &lines,
             AgentTerminalPresentationStyle::UserPrompt,
+            rendered_lines.as_slice(),
+            &[],
         )
     }
 

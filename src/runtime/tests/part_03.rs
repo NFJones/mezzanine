@@ -4561,6 +4561,56 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies visible-pane user prompt transcript lines wrap to the bounded pane
+/// width with a fifth-column hanging indent for continuation rows.
+///
+/// Long user-entered transcript lines should use the same bounded renderer as
+/// other visible pane logs so they stay within the pane width or the 120-column
+/// cap. Wrapped continuation rows keep a shallow hanging indent instead of
+/// repeating the `user> ` label so the copied transcript remains readable.
+#[test]
+fn runtime_user_prompt_logs_wrap_with_fifth_column_hanging_indent() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(24, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(24, 12).unwrap(), 100).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .append_agent_user_prompt_to_terminal_buffer("%1", "alpha beta gamma delta epsilon")
+        .unwrap();
+
+    let user_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .into_iter()
+        .filter(|line| line.starts_with("▐ "))
+        .collect::<Vec<_>>();
+    assert!(
+        user_lines.iter().any(|line| line == "▐ user> alpha beta"),
+        "{user_lines:#?}"
+    );
+    assert!(
+        user_lines.iter().any(|line| line == "▐     gamma delta"),
+        "{user_lines:#?}"
+    );
+    assert!(
+        user_lines.iter().any(|line| line == "▐     epsilon"),
+        "{user_lines:#?}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies plain text `say` output does not receive markdown block framing.
 ///
 /// Plain `say` output is ordinary assistant transcript text, so it should keep
