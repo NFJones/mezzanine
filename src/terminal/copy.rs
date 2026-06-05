@@ -619,26 +619,78 @@ impl CopyMode {
         validate_copy_position(&self.lines, start)?;
         validate_copy_position(&self.lines, end)?;
 
-        if start.line == end.line {
-            let lines = vec![self.copy_line_slice(start.line, start.column, end.column)];
-            return Ok(normalize_copied_selection_lines(lines).join("\n"));
-        }
-
         let mut copied = Vec::new();
-        copied.push(self.copy_line_slice(
-            start.line,
-            start.column,
-            char_count(&self.lines[start.line]),
-        ));
-        for line in (start.line + 1)..end.line {
-            copied.push(self.copy_lines[line].clone());
+        let mut line = start.line;
+        while line <= end.line {
+            if let Some((group_end, raw_line)) =
+                self.copy_selected_markdown_source_line(start, end, line)
+            {
+                copied.push(raw_line);
+                line = group_end.saturating_add(1);
+                continue;
+            }
+            let line_start = if line == start.line { start.column } else { 0 };
+            let line_end = if line == end.line {
+                end.column
+            } else {
+                char_count(&self.lines[line])
+            };
+            copied.push(self.copy_line_slice(line, line_start, line_end));
+            line = line.saturating_add(1);
         }
-        copied.push(self.copy_line_slice(end.line, 0, end.column));
         Ok(normalize_copied_selection_lines(copied).join("\n"))
     }
 
+    /// Returns the raw markdown source line when the selection fully covers one
+    /// rendered source-line group.
+    fn copy_selected_markdown_source_line(
+        &self,
+        selection_start: CopyPosition,
+        selection_end: CopyPosition,
+        line: usize,
+    ) -> Option<(usize, String)> {
+        let copy_line = self.copy_lines.get(line)?;
+        let (_, raw_line) = decode_agent_copy_source_line(copy_line)?;
+        let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
+        if line != group_start
+            || !selection_fully_covers_markdown_source_group(
+                &self.lines,
+                selection_start,
+                selection_end,
+                group_start,
+                group_end,
+            )
+        {
+            return None;
+        }
+        Some((group_end, raw_line.to_string()))
+    }
+
+    /// Returns the rendered row bounds belonging to one markdown source line.
+    fn markdown_source_group_bounds(&self, line: usize, copy_line: &str) -> (usize, usize) {
+        let mut start = line;
+        while start > 0
+            && self
+                .copy_lines
+                .get(start.saturating_sub(1))
+                .is_some_and(|candidate| candidate == copy_line)
+        {
+            start = start.saturating_sub(1);
+        }
+        let mut end = line;
+        while end.saturating_add(1) < self.copy_lines.len()
+            && self
+                .copy_lines
+                .get(end.saturating_add(1))
+                .is_some_and(|candidate| candidate == copy_line)
+        {
+            end = end.saturating_add(1);
+        }
+        (start, end)
+    }
+
     /// Slices a displayed line unless the selection covers a full transformed
-    /// presentation line with a raw-copy override.
+    /// presentation line with a non-markdown raw-copy override.
     fn copy_line_slice(&self, line: usize, start: usize, end: usize) -> String {
         let Some(display_line) = self.lines.get(line) else {
             return String::new();
@@ -650,7 +702,7 @@ impl CopyMode {
             return AGENT_COPY_SKIP_LINE.to_string();
         }
         if decode_agent_copy_source_line(copy_line).is_some() {
-            return copy_line.clone();
+            return line_slice(display_line, start, end);
         }
         let display_end = char_count(display_line);
         if copy_line != display_line {
@@ -690,6 +742,33 @@ impl CopyMode {
             self.selection = Some((anchor, self.cursor));
         }
     }
+}
+
+/// Returns whether a selection fully covers every rendered row of one markdown
+/// source line.
+fn selection_fully_covers_markdown_source_group(
+    lines: &[String],
+    selection_start: CopyPosition,
+    selection_end: CopyPosition,
+    group_start: usize,
+    group_end: usize,
+) -> bool {
+    if selection_start.line > group_start || selection_end.line < group_end {
+        return false;
+    }
+    if selection_start.line == group_start && selection_start.column > 0 {
+        return false;
+    }
+    if selection_end.line == group_end {
+        let group_end_width = lines
+            .get(group_end)
+            .map(|line| char_count(line))
+            .unwrap_or_default();
+        if selection_end.column < group_end_width {
+            return false;
+        }
+    }
+    true
 }
 
 /// Finds the grapheme cluster covering a display column and returns its

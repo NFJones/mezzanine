@@ -124,13 +124,14 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
     assert_eq!(copied, "# Heading");
 }
 
-/// Verifies partial and continuation markdown selections preserve raw source.
+/// Verifies partial markdown selections copy the rendered display slice.
 /// 
-/// Rendered headings remove markdown syntax and wrapped continuation rows are
-/// presentation-only splits, but copying any visible slice should still return
-/// the original markdown source line exactly once.
+/// Copy mode should only substitute raw markdown when the selection covers the
+/// full rendered extent of a source line. Partial or continuation-only
+/// selections must therefore match the visible wrapped text instead of
+/// expanding back into the authored markdown source line.
 #[test]
-fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line() {
+fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selection() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(24, 12).unwrap(), 120)
@@ -163,8 +164,17 @@ fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line
         .find(|(_, line)| !line.trim().is_empty())
         .map(|(index, _)| index)
         .unwrap();
-    let heading_column_start = visible_lines[heading_line_index].find("heading").unwrap();
+    let heading_display_line = visible_lines[heading_line_index].clone();
+    let heading_column_start = heading_display_line
+        .split_once("heading")
+        .map(|(prefix, _)| prefix.chars().count())
+        .unwrap();
     let continuation_line_width = visible_lines[continuation_line_index].chars().count();
+    let expected_heading_slice = heading_display_line
+        .chars()
+        .skip(heading_column_start)
+        .collect::<String>();
+    let expected_continuation_slice = "that wraps";
 
     copy_mode
         .select_range(
@@ -173,12 +183,15 @@ fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line
                 column: heading_column_start,
             },
             CopyPosition {
-                line: copy_mode.scroll_top().saturating_add(heading_line_index),
-                column: heading_column_start.saturating_add("heading".chars().count()),
+                line: copy_mode.scroll_top().saturating_add(continuation_line_index),
+                column: continuation_line_width,
             },
         )
         .unwrap();
-    assert_eq!(copy_mode.copy_selection().unwrap(), markdown);
+    assert_eq!(
+        copy_mode.copy_selection().unwrap(),
+        format!("{expected_heading_slice}\n{expected_continuation_slice}")
+    );
 
     copy_mode
         .select_range(
@@ -192,7 +205,10 @@ fn runtime_agent_markdown_partial_and_continuation_copy_preserve_raw_source_line
             },
         )
         .unwrap();
-    assert_eq!(copy_mode.copy_selection().unwrap(), markdown);
+    assert_eq!(
+        copy_mode.copy_selection().unwrap(),
+        expected_continuation_slice
+    );
 }
 
 /// Verifies plain `mez>` output wraps under the assistant indicator.
