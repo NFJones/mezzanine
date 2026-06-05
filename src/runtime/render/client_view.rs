@@ -282,8 +282,8 @@ impl RuntimeSessionService {
         view: &mut RenderedClientView,
     ) -> Result<()> {
         let mut deferred_cleanup = self.deferred_word_copy_cleanup.borrow_mut();
-        let mut rendered_deferred_cleanup = false;
-        if let Some((pane_id, copy_mode)) = deferred_cleanup.as_ref()
+        let mut clear_deferred_cleanup = false;
+        if let Some((pane_id, copy_mode, cleanup_at_unix_ms)) = deferred_cleanup.as_ref()
             && let Some(pane_index) = window
                 .panes()
                 .iter()
@@ -300,9 +300,9 @@ impl RuntimeSessionService {
                 usize::from(size.rows),
                 &lines,
             );
-            rendered_deferred_cleanup = true;
+            clear_deferred_cleanup = current_unix_millis() >= *cleanup_at_unix_ms;
         }
-        if rendered_deferred_cleanup {
+        if clear_deferred_cleanup {
             deferred_cleanup.take();
         }
         drop(deferred_cleanup);

@@ -34,6 +34,8 @@ use super::{
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
+/// How long the copied-word highlight remains visible after a double click.
+const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
 use crate::agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, AgentAction,
@@ -3806,8 +3808,11 @@ impl RuntimeSessionService {
         };
         self.mouse_selection_drag_state = None;
         self.scrollback_copy_mode_panes.remove(pane_id);
-        self.deferred_word_copy_cleanup
-            .replace(Some((pane_id.to_string(), copy_mode)));
+        self.deferred_word_copy_cleanup.replace(Some((
+            pane_id.to_string(),
+            copy_mode,
+            current_unix_millis().saturating_add(DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS),
+        )));
         self.copy_text_to_buffer_and_host_clipboard(
             "mouse",
             copied,

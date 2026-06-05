@@ -3712,8 +3712,10 @@ pub struct RuntimeSessionService {
     pub(super) mouse_selection_drag_state: Option<MouseSelectionDragState>,
     /// Last pane content click observed for double-click word selection.
     pub(super) last_mouse_click_state: Option<RuntimeMouseClickState>,
-    /// Deferred double-click word copy cleanup: (pane_id, copy_mode) to clear on next render.
-    pub(super) deferred_word_copy_cleanup: std::cell::RefCell<Option<(String, CopyMode)>>,
+    /// Deferred double-click word copy cleanup: (pane_id, copy_mode,
+    /// cleanup_at_unix_ms) retained until the copied-word highlight has been
+    /// visible for its full lifetime.
+    pub(super) deferred_word_copy_cleanup: std::cell::RefCell<Option<(String, CopyMode, u64)>>,
     /// Stores the pressed window status-bar action value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
