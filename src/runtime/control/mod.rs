@@ -7,29 +7,29 @@ mod configuration;
 mod subagents;
 use super::{
     AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentShellVisibility, AgentTurnLedger,
-    AgentTurnRecord, AgentTurnState, AgentTurnTrigger, ApprovalDecision,
-    ApprovalDecisionScopePersistence, ApprovalGrant, ApprovalScope, AttachedTerminalClientStepPlan,
-    AuditActor, AuditRecord, BlockedApprovalRequest, BlockedApprovalState, ClientRole, ClientState,
-    ClientViewRole, CommandRule, CommandRuleScope, ConfigFormat, ConfigLayer, ConfigMutation,
-    ConfigMutationOperation, ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeferredConfigFileWrite, DeferredProjectConfigWrite,
-    Envelope, EventKind, EventVisibility, HookEvent, McpApprovalSetting, McpExternalCapability,
-    McpServerConfig, McpServerKind, McpServerState, McpServerStatus, McpToolEffects, McpToolState,
-    MemoryRecord, MessageConnection, MessageService, MessageServiceSnapshot, MezError,
-    PaneCaptureSource, PaneExitRecord, PaneId, PaneProcessStart, PaneReadinessOverrideStore,
-    PaneReadinessState, PaneResizeUpdate, Path, PathBuf, ProjectTrustStore, Recipient, Result,
-    RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    RuntimeSnapshotOwnedCreationContext, RuntimeSubagentLineage, RuntimeSubagentPlacement,
-    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotAgentSession,
-    SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
-    SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
-    SnapshotFrameState, SnapshotMcpExternalCapability, SnapshotMcpServerState,
-    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository,
-    SnapshotState, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
-    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition,
-    TerminalFrameStyle, TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
+    ApprovalDecision, ApprovalDecisionScopePersistence, ApprovalGrant, ApprovalScope,
+    AttachedTerminalClientStepPlan, AuditActor, AuditRecord, BlockedApprovalRequest,
+    BlockedApprovalState, ClientRole, ClientState, ClientViewRole, CommandRule, CommandRuleScope,
+    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigScope, ContextBlock,
+    ContextSourceKind, ControlConnectionState, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    DeferredConfigFileWrite, DeferredProjectConfigWrite, Envelope, EventKind, EventVisibility,
+    HookEvent, McpApprovalSetting, McpExternalCapability, McpServerConfig, McpServerKind,
+    McpServerState, McpServerStatus, McpToolEffects, McpToolState, MemoryRecord, MessageConnection,
+    MessageService, MessageServiceSnapshot, MezError, PaneCaptureSource, PaneId, PaneProcessStart,
+    PaneReadinessOverrideStore, PaneReadinessState, PaneResizeUpdate, Path, PathBuf,
+    ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
+    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
+    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
+    SenderIdentity, SessionRecord, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
+    SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
+    SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState,
+    SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
+    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState, SplitDirection,
+    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition, TerminalFrameStyle,
+    TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
     append_memory_context, append_permission_policy_context, append_scheduler_context,
     approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
     decode_control_frame, decode_mmp_frame, default_trust_database_path,
@@ -2776,103 +2776,26 @@ impl RuntimeSessionService {
         let new_primary = self.session.attach_primary(primary_name, true)?;
         self.last_attach_at_unix_seconds = self.session.last_attached_at_unix_seconds;
         connection.rebind_caller_client(new_primary.clone());
-        let interrupted_agent_turns =
-            self.restore_agent_sessions_from_snapshot(&payload.agent_sessions, restored_at)?;
-        for window in &payload.windows {
-            for pane in &window.panes {
-                if !pane.transcript_refs.is_empty() {
-                    self.pane_transcript_refs
-                        .insert(pane.pane_id.clone(), pane.transcript_refs.clone());
-                }
-                if let Some(exit_status) = pane.exit_status {
-                    self.pane_exit_records
-                        .insert(pane.pane_id.clone(), PaneExitRecord { exit_status });
-                }
-            }
-        }
-        let seeded_terminal_screens =
-            self.seed_terminal_screens_from_snapshot_payload_without_hooks(&payload)?;
+        let restarted_panes = self.restart_restored_pane_processes(None)?.len();
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
         self.append_lifecycle_event(
             EventKind::SnapshotChanged,
             format!(
-                r#"{{"method":"snapshot/resume","snapshot_id":"{}","resumed":true,"terminated_panes":{},"seeded_terminal_screens":{},"interrupted_agent_turns":{}}}"#,
+                r#"{{"method":"snapshot/resume","snapshot_id":"{}","resumed":true,"terminated_panes":{},"restarted_panes":{},"seeded_terminal_screens":0,"interrupted_agent_turns":0}}"#,
                 json_escape(snapshot_id),
                 terminated_panes,
-                seeded_terminal_screens,
-                interrupted_agent_turns
+                restarted_panes
             ),
         )?;
         Ok(format!(
-            r#"{{"session":{},"resumed":true,"resume_plan":{},"limitations":{},"terminated_panes":{},"seeded_terminal_screens":{},"interrupted_agent_turns":{},"primary_client_id":"{}"}}"#,
+            r#"{{"session":{},"resumed":true,"resume_plan":{},"limitations":{},"terminated_panes":{},"restarted_panes":{},"seeded_terminal_screens":0,"interrupted_agent_turns":0,"primary_client_id":"{}"}}"#,
             self.runtime_session_state_json(),
             runtime_snapshot_resume_plan_json(&resume_plan),
             runtime_string_array_json(&resume_plan.limitations),
             terminated_panes,
-            seeded_terminal_screens,
-            interrupted_agent_turns,
+            restarted_panes,
             json_escape(new_primary.as_str())
         ))
-    }
-
-    /// Runs the restore agent sessions from snapshot operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn restore_agent_sessions_from_snapshot(
-        &mut self,
-        agent_sessions: &[SnapshotAgentSession],
-        restored_at: u64,
-    ) -> Result<usize> {
-        let mut interrupted = 0usize;
-        for agent_session in agent_sessions {
-            runtime_pane_by_id(&self.session, &agent_session.pane_id)?;
-            let running_turn_id = agent_session.running_turn_id.clone();
-            let visibility = runtime_agent_visibility_from_snapshot(
-                &agent_session.visibility,
-                running_turn_id.is_some(),
-            )?;
-            let restored_session = self
-                .agent_shell_store
-                .ensure_session(agent_session.pane_id.clone())?;
-            restored_session.session_id = agent_session.conversation_id.clone();
-            restored_session.visibility = visibility;
-            restored_session.running_turn_id = None;
-            restored_session.transcript_entries = agent_session.transcript_entries;
-
-            let Some(turn_id) = running_turn_id else {
-                continue;
-            };
-            self.agent_turn_ledger.start_turn(AgentTurnRecord {
-                turn_id: turn_id.clone(),
-                agent_id: format!("agent-{}", agent_session.pane_id),
-                pane_id: agent_session.pane_id.clone(),
-                trigger: AgentTurnTrigger::ScheduledTask,
-                started_at_unix_seconds: restored_at,
-                policy_profile: "snapshot-resume".to_string(),
-                model_profile: "default".to_string(),
-                parent_turn_id: None,
-                state: AgentTurnState::Queued,
-                cooperation_mode: None,
-            })?;
-            self.agent_turn_ledger
-                .finish_turn(&turn_id, AgentTurnState::Interrupted)?;
-            interrupted = interrupted.saturating_add(1);
-        }
-        if interrupted > 0 {
-            self.append_lifecycle_event(
-                EventKind::AgentStatus,
-                format!(
-                    r#"{{"source":"snapshot/resume","interrupted_agent_turns":{},"retry_requires_confirmation":true}}"#,
-                    interrupted
-                ),
-            )?;
-        }
-        if !agent_sessions.is_empty() {
-            self.checkpoint_agent_session_metadata()?;
-        }
-        Ok(interrupted)
     }
 
     /// Runs the dispatch runtime approval request operation for this subsystem.
@@ -4755,28 +4678,6 @@ fn runtime_snapshot_agent_visibility_name(visibility: AgentShellVisibility) -> &
         AgentShellVisibility::Hidden => "hidden",
         AgentShellVisibility::Visible => "visible",
         AgentShellVisibility::HidePendingTaskCompletion => "hide-pending-task-completion",
-    }
-}
-
-/// Runs the runtime agent visibility from snapshot operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_agent_visibility_from_snapshot(
-    visibility: &str,
-    running_turn_was_interrupted: bool,
-) -> Result<AgentShellVisibility> {
-    match visibility {
-        "hidden" => Ok(AgentShellVisibility::Hidden),
-        "visible" => Ok(AgentShellVisibility::Visible),
-        "hide-pending-task-completion" if running_turn_was_interrupted => {
-            Ok(AgentShellVisibility::Hidden)
-        }
-        "hide-pending-task-completion" => Ok(AgentShellVisibility::HidePendingTaskCompletion),
-        _ => Err(MezError::invalid_args(
-            "snapshot agent session visibility is invalid",
-        )),
     }
 }
 

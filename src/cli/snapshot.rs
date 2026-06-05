@@ -318,7 +318,7 @@ pub(super) async fn run_restored_snapshot_daemon<W: Write>(
         .as_ref()
         .map(|path| format!(r#""{}""#, json_escape(&path.to_string_lossy())))
         .unwrap_or_else(|| "null".to_string());
-    let restarted = restart_command.is_some();
+    let restarted = true;
 
     let startup = format!(
         r#"{{"serving":true,"restored":true,"live":true,"restarted":{},"session_id":"{}","socket":"{}","message_socket":{},"event_socket":{},"config":"{}","control":true,"message":{},"event":{},"resume_plan":{}}}"#,

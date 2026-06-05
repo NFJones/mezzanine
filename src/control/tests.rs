@@ -1021,6 +1021,7 @@ fn generic_pane_state_serializes_restored_snapshot_metadata() {
         approval_requests: Vec::new(),
         message_state: None,
         mcp_servers: Vec::new(),
+        window_groups: Vec::new(),
         windows: vec![WindowSnapshotPayload {
             window_id: "@4".to_string(),
             index: 0,

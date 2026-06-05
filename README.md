@@ -419,7 +419,7 @@ mez [--json] <command> [options]
 | `mez detach`               | Detach the current or specified client.                    |
 | `mez kill-session --force` | Terminate a live session.                                  |
 | `mez serve`                | Start a foreground control daemon for a new session.       |
-| `mez snapshot ...`         | Create, list, inspect, delete, resume, and plan snapshots. |
+| `mez snapshot ...`         | Create, list, inspect, delete, resume, and plan layout snapshots. |
 
 ### Configuration and trust commands
 

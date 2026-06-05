@@ -843,9 +843,7 @@ pub(super) async fn run_foreground_control_daemon(
             restart_command,
         } => {
             service.seed_terminal_screens_from_snapshot_payload(&payload)?;
-            if restart_command.is_some() {
-                service.restart_restored_pane_processes(restart_command.as_deref())?;
-            }
+            service.restart_restored_pane_processes(restart_command.as_deref())?;
         }
     }
     service.persist_registry_update()?;

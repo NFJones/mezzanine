@@ -204,7 +204,12 @@ impl RuntimeSessionService {
         let mut starts = Vec::with_capacity(descriptors.len());
         for descriptor in descriptors {
             let restored_screen = self.pane_screens.get(descriptor.pane_id.as_str()).cloned();
-            let started = self.start_pane_process(descriptor, explicit_command)?;
+            let start_directory = self.restored_pane_start_directory(descriptor.pane_id.as_str());
+            let started = self.start_pane_process_with_start_directory(
+                descriptor,
+                explicit_command,
+                start_directory.as_deref(),
+            )?;
             if let Some(mut screen) = restored_screen {
                 screen.feed(b"\n[mezzanine: pane restarted with a fresh primary PID]\n");
                 self.pane_screens.insert(started.pane_id.clone(), screen);
@@ -222,6 +227,21 @@ impl RuntimeSessionService {
             starts.push(started);
         }
         Ok(starts)
+    }
+
+    /// Returns the start directory for a restored pane's fresh shell.
+    fn restored_pane_start_directory(&self, pane_id: &str) -> Option<PathBuf> {
+        self.session
+            .pane_state_metadata(pane_id)
+            .and_then(|metadata| metadata.current_working_directory.as_deref())
+            .map(PathBuf::from)
+            .filter(|directory| directory.is_dir())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|home| !home.is_empty())
+                    .map(PathBuf::from)
+                    .filter(|home| home.is_dir())
+            })
     }
 
     /// Runs the seed terminal screens from snapshot payload operation for this subsystem.

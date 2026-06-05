@@ -4,12 +4,14 @@
 //! advances the id factory beyond restored identifiers.
 
 use crate::error::{MezError, Result};
-use crate::ids::{IdFactory, PaneId, SessionId, WindowGroupId, WindowId};
+use crate::ids::{IdFactory, PaneId, SessionId, StableId, WindowGroupId, WindowId};
 use crate::layout::{
     LayoutPolicy, Pane, PaneGeometry, PaneTitleSource, RestoredWindowLayout, Size, Window,
 };
 use crate::shell::ResolvedShell;
-use crate::snapshot::{SessionSnapshotPayload, SnapshotSessionState, WindowSnapshotPayload};
+use crate::snapshot::{
+    SessionSnapshotPayload, SnapshotSessionState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+};
 use std::collections::BTreeMap;
 
 use super::time::current_unix_seconds;
@@ -125,19 +127,8 @@ impl Session {
                 "snapshot active_window_id does not match the active window",
             ));
         }
-        let group_id = WindowGroupId::parse('g', "g1").ok_or_else(|| {
-            MezError::invalid_args("snapshot restore could not allocate default group id")
-        })?;
-        restored_ids.push(group_id.clone());
-        let mut default_group = WindowGroup::new(
-            group_id,
-            0,
-            "0",
-            windows[active_window_index].id.clone(),
-            Some(restored_at),
-        );
-        default_group.window_ids = windows.iter().map(|window| window.id.clone()).collect();
-        default_group.active_window_id = Some(windows[active_window_index].id.clone());
+        let (window_groups, active_group_index, last_active_group_index) =
+            restored_window_groups(payload, &windows, active_window_index, &mut restored_ids)?;
 
         Ok(Self {
             ids: IdFactory::after_existing_ids(restored_ids.iter()),
@@ -151,9 +142,9 @@ impl Session {
             shell,
             config_generation: 0,
             windows,
-            window_groups: vec![default_group],
-            active_group_index: 0,
-            last_active_group_index: None,
+            window_groups,
+            active_group_index,
+            last_active_group_index,
             active_window_index,
             last_active_window_index: None,
             pane_state_metadata,
@@ -178,6 +169,100 @@ fn session_state_from_snapshot(state: SnapshotSessionState) -> SessionState {
         SnapshotSessionState::Stopping => SessionState::Stopping,
         SnapshotSessionState::Failed => SessionState::Failed,
     }
+}
+
+/// Restores saved window groups, falling back to one group for legacy payloads.
+fn restored_window_groups(
+    payload: &SessionSnapshotPayload,
+    windows: &[Window],
+    active_window_index: usize,
+    restored_ids: &mut Vec<StableId>,
+) -> Result<(Vec<WindowGroup>, usize, Option<usize>)> {
+    if payload.window_groups.is_empty() {
+        let group_id = WindowGroupId::parse('g', "g1").ok_or_else(|| {
+            MezError::invalid_args("snapshot restore could not allocate default group id")
+        })?;
+        restored_ids.push(group_id.clone());
+        let mut default_group = WindowGroup::new(
+            group_id,
+            0,
+            "0",
+            windows[active_window_index].id.clone(),
+            Some(current_unix_seconds()),
+        );
+        default_group.window_ids = windows.iter().map(|window| window.id.clone()).collect();
+        default_group.active_window_id = Some(windows[active_window_index].id.clone());
+        return Ok((vec![default_group], 0, None));
+    }
+
+    let mut active_group_index = None;
+    let mut groups = Vec::with_capacity(payload.window_groups.len());
+    for (expected_index, group_payload) in payload.window_groups.iter().enumerate() {
+        if group_payload.index != expected_index {
+            return Err(MezError::invalid_args(
+                "snapshot window groups must be stored in contiguous index order",
+            ));
+        }
+        let group = restored_window_group(group_payload, windows, current_unix_seconds())?;
+        if group_payload.active && active_group_index.replace(expected_index).is_some() {
+            return Err(MezError::invalid_args(
+                "snapshot payload contains multiple active window groups",
+            ));
+        }
+        restored_ids.push(group.id.clone());
+        groups.push(group);
+    }
+    let active_group_index = active_group_index.ok_or_else(|| {
+        MezError::invalid_args("snapshot payload must contain exactly one active window group")
+    })?;
+    Ok((groups, active_group_index, None))
+}
+
+/// Converts one validated snapshot window group into a live session group.
+fn restored_window_group(
+    group_payload: &WindowGroupSnapshotPayload,
+    windows: &[Window],
+    restored_at: u64,
+) -> Result<WindowGroup> {
+    let group_id = WindowGroupId::parse('g', group_payload.group_id.clone()).ok_or_else(|| {
+        MezError::invalid_args("snapshot payload contains an invalid window group id")
+    })?;
+    let window_ids = group_payload
+        .window_ids
+        .iter()
+        .map(|window_id| restored_group_window_id(windows, window_id))
+        .collect::<Result<Vec<_>>>()?;
+    let first_window = window_ids.first().cloned().ok_or_else(|| {
+        MezError::invalid_args("snapshot window group must contain at least one window")
+    })?;
+    let mut group = WindowGroup::new(
+        group_id,
+        group_payload.index,
+        group_payload.name.clone(),
+        first_window,
+        Some(restored_at),
+    );
+    group.window_ids = window_ids;
+    group.active_window_id = group_payload
+        .active_window_id
+        .as_deref()
+        .map(|window_id| restored_group_window_id(windows, window_id))
+        .transpose()?;
+    group.last_active_window_id = group_payload
+        .last_active_window_id
+        .as_deref()
+        .map(|window_id| restored_group_window_id(windows, window_id))
+        .transpose()?;
+    Ok(group)
+}
+
+/// Finds the restored window id for one snapshot group reference.
+fn restored_group_window_id(windows: &[Window], window_id: &str) -> Result<WindowId> {
+    windows
+        .iter()
+        .find(|window| window.id.as_str() == window_id)
+        .map(|window| window.id.clone())
+        .ok_or_else(|| MezError::invalid_args("snapshot window group references an unknown window"))
 }
 
 /// Runs the restored pane geometries operation for this subsystem.

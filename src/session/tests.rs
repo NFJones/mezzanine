@@ -704,6 +704,7 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
         approval_requests: Vec::new(),
         message_state: None,
         mcp_servers: Vec::new(),
+        window_groups: Vec::new(),
         windows: vec![crate::snapshot::WindowSnapshotPayload {
             window_id: "@8".to_string(),
             index: 0,

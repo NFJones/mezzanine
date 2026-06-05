@@ -6847,7 +6847,7 @@ Reattaching to a detached session means reconnecting a client to a still-live
 Mezzanine runtime whose pane shells and agent tasks may have continued running.
 
 Resuming from a session snapshot means constructing a new live session from
-persisted Mezzanine metadata and transcripts. Snapshot resume MUST NOT imply
+persisted Mezzanine layout metadata. Snapshot resume MUST NOT imply
 resurrection of Unix processes that have exited or host processes that cannot
 be reconnected by the operating system.
 
@@ -6864,10 +6864,12 @@ to the extent still available within configured persistence limits.
 If any state cannot be restored, Mezzanine MUST report the lost state to the
 user.
 
-A session snapshot MUST include session identity, window state, pane layout,
-active selections, pane shell metadata, bounded terminal history, frame state,
-agent sessions, local message protocol state, active configuration layer
-metadata, MCP server state, and approval history metadata needed for audit.
+A session snapshot MUST include session identity, group, window, and pane
+layout topology, active selections, pane and window titles, and the last known
+pane current working directory when available. A session snapshot MUST NOT
+persist pane process state, bounded terminal history, agent sessions, local
+message protocol state, active configuration layer metadata, MCP server state,
+or approval history as resumable live state.
 
 A session snapshot MUST NOT persist active pending approval requests or active
 approval grants as live authority. When a snapshot is resumed into a new live
@@ -6877,12 +6879,12 @@ be reset.
 Session snapshots MUST NOT contain raw provider credentials, provider tokens,
 private keys, or other authentication secrets.
 
-Session snapshots may contain sensitive terminal history, command output, file
-content excerpts, and agent transcripts because those are part of the state
-being preserved. This is an accepted risk of snapshotting terminal sessions.
-Mezzanine MUST disclose this risk in snapshot documentation and SHOULD store
-snapshots in a user-private path with permissions no broader than `0700` for
-directories and `0600` for files when the host platform supports Unix modes.
+Session snapshots may contain sensitive pane titles, window titles, and current
+working directory paths because those are part of the layout state being
+preserved. This is an accepted risk of snapshotting terminal layouts. Mezzanine
+MUST disclose this risk in snapshot documentation and SHOULD store snapshots in
+a user-private path with permissions no broader than `0700` for directories and
+`0600` for files when the host platform supports Unix modes.
 
 Session snapshots SHOULD be stored in a structured format under
 `~/.config/mezzanine` unless the user configures another user-private path.
@@ -6893,14 +6895,14 @@ Mezzanine MUST support resuming the most recent snapshot for a session.
 
 Mezzanine MUST support selecting a snapshot to resume.
 
-When resuming a snapshot, Mezzanine MUST preserve the prior transcript and
-append new activity rather than overwriting history.
+When resuming a snapshot, Mezzanine MUST reconstruct the saved group, window,
+and pane layout and MUST start fresh pane shells in the saved pane current
+working directories. If a saved directory is unavailable, resume MUST fall back
+to the user's home directory when available.
 
-If pane shell processes cannot be reconnected because the original live session
-is gone, the host rebooted, or the processes have exited, Mezzanine MUST
-restore their terminal history and mark those panes as exited. Mezzanine MAY
-offer to restart a shell in those panes, but restarted panes MUST receive fresh
-primary PIDs and MUST be visibly marked as restarted.
+Snapshot resume MUST NOT reconnect, reattach, or reload the pane shell
+processes from the snapshotted session. Fresh pane shells created by snapshot
+resume MUST receive fresh primary PIDs and MUST be visibly marked as restarted.
 
 If an agent task was running at snapshot time and the original live task can be
 reconnected, resume MAY continue the task. If the original live task cannot be

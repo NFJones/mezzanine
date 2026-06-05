@@ -446,18 +446,18 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
 
     assert!(encoded.starts_with("payload_version\t4\n"));
     assert!(encoded.contains("\nwindow_layout\t@1\t"));
-    assert!(encoded.contains("\npane_shell\t%1\t\tstarting\t\tunknown\n"));
+    assert!(encoded.contains("\npane_shell\t%1\t\texited\t\tunknown\n"));
     assert_eq!(loaded, payload);
     assert_eq!(loaded.shell.path, "/usr/bin/zsh");
     assert_eq!(loaded.shell.source, "shell-env");
     assert!(!loaded.shell.used_fallback);
-    assert_eq!(loaded.active_config_layers, config_layers);
-    assert_eq!(loaded.frame_state, frame_state);
-    assert_eq!(loaded.agent_sessions, agent_sessions);
-    assert_eq!(loaded.approval_grants, approval_grants);
-    assert_eq!(loaded.approval_requests, approval_requests);
-    assert_eq!(loaded.message_state, Some(message_state));
-    assert_eq!(loaded.mcp_servers, mcp_servers);
+    assert!(loaded.active_config_layers.is_empty());
+    assert_eq!(loaded.frame_state, SnapshotFrameState::default());
+    assert!(loaded.agent_sessions.is_empty());
+    assert!(loaded.approval_grants.is_empty());
+    assert!(loaded.approval_requests.is_empty());
+    assert_eq!(loaded.message_state, None);
+    assert!(loaded.mcp_servers.is_empty());
     assert_eq!(loaded.windows[0].layout_policy, "even-vertical");
     assert_eq!(
         loaded.windows[0].layout_root,
@@ -494,18 +494,8 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     );
     assert_eq!(plan.window_count, 1);
     assert_eq!(plan.pane_count, 2);
-    assert_eq!(plan.restart_required_panes.len(), 2);
-    assert!(plan.limitations[0].contains("must be restarted"));
-    assert!(
-        plan.limitations
-            .iter()
-            .any(|limitation| limitation.contains("running agent turns"))
-    );
-    assert!(
-        plan.limitations
-            .iter()
-            .any(|limitation| limitation.contains("MCP runtime transports"))
-    );
+    assert!(plan.restart_required_panes.is_empty());
+    assert!(plan.limitations.is_empty());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -601,47 +591,39 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
     let loaded = repo.inspect_payload("snap-capture").unwrap();
 
     assert_eq!(loaded, payload);
-    assert_eq!(
-        loaded.windows[0].panes[0].exit_status,
-        Some(crate::process::PaneExitStatus {
-            code: Some(7),
-            signal: None,
-            success: false,
-        })
-    );
-    assert_eq!(loaded.windows[0].panes[0].primary_pid, Some(4242));
-    assert_eq!(loaded.windows[0].panes[0].process_state, "running");
+    assert_eq!(loaded.windows[0].panes[0].exit_status, None);
+    assert_eq!(loaded.windows[0].panes[0].primary_pid, None);
+    assert_eq!(loaded.windows[0].panes[0].process_state, "exited");
     assert_eq!(
         loaded.windows[0].panes[0]
             .current_working_directory
             .as_deref(),
         Some("/workspace/project")
     );
-    assert_eq!(loaded.windows[0].panes[0].readiness_state, "ready");
-    assert!(loaded.contains_terminal_history());
-    assert!(loaded.contains_agent_transcripts());
-    assert_eq!(loaded.windows[0].panes[0].terminal_history, vec!["history"]);
-    assert_eq!(
-        loaded.windows[0].panes[0].terminal_history_line_style_spans,
-        captures[0].terminal_history_line_style_spans
+    assert_eq!(loaded.windows[0].panes[0].readiness_state, "unknown");
+    assert!(!loaded.contains_terminal_history());
+    assert!(!loaded.contains_agent_transcripts());
+    assert!(loaded.windows[0].panes[0].terminal_history.is_empty());
+    assert!(
+        loaded.windows[0].panes[0]
+            .terminal_history_line_style_spans
+            .is_empty()
     );
-    assert_eq!(loaded.windows[0].panes[0].visible_lines, vec!["visible"]);
-    assert_eq!(
-        loaded.windows[0].panes[0].visible_line_style_spans,
-        captures[0].visible_line_style_spans
+    assert!(loaded.windows[0].panes[0].visible_lines.is_empty());
+    assert!(
+        loaded.windows[0].panes[0]
+            .visible_line_style_spans
+            .is_empty()
     );
     assert_eq!(
         loaded.windows[0].panes[0].terminal_modes,
-        captures[0].terminal_modes
+        TerminalModeState::default()
     );
     assert_eq!(
         loaded.windows[0].panes[0].terminal_saved_state,
-        captures[0].terminal_saved_state
+        TerminalSavedState::default()
     );
-    assert_eq!(
-        loaded.windows[0].panes[0].transcript_refs,
-        vec!["conversation-1"]
-    );
+    assert!(loaded.windows[0].panes[0].transcript_refs.is_empty());
 
     let state = repo
         .create_from_session_with_captures(
@@ -652,8 +634,8 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
         )
         .unwrap();
     let manifest = repo.inspect(&state.id).unwrap();
-    assert!(manifest.contains_terminal_history);
-    assert!(manifest.contains_agent_transcripts);
+    assert!(!manifest.contains_terminal_history);
+    assert!(!manifest.contains_agent_transcripts);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -686,8 +668,8 @@ fn snapshot_repository_builds_rollback_plan_with_limitations() {
         rollback.restore_command.as_deref(),
         Some("mez snapshot resume snap-1")
     );
-    assert_eq!(rollback.restart_required_panes, vec!["%1"]);
-    assert!(rollback.limitations[0].contains("must be restarted"));
+    assert!(rollback.restart_required_panes.is_empty());
+    assert!(rollback.limitations.is_empty());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -754,7 +736,7 @@ fn snapshot_repository_restores_session_shape_from_payload() {
             .iter()
             .all(|pane| !pane.live)
     );
-    assert_eq!(restored.resume_plan.restart_required_panes.len(), 2);
+    assert!(restored.resume_plan.restart_required_panes.is_empty());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -834,6 +816,7 @@ fn snapshot_payload_rejects_windows_without_panes() {
         approval_requests: Vec::new(),
         message_state: None,
         mcp_servers: Vec::new(),
+        window_groups: Vec::new(),
         windows: vec![WindowSnapshotPayload {
             window_id: "@1".to_string(),
             index: 0,

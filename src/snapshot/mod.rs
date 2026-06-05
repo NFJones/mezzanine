@@ -43,7 +43,7 @@ pub use types::{
     SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
     SnapshotMcpToolState, SnapshotPaneCapture, SnapshotPaneGeometry, SnapshotRepository,
     SnapshotRestoreResult, SnapshotResumePlan, SnapshotRollbackPlan, SnapshotSessionState,
-    SnapshotShellMetadata, SnapshotState, WindowSnapshotPayload,
+    SnapshotShellMetadata, SnapshotState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
 
 /// Exposes the tests module boundary.

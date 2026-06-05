@@ -235,11 +235,32 @@ pub struct SessionSnapshotPayload {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub mcp_servers: Vec<SnapshotMcpServerState>,
+    /// Window groups captured as layout topology for snapshot resume.
+    pub window_groups: Vec<WindowGroupSnapshotPayload>,
     /// Stores the windows value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub windows: Vec<WindowSnapshotPayload>,
+}
+
+/// Window group topology captured by a snapshot payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowGroupSnapshotPayload {
+    /// Stable window-group identity captured at snapshot time.
+    pub group_id: String,
+    /// Display index within the saved group bar.
+    pub index: usize,
+    /// User-visible group title.
+    pub name: String,
+    /// Ordered stable window identities owned by this group.
+    pub window_ids: Vec<String>,
+    /// Active window inside this group, when known.
+    pub active_window_id: Option<String>,
+    /// Previously active window inside this group, when known.
+    pub last_active_window_id: Option<String>,
+    /// Whether this group was active at snapshot time.
+    pub active: bool,
 }
 
 /// Session approval grant metadata captured for snapshot audit history.

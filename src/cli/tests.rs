@@ -2384,7 +2384,7 @@ fn snapshot_resume_restores_local_session_shape() {
     assert!(output.contains(r#""restored":true"#));
     assert!(output.contains(r#""live":false"#));
     assert!(output.contains(r#""pane_count":2"#));
-    assert!(output.contains(r#""restart_required_panes":["%1","%2"]"#));
+    assert!(output.contains(r#""restart_required_panes":[]"#));
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
@@ -2527,7 +2527,7 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
     let (view_response, _) = decode_control_frame(&response[consumed..], 1024 * 1024).unwrap();
     assert!(initialize_response.contains(r#""granted_role":"primary""#));
     assert!(
-        view_response.contains("snapshot-visible"),
+        view_response.contains("pane restarted with a fresh primary PID"),
         "{view_response}"
     );
     drop(stream);

@@ -24,7 +24,8 @@ use super::types::{
     SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
     SnapshotFrameState, SnapshotLayoutNode, SnapshotMcpExternalCapability, SnapshotMcpServerState,
     SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotPaneGeometry,
-    SnapshotResumePlan, SnapshotSessionState, SnapshotShellMetadata, WindowSnapshotPayload,
+    SnapshotResumePlan, SnapshotSessionState, SnapshotShellMetadata, WindowGroupSnapshotPayload,
+    WindowSnapshotPayload,
 };
 
 /// Defines the SNAPSHOT PAYLOAD FORMAT VERSION const used by this subsystem.
@@ -154,52 +155,24 @@ impl SessionSnapshotPayload {
                         .iter()
                         .map(|pane| {
                             let pane_id = pane.id.to_string();
-                            let capture = context
+                            let current_working_directory = context
                                 .pane_captures
                                 .iter()
-                                .find(|capture| capture.pane_id == pane_id);
-                            let visible_lines = capture
-                                .map(|capture| capture.visible_lines.clone())
-                                .unwrap_or_default();
-                            let visible_line_style_spans = capture
-                                .map(|capture| {
-                                    normalized_line_style_spans(
-                                        &capture.visible_line_style_spans,
-                                        visible_lines.len(),
-                                    )
-                                })
-                                .unwrap_or_else(|| vec![Vec::new(); visible_lines.len()]);
-                            let terminal_history = capture
-                                .map(|capture| capture.terminal_history.clone())
-                                .unwrap_or_default();
-                            let terminal_history_line_style_spans = capture
-                                .map(|capture| {
-                                    normalized_line_style_spans(
-                                        &capture.terminal_history_line_style_spans,
-                                        terminal_history.len(),
-                                    )
-                                })
-                                .unwrap_or_else(|| vec![Vec::new(); terminal_history.len()]);
+                                .find(|capture| capture.pane_id == pane_id)
+                                .and_then(|capture| capture.current_working_directory.clone());
                             PaneSnapshotPayload {
                                 pane_id,
                                 index: pane.index,
                                 title: pane.title.clone(),
                                 active: pane.active,
-                                live_at_snapshot: pane.live,
+                                live_at_snapshot: false,
                                 columns: pane.size.columns,
                                 rows: pane.size.rows,
-                                primary_pid: capture.and_then(|capture| capture.primary_pid),
-                                process_state: capture
-                                    .and_then(|capture| capture.process_state.clone())
-                                    .unwrap_or_else(|| {
-                                        default_pane_process_state(pane.live).to_string()
-                                    }),
-                                current_working_directory: capture
-                                    .and_then(|capture| capture.current_working_directory.clone()),
-                                readiness_state: capture
-                                    .and_then(|capture| capture.readiness_state.clone())
-                                    .unwrap_or_else(|| "unknown".to_string()),
-                                exit_status: capture.and_then(|capture| capture.exit_status),
+                                primary_pid: None,
+                                process_state: default_pane_process_state(false).to_string(),
+                                current_working_directory,
+                                readiness_state: "unknown".to_string(),
+                                exit_status: None,
                                 geometry: pane_geometries
                                     .iter()
                                     .find(|geometry| geometry.index == pane.index)
@@ -209,25 +182,35 @@ impl SessionSnapshotPayload {
                                         columns: geometry.columns,
                                         rows: geometry.rows,
                                     }),
-                                terminal_modes: capture
-                                    .map(|capture| capture.terminal_modes.clone())
-                                    .unwrap_or_default(),
-                                terminal_saved_state: capture
-                                    .map(|capture| capture.terminal_saved_state.clone())
-                                    .unwrap_or_default(),
-                                terminal_history,
-                                terminal_history_line_style_spans,
-                                visible_lines,
-                                visible_line_style_spans,
-                                alternate_screen_active: capture
-                                    .is_some_and(|capture| capture.alternate_screen_active),
-                                transcript_refs: capture
-                                    .map(|capture| capture.transcript_refs.clone())
-                                    .unwrap_or_default(),
+                                terminal_modes: TerminalModeState::default(),
+                                terminal_saved_state: TerminalSavedState::default(),
+                                terminal_history: Vec::new(),
+                                terminal_history_line_style_spans: Vec::new(),
+                                visible_lines: Vec::new(),
+                                visible_line_style_spans: Vec::new(),
+                                alternate_screen_active: false,
+                                transcript_refs: Vec::new(),
                             }
                         })
                         .collect(),
                 }
+            })
+            .collect();
+        let active_group_id = session.active_group().map(|group| group.id.to_string());
+        let window_groups = session
+            .window_groups()
+            .iter()
+            .map(|group| WindowGroupSnapshotPayload {
+                group_id: group.id.to_string(),
+                index: group.index,
+                name: group.name.clone(),
+                window_ids: group.window_ids.iter().map(ToString::to_string).collect(),
+                active_window_id: group.active_window_id.as_ref().map(ToString::to_string),
+                last_active_window_id: group
+                    .last_active_window_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                active: Some(group.id.to_string()) == active_group_id,
             })
             .collect();
 
@@ -239,13 +222,14 @@ impl SessionSnapshotPayload {
             authoritative_rows: session.authoritative_size.rows,
             active_window_id,
             shell: shell_metadata_from_session(session),
-            active_config_layers: context.active_config_layers.to_vec(),
-            frame_state: context.frame_state.clone(),
-            agent_sessions: context.agent_sessions.to_vec(),
-            approval_grants: context.approval_grants.to_vec(),
-            approval_requests: context.approval_requests.to_vec(),
-            message_state: context.message_state.cloned(),
-            mcp_servers: context.mcp_servers.to_vec(),
+            active_config_layers: Vec::new(),
+            frame_state: SnapshotFrameState::default(),
+            agent_sessions: Vec::new(),
+            approval_grants: Vec::new(),
+            approval_requests: Vec::new(),
+            message_state: None,
+            mcp_servers: Vec::new(),
+            window_groups,
             windows,
         }
     }
@@ -314,9 +298,13 @@ impl SessionSnapshotPayload {
         for server in &self.mcp_servers {
             server.validate()?;
         }
+        for group in &self.window_groups {
+            group.validate()?;
+        }
         for window in &self.windows {
             window.validate()?;
         }
+        validate_snapshot_window_groups(self)?;
         Ok(())
     }
 
@@ -513,6 +501,24 @@ impl SessionSnapshotPayload {
                 .map_err(|_| MezError::invalid_state("snapshot MCP state could not be encoded"))?;
             output.push_str(&format!("mcp_state\t{}\n", escape_field(&encoded)));
         }
+        for group in &self.window_groups {
+            output.push_str(&format!(
+                "window_group\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                escape_field(&group.group_id),
+                group.index,
+                escape_field(&group.name),
+                group.active,
+                escape_field(group.active_window_id.as_deref().unwrap_or("")),
+                escape_field(group.last_active_window_id.as_deref().unwrap_or(""))
+            ));
+            for window_id in &group.window_ids {
+                output.push_str(&format!(
+                    "window_group_window\t{}\t{}\n",
+                    escape_field(&group.group_id),
+                    escape_field(window_id)
+                ));
+            }
+        }
         for window in &self.windows {
             output.push_str(&format!(
                 "window\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -704,12 +710,38 @@ impl SessionSnapshotPayload {
             approval_requests: Vec::new(),
             message_state: None,
             mcp_servers: Vec::new(),
+            window_groups: Vec::new(),
             windows: Vec::new(),
         };
 
         for line in lines {
             let fields = split_fields(line)?;
             match fields.first().map(String::as_str) {
+                Some("window_group") => {
+                    if fields.len() != 7 {
+                        return Err(MezError::invalid_args(
+                            "invalid snapshot window group field count",
+                        ));
+                    }
+                    payload.window_groups.push(WindowGroupSnapshotPayload {
+                        group_id: fields[1].clone(),
+                        index: parse_usize(&fields[2])?,
+                        name: fields[3].clone(),
+                        window_ids: Vec::new(),
+                        active: parse_bool(&fields[4])?,
+                        active_window_id: non_empty_string(&fields[5]),
+                        last_active_window_id: non_empty_string(&fields[6]),
+                    });
+                }
+                Some("window_group_window") => {
+                    if fields.len() != 3 {
+                        return Err(MezError::invalid_args(
+                            "invalid snapshot window group window field count",
+                        ));
+                    }
+                    let group = payload_window_group_mut(&mut payload, &fields[1])?;
+                    group.window_ids.push(fields[2].clone());
+                }
                 Some("window") => {
                     if fields.len() != 8 {
                         return Err(MezError::invalid_args(
@@ -1244,6 +1276,18 @@ fn payload_window_mut<'a>(
         .iter_mut()
         .find(|window| window.window_id == window_id)
         .ok_or_else(|| MezError::invalid_args("snapshot window layout references unknown window"))
+}
+
+/// Returns the mutable snapshot window group with the requested stable id.
+fn payload_window_group_mut<'a>(
+    payload: &'a mut SessionSnapshotPayload,
+    group_id: &str,
+) -> Result<&'a mut WindowGroupSnapshotPayload> {
+    payload
+        .window_groups
+        .iter_mut()
+        .find(|group| group.group_id == group_id)
+        .ok_or_else(|| MezError::invalid_args("snapshot window group references unknown group"))
 }
 
 /// Runs the payload approval grant mut operation for this subsystem.
@@ -1976,6 +2020,73 @@ impl SnapshotFrameSettings {
         }
         Ok(())
     }
+}
+
+impl WindowGroupSnapshotPayload {
+    /// Validates saved window-group topology before session reconstruction.
+    fn validate(&self) -> Result<()> {
+        if self.group_id.is_empty() || self.name.is_empty() {
+            return Err(MezError::invalid_args(
+                "snapshot window group identity fields must not be empty",
+            ));
+        }
+        if self.window_ids.is_empty() {
+            return Err(MezError::invalid_args(
+                "snapshot window group must contain at least one window",
+            ));
+        }
+        if self.window_ids.iter().any(|window_id| window_id.is_empty()) {
+            return Err(MezError::invalid_args(
+                "snapshot window group window ids must not be empty",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Validates that saved groups reference saved windows and identify one active group.
+fn validate_snapshot_window_groups(payload: &SessionSnapshotPayload) -> Result<()> {
+    if payload.window_groups.is_empty() {
+        return Ok(());
+    }
+    let active_count = payload
+        .window_groups
+        .iter()
+        .filter(|group| group.active)
+        .count();
+    if active_count != 1 {
+        return Err(MezError::invalid_args(
+            "snapshot payload must contain exactly one active window group",
+        ));
+    }
+    for group in &payload.window_groups {
+        for window_id in &group.window_ids {
+            if !payload
+                .windows
+                .iter()
+                .any(|window| window.window_id == *window_id)
+            {
+                return Err(MezError::invalid_args(
+                    "snapshot window group references an unknown window",
+                ));
+            }
+        }
+        for active_window_id in [&group.active_window_id, &group.last_active_window_id]
+            .into_iter()
+            .flatten()
+        {
+            if !group
+                .window_ids
+                .iter()
+                .any(|window_id| window_id == active_window_id)
+            {
+                return Err(MezError::invalid_args(
+                    "snapshot window group active window references an unknown group window",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 impl WindowSnapshotPayload {
