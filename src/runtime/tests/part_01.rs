@@ -234,7 +234,8 @@ fn temp_root(name: &str) -> PathBuf {
 /// The command prompt should no longer return command-layer placeholders for
 /// `save-layout` or `load-layout` when a daemon has configured snapshot
 /// storage. This protects the bridge from parsed colon commands to the same
-/// runtime control paths used by JSON-RPC snapshot clients.
+/// runtime control paths used by JSON-RPC snapshot clients, and verifies the
+/// primary client can keep using the session immediately after `load-layout`.
 #[test]
 fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     let root = temp_root("terminal-snapshot-commands");
@@ -260,6 +261,14 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
     assert!(resume.contains(r#"\"restarted_panes\":1"#), "{resume}");
+
+    let create_after_resume = service
+        .execute_terminal_command(&primary, "save-layout --name checkpoint-after-load")
+        .unwrap();
+    assert!(
+        create_after_resume.contains(r#"\"name\":\"checkpoint-after-load\""#),
+        "{create_after_resume}"
+    );
 
     let _ = fs::remove_dir_all(root);
 }

@@ -2802,7 +2802,12 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         let terminated_panes =
             self.pane_processes.tracked_pane_ids().len() + self.async_owned_pane_processes.len();
-        self.stop_all_active_pane_pipes();
+        let replaced_pane_ids = self
+            .session
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+            .collect::<Vec<_>>();
         self.active_copy_modes.clear();
         self.pane_screens.clear();
         self.pane_transaction_osc_screens.clear();
@@ -2858,6 +2863,11 @@ impl RuntimeSessionService {
             .collect();
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
         let restarted_panes = self.restart_restored_pane_processes(None)?.len();
+        let replaced_pane_id_refs = replaced_pane_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        self.stop_active_pane_pipes_for(replaced_pane_id_refs.as_slice());
         self.append_lifecycle_event(
             EventKind::SnapshotChanged,
             format!(
