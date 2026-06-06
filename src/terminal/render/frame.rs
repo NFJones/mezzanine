@@ -420,8 +420,10 @@ pub(super) fn pane_frame_agent_status_rendition(
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
     match status {
-        "queued" | "running" | "remembering" | "thinking" | "routing" | "executing" | "waiting"
-        | "compacting" => ui_theme.colors.agent_status_running.rendition(),
+        "queued" | "running" | "remembering" | "memorizing" | "thinking" | "routing"
+        | "executing" | "waiting" | "compacting" => {
+            ui_theme.colors.agent_status_running.rendition()
+        }
         "blocked" | "waiting_approval" => ui_theme.colors.agent_status_blocked.rendition(),
         "failed" => ui_theme.colors.agent_status_failed.rendition(),
         "interrupted" | "stopped" => ui_theme.colors.agent_status_idle.rendition(),
@@ -436,6 +438,7 @@ pub(super) fn pane_frame_agent_status_is_active(status: &str) -> bool {
         "queued"
             | "running"
             | "remembering"
+            | "memorizing"
             | "thinking"
             | "routing"
             | "executing"

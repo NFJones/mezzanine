@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentCompactionEvent, AgentProviderEvent, AgentTurnLedger, AgentTurnRunner,
+    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger, AgentTurnRunner,
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncAttachedTerminalIo,
     AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPaneIoMode, AsyncRuntimeService,
     AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
@@ -13,10 +13,11 @@ use super::{
     AttachedTerminalFdRole, ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
-    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, TerminalClientLoopAction,
-    empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
-    merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch, RuntimeEvent,
+    RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
+    TerminalClientLoopAction, empty_attached_terminal_loop_report,
+    is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
+    run_async_attached_terminal_client_loop,
     run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
 use crate::agent::{
@@ -1077,6 +1078,7 @@ async fn dispatch_agent_provider_side_effects(
 ) -> Result<u64> {
     let mut worker_tasks = Vec::new();
     let mut compaction_tasks = Vec::new();
+    let mut remember_tasks = Vec::new();
     for dispatch in dispatches {
         match dispatch {
             RuntimeSideEffect::DispatchAgentProvider { agent_id, turn_id } => {
@@ -1118,6 +1120,31 @@ async fn dispatch_agent_provider_side_effects(
                 });
                 compaction_tasks.push((pane_id, task));
             }
+            RuntimeSideEffect::DispatchAgentRemember { pane_id } => {
+                let dispatch = match handle.claim_agent_remember_task(pane_id.clone()).await {
+                    Ok(Some(dispatch)) => dispatch,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        let mut batch = RuntimeEventBatch::new();
+                        batch.push(RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
+                            pane_id,
+                            kind: provider_worker_error_kind(&error).to_string(),
+                            message: error.message().to_string(),
+                            provider_failure_json: error
+                                .provider_failure_json()
+                                .map(str::to_string),
+                            provider_raw_text: error.provider_raw_text().map(str::to_string),
+                        }));
+                        handle.submit_runtime_events(batch).await?;
+                        continue;
+                    }
+                };
+                let task =
+                    tokio::spawn(
+                        async move { execute_runtime_agent_remember_dispatch(dispatch).await },
+                    );
+                remember_tasks.push((pane_id, task));
+            }
             _ => {}
         }
     }
@@ -1138,6 +1165,18 @@ async fn dispatch_agent_provider_side_effects(
     }
     for (pane_id, task) in compaction_tasks {
         let Some((event, completed)) = await_agent_compaction_worker(handle, pane_id, task).await?
+        else {
+            continue;
+        };
+        if completed {
+            executions = executions.saturating_add(1);
+        }
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(event);
+        handle.submit_runtime_events(batch).await?;
+    }
+    for (pane_id, task) in remember_tasks {
+        let Some((event, completed)) = await_agent_remember_worker(handle, pane_id, task).await?
         else {
             continue;
         };
@@ -1231,6 +1270,39 @@ async fn await_agent_compaction_worker(
     }
 }
 
+/// Waits for one model-backed durable memory worker while honoring shutdown.
+async fn await_agent_remember_worker(
+    handle: &AsyncRuntimeSessionHandle,
+    pane_id: String,
+    mut task: tokio::task::JoinHandle<Result<crate::agent::ModelResponse>>,
+) -> Result<Option<(RuntimeEvent, bool)>> {
+    let mut lifecycle = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    loop {
+        tokio::select! {
+            result = &mut task => {
+                return Ok(Some(remember_worker_event(pane_id, result)));
+            }
+            _ = handle.wait_for_event_delivery() => {}
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+            }
+            changed = lifecycle.changed() => {
+                if changed.is_err() {
+                    task.abort();
+                    let _ = task.await;
+                    return Ok(None);
+                }
+            }
+        }
+        if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+            task.abort();
+            let _ = task.await;
+            return Ok(None);
+        }
+    }
+}
+
 /// Runs the provider worker event operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1300,6 +1372,42 @@ fn compaction_worker_event(
         ),
         Err(error) => (
             RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
+                pane_id,
+                kind: "invalid_state".to_string(),
+                message: format!("provider worker join failed: {error}"),
+                provider_failure_json: None,
+                provider_raw_text: None,
+            }),
+            false,
+        ),
+    }
+}
+
+/// Converts a durable memory worker result into a runtime event.
+fn remember_worker_event(
+    pane_id: String,
+    result: std::result::Result<Result<crate::agent::ModelResponse>, tokio::task::JoinError>,
+) -> (RuntimeEvent, bool) {
+    match result {
+        Ok(Ok(response)) => (
+            RuntimeEvent::AgentRemember(AgentRememberEvent::Completed {
+                pane_id,
+                response: Box::new(response),
+            }),
+            true,
+        ),
+        Ok(Err(error)) => (
+            RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
+                pane_id,
+                kind: provider_worker_error_kind(&error).to_string(),
+                message: error.message().to_string(),
+                provider_failure_json: error.provider_failure_json().map(str::to_string),
+                provider_raw_text: error.provider_raw_text().map(str::to_string),
+            }),
+            false,
+        ),
+        Err(error) => (
+            RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
                 pane_id,
                 kind: "invalid_state".to_string(),
                 message: format!("provider worker join failed: {error}"),
@@ -2272,6 +2380,24 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &task.model_profile,
             )
             .await
+        }
+    }
+}
+
+/// Executes one model-backed durable memory generation request.
+async fn execute_runtime_agent_remember_dispatch(
+    dispatch: RuntimeAgentRememberDispatch,
+) -> Result<crate::agent::ModelResponse> {
+    let RuntimeAgentRememberDispatch { task, provider } = dispatch;
+    match provider {
+        RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+            provider.send_request_async(&task.request).await
+        }
+        RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+            provider.send_request_async(&task.request).await
+        }
+        RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+            provider.send_request_async(&task.request).await
         }
     }
 }

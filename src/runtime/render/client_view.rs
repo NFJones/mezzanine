@@ -465,6 +465,13 @@ impl RuntimeSessionService {
                 runtime_agent_turn_duration_display(elapsed)
             ));
         }
+        if let Some(started_at) = self.agent_remembering_panes.get(pane_id) {
+            let elapsed = current_unix_seconds().saturating_sub(*started_at);
+            return Some(format!(
+                "memorizing ({} • esc to interrupt)",
+                runtime_agent_turn_duration_display(elapsed)
+            ));
+        }
         let running_turn_id = self
             .agent_shell_store
             .get(pane_id)?
@@ -803,7 +810,9 @@ impl RuntimeSessionService {
 
     /// Reports whether the pane currently renders a live agent footer.
     fn pane_has_live_agent_footer(&self, pane_id: &str) -> bool {
-        if self.agent_compacting_panes.contains_key(pane_id) {
+        if self.agent_compacting_panes.contains_key(pane_id)
+            || self.agent_remembering_panes.contains_key(pane_id)
+        {
             return true;
         }
         let Some(running_turn_id) = self
@@ -821,7 +830,9 @@ impl RuntimeSessionService {
 
     /// Reports whether a pane has an active-work status in its frame context.
     fn pane_has_active_agent_frame_status(&self, pane_id: &str) -> bool {
-        if self.agent_compacting_panes.contains_key(pane_id) {
+        if self.agent_compacting_panes.contains_key(pane_id)
+            || self.agent_remembering_panes.contains_key(pane_id)
+        {
             return true;
         }
         self.agent_turn_ledger
@@ -969,6 +980,14 @@ impl RuntimeSessionService {
                             pane_ids.iter().any(|window_pane| window_pane == *pane_id)
                         })
                         .count(),
+                )
+                .saturating_add(
+                    self.agent_remembering_panes
+                        .iter()
+                        .filter(|(pane_id, _)| {
+                            pane_ids.iter().any(|window_pane| window_pane == *pane_id)
+                        })
+                        .count(),
                 );
             context
                 .window_agent_active_counts
@@ -1017,6 +1036,11 @@ impl RuntimeSessionService {
                     .agent_compacting_panes
                     .contains_key(&pane_id)
                     .then(|| "compacting".to_string())
+                    .or_else(|| {
+                        self.agent_remembering_panes
+                            .contains_key(&pane_id)
+                            .then(|| "memorizing".to_string())
+                    })
                     .or_else(|| {
                         latest_turn.map(|turn| self.runtime_agent_frame_status(turn).to_string())
                     })

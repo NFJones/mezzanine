@@ -33,6 +33,9 @@ pub enum RuntimeEvent {
     /// A model-backed conversation compaction completed or failed outside the
     /// runtime actor.
     AgentCompaction(AgentCompactionEvent),
+    /// A model-backed durable memory generation task completed or failed
+    /// outside the runtime actor.
+    AgentRemember(AgentRememberEvent),
     /// A hook worker task completed or failed outside the runtime actor.
     Hook(AsyncHookEvent),
     /// A persistence worker completed or failed a write outside the runtime actor.
@@ -52,6 +55,7 @@ impl RuntimeEvent {
             Self::Process(_) => "process",
             Self::AgentProvider(_) => "agent_provider",
             Self::AgentCompaction(_) => "agent_compaction",
+            Self::AgentRemember(_) => "agent_remember",
             Self::Hook(_) => "hook",
             Self::Persistence(_) => "persistence",
             Self::Timer(_) => "timer",
@@ -212,6 +216,31 @@ pub enum AgentCompactionEvent {
     /// Provider work failed before producing a summary response.
     Failed {
         /// Pane whose conversation compaction failed.
+        pane_id: String,
+        /// Stable failure kind for diagnostics.
+        kind: String,
+        /// Human-readable failure.
+        message: String,
+        /// Structured provider failure payload when the provider returned one.
+        provider_failure_json: Option<String>,
+        /// Raw provider text when the provider produced malformed output.
+        provider_raw_text: Option<String>,
+    },
+}
+
+/// Event emitted by an async durable memory generation worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentRememberEvent {
+    /// Provider work completed with a model response containing memories.
+    Completed {
+        /// Pane whose `/remember` command completed.
+        pane_id: String,
+        /// Provider response produced by the memory worker.
+        response: Box<ModelResponse>,
+    },
+    /// Provider work failed before producing a memory response.
+    Failed {
+        /// Pane whose `/remember` command failed.
         pane_id: String,
         /// Stable failure kind for diagnostics.
         kind: String,
@@ -449,6 +478,11 @@ pub enum RuntimeSideEffect {
         /// Pane whose active conversation should be compacted.
         pane_id: String,
     },
+    /// Start model-backed durable memory generation outside the actor.
+    DispatchAgentRemember {
+        /// Pane whose active context should be memorized.
+        pane_id: String,
+    },
     /// Execute a non-blocking program hook outside the actor.
     RunProgramHook {
         /// Original hook plan to execute.
@@ -671,6 +705,7 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::Pane(_)
         | RuntimeEvent::AgentProvider(_)
         | RuntimeEvent::AgentCompaction(_)
+        | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_) => 2,
     }

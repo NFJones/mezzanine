@@ -13,12 +13,12 @@ use super::{
     ClientEvent, ClientId, ClientStatusLine, ClientViewRole, ControlConnectionState,
     DeliveryCursor, FanoutBatch, Framed, JoinSet, MessageConnection, MezError, PaneProcess,
     ProtocolFrameCodec, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
-    RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch,
-    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, Size, StreamExt, TerminalClientLoopConfig, TerminalStyleSpan,
-    UnixListener, UnixStream, authorize_unix_peer_raw_fd, encode_frame, oneshot,
-    plan_attached_terminal_client_step,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
+    RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable, RuntimeEventIngressReport,
+    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, StreamExt,
+    TerminalClientLoopConfig, TerminalStyleSpan, UnixListener, UnixStream,
+    authorize_unix_peer_raw_fd, encode_frame, oneshot, plan_attached_terminal_client_step,
 };
 use crate::runtime::PaneResizeUpdate;
 use crate::snapshot::SnapshotRepository;
@@ -624,6 +624,16 @@ pub(super) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Option<RuntimeAgentCompactionDispatch>>>,
+    },
+    /// Claims a queued model-backed durable memory task.
+    ClaimAgentRememberTask {
+        /// Pane whose queued memory generation should be claimed.
+        pane_id: String,
+        /// Stores the reply value for this data structure.
+        ///
+        /// The field is part of structured state exchanged across this module
+        /// boundary and should remain aligned with the owning type invariant.
+        reply: oneshot::Sender<Result<Option<RuntimeAgentRememberDispatch>>>,
     },
     /// Represents the Submit Runtime Events case for this enumeration.
     ///

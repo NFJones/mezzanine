@@ -38,8 +38,8 @@ use crate::runtime::{
     DeferredCommandPromptHistoryWrite, DeferredPaneInput, DeferredPanePipeWrite,
     DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
     RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeEventConnectionTable,
-    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
+    RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeShellTransactionTimerKind, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
     authorize_unix_peer_raw_fd, current_effective_uid,
@@ -164,8 +164,8 @@ pub use pane_io::{
 };
 pub use provider::build_async_agent_provider_service;
 pub use runtime_events::{
-    AgentCompactionEvent, AgentProviderEvent, AsyncHookEvent, ClientEvent, PaneEvent,
-    PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
+    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
+    PaneEvent, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
     RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
     RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, ShutdownEvent, TimerEvent,
 };

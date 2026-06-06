@@ -13,18 +13,19 @@ use super::{
     EnvironmentSignature, EventAudience, EventLog, File, FocusedShellHookDispatch,
     FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
     HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
-    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
-    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, OpenOptions, OsString,
-    PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore,
-    PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, ScopeRegistry,
-    Session, SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
-    SnapshotRepository, SplitDirection, Stdio, SubagentProfile, SubagentScopeDeclaration,
-    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
-    ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write,
-    delivery_batch_json, effective_uid, encode_control_body, encode_event_notification,
-    encode_mmp_body, execute_streamable_http_exchange, mcp_tools_call_operation,
+    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MemoryScope,
+    MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
+    OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager,
+    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes,
+    PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result,
+    ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore, SessionRecord,
+    SessionRegistry, Size, SnapshotRepository, SplitDirection, Stdio, SubagentProfile,
+    SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
+    TerminalScreen, ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent, WindowFrameAction,
+    WindowId, Write, delivery_batch_json, effective_uid, encode_control_body,
+    encode_event_notification, encode_mmp_body, execute_streamable_http_exchange,
+    mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::mcp::McpPromptTool;
@@ -3557,6 +3558,34 @@ pub struct RuntimeAgentCompactionDispatch {
     pub provider: RuntimeAgentProviderDispatchProvider,
 }
 
+/// Provider-backed durable memory generation queued outside the actor.
+///
+/// The actor owns command validation and state mutation while provider I/O runs
+/// in a worker. This task carries the deterministic request and memory metadata
+/// needed to persist generated records once a model response returns.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentRememberTask {
+    /// Pane whose visible status should remain `memorizing`.
+    pub pane_id: String,
+    /// Active model profile name used for the memory request.
+    pub model_profile_name: String,
+    /// Active model profile copied for completion metadata.
+    pub model_profile: ModelProfile,
+    /// Durable scope selected when the command was queued.
+    pub scope: MemoryScope,
+    /// Provider request submitted by the async memory worker.
+    pub request: ModelRequest,
+}
+
+/// Claimed model memory dispatch owned by an async provider worker.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentRememberDispatch {
+    /// Remember task metadata and provider request.
+    pub task: RuntimeAgentRememberTask,
+    /// Provider used to execute the memory-generation request.
+    pub provider: RuntimeAgentProviderDispatchProvider,
+}
+
 /// Carries Runtime Session Service state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -4195,6 +4224,13 @@ pub struct RuntimeSessionService {
     pub(super) pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
     /// Model-backed compaction tasks claimed by async provider workers.
     pub(super) claimed_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
+    /// Panes currently running model-backed durable memory generation, keyed by
+    /// start time for timer rendering.
+    pub(super) agent_remembering_panes: BTreeMap<String, u64>,
+    /// Model-backed memory-generation tasks waiting for async provider dispatch.
+    pub(super) pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+    /// Model-backed memory-generation tasks claimed by async provider workers.
+    pub(super) claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Whether new agent turns use routing model and reasoning sizing by default.
     pub(super) agent_routing: bool,
     /// Pane-local routing overrides. Missing entries inherit the

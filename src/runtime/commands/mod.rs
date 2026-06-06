@@ -4,7 +4,10 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::types::{RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind};
+use super::types::{
+    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
+    RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
+};
 use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext, AgentId,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, AgentTurnRecord,
@@ -1009,10 +1012,8 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "remember"
                 {
-                    let remember_outcome = AgentShellCommandOutcome::Display {
-                        command: "remember".to_string(),
-                        body: "remember command requires async model execution".to_string(),
-                    };
+                    let remember_outcome =
+                        self.execute_agent_shell_remember_command(&pane_id, input)?;
                     runtime_agent_shell_command_response_json(
                         &pane_id,
                         input,
@@ -1148,6 +1149,15 @@ impl RuntimeSessionService {
         runtime
             .block_on(self.ensure_runtime_mcp_transports_discovered_async())
             .map(|_| ())
+    }
+
+    /// Executes `/remember` from synchronous UI paths by queuing model work.
+    fn execute_agent_shell_remember_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        self.queue_agent_shell_remember_command_with_model(pane_id, input)
     }
 
     /// Runs the execute agent shell command async operation for this subsystem.
@@ -1572,8 +1582,17 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Executes `/remember` by asking the active model to propose durable memories.
+    /// Executes `/remember` by queuing durable memory generation.
     pub(super) async fn execute_agent_shell_remember_command_async(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        self.queue_agent_shell_remember_command_with_model(pane_id, input)
+    }
+
+    /// Queues model-backed durable memory generation and marks the pane active.
+    fn queue_agent_shell_remember_command_with_model(
         &mut self,
         pane_id: &str,
         input: &str,
@@ -1591,6 +1610,16 @@ impl RuntimeSessionService {
                 "remember requires a configured Mezzanine config root",
             ));
         };
+        if self.agent_remembering_panes.contains_key(pane_id) {
+            return Err(MezError::conflict(format!(
+                "cannot remember while pane {pane_id} is already memorizing"
+            )));
+        }
+        if self.agent_compacting_panes.contains_key(pane_id) {
+            return Err(MezError::conflict(format!(
+                "cannot remember while pane {pane_id} is compacting"
+            )));
+        }
         let source_text = if invocation.args.trim().is_empty() {
             let context = self.agent_context_for_pane_prompt(
                 pane_id,
@@ -1615,18 +1644,63 @@ impl RuntimeSessionService {
             invocation.args.trim().is_empty(),
             &source_text,
         )?;
-        let provider =
-            self.runtime_model_provider_for_profile(&model_profile, "provider_remember")?;
-        let response = provider.send_request_async(&request).await?;
+        self.agent_remembering_panes
+            .insert(pane_id.to_string(), current_unix_seconds().max(1));
+        self.pending_agent_remember_tasks.insert(
+            pane_id.to_string(),
+            RuntimeAgentRememberTask {
+                pane_id: pane_id.to_string(),
+                model_profile_name: model_profile_name.clone(),
+                model_profile: model_profile.clone(),
+                scope: self.runtime_remember_scope_for_pane(pane_id),
+                request,
+            },
+        );
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            &format!(
+                "agent: memorizing durable context provider={} model={}",
+                model_profile.provider, model_profile.model
+            ),
+        )?;
+        let _ = config_root;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "remember".to_string(),
+            body: format!(
+                "pane={} memorizing=true state=queued source=agent-remember model_profile={} provider={} model={}",
+                json_escape(pane_id),
+                json_escape(&model_profile_name),
+                json_escape(&model_profile.provider),
+                json_escape(&model_profile.model),
+            ),
+            visibility,
+        })
+    }
+
+    /// Applies one completed `/remember` model response through actor-owned state.
+    pub fn apply_agent_remember_completed_event(
+        &mut self,
+        pane_id: &str,
+        response: ModelResponse,
+    ) -> Result<bool> {
+        let Some(task) = self.claimed_agent_remember_tasks.remove(pane_id) else {
+            self.agent_remembering_panes.remove(pane_id);
+            return Ok(false);
+        };
+        self.agent_remembering_panes.remove(pane_id);
         self.record_agent_provider_token_usage_with_profile(
             pane_id,
             response.usage,
             response.usage,
-            Some(&model_profile),
+            Some(&task.model_profile),
         );
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
         let candidates = runtime_remember_candidates_from_response(&response)?;
-        let scope = self.runtime_remember_scope_for_pane(pane_id);
+        let Some(config_root) = self.config_root.clone() else {
+            return Err(MezError::invalid_state(
+                "remember requires a configured Mezzanine config root",
+            ));
+        };
         let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
         let now = current_unix_seconds().max(1);
         let mut stored = Vec::new();
@@ -1636,7 +1710,7 @@ impl RuntimeSessionService {
                 now,
                 runtime_remember_slug(&candidate.summary, index + 1)
             );
-            let record = candidate.into_record(id, scope.clone(), now)?;
+            let record = candidate.into_record(id, task.scope.clone(), now)?;
             self.upsert_session_memory(record.clone())?;
             store.upsert(record.clone())?;
             stored.push(record);
@@ -1646,16 +1720,15 @@ impl RuntimeSessionService {
                 "remember model response did not contain any acceptable memories",
             ));
         }
-        Ok(AgentShellCommandOutcome::Mutated {
-            command: "remember".to_string(),
-            body: format!(
-                "pane={} stored={} scope={} source=agent-remember model_profile={} provider={} model={} ids={}",
-                json_escape(pane_id),
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            &format!(
+                "agent: memorized durable context stored={} scope={} source=agent-remember model_profile={} provider={} model={} ids={}",
                 stored.len(),
-                json_escape(&runtime_remember_scope_display(&scope)),
-                json_escape(&model_profile_name),
-                json_escape(&model_profile.provider),
-                json_escape(&model_profile.model),
+                runtime_remember_scope_display(&task.scope),
+                task.model_profile_name,
+                task.model_profile.provider,
+                task.model_profile.model,
                 runtime_string_array_json(
                     &stored
                         .iter()
@@ -1663,8 +1736,49 @@ impl RuntimeSessionService {
                         .collect::<Vec<_>>()
                 )
             ),
-            visibility,
-        })
+        )?;
+        Ok(true)
+    }
+
+    /// Applies a failed model-backed `/remember` worker result.
+    pub fn apply_agent_remember_failed_event(
+        &mut self,
+        pane_id: &str,
+        message: &str,
+    ) -> Result<bool> {
+        let had_task = self.pending_agent_remember_tasks.remove(pane_id).is_some()
+            || self.claimed_agent_remember_tasks.remove(pane_id).is_some()
+            || self.agent_remembering_panes.remove(pane_id).is_some();
+        if had_task {
+            self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!("agent: remember failed during provider request: {message}"),
+            )?;
+        }
+        Ok(had_task)
+    }
+
+    /// Returns pane ids with queued model-backed durable memory tasks.
+    pub fn pending_agent_remember_tasks(&self) -> Vec<String> {
+        self.pending_agent_remember_tasks.keys().cloned().collect()
+    }
+
+    /// Claims one queued durable memory task for execution outside the actor.
+    pub fn claim_agent_remember_task(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<Option<RuntimeAgentRememberDispatch>> {
+        let Some(task) = self.pending_agent_remember_tasks.remove(pane_id) else {
+            return Ok(None);
+        };
+        if !self.agent_remembering_panes.contains_key(pane_id) {
+            return Ok(None);
+        }
+        let provider =
+            self.runtime_model_provider_for_profile(&task.model_profile, "provider_remember")?;
+        self.claimed_agent_remember_tasks
+            .insert(pane_id.to_string(), task.clone());
+        Ok(Some(RuntimeAgentRememberDispatch { task, provider }))
     }
 
     /// Builds the durable memory scope used for `/remember` records.
@@ -1676,12 +1790,12 @@ impl RuntimeSessionService {
             .unwrap_or(MemoryScope::Global)
     }
 
-    /// Builds an async provider suitable for one runtime-owned model command.
+    /// Builds an async provider dispatch suitable for one runtime-owned model command.
     fn runtime_model_provider_for_profile(
         &mut self,
         model_profile: &ModelProfile,
         audit_operation: &str,
-    ) -> Result<Box<dyn AsyncModelProvider>> {
+    ) -> Result<RuntimeAgentProviderDispatchProvider> {
         let provider_config = self
             .provider_registry
             .provider(&model_profile.provider)
@@ -1714,7 +1828,7 @@ impl RuntimeSessionService {
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
-        let provider_result: Result<Box<dyn AsyncModelProvider>> = match api {
+        let provider_result: Result<RuntimeAgentProviderDispatchProvider> = match api {
             ProviderApiCompatibility::OpenAiResponses => {
                 openai_responses_provider_from_auth_store_with_provider_options(
                     auth_store,
@@ -1724,7 +1838,7 @@ impl RuntimeSessionService {
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
-                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+                .map(RuntimeAgentProviderDispatchProvider::OpenAi)
             }
             ProviderApiCompatibility::OpenAiChatCompletions => {
                 openai_compatible_provider_from_auth_store_with_provider_options(
@@ -1735,7 +1849,7 @@ impl RuntimeSessionService {
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
-                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+                .map(RuntimeAgentProviderDispatchProvider::OpenAiCompatible)
             }
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 deepseek_chat_completions_provider_from_auth_store_with_provider_options(
@@ -1745,7 +1859,7 @@ impl RuntimeSessionService {
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )
-                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+                .map(RuntimeAgentProviderDispatchProvider::DeepSeek)
             }
         };
         match provider_result {

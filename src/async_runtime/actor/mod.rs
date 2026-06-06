@@ -6,21 +6,21 @@
 mod side_effects;
 
 use super::{
-    AgentCompactionEvent, AgentId, AgentProviderEvent, Arc, AsyncControlInputResult,
-    AsyncHookEvent, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFlush,
-    AsyncRenderedClientFrame, AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest,
-    AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle, AttachedClientStepApplication,
-    AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
-    AttachedTerminalOutputModes, ClientEvent, ClientId, ClientState, ClientStatusLine,
-    ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
-    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredPaneInput, DeferredPanePipeWrite,
-    DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook, DeliveryCursor, FanoutBatch,
-    MessageConnection, MezError, Notify, PaneEvent, PaneExitStatus, PersistenceEvent,
-    PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason,
-    RenderedClientView, Result, RuntimeAgentProviderDispatch, RuntimeAgentProviderTask,
-    RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable, RuntimeEventIngressReport,
-    RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
+    AgentCompactionEvent, AgentId, AgentProviderEvent, AgentRememberEvent, Arc,
+    AsyncControlInputResult, AsyncHookEvent, AsyncMessageFanout, AsyncMessageInputResult,
+    AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncRuntimeActorConfig,
+    AsyncRuntimeActorExit, AsyncRuntimeRequest, AsyncRuntimeSessionActor,
+    AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, AttachedTerminalOutputModes, ClientEvent,
+    ClientId, ClientState, ClientStatusLine, ClientViewRole, ControlConnectionState,
+    DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeferredAgentPromptHistoryWrite,
+    DeferredAgentTranscriptWrite, DeferredCommandPromptHistoryWrite, DeferredPaneInput,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
+    DeliveryCursor, FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PaneExitStatus,
+    PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
+    RenderInvalidationReason, RenderedClientView, Result, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeShellTransactionTimerKind, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey,
     RuntimeTimerKind, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
@@ -862,6 +862,15 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::ClaimAgentRememberTask { pane_id, reply } => {
+                let result = self.service.claim_agent_remember_task(&pane_id);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
             AsyncRuntimeRequest::SubmitRuntimeEvents { batch, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self.apply_runtime_event_batch(batch).await;
@@ -1204,6 +1213,9 @@ impl AsyncRuntimeSessionActor {
             }
             RuntimeEvent::AgentCompaction(compaction_event) => {
                 self.apply_runtime_agent_compaction_event(compaction_event)
+            }
+            RuntimeEvent::AgentRemember(remember_event) => {
+                self.apply_runtime_agent_remember_event(remember_event)
             }
             RuntimeEvent::Hook(hook_event) => self.apply_runtime_hook_event(hook_event),
             RuntimeEvent::Persistence(persistence_event) => {
@@ -1554,6 +1566,12 @@ impl AsyncRuntimeSessionActor {
             }
             side_effects.push(RuntimeSideEffect::DispatchAgentCompaction { pane_id });
         }
+        for pane_id in self.service.pending_agent_remember_tasks() {
+            if self.remember_dispatch_is_already_queued(&pane_id) {
+                continue;
+            }
+            side_effects.push(RuntimeSideEffect::DispatchAgentRemember { pane_id });
+        }
         Ok(side_effects)
     }
 
@@ -1564,6 +1582,16 @@ impl AsyncRuntimeSessionActor {
                 effect,
                 RuntimeSideEffect::DispatchAgentCompaction { pane_id }
                     if pane_id == target_pane_id
+            )
+        })
+    }
+
+    /// Returns true when a queued durable memory dispatch already exists for a pane.
+    fn remember_dispatch_is_already_queued(&self, target_pane_id: &str) -> bool {
+        self.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::DispatchAgentRemember { pane_id } if pane_id == target_pane_id
             )
         })
     }
@@ -2142,6 +2170,31 @@ impl AsyncRuntimeSessionActor {
         Ok(RuntimeEventApplication {
             applied,
             side_effects,
+        })
+    }
+
+    /// Applies completion or failure from a queued model-backed memory task.
+    fn apply_runtime_agent_remember_event(
+        &mut self,
+        remember_event: AgentRememberEvent,
+    ) -> Result<RuntimeEventApplication> {
+        let applied = match remember_event {
+            AgentRememberEvent::Completed { pane_id, response } => self
+                .service
+                .apply_agent_remember_completed_event(&pane_id, *response)?,
+            AgentRememberEvent::Failed {
+                pane_id, message, ..
+            } => self
+                .service
+                .apply_agent_remember_failed_event(&pane_id, &message)?,
+        };
+        Ok(RuntimeEventApplication {
+            applied,
+            side_effects: if applied {
+                self.render_side_effects(RenderInvalidationReason::FullRedraw)
+            } else {
+                Vec::new()
+            },
         })
     }
 
@@ -2860,6 +2913,7 @@ impl AsyncRuntimeSessionActor {
                     effect,
                     RuntimeSideEffect::DispatchAgentProvider { .. }
                         | RuntimeSideEffect::DispatchAgentCompaction { .. }
+                        | RuntimeSideEffect::DispatchAgentRemember { .. }
                 )
             {
                 drained.push(effect);
@@ -3462,6 +3516,7 @@ fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::Process(_)
         | RuntimeEvent::AgentProvider(_)
         | RuntimeEvent::AgentCompaction(_)
+        | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Shutdown(_) => true,
     }
 }
@@ -3614,6 +3669,7 @@ fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static str {
         RuntimeSideEffect::CancelTimer { .. } => "cancel-timer",
         RuntimeSideEffect::DispatchAgentProvider { .. } => "dispatch-agent-provider",
         RuntimeSideEffect::DispatchAgentCompaction { .. } => "dispatch-agent-compaction",
+        RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
         RuntimeSideEffect::RunProgramHook { .. } => "run-program-hook",
         RuntimeSideEffect::Persist { .. } => "persist",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",
@@ -4536,6 +4592,15 @@ impl AsyncRuntimeSessionHandle {
         pane_id: String,
     ) -> Result<Option<super::RuntimeAgentCompactionDispatch>> {
         self.request(|reply| AsyncRuntimeRequest::ClaimAgentCompactionTask { pane_id, reply })
+            .await?
+    }
+
+    /// Claims one queued model-backed durable memory task for async execution.
+    pub async fn claim_agent_remember_task(
+        &self,
+        pane_id: String,
+    ) -> Result<Option<super::RuntimeAgentRememberDispatch>> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimAgentRememberTask { pane_id, reply })
             .await?
     }
 
