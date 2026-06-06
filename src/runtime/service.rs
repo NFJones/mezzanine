@@ -1414,50 +1414,6 @@ impl RuntimeSessionService {
         result
     }
 
-    /// Runs the retry runtime mcp server async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) async fn retry_runtime_mcp_server_async(
-        &mut self,
-        server_id: &str,
-    ) -> Result<RuntimeMcpRetryReport> {
-        let previous = self
-            .mcp_registry
-            .list_servers()
-            .into_iter()
-            .find(|server| server.configured.id == server_id)
-            .cloned()
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "MCP server not found")
-            })?;
-        if !previous.configured.enabled {
-            return Err(MezError::forbidden(
-                "MCP server is disabled; enable it before retrying",
-            ));
-        }
-        let retryable_before_retry = matches!(
-            previous.status,
-            McpServerStatus::Unavailable | McpServerStatus::Blacklisted | McpServerStatus::Failed
-        );
-
-        let mut registry = std::mem::take(&mut self.mcp_registry);
-        let result = self
-            .retry_runtime_mcp_server_with_registry_async(
-                &mut registry,
-                server_id,
-                previous.status,
-                retryable_before_retry,
-            )
-            .await;
-        if result.is_ok() {
-            let _ = self.persist_registry_update_plan(&self.registry_update_plan());
-        }
-        self.mcp_registry = registry;
-        result
-    }
-
     /// Runs the retry runtime mcp server with registry operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1476,52 +1432,6 @@ impl RuntimeSessionService {
         let mut rediscovered = true;
         let mut reason = None;
         if let Err(error) = self.discover_runtime_mcp_transport(registry, server_id, &environment) {
-            rediscovered = false;
-            let message = error.message().to_string();
-            let _ = registry.blacklist_for_session(server_id, message.clone());
-            self.mcp_transports.remove(server_id);
-            reason = Some(message);
-        }
-
-        let current = registry
-            .list_servers()
-            .into_iter()
-            .find(|server| server.configured.id == server_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "MCP server not found")
-            })?;
-        Ok(RuntimeMcpRetryReport {
-            server_id: server_id.to_string(),
-            previous_status,
-            status: current.status,
-            retryable_before_retry,
-            rediscovered,
-            tools: current.tools.len(),
-            reason,
-        })
-    }
-
-    /// Runs the retry runtime mcp server with registry async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    async fn retry_runtime_mcp_server_with_registry_async(
-        &mut self,
-        registry: &mut McpRegistry,
-        server_id: &str,
-        previous_status: McpServerStatus,
-        retryable_before_retry: bool,
-    ) -> Result<RuntimeMcpRetryReport> {
-        registry.retry_server(server_id)?;
-        self.mcp_transports.remove(server_id);
-        let environment = std::env::vars().collect::<BTreeMap<_, _>>();
-        let mut rediscovered = true;
-        let mut reason = None;
-        if let Err(error) = self
-            .discover_runtime_mcp_transport_async(registry, server_id, &environment)
-            .await
-        {
             rediscovered = false;
             let message = error.message().to_string();
             let _ = registry.blacklist_for_session(server_id, message.clone());

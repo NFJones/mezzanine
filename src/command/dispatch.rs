@@ -12,24 +12,21 @@ use super::{
     AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, ConfigMutation,
     ConfigMutationOperation, ConfigPaths, ConfigScope, KeyChord, MezError, PaneNavigationDirection,
     PaneReadinessOverrideStore, PaneReadinessState, PathBuf, Result, Session,
-    attach_session_display, auth_login_plan_display, auth_status_display,
-    auth_status_store_display, bind_key_args, binding_config_key, capture_pane_display,
-    choose_buffer_display, choose_client_display, choose_group_display, choose_observer_display,
-    choose_window_display, clear_history_display, command_help_display, command_target_pane_id,
-    config_set_string, config_unset, copy_mode_display, copy_selection_display,
-    create_buffer_display, execute_auth_login, export_history_display, flag_value,
-    key_chord_notation, list_baseline_commands, list_buffers_display, list_clients,
+    attach_session_display, auth_status_display, auth_status_store_display, bind_key_args,
+    binding_config_key, capture_pane_display, choose_buffer_display, choose_client_display,
+    choose_group_display, choose_observer_display, choose_window_display, clear_history_display,
+    command_help_display, command_target_pane_id, config_set_string, config_unset,
+    copy_mode_display, copy_selection_display, create_buffer_display, export_history_display,
+    flag_value, key_chord_notation, list_baseline_commands, list_buffers_display, list_clients,
     list_current_session, list_default_key_bindings, list_default_themes, list_groups,
     list_observers, list_panes, list_windows, load_layout_selector, mark_pane_ready_audit_record,
-    mark_pane_ready_warning_display, mcp_add_plan_display, mcp_login_plan_display,
-    mcp_logout_plan_display, mcp_remove_plan_display, mcp_retry_plan_display, mcp_server_id,
-    mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
-    mutation_plans_changed, mutation_plans_reload_required, pane_readiness_state_name,
+    mark_pane_ready_warning_display, mcp_server_id, mcp_status_plan_display,
+    mcp_status_store_display, mutated_pane_command_outcome, pane_readiness_state_name,
     parse_command_sequence, parse_config_command_value, paste_buffer_display,
     paste_clipboard_display, persist_command_config_mutation, persist_command_theme_config,
-    persist_config_text, persist_mcp_add, persist_mcp_remove, pipe_pane_display, positional_args,
-    save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
-    show_default_options, show_messages_display, show_metrics_display, validate_config_file,
+    persist_config_text, pipe_pane_display, positional_args, save_buffer_display, save_layout_name,
+    search_history_display, set_option_args, set_theme_arg, show_default_options,
+    show_messages_display, show_metrics_display, validate_config_file,
 };
 
 use std::fs;
@@ -70,24 +67,6 @@ pub fn execute_auth_command(
             command: invocation.name.clone(),
             body: auth_status_store_display(auth_store.status()?),
         }),
-        "auth-login" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: execute_auth_login(auth_store, invocation)?,
-        }),
-        "mcp-login" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_login_plan_display(invocation)?,
-        }),
-        "mcp-logout" => {
-            let server_id = mcp_server_id(invocation, "mcp-logout requires a server id")?;
-            let changed = auth_store.logout_mcp_server(server_id)?;
-            Ok(CommandOutcome::Display {
-                command: invocation.name.clone(),
-                body: format!(
-                    "server={server_id}:logged_out={changed}:changed={changed}:source=auth-store"
-                ),
-            })
-        }
         "mcp-status" => {
             let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
             Ok(CommandOutcome::Display {
@@ -161,48 +140,6 @@ fn swap_pane_neighbor_target(
 /// Runs the move window target index operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-/// Runs the execute mcp config command operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn execute_mcp_config_command(
-    paths: &ConfigPaths,
-    invocation: &CommandInvocation,
-) -> Result<CommandOutcome> {
-    match invocation.name.as_str() {
-        "mcp-add" => {
-            let (server_id, transport, target, plans) = persist_mcp_add(paths, invocation)?;
-            Ok(CommandOutcome::Display {
-                command: invocation.name.clone(),
-                body: format!(
-                    "server={server_id}:transport={transport}:target={target}:changed={}:reload_required={}:source=config-store",
-                    mutation_plans_changed(&plans),
-                    mutation_plans_reload_required(&plans)
-                ),
-            })
-        }
-        "mcp-remove" => {
-            let server_id = mcp_server_id(invocation, "mcp-remove requires a server id")?;
-            let plans = persist_mcp_remove(paths, server_id)?;
-            Ok(CommandOutcome::Display {
-                command: invocation.name.clone(),
-                body: format!(
-                    "server={server_id}:removed=true:changed={}:reload_required={}:source=config-store",
-                    mutation_plans_changed(&plans),
-                    mutation_plans_reload_required(&plans)
-                ),
-            })
-        }
-        _ => Err(MezError::invalid_args(format!(
-            "command `{}` is not an MCP configuration command",
-            invocation.name
-        ))),
-    }
-}
-
 /// Runs the execute config store command operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -879,33 +816,9 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: auth_status_display(),
         }),
-        "auth-login" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: auth_login_plan_display(invocation),
-        }),
-        "mcp-add" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_add_plan_display(invocation)?,
-        }),
-        "mcp-remove" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_remove_plan_display(invocation)?,
-        }),
-        "mcp-login" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_login_plan_display(invocation)?,
-        }),
-        "mcp-logout" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_logout_plan_display(invocation)?,
-        }),
         "mcp-status" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: mcp_status_plan_display(invocation)?,
-        }),
-        "mcp-retry" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_retry_plan_display(invocation)?,
         }),
         "mark-pane-ready" => {
             session.require_primary(primary_client_id)?;

@@ -107,7 +107,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
 /// existing MCP configuration. These ids come from the live runtime registry,
 /// not the static command table.
 #[test]
-fn runtime_primary_command_prompt_mcp_retry_autocompletes_configured_server_id() {
+fn runtime_primary_command_prompt_mcp_status_autocompletes_configured_server_id() {
     let mut service = test_runtime_service();
     service
         .mcp_registry_mut()
@@ -128,7 +128,7 @@ fn runtime_primary_command_prompt_mcp_retry_autocompletes_configured_server_id()
             &primary,
             &AttachedTerminalClientStepPlan {
                 actions: vec![
-                    TerminalClientLoopAction::ForwardToPane(b"mcp-retry fi".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"mcp-status fi".to_vec()),
                     TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
                 ],
                 output_lines: Vec::new(),
@@ -149,7 +149,7 @@ fn runtime_primary_command_prompt_mcp_retry_autocompletes_configured_server_id()
             .prompt
             .buffer
             .line(),
-        "mcp-retry fixture "
+        "mcp-status fixture "
     );
 }
 
@@ -4034,25 +4034,15 @@ fn runtime_agent_shell_logout_uses_attached_auth_store() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let root = temp_root("runtime-agent-logout");
-    let secret_file = root.join("openai-key.txt");
-    fs::write(&secret_file, "sk-runtime-secret").unwrap();
-    service.set_auth_store(AuthStore::new(crate::auth::AuthPaths::under_config_root(
-        &root,
-    )));
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    auth_store
+        .login_provider_api_key_with_selected_store("openai", "work", "sk-runtime-secret", Some("file"))
+        .unwrap();
+    service.set_auth_store(auth_store);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let login = service
-        .execute_terminal_command(
-            &primary,
-            &format!(
-                "auth-login --api-key --credential-store file --api-key-file {} --profile work",
-                secret_file.display()
-            ),
-        )
-        .unwrap();
-    assert!(login.contains("authenticated=true"), "{login}");
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-logout","method":"agent/shell/command","params":{"idempotency_key":"agent-logout","input":"/logout"}}"#,

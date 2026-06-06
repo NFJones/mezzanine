@@ -4279,7 +4279,7 @@ fn readline_prompt_client_presentation_styles_agent_prompt_by_display_width() {
 fn prompt_overlay_presentation_places_cursor_on_prompt_row() {
     let mut prompt =
         crate::readline::ReadlinePrompt::new(crate::readline::ReadlinePromptKind::Command);
-    prompt.buffer.insert_text("auth-login");
+    prompt.buffer.insert_text("auth-status");
 
     let presentation = compose_prompt_overlay_presentation(
         &["pane".to_string(), "old".to_string()],
@@ -4295,9 +4295,9 @@ fn prompt_overlay_presentation_places_cursor_on_prompt_row() {
             .iter()
             .all(|line| line.chars().count() == 24)
     );
-    assert_eq!(presentation.lines[2], "▐ :auth-login           ");
+    assert_eq!(presentation.lines[2], "▐ :auth-status          ");
     assert_eq!(presentation.cursor_row, 2);
-    assert_eq!(presentation.cursor_column, 13);
+    assert_eq!(presentation.cursor_column, 14);
     assert!(presentation.cursor_visible);
 }
 
@@ -4320,17 +4320,17 @@ fn prompt_overlay_presentation_styles_command_shadow_hint() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ :mcp-add              ");
+    assert_eq!(presentation.lines[1], "▐ :mcp-status           ");
     assert!(
         presentation.line_style_spans[1]
             .iter()
-            .any(|span| span.start == 7 && span.length == 3 && span.rendition.dim)
+            .any(|span| span.start == 7 && span.length == 6 && span.rendition.dim)
     );
     assert!(
         presentation.line_style_spans[1]
             .iter()
             .any(|span| span.start == 7
-                && span.length == 3
+                && span.length == 6
                 && span.rendition.foreground.is_some_and(|foreground| {
                     test_color_is_grayscale(foreground)
                         && test_contrast_ratio(

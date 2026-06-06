@@ -4265,64 +4265,6 @@ fn runtime_terminal_command_rejects_agent_scoped_slash_duplicates() {
 }
 
 /// Verifies that command-prompt MCP mutation commands update the live runtime
-/// configuration layer and reload the runtime-owned MCP registry. MCP listing
-/// is handled by the agent `/list-mcp` command, so this test checks registry state
-/// directly instead of reintroducing a terminal `mcp-list` alias.
-#[tokio::test]
-async fn runtime_terminal_command_mcp_add_and_remove_update_runtime_registry() {
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
-        .unwrap();
-    let root = temp_root("runtime-terminal-mcp-add-remove");
-    let script_path = root.join("mcp-fixture.sh");
-    fs::write(&script_path, runtime_mcp_fixture_script(false)).unwrap();
-
-    let add = service
-        .execute_terminal_command_async(
-            &primary,
-            &format!(
-                "mcp-add fixture --command /bin/sh --arg {}",
-                script_path.display()
-            ),
-        )
-        .await
-        .unwrap();
-
-    assert!(add.contains("server=fixture"), "{add}");
-    assert!(add.contains("transport=stdio"), "{add}");
-    assert!(add.contains("changed=true"), "{add}");
-    assert!(add.contains("source=runtime-config"), "{add}");
-    assert!(add.contains("status=available"), "{add}");
-    assert!(add.contains("tools=1"), "{add}");
-    assert_eq!(
-        service.mcp_registry().prompt_summary().available_tools[0].tool_name,
-        "echo"
-    );
-
-    assert_eq!(service.mcp_registry().list_servers().len(), 1);
-    assert_eq!(
-        service.mcp_registry().prompt_summary().available_tools[0].tool_name,
-        "echo"
-    );
-
-    let remove = service
-        .execute_terminal_command_async(&primary, "mcp-remove fixture")
-        .await
-        .unwrap();
-
-    assert!(remove.contains("server=fixture"), "{remove}");
-    assert!(remove.contains("removed=true"), "{remove}");
-    assert!(remove.contains("changed=true"), "{remove}");
-    assert!(
-        service.mcp_registry().list_servers().is_empty(),
-        "{:?}",
-        service.mcp_registry().list_servers()
-    );
-    assert!(service.mcp_registry().list_servers().is_empty());
-    let _ = fs::remove_dir_all(root);
-}
-
 /// Verifies that live provider information refresh is an explicit terminal
 /// command and that the result is cached for later model-list displays.
 ///
@@ -4406,30 +4348,30 @@ async fn runtime_terminal_refresh_provider_info_async_command_refreshes_provider
     assert!(service.provider_model_catalog_cache.contains_key("openai"));
 }
 
-/// Verifies that user-visible MCP retry surfaces clear session blacklisting,
-/// drop stale transport state, and rediscover the configured server. This is
-/// the recovery path promised by the MCP prompt restriction: blacklisted
-/// servers stay hidden from the model until the user explicitly retries them.
+/// Verifies that the synchronous MCP retry helper keeps async-only transports
+/// blacklisted instead of exposing stale tools. Blacklisted servers stay hidden
+/// from the model until an integration workflow with async runtime support can
+/// rediscover them.
 #[tokio::test]
-async fn runtime_mcp_retry_command_and_control_rediscover_session_blacklisted_server() {
+async fn runtime_mcp_retry_control_keeps_async_only_blacklisted_server_hidden() {
     let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
-        .unwrap();
     let root = temp_root("runtime-mcp-retry");
     let script_path = root.join("mcp-fixture.sh");
     fs::write(&script_path, runtime_mcp_fixture_script(false)).unwrap();
-
     service
-        .execute_terminal_command_async(
-            &primary,
-            &format!(
-                "mcp-add fixture --command /bin/sh --arg {}",
-                script_path.display()
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [{}]\napproval = \"allow\"\ntool_timeout_ms = 1000\n",
+                toml_string(script_path.to_string_lossy().as_ref())
             ),
-        )
-        .await
+        }])
         .unwrap();
+    service.apply_runtime_config_layers_async().await.unwrap();
     service
         .mcp_registry_mut()
         .blacklist_for_session("fixture", "failed handshake")
@@ -4441,38 +4383,7 @@ async fn runtime_mcp_retry_command_and_control_rediscover_session_blacklisted_se
             .available_tools
             .is_empty()
     );
-
-    let command_retry = service
-        .execute_terminal_command_async(&primary, "mcp-retry fixture")
-        .await
-        .unwrap();
-
-    assert!(command_retry.contains("server=fixture"), "{command_retry}");
-    assert!(
-        command_retry.contains("previous_status=blacklisted"),
-        "{command_retry}"
-    );
-    assert!(
-        command_retry.contains("status=available"),
-        "{command_retry}"
-    );
-    assert!(
-        command_retry.contains("rediscovered=true"),
-        "{command_retry}"
-    );
-    assert_eq!(
-        service.mcp_registry().prompt_summary().available_tools[0].tool_name,
-        "echo"
-    );
-
-    service
-        .mcp_registry_mut()
-        .blacklist_for_session("fixture", "tool call failed")
-        .unwrap();
-    let control_retry = service
-        .retry_runtime_mcp_server_async("fixture")
-        .await
-        .unwrap();
+    let control_retry = service.retry_runtime_mcp_server("fixture").unwrap();
 
     assert!(
         control_retry.previous_status_name() == "blacklisted",
@@ -4480,13 +4391,20 @@ async fn runtime_mcp_retry_command_and_control_rediscover_session_blacklisted_se
     );
     assert_eq!(
         control_retry.status_name(),
-        "available",
+        "blacklisted",
         "{control_retry:?}"
     );
-    assert!(control_retry.rediscovered, "{control_retry:?}");
+    assert!(!control_retry.rediscovered, "{control_retry:?}");
+    assert!(
+        control_retry
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("requires async runtime discovery")),
+        "{control_retry:?}"
+    );
     assert_eq!(
         service.mcp_registry().list_servers()[0].status,
-        crate::mcp::McpServerStatus::Available
+        crate::mcp::McpServerStatus::Blacklisted
     );
     let _ = fs::remove_dir_all(root);
 }

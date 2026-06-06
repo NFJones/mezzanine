@@ -790,12 +790,12 @@ fn readline_command_prompt_selects_command_arguments() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Command);
 
     assert_eq!(
-        prompt_outcome(&mut prompt, b"mcp-add st"),
+        prompt_outcome(&mut prompt, b"set-theme to"),
         ReadlineOutcome::Edited
     );
     assert_eq!(prompt_outcome(&mut prompt, b"\t"), ReadlineOutcome::Edited);
 
-    assert_eq!(prompt.buffer.line(), "mcp-add stdio ");
+    assert_eq!(prompt.buffer.line(), "set-theme tokyo_night ");
 }
 
 /// Verifies that agent prompts use the same selector path for slash commands
@@ -833,18 +833,18 @@ fn readline_command_prompt_renders_shadow_hints_without_editing() {
     let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Command);
 
     assert_eq!(
-        prompt_outcome(&mut prompt, b"mcp-add "),
+        prompt_outcome(&mut prompt, b"save-layout "),
         ReadlineOutcome::Edited
     );
 
-    assert_eq!(prompt.buffer.line(), "mcp-add ");
+    assert_eq!(prompt.buffer.line(), "save-layout ");
     assert_eq!(
         prompt.render_with_shadow_hint(),
-        ":mcp-add  <name> --transport <stdio|streamable-http>"
+        ":save-layout  [--name name]"
     );
     assert_eq!(
         prompt.rendered_shadow_hint_columns(),
-        Some((":mcp-add ".len(), 43))
+        Some((":save-layout ".len(), 14))
     );
 }
 

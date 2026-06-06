@@ -129,18 +129,6 @@ pub(super) fn credential_store_kind_name(kind: CredentialStoreKind) -> &'static 
     }
 }
 
-/// Runs the repeated flag values operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn repeated_flag_values(args: &[String], flag: &str) -> Vec<String> {
-    args.windows(2)
-        .filter(|window| window[0] == flag)
-        .map(|window| window[1].clone())
-        .collect()
-}
-
 /// Runs the validate command identifier operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -5,13 +5,11 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuthMethod, AuthStatus, AuthStore, CommandInvocation, ConfigFormat, ConfigMutation,
-    ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
-    KeyValueLine, MezError, Result, credential_store_kind_name, flag_value, fs,
-    persist_config_mutation, persist_config_text, plan_config_mutation, positional_args,
-    repeated_flag_values, validate_command_identifier,
+    AuthStatus, CommandInvocation, ConfigFormat, ConfigMutation, ConfigMutationOperation,
+    ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, KeyValueLine, MezError,
+    Result, credential_store_kind_name, fs, persist_config_mutation, persist_config_text,
+    plan_config_mutation, positional_args, validate_command_identifier,
 };
-use crate::auth::selected_auth_method_from_flags;
 use crate::config::parse_config_json_value;
 use crate::terminal::{
     UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme,
@@ -19,71 +17,7 @@ use crate::terminal::{
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-// Store-backed auth, MCP, config, and project-trust helpers.
-
-/// Runs the persist mcp add operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn persist_mcp_add(
-    paths: &ConfigPaths,
-    invocation: &CommandInvocation,
-) -> Result<(String, &'static str, String, Vec<ConfigMutationPlan>)> {
-    let server_id = mcp_server_id(invocation, "mcp-add requires a server id")?;
-    let (transport, target) = mcp_transport_target(invocation)?;
-    let args = repeated_flag_values(&invocation.args, "--arg");
-    let mut plans = Vec::new();
-    plans.push(persist_command_config_mutation(
-        paths,
-        config_set_bool(format!("mcp_servers.{server_id}.enabled"), true),
-    )?);
-    match transport {
-        "stdio" => {
-            plans.push(persist_command_config_mutation(
-                paths,
-                config_set_string(format!("mcp_servers.{server_id}.command"), target),
-            )?);
-            plans.push(persist_command_config_mutation(
-                paths,
-                config_set_string_array(format!("mcp_servers.{server_id}.args"), &args),
-            )?);
-            plans.push(persist_command_config_mutation(
-                paths,
-                config_unset(format!("mcp_servers.{server_id}.url")),
-            )?);
-        }
-        "streamable-http" => {
-            plans.push(persist_command_config_mutation(
-                paths,
-                config_set_string(format!("mcp_servers.{server_id}.url"), target),
-            )?);
-            plans.push(persist_command_config_mutation(
-                paths,
-                config_unset(format!("mcp_servers.{server_id}.command")),
-            )?);
-            plans.push(persist_command_config_mutation(
-                paths,
-                config_set_string_array(format!("mcp_servers.{server_id}.args"), &[]),
-            )?);
-        }
-        _ => unreachable!("MCP transport target validation returned a known transport"),
-    }
-    Ok((server_id.to_string(), transport, target.to_string(), plans))
-}
-
-/// Runs the persist mcp remove operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn persist_mcp_remove(
-    paths: &ConfigPaths,
-    server_id: &str,
-) -> Result<Vec<ConfigMutationPlan>> {
-    persist_command_config_mutation(paths, config_unset(format!("mcp_servers.{server_id}")))
-        .map(|plan| vec![plan])
-}
+// Store-backed auth, config, and project-trust helpers.
 
 /// Runs the persist command config mutation operation for this subsystem.
 ///
@@ -281,33 +215,6 @@ pub(super) fn config_set_string(
     }
 }
 
-/// Runs the config set bool operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn config_set_bool(path: impl Into<String>, value: bool) -> ConfigMutation {
-    ConfigMutation {
-        path: path.into(),
-        operation: ConfigMutationOperation::Set(ConfigMutationValue::Boolean(value)),
-    }
-}
-
-/// Runs the config set string array operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn config_set_string_array(
-    path: impl Into<String>,
-    values: &[String],
-) -> ConfigMutation {
-    ConfigMutation {
-        path: path.into(),
-        operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(values.to_vec())),
-    }
-}
-
 /// Runs the config unset operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -318,24 +225,6 @@ pub(super) fn config_unset(path: impl Into<String>) -> ConfigMutation {
         path: path.into(),
         operation: ConfigMutationOperation::Unset,
     }
-}
-
-/// Runs the mutation plans changed operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mutation_plans_changed(plans: &[ConfigMutationPlan]) -> bool {
-    plans.iter().any(|plan| plan.changed)
-}
-
-/// Runs the mutation plans reload required operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mutation_plans_reload_required(plans: &[ConfigMutationPlan]) -> bool {
-    plans.iter().any(|plan| plan.reload_required)
 }
 
 /// Runs the mcp server id operation for this subsystem.
@@ -357,99 +246,6 @@ pub(super) fn mcp_server_id<'a>(
 
 /// Runs the mcp transport target operation for this subsystem.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_transport_target(invocation: &CommandInvocation) -> Result<(&'static str, &str)> {
-    let command = flag_value(&invocation.args, "--command");
-    let url = flag_value(&invocation.args, "--url");
-    if command.is_some() == url.is_some() {
-        return Err(MezError::invalid_args(
-            "mcp-add requires exactly one of --command or --url",
-        ));
-    }
-    Ok(match (command, url) {
-        (Some(command), None) => ("stdio", command),
-        (None, Some(url)) => ("streamable-http", url),
-        _ => unreachable!("validated exactly one transport target"),
-    })
-}
-
-/// Runs the execute auth login operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn execute_auth_login(
-    auth_store: &AuthStore,
-    invocation: &CommandInvocation,
-) -> Result<String> {
-    let method = auth_login_method(&invocation.args)?;
-    let provider = flag_value(&invocation.args, "--provider").unwrap_or("openai");
-    if method != AuthMethod::ApiKey {
-        return Ok(format!(
-            "provider={provider} method={} authenticated=false action=interactive-required reason=run-mez-auth-login source=auth-store",
-            auth_method_display_name(method)
-        ));
-    }
-
-    let selected_profile = flag_value(&invocation.args, "--profile").unwrap_or("default");
-    let Some(api_key_path) = flag_value(&invocation.args, "--api-key-file") else {
-        let plan = auth_store.plan_provider_flow(provider, AuthMethod::ApiKey);
-        return Ok(format!(
-            "provider={} method=api-key credential_target={} action=prompt-required source=auth-store",
-            plan.provider, plan.credential_target
-        ));
-    };
-    let api_key = fs::read_to_string(api_key_path)?;
-    let api_key = api_key.trim();
-
-    let metadata = auth_store.login_provider_api_key_with_selected_store(
-        provider,
-        selected_profile,
-        api_key,
-        flag_value(&invocation.args, "--credential-store"),
-    )?;
-
-    let credential_store = metadata
-        .credential_store_ref
-        .as_deref()
-        .and_then(|reference| reference.split_once(':').map(|(prefix, _)| prefix))
-        .unwrap_or("unknown");
-    Ok(format!(
-        "provider={} method=api-key authenticated=true selected_model_profile={} credential_store={} source=auth-store",
-        metadata.provider, metadata.selected_model_profile, credential_store
-    ))
-}
-
-/// Runs the auth login method operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn auth_login_method(args: &[String]) -> Result<AuthMethod> {
-    let api_key = args.iter().any(|arg| arg == "--api-key");
-    let browser = args.iter().any(|arg| arg == "--browser");
-    let device_code = args
-        .iter()
-        .any(|arg| arg == "--device-code" || arg == "--device-auth");
-    selected_auth_method_from_flags(
-        api_key,
-        browser,
-        device_code,
-        "auth-login accepts only one authentication method flag",
-    )
-}
-
-/// Runs the auth method display name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn auth_method_display_name(method: AuthMethod) -> &'static str {
-    method.as_str()
-}
-
 /// Runs the auth status store display operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::agent::{PaneReadinessOverrideStore, PaneReadinessState};
 use crate::audit::{AuditActor, AuditLog, AuditRecord};
-use crate::auth::{AuthMethod, AuthStatus, AuthStore, CredentialStoreKind};
+use crate::auth::{AuthStatus, AuthStore, CredentialStoreKind};
 use crate::config::{
     ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
     ConfigPaths, ConfigScope, persist_config_mutation, persist_config_text, plan_config_mutation,
@@ -107,7 +107,7 @@ mod types;
 
 pub use dispatch::{
     execute_auth_command, execute_command, execute_command_sequence, execute_config_store_command,
-    execute_mark_pane_ready_command, execute_mcp_config_command,
+    execute_mark_pane_ready_command,
 };
 pub(crate) use display::{
     bind_key_args, binding_config_key, key_chord_notation, new_window_name,
@@ -121,33 +121,28 @@ pub use types::{
 };
 
 use display::{
-    attach_session_display, auth_login_plan_display, auth_status_display, capture_pane_display,
-    choose_buffer_display, choose_client_display, choose_group_display, choose_observer_display,
-    choose_window_display, clear_history_display, command_help_display, copy_mode_display,
-    copy_selection_display, create_buffer_display, export_history_display, list_baseline_commands,
-    list_buffers_display, list_clients, list_current_session, list_default_key_bindings,
-    list_default_themes, list_groups, list_observers, list_panes, list_windows,
-    load_layout_selector, mcp_add_plan_display, mcp_login_plan_display, mcp_logout_plan_display,
-    mcp_remove_plan_display, mcp_retry_plan_display, mcp_status_plan_display,
-    mutated_pane_command_outcome, parse_config_command_value, paste_buffer_display,
-    paste_clipboard_display, pipe_pane_display, save_buffer_display, save_layout_name,
-    search_history_display, set_option_args, set_theme_arg, show_default_options,
+    attach_session_display, auth_status_display, capture_pane_display, choose_buffer_display,
+    choose_client_display, choose_group_display, choose_observer_display, choose_window_display,
+    clear_history_display, command_help_display, copy_mode_display, copy_selection_display,
+    create_buffer_display, export_history_display, list_baseline_commands, list_buffers_display,
+    list_clients, list_current_session, list_default_key_bindings, list_default_themes,
+    list_groups, list_observers, list_panes, list_windows, load_layout_selector,
+    mcp_status_plan_display, mutated_pane_command_outcome, parse_config_command_value,
+    paste_buffer_display, paste_clipboard_display, pipe_pane_display, save_buffer_display,
+    save_layout_name, search_history_display, set_option_args, set_theme_arg, show_default_options,
     show_messages_display, show_metrics_display,
 };
 use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,
-    mark_pane_ready_warning_display, pane_readiness_state_name, repeated_flag_values,
-    validate_command_identifier,
+    mark_pane_ready_warning_display, pane_readiness_state_name, validate_command_identifier,
 };
 use shell::{
     QuoteState, explicit_shell_command_flag, flag_value, positional_args,
     positional_args_before_double_dash, shell_command_after_double_dash, shell_command_from_words,
 };
 use stores::{
-    auth_status_store_display, config_set_string, config_unset, execute_auth_login, mcp_server_id,
-    mcp_status_store_display, mcp_transport_target, mutation_plans_changed,
-    mutation_plans_reload_required, persist_command_config_mutation, persist_command_theme_config,
-    persist_mcp_add, persist_mcp_remove,
+    auth_status_store_display, config_set_string, config_unset, mcp_server_id,
+    mcp_status_store_display, persist_command_config_mutation, persist_command_theme_config,
 };
 
 /// Exposes the tests module boundary.

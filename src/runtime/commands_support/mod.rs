@@ -12,7 +12,7 @@ use super::{
     AuditRecord, CommandInvocation, CommandOutcome, CommandRule, CommandRuleScope, ConfigFormat,
     ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue, ConfigPaths,
     ConfigScope, CopyMode, DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeferredConfigFileWrite,
-    EventAudience, EventKind, HookExecutionStatus, KeyChord, KeyCode, McpServerStatus, MezError,
+    EventAudience, EventKind, HookExecutionStatus, KeyChord, KeyCode, MezError,
     ObserverDecisionState, PaneReadinessState, PasteBuffer, PathBuf, PermissionAuthorityChange,
     PermissionPolicy, PermissionPreset, Result, RuleDecision, RuleMatch, RuntimeLifecycleState,
     RuntimeSessionService, SearchDirection, Session, TerminalScreen, UiThemeDefinition, Value,
@@ -679,7 +679,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 ),
             }))
         }
-        "auth-login" | "auth-status" | "mcp-login" | "mcp-logout" | "mcp-status" => {
+        "auth-status" | "mcp-status" => {
             let outcome = {
                 let Some(auth_store) = service.auth_store() else {
                     return Ok(None);
@@ -689,18 +689,6 @@ pub(super) fn execute_runtime_live_terminal_command(
             runtime_append_auth_command_audit(service, invocation, &outcome)?;
             Ok(Some(outcome))
         }
-        "mcp-add" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_add_command(service, invocation)?,
-        })),
-        "mcp-remove" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_remove_command(service, invocation)?,
-        })),
-        "mcp-retry" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_retry_command(service, invocation)?,
-        })),
         "pipe-pane" => {
             let body = runtime_pipe_pane_command(service, invocation)?;
             Ok(Some(CommandOutcome::Display {
@@ -1625,18 +1613,6 @@ pub(super) async fn execute_runtime_live_terminal_command_async(
     invocation: &CommandInvocation,
 ) -> Result<Option<CommandOutcome>> {
     match invocation.name.as_str() {
-        "mcp-add" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_add_command_async(service, invocation).await?,
-        })),
-        "mcp-remove" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_remove_command_async(service, invocation).await?,
-        })),
-        "mcp-retry" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_retry_command_async(service, invocation).await?,
-        })),
         "refresh-provider-info" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_refresh_provider_info_command_async(service, invocation).await?,
@@ -4237,24 +4213,7 @@ pub(super) fn runtime_append_auth_command_audit(
     let CommandOutcome::Display { body, .. } = outcome else {
         return Ok(());
     };
-    let actor = AuditActor {
-        kind: "client".to_string(),
-        id: "primary-command".to_string(),
-    };
-    let record = match invocation.name.as_str() {
-        "auth-login" if body.contains("logged_in=true") || body.contains("authenticated=true") => {
-            AuditRecord::auth_change(
-                service.session.id.to_string(),
-                actor,
-                "openai",
-                "default",
-                "login",
-                "succeeded",
-            )
-        }
-        _ => return Ok(()),
-    };
-    let _ = audit_log.append(record)?;
+    let _ = (audit_log, body, invocation);
     Ok(())
 }
 

@@ -7,11 +7,9 @@
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
     KeyValueLine, LayoutLoadSelector, MezError, Result, Session, baseline_commands,
-    explicit_shell_command_flag, flag_value, mcp_server_id, mcp_transport_target, positional_args,
-    positional_args_before_double_dash, repeated_flag_values, shell_command_after_double_dash,
-    shell_command_from_words,
+    explicit_shell_command_flag, flag_value, mcp_server_id, positional_args,
+    positional_args_before_double_dash, shell_command_after_double_dash, shell_command_from_words,
 };
-use crate::auth::selected_auth_method_from_flags;
 
 // Command display helpers and state renderers.
 
@@ -535,16 +533,9 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 /// Returns the help category for one terminal command.
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
-        "agent-shell"
-        | "auth-login"
-        | "auth-status"
-        | "mcp-add"
-        | "mcp-login"
-        | "mcp-logout"
-        | "mcp-remove"
-        | "mcp-status"
-        | "mcp-retry"
-        | "refresh-provider-info" => "agent and integrations",
+        "agent-shell" | "auth-status" | "mcp-status" | "refresh-provider-info" => {
+            "agent and integrations"
+        }
         "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
         | "unbind-key" | "list-themes" => "configuration",
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
@@ -568,7 +559,6 @@ fn terminal_command_description(name: &str) -> &'static str {
         "agent-shell" => "toggle the pane-local agent shell.",
         "approve-observer" => "approve a pending observer.",
         "attach-session" => "attach to an existing session.",
-        "auth-login" => "start provider authentication.",
         "auth-status" => "show non-secret auth status.",
         "bind-key" => "add or replace a live key binding.",
         "break-pane" => "move a pane into a new window.",
@@ -603,11 +593,6 @@ fn terminal_command_description(name: &str) -> &'static str {
         "list-themes" => "show built-in and configured UI themes.",
         "list-windows" => "show window identities, names, active state, and sizes.",
         "mark-pane-ready" => "temporarily mark a pane as ready after risk acknowledgement.",
-        "mcp-add" => "add an MCP server.",
-        "mcp-login" => "authenticate an MCP server.",
-        "mcp-logout" => "remove MCP server authentication.",
-        "mcp-remove" => "remove an MCP server.",
-        "mcp-retry" => "retry an unavailable MCP server.",
         "mcp-status" => "show non-secret MCP server auth status.",
         "new-group" => "create a window group with one landing window.",
         "new-window" => "create a window with one pane.",
@@ -1348,93 +1333,6 @@ pub(super) fn auth_status_display() -> String {
         .finish()
 }
 
-/// Runs the auth login plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn auth_login_plan_display(invocation: &CommandInvocation) -> String {
-    let method = selected_auth_method_from_flags(
-        invocation.args.iter().any(|arg| arg == "--api-key"),
-        invocation.args.iter().any(|arg| arg == "--browser"),
-        invocation
-            .args
-            .iter()
-            .any(|arg| arg == "--device-code" || arg == "--device-auth"),
-        "auth-login accepts only one authentication method flag",
-    )
-    .map(|method| method.as_str())
-    .unwrap_or("browser");
-    KeyValueLine::spaced()
-        .push("provider", "openai")
-        .push("method", method)
-        .push("action", "plan-only")
-        .push("reason", "auth-store-not-connected")
-        .finish()
-}
-
-/// Runs the mcp add plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_add_plan_display(invocation: &CommandInvocation) -> Result<String> {
-    let server_id = mcp_server_id(invocation, "mcp-add requires a server id")?;
-    let args = repeated_flag_values(&invocation.args, "--arg");
-    let (transport, target) = mcp_transport_target(invocation)?;
-    Ok(KeyValueLine::colon_separated()
-        .push("server", server_id)
-        .push("transport", transport)
-        .push("target", target)
-        .push("args", args.len())
-        .push("changed", false)
-        .push("reason", "live-config-control-unavailable")
-        .finish())
-}
-
-/// Runs the mcp remove plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_remove_plan_display(invocation: &CommandInvocation) -> Result<String> {
-    let server_id = mcp_server_id(invocation, "mcp-remove requires a server id")?;
-    Ok(KeyValueLine::colon_separated()
-        .push("server", server_id)
-        .push("removed", false)
-        .push("reason", "live-config-control-unavailable")
-        .finish())
-}
-
-/// Runs the mcp login plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_login_plan_display(invocation: &CommandInvocation) -> Result<String> {
-    let server_id = mcp_server_id(invocation, "mcp-login requires a server id")?;
-    Ok(KeyValueLine::colon_separated()
-        .push("server", server_id)
-        .push("authenticated", false)
-        .push("action", "interactive-required")
-        .push("reason", "run-mez-mcp-login")
-        .finish())
-}
-
-/// Runs the mcp logout plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_logout_plan_display(invocation: &CommandInvocation) -> Result<String> {
-    let server_id = mcp_server_id(invocation, "mcp-logout requires a server id")?;
-    Ok(KeyValueLine::colon_separated()
-        .push("server", server_id)
-        .push("logged_out", false)
-        .push("reason", "auth-store-unavailable")
-        .finish())
-}
-
 /// Runs the mcp status plan display operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1448,18 +1346,6 @@ pub(super) fn mcp_status_plan_display(invocation: &CommandInvocation) -> Result<
         .push("state", "unknown")
         .push("reason", "auth-store-unavailable")
         .finish())
-}
-
-/// Runs the mcp retry plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_retry_plan_display(invocation: &CommandInvocation) -> Result<String> {
-    let server_id = mcp_server_id(invocation, "mcp-retry requires a server id")?;
-    Ok(format!(
-        "server={server_id}:retried=false:reason=runtime-mcp-unavailable"
-    ))
 }
 
 /// Runs the client role name operation for this subsystem.

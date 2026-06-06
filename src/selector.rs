@@ -787,26 +787,6 @@ fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
                 "permissions",
             ]));
         }
-        "auth-login" => {
-            candidates.extend(flag_candidates(&[
-                "--browser",
-                "--device-code",
-                "--api-key",
-                "--api-key-file",
-                "--model-profile",
-            ]));
-            candidates.extend(value_candidates(&["default"]));
-        }
-        "mcp-add" | "mcp-remove" | "mcp-retry" => {
-            candidates.extend(flag_candidates(&[
-                "--transport",
-                "--command",
-                "--url",
-                "--env",
-                "--disabled",
-            ]));
-            candidates.extend(value_candidates(&["stdio", "streamable-http"]));
-        }
         "save-layout" => {
             candidates.extend(flag_candidates(&["--name"]));
         }
@@ -923,9 +903,7 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "set-theme" => Some(" <theme>"),
         "source-file" => Some(" <path>"),
         "agent-shell" => Some(" <show|hide|toggle>"),
-        "auth-login" => Some(" [--provider <openai|deepseek>] [--browser|--device-code|--api-key]"),
-        "mcp-add" => Some(" <name> --transport <stdio|streamable-http>"),
-        "mcp-remove" | "mcp-retry" => Some(" <name>"),
+        "mcp-status" => Some(" <name>"),
         "save-layout" => Some(" [--name name]"),
         "load-layout" => Some(" [--name name]"),
         "capture-pane" => Some(" [-t target-pane] [--start n] [--end n]"),
@@ -1080,7 +1058,6 @@ fn command_accepts_path_argument(surface: SelectorSurface, command: &str) -> boo
                 | "new-window"
                 | "new-group"
                 | "split-window"
-                | "auth-login"
                 | "save-layout"
                 | "load-layout"
         ),
@@ -1403,12 +1380,6 @@ mod tests {
     /// implementation detail.
     #[test]
     fn selector_plans_mezzanine_command_argument_candidates() {
-        let plan = plan_selector(SelectorSurface::MezzanineCommand, "mcp-add st", 10).unwrap();
-
-        assert_eq!(plan.replacement_start, "mcp-add ".len());
-        assert_eq!(plan.candidates[0].value, "stdio");
-        assert_eq!(plan.candidates[0].kind, SelectorCandidateKind::Value);
-
         let theme_plan =
             plan_selector(SelectorSurface::MezzanineCommand, "set-theme to", 12).unwrap();
         assert_eq!(theme_plan.replacement_start, "set-theme ".len());
@@ -1710,12 +1681,12 @@ mod tests {
         let candidate = plan
             .candidates
             .iter()
-            .find(|candidate| candidate.value == "mcp-add")
+            .find(|candidate| candidate.value == "mcp-status")
             .unwrap();
 
         let (line, cursor) = apply_selector_candidate(line, &plan, candidate);
 
-        assert_eq!(line, "list-windows; mcp-add ");
+        assert_eq!(line, "list-windows; mcp-status ");
         assert_eq!(cursor, line.len());
     }
 
@@ -1781,14 +1752,14 @@ mod tests {
     fn active_selector_keeps_argument_candidate_selection_active() {
         let selector = ActiveSelector::start(
             SelectorSurface::MezzanineCommand,
-            "mcp-add st",
-            "mcp-add st".len(),
+            "set-theme to",
+            "set-theme to".len(),
             false,
         )
         .unwrap();
         let (line, cursor) = selector.selected_line().unwrap();
 
-        assert_eq!(line, "mcp-add stdio ");
+        assert_eq!(line, "set-theme tokyo_night ");
         assert!(!selector.should_refresh_from_selected_directory(&line, cursor));
     }
 
@@ -1809,22 +1780,19 @@ mod tests {
     fn selector_shadow_hint_hides_placeholder_after_param_input() {
         let placeholder = shadow_hint(
             SelectorSurface::MezzanineCommand,
-            "mcp-add ",
-            "mcp-add ".len(),
+            "save-layout ",
+            "save-layout ".len(),
         )
         .unwrap();
         let value_suffix = shadow_hint(
             SelectorSurface::MezzanineCommand,
-            "mcp-add st",
-            "mcp-add st".len(),
+            "set-theme to",
+            "set-theme to".len(),
         )
         .unwrap();
 
-        assert_eq!(
-            placeholder.text,
-            " <name> --transport <stdio|streamable-http>"
-        );
-        assert_eq!(value_suffix.text, "dio");
+        assert_eq!(placeholder.text, " [--name name]");
+        assert_eq!(value_suffix.text, "kyo_night");
 
         let theme_placeholder = shadow_hint(
             SelectorSurface::MezzanineCommand,
