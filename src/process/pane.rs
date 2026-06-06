@@ -141,6 +141,17 @@ impl PaneProcess {
         self.primary_pid
     }
 
+    /// Returns the process-group leader recorded when the pane process was
+    /// spawned.
+    ///
+    /// Portable PTY backends can expose a process-group leader that differs
+    /// from the child pid returned as `primary_pid`. Foreground-shell checks use
+    /// this value to compare PTY foreground process groups against the shell's
+    /// process group instead of assuming pid and pgid are identical.
+    pub fn process_group_leader(&self) -> Option<i32> {
+        self.process_group_leader
+    }
+
     /// Returns the live process name when the host exposes it.
     ///
     /// On Linux this reads `/proc/<pid>/comm`, so the value tracks the current

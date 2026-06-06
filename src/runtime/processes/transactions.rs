@@ -734,8 +734,13 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<bool> {
         let primary_pid = self.pane_processes.primary_pid(pane_id)?;
-        let foreground_pid = self.pane_processes.foreground_process_group_id(pane_id)?;
-        Some(foreground_pid == primary_pid)
+        let foreground_group = self.pane_processes.foreground_process_group_id(pane_id)?;
+        let primary_process_group = self
+            .pane_processes
+            .process_group_leader(pane_id)
+            .and_then(|leader| u32::try_from(leader).ok())
+            .unwrap_or(primary_pid);
+        Some(foreground_group == primary_pid || foreground_group == primary_process_group)
     }
 
     /// Runs the observe agent shell transaction events operation for this subsystem.

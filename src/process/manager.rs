@@ -109,6 +109,40 @@ impl PaneProcessManager {
         self.processes.get(pane_id).map(PaneProcess::primary_pid)
     }
 
+    /// Returns the recorded process-group leader for a tracked pane.
+    ///
+    /// This is best-effort metadata from the PTY backend. It is absent when the
+    /// backend cannot expose the pane shell process group.
+    pub fn process_group_leader(&self, pane_id: &str) -> Option<i32> {
+        self.processes
+            .get(pane_id)
+            .and_then(PaneProcess::process_group_leader)
+    }
+
+    /// Overrides the recorded process-group leader for tests.
+    ///
+    /// This lets runtime tests model hosts where the primary shell pid and PTY
+    /// foreground process group differ without depending on platform-specific
+    /// job-control timing.
+    #[cfg(test)]
+    pub fn set_process_group_leader_for_test(&mut self, pane_id: &str, leader: Option<i32>) {
+        if let Some(process) = self.processes.get_mut(pane_id) {
+            process.process_group_leader = leader;
+        }
+    }
+
+    /// Overrides the recorded primary pid for tests.
+    ///
+    /// This lets runtime tests model PTY backends where the pane shell process
+    /// group differs from the primary pid while keeping the live process handle
+    /// intact for foreground process-group queries.
+    #[cfg(test)]
+    pub fn set_primary_pid_for_test(&mut self, pane_id: &str, primary_pid: u32) {
+        if let Some(process) = self.processes.get_mut(pane_id) {
+            process.primary_pid = primary_pid;
+        }
+    }
+
     /// Returns the live primary process name for a pane.
     ///
     /// The value is sourced from the tracked process handle and is `None` when
