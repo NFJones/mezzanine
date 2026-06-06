@@ -271,7 +271,9 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
 /// daemon has a different session id after restart. Scoping `--latest` to the
 /// current session id made the command unable to find persisted snapshots from
 /// previous daemon sessions, so this regression uses two runtime services that
-/// share one repository root.
+/// share one repository root. Resume also keeps the receiving runtime's session
+/// and primary client identity because it only recreates the saved topology and
+/// fresh pane shells rather than adopting snapshotted connection state.
 #[test]
 fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_sessions() {
     let root = temp_root("terminal-snapshot-latest-cross-session");
@@ -292,12 +294,20 @@ fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_session
     let resuming_primary = resuming_service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    let live_session_id = resuming_service.session.id.to_string();
 
     let resume = resuming_service
         .execute_terminal_command(&resuming_primary, "resume-session --latest")
         .unwrap();
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
-    assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
+    assert!(
+        resume.contains(&format!(
+            r#"\"primary_client_id\":\"{}\""#,
+            resuming_primary.as_str()
+        )),
+        "{resume}"
+    );
+    assert_eq!(resuming_service.session.id.to_string(), live_session_id);
 
     let _ = fs::remove_dir_all(root);
 }

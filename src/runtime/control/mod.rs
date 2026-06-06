@@ -13,9 +13,9 @@ use super::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigScope, ContextBlock,
     ContextSourceKind, ControlConnectionState, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
     DeferredConfigFileWrite, DeferredProjectConfigWrite, Envelope, EventKind, EventVisibility,
-    HookEvent, McpApprovalSetting, McpExternalCapability, McpServerConfig, McpServerKind,
-    McpServerState, McpServerStatus, McpToolEffects, McpToolState, MemoryRecord, MessageConnection,
-    MessageService, MessageServiceSnapshot, MezError, PaneCaptureSource, PaneId, PaneProcessStart,
+    HookEvent, McpApprovalSetting, McpExternalCapability, McpServerKind, McpServerStatus,
+    McpToolEffects, McpToolState, MemoryRecord, MessageConnection,
+    MessageServiceSnapshot, MezError, PaneCaptureSource, PaneId, PaneProcessStart,
     PaneReadinessOverrideStore, PaneReadinessState, PaneResizeUpdate, Path, PathBuf,
     ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
     RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
@@ -709,17 +709,18 @@ impl RuntimeSessionService {
         outcome: RuntimeSnapshotControlAsyncOutcome,
         connection: &mut ControlConnectionState,
     ) -> String {
+        let _ = connection;
         let result = match outcome {
             RuntimeSnapshotControlAsyncOutcome::Dispatch(result) => result,
             RuntimeSnapshotControlAsyncOutcome::Resume(result) => {
-                result.and_then(|(payload, restored)| {
+                result.and_then(|(payload, _restored)| {
                     self.require_snapshot_resume_hooks_allow(&payload)?;
                     let snapshot_id = runtime_snapshot_id_from_request(&work.request);
+                    let resume_plan = payload.resume_plan();
                     self.apply_runtime_snapshot_resume_for_connection(
                         snapshot_id.as_str(),
                         payload,
-                        restored,
-                        connection,
+                        resume_plan,
                         &work.caller_client_id,
                     )
                 })
@@ -2746,16 +2747,12 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_args("snapshot/resume requires snapshot_id"))?;
         let payload = snapshots.inspect_payload(&snapshot_id)?;
         self.require_snapshot_resume_hooks_allow(&payload)?;
-        let restored = snapshots.restore_session_from_payload(
-            &snapshot_id,
-            &payload,
-            self.session.shell.clone(),
-        )?;
+        let _ = connection;
+        let resume_plan = payload.resume_plan();
         self.apply_runtime_snapshot_resume_for_connection(
             &snapshot_id,
             payload,
-            restored,
-            connection,
+            resume_plan,
             caller_client_id,
         )
     }
@@ -2772,6 +2769,7 @@ impl RuntimeSessionService {
         connection: &mut ControlConnectionState,
         caller_client_id: &crate::ids::ClientId,
     ) -> Result<String> {
+        let _ = connection;
         let params = request
             .params
             .as_deref()
@@ -2782,14 +2780,11 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_args("snapshot/resume requires snapshot_id"))?;
         let payload = snapshots.inspect_payload_async(&snapshot_id).await?;
         self.require_snapshot_resume_hooks_allow(&payload)?;
-        let restored = snapshots
-            .restore_session_from_payload_async(&snapshot_id, &payload, self.session.shell.clone())
-            .await?;
+        let resume_plan = payload.resume_plan();
         self.apply_runtime_snapshot_resume_for_connection(
             &snapshot_id,
             payload,
-            restored,
-            connection,
+            resume_plan,
             caller_client_id,
         )
     }
@@ -2803,21 +2798,9 @@ impl RuntimeSessionService {
         &mut self,
         snapshot_id: &str,
         payload: crate::snapshot::SessionSnapshotPayload,
-        restored: crate::snapshot::SnapshotRestoreResult,
-        connection: &mut ControlConnectionState,
+        resume_plan: crate::snapshot::SnapshotResumePlan,
         caller_client_id: &crate::ids::ClientId,
     ) -> Result<String> {
-        let primary_name = self
-            .session
-            .clients()
-            .iter()
-            .find(|client| client.id == *caller_client_id)
-            .map(|client| client.name.clone())
-            .unwrap_or_else(|| "primary".to_string());
-        let crate::snapshot::SnapshotRestoreResult {
-            session,
-            resume_plan,
-        } = restored;
         let terminated_panes = self.terminate_all_runtime_pane_processes(true)?;
         self.stop_all_active_pane_pipes();
         self.active_copy_modes.clear();
@@ -2857,20 +2840,11 @@ impl RuntimeSessionService {
         self.pane_readiness_overrides = PaneReadinessOverrideStore::default();
         self.blocked_approvals = Default::default();
         self.session_approvals = Default::default();
-        self.message_service = payload
-            .message_state
-            .as_ref()
-            .map(MessageService::from_snapshot_state)
-            .transpose()?
-            .unwrap_or_default();
-        self.mcp_registry = runtime_mcp_registry_from_snapshot_metadata(&payload.mcp_servers);
-        self.mcp_transports.clear();
 
-        self.session = session;
+        self.session
+            .replace_layout_from_snapshot_payload(&payload)?;
         self.session.state = crate::session::SessionState::Running;
         let restored_at = current_unix_seconds();
-        self.created_at_unix_seconds = restored_at;
-        self.last_attach_at_unix_seconds = None;
         self.window_created_at_unix_seconds = self
             .session
             .windows()
@@ -2882,9 +2856,6 @@ impl RuntimeSessionService {
                 )
             })
             .collect();
-        let new_primary = self.session.attach_primary(primary_name, true)?;
-        self.last_attach_at_unix_seconds = self.session.last_attached_at_unix_seconds;
-        connection.rebind_caller_client(new_primary.clone());
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
         let restarted_panes = self.restart_restored_pane_processes(None)?.len();
         self.append_lifecycle_event(
@@ -2903,7 +2874,7 @@ impl RuntimeSessionService {
             runtime_string_array_json(&resume_plan.limitations),
             terminated_panes,
             restarted_panes,
-            json_escape(new_primary.as_str())
+            json_escape(caller_client_id.as_str())
         ))
     }
 
@@ -4567,136 +4538,6 @@ fn runtime_snapshot_mcp_approval_name(approval: McpApprovalSetting) -> &'static 
     }
 }
 
-/// Runs the runtime mcp registry from snapshot metadata operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_registry_from_snapshot_metadata(
-    servers: &[SnapshotMcpServerState],
-) -> crate::mcp::McpRegistry {
-    let mut registry = crate::mcp::McpRegistry::default();
-    registry.replace_with_states(
-        servers
-            .iter()
-            .map(runtime_mcp_server_state_from_snapshot_metadata)
-            .collect(),
-    );
-    registry
-}
-
-/// Runs the runtime mcp server state from snapshot metadata operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_server_state_from_snapshot_metadata(
-    server: &SnapshotMcpServerState,
-) -> McpServerState {
-    let mut config = match runtime_mcp_kind_from_snapshot_name(&server.kind) {
-        McpServerKind::Stdio => McpServerConfig::stdio(
-            server.id.clone(),
-            server.name.clone(),
-            "snapshot-restored-mcp-transport-unavailable",
-            Vec::new(),
-        ),
-        McpServerKind::Http => McpServerConfig::streamable_http(
-            server.id.clone(),
-            server.name.clone(),
-            "https://snapshot.invalid",
-        ),
-    };
-    config.enabled = server.enabled;
-    config.external_capability =
-        runtime_mcp_external_capability_from_snapshot(&server.external_capability);
-
-    let status = runtime_mcp_status_from_restored_snapshot(server);
-    let blacklist_reason = runtime_mcp_restore_reason(server);
-    let tools = server
-        .tools
-        .iter()
-        .map(|tool| McpToolState {
-            server_id: server.id.clone(),
-            name: tool.name.clone(),
-            available: false,
-            blacklisted: matches!(status, McpServerStatus::Blacklisted) || tool.blacklisted,
-            permission_required: tool.permission_required,
-            effects: runtime_mcp_effects_from_snapshot(&tool.effects),
-            approval: runtime_mcp_approval_from_snapshot_name(&tool.approval),
-            description: tool.description.clone(),
-            input_schema_json: tool.input_schema_json.clone(),
-        })
-        .collect();
-
-    McpServerState {
-        configured: config,
-        status,
-        last_checked_at_unix_seconds: server.last_checked_at_unix_seconds,
-        blacklist_reason,
-        tools,
-    }
-}
-
-/// Runs the runtime mcp status from restored snapshot operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_status_from_restored_snapshot(server: &SnapshotMcpServerState) -> McpServerStatus {
-    if !server.enabled {
-        return McpServerStatus::Configured;
-    }
-    match server.status.as_str() {
-        "blacklisted" => McpServerStatus::Blacklisted,
-        "failed" => McpServerStatus::Failed,
-        "unavailable" => McpServerStatus::Unavailable,
-        _ => McpServerStatus::Unavailable,
-    }
-}
-
-/// Runs the runtime mcp restore reason operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_restore_reason(server: &SnapshotMcpServerState) -> Option<String> {
-    if !server.enabled {
-        return server.blacklist_reason.clone();
-    }
-    server.blacklist_reason.clone().or_else(|| {
-        Some(format!(
-            "live MCP transport not restored from snapshot metadata (snapshot status: {})",
-            server.status
-        ))
-    })
-}
-
-/// Runs the runtime mcp kind from snapshot name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_kind_from_snapshot_name(kind: &str) -> McpServerKind {
-    match kind {
-        "streamable_http" | "http" => McpServerKind::Http,
-        _ => McpServerKind::Stdio,
-    }
-}
-
-/// Runs the runtime mcp approval from snapshot name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_approval_from_snapshot_name(approval: &str) -> McpApprovalSetting {
-    match approval {
-        "prompt" => McpApprovalSetting::Prompt,
-        "allow" => McpApprovalSetting::Allow,
-        "deny" => McpApprovalSetting::Deny,
-        _ => McpApprovalSetting::Inherit,
-    }
-}
-
 /// Runs the runtime mutating response is cacheable operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -4704,38 +4545,6 @@ fn runtime_mcp_approval_from_snapshot_name(approval: &str) -> McpApprovalSetting
 /// on duplicated control-flow logic.
 fn runtime_mutating_response_is_cacheable(method: &str) -> bool {
     method != "terminal/step"
-}
-
-/// Runs the runtime mcp external capability from snapshot operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_external_capability_from_snapshot(
-    capability: &SnapshotMcpExternalCapability,
-) -> McpExternalCapability {
-    McpExternalCapability {
-        mutates_filesystem_outside_shell: capability.mutates_filesystem_outside_shell,
-        executes_processes_outside_shell: capability.executes_processes_outside_shell,
-        accesses_credentials_outside_shell: capability.accesses_credentials_outside_shell,
-        purpose: capability.purpose.clone(),
-    }
-}
-
-/// Runs the runtime mcp effects from snapshot operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mcp_effects_from_snapshot(effects: &SnapshotMcpToolEffects) -> McpToolEffects {
-    McpToolEffects {
-        reads_filesystem: effects.reads_filesystem,
-        mutates_filesystem: effects.mutates_filesystem,
-        executes_processes: effects.executes_processes,
-        accesses_credentials: effects.accesses_credentials,
-        uses_network: effects.uses_network,
-        has_side_effects: effects.has_side_effects,
-    }
 }
 
 /// Runs the runtime snapshot approval scope name operation for this subsystem.

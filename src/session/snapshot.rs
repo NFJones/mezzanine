@@ -18,6 +18,33 @@ use super::time::current_unix_seconds;
 use super::types::{PaneStateMetadata, Session, SessionState, WindowGroup};
 
 impl Session {
+    /// Replaces only the user-visible layout and pane metadata from a snapshot.
+    ///
+    /// Runtime `resume-session` uses this path when it should behave like a
+    /// user manually recreated the saved groups, windows, panes, titles, and
+    /// pane working directories. Session identity, clients, observers,
+    /// configuration generation, and other runtime-owned state are deliberately
+    /// retained so callers do not inherit snapshotted process or connection
+    /// state.
+    pub fn replace_layout_from_snapshot_payload(
+        &mut self,
+        payload: &SessionSnapshotPayload,
+    ) -> Result<()> {
+        let restored = Self::from_snapshot_payload(self.shell.clone(), payload)?;
+
+        self.ids = restored.ids;
+        self.authoritative_size = restored.authoritative_size;
+        self.windows = restored.windows;
+        self.window_groups = restored.window_groups;
+        self.active_group_index = restored.active_group_index;
+        self.last_active_group_index = restored.last_active_group_index;
+        self.active_window_index = restored.active_window_index;
+        self.last_active_window_index = restored.last_active_window_index;
+        self.pane_state_metadata = restored.pane_state_metadata;
+        self.record_event();
+        Ok(())
+    }
+
     /// Runs the from snapshot payload operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
