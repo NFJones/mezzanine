@@ -353,8 +353,8 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `memory.enabled` | boolean | `true` | Enable persistent memory commands and durable memory loading. |
 | `memory.storage` | string | `"sqlite"` | Persistent memory storage backend. Current builds use SQLite with TSV import/export compatibility. |
 | `memory.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/memory.sqlite`. |
-| `memory.max_records` | integer | `5000` | Planned retention cap for persistent records before archival or pruning. |
-| `memory.max_bytes` | integer | `10485760` | Planned persistent memory byte cap. |
+| `memory.max_records` | integer | `5000` | Retention cap for persistent records before archival or pruning. |
+| `memory.max_bytes` | integer | `10485760` | Persistent memory content-byte cap enforced by `mez memory prune`. |
 | `memory.max_injected_records` | integer | `12` | Maximum persistent memory records eligible for automatic context injection. |
 | `memory.max_injected_bytes` | integer | `24576` | Maximum bytes of persistent memory eligible for automatic context injection. |
 | `memory.candidate_limit` | integer | `100` | Maximum local candidates retrieved before injection or sidecar reranking. |
@@ -366,7 +366,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `memory.sidecar_rerank_timeout_ms` | integer | `1500` | Maximum sidecar reranking time. |
 | `memory.sidecar_max_queries` | integer | `5` | Maximum sidecar-planned FTS queries per retrieval pass. |
 | `memory.sidecar_fallback` | string | `"deterministic"` | Fallback policy when sidecar planning or reranking fails validation. |
-| `memory.archive_before_prune` | boolean | `true` | Prefer archived state before destructive pruning. |
+| `memory.archive_before_prune` | boolean | `true` | Archive non-expired over-limit records before destructive pruning. |
 | `memory.default_ttl_days` | integer | `180` | Default retention horizon for new expiring memory records. |
 
 ### `agents`

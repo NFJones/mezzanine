@@ -43,7 +43,7 @@ mod types;
 /// declaration makes the boundary available to the crate.
 mod validation;
 
-pub use persistent_store::{MemorySearchRequest, MemorySearchResult};
+pub use persistent_store::{MemoryRetentionPolicy, MemorySearchRequest, MemorySearchResult};
 pub use retrieval::{
     MemoryCandidateCard, MemoryRetrievalRequest, MemoryRetrievalResult, MemorySelectionSource,
     MemorySidecarFallbackReason, MemorySidecarPlan, MemorySidecarRerankSelection,

@@ -7159,9 +7159,12 @@ use count, confirmation counts, supersession, and expiry when available.
 Memory scopes MUST include at least global, project, session, window, pane, and
 agent.
 
-The user MUST be able to list, search, inspect, edit, export, and delete
-persistent memory. Search SHOULD use local full-text retrieval when available
-and MUST preserve deterministic priority, recency, and id ordering as a fallback.
+The user MUST be able to list, search, inspect, edit, export, delete, mark use,
+confirm, supersede, archive, stale, restore, and prune persistent memory. Search
+SHOULD use local full-text retrieval when available and MUST preserve
+deterministic priority, recency, and id ordering as a fallback. Pruning MUST
+honor configured record and byte caps, expiry metadata, and the
+`archive_before_prune` policy.
 
 Persistent memory storage MUST NOT reject user-managed records solely because
 their content matches a heuristic sensitive-content pattern. Sensitive-content

@@ -41,8 +41,8 @@ use crate::ids::ClientId;
 use crate::layout::Size;
 use crate::mcp::McpRegistry;
 use crate::memory::{
-    MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest, MemorySource, MemoryState,
-    PersistentMemoryStore,
+    MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest,
+    MemorySource, MemoryState, PersistentMemoryStore,
 };
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
@@ -69,6 +69,8 @@ use crate::terminal::{
     TerminalStyleSpan, UiTheme, attached_terminal_output_disconnected,
 };
 use crate::transcript::AgentTranscriptStore;
+
+use self::mcp::load_primary_config_layers;
 
 /// Exposes the args module boundary.
 ///

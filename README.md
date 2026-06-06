@@ -445,7 +445,7 @@ mez [--json] <command> [options]
 | `mez auth status`          | Show auth state.                                                |
 | `mez auth logout`          | Remove stored auth for the active profile.                      |
 | `mez mcp ...`              | List, add, remove, enable, disable, inspect, login, logout, and status MCP servers. |
-| `mez memory ...`           | List, search, add, inspect, edit, delete, and export persistent memory. |
+| `mez memory ...`           | List, search, add, inspect, edit, lifecycle, prune, delete, and export persistent memory. |
 
 `mez auth status` reports coarse authentication state that is safe to share for
 debugging by default. JSON status output intentionally omits account identifiers

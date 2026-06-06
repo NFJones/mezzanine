@@ -5,9 +5,10 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    Args, CliEnv, CliOutputFormat, MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest,
-    MemorySource, MemoryState, MezError, PersistentMemoryStore, Result, Serialize, Subcommand,
-    Write, current_unix_seconds, serialize_json, write_json_or_plain,
+    Args, CliEnv, CliOutputFormat, MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope,
+    MemorySearchRequest, MemorySource, MemoryState, MezError, PersistentMemoryStore, Result,
+    Serialize, Subcommand, Write, current_unix_seconds, load_primary_config_layers,
+    runtime_effective_config_value, serialize_json, write_json_or_plain,
 };
 
 // Memory subcommands and output formatting.
@@ -74,8 +75,30 @@ pub(super) fn run_memory<W: Write>(
             let output = memory_record_json(&store.inspect(&id)?)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
-        MemoryCliCommand::Edit { id, content } => {
-            let record = store.edit_content(&id, &content, current_unix_seconds()?)?;
+        MemoryCliCommand::Edit {
+            id,
+            content,
+            kind,
+            state,
+            priority,
+            expires_at,
+        } => {
+            let mut record = store.inspect(&id)?;
+            record.content = content;
+            if let Some(kind) = kind.as_deref().map(parse_memory_kind).transpose()? {
+                record.kind = kind;
+            }
+            if let Some(state) = state.as_deref().map(parse_memory_state).transpose()? {
+                record.state = state;
+            }
+            if let Some(priority) = priority {
+                record.priority = priority;
+            }
+            if let Some(expires_at) = expires_at {
+                record.expires_at_unix_seconds = (expires_at != 0).then_some(expires_at);
+            }
+            record.updated_at_unix_seconds = current_unix_seconds()?;
+            store.upsert(record.clone())?;
             let output = memory_record_json(&record)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
@@ -99,8 +122,24 @@ pub(super) fn run_memory<W: Write>(
             let output = memory_record_json(&record)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
+        MemoryCliCommand::Use { id } => {
+            let record = store.record_use(&id, current_unix_seconds()?)?;
+            let output = memory_record_json(&record)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        MemoryCliCommand::Confirm { id } => {
+            let record = store.confirm(&id, current_unix_seconds()?)?;
+            let output = memory_record_json(&record)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        MemoryCliCommand::Supersede { old_id, new_id } => {
+            let record = store.supersede(&old_id, &new_id, current_unix_seconds()?)?;
+            let output = memory_record_json(&record)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
         MemoryCliCommand::Prune { dry_run } => {
-            let records = store.prune_expired(current_unix_seconds()?, dry_run)?;
+            let policy = memory_retention_policy(&env, current_unix_seconds()?)?;
+            let records = store.enforce_retention(policy, dry_run)?;
             let output = memory_records_json(&records)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
@@ -185,6 +224,18 @@ enum MemoryCliCommand {
         /// Replacement memory content text.
         #[arg(long, allow_hyphen_values = true)]
         content: String,
+        /// Replacement memory kind.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Replacement memory lifecycle state.
+        #[arg(long)]
+        state: Option<String>,
+        /// Replacement memory priority from 0 to 255.
+        #[arg(long)]
+        priority: Option<u8>,
+        /// Replacement expiry time as Unix seconds; zero clears expiry.
+        #[arg(long)]
+        expires_at: Option<u64>,
     },
     /// Deletes one memory record.
     Delete {
@@ -206,7 +257,24 @@ enum MemoryCliCommand {
         /// Memory record id.
         id: String,
     },
-    /// Deletes expired memory records, or lists them with `--dry-run`.
+    /// Records that one memory was selected for use.
+    Use {
+        /// Memory record id.
+        id: String,
+    },
+    /// Records explicit operator confirmation for one memory.
+    Confirm {
+        /// Memory record id.
+        id: String,
+    },
+    /// Marks an older memory as superseded by a newer memory.
+    Supersede {
+        /// Older memory record id to mark superseded.
+        old_id: String,
+        /// Newer memory record id that replaces the older record.
+        new_id: String,
+    },
+    /// Applies memory retention policy, or lists affected records with `--dry-run`.
     Prune {
         /// Show records that would be pruned without deleting them.
         #[arg(long, default_value_t = false)]
@@ -235,6 +303,35 @@ enum MemoryCliCommand {
         #[arg(long, default_value_t = 0)]
         limit: usize,
     },
+}
+
+/// Builds the configured persistent-memory retention policy for CLI pruning.
+fn memory_retention_policy(env: &CliEnv, now_unix_seconds: u64) -> Result<MemoryRetentionPolicy> {
+    let paths = env.config_paths()?;
+    let layers = load_primary_config_layers(&paths)?;
+    let root = runtime_effective_config_value(&layers)?;
+    let memory = root.get("memory").and_then(serde_json::Value::as_object);
+    Ok(MemoryRetentionPolicy {
+        now_unix_seconds,
+        max_records: memory_config_usize(memory, "max_records"),
+        max_bytes: memory_config_usize(memory, "max_bytes"),
+        archive_before_prune: memory
+            .and_then(|config| config.get("archive_before_prune"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+    })
+}
+
+/// Returns one memory config integer as a usize when present and non-zero.
+fn memory_config_usize(
+    memory: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> Option<usize> {
+    memory
+        .and_then(|config| config.get(key))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
 }
 
 /// Returns records matching CLI search and metadata filters.
@@ -312,6 +409,18 @@ struct MemoryRecordJson<'a> {
     kind: &'static str,
     /// Lifecycle state label for this memory record.
     state: &'static str,
+    /// Last time this memory was selected for use.
+    last_used_at_unix_seconds: Option<u64>,
+    /// Number of times this memory was selected for use.
+    use_count: u64,
+    /// Number of explicit confirmations for this memory.
+    confirmed_count: u64,
+    /// Last explicit confirmation timestamp.
+    last_confirmed_at_unix_seconds: Option<u64>,
+    /// Memory id superseded by this record, when applicable.
+    supersedes_id: Option<&'a str>,
+    /// Expiry time used by retention policy.
+    expires_at_unix_seconds: Option<u64>,
     /// Stored memory content.
     content: &'a str,
 }
@@ -327,6 +436,12 @@ impl<'a> From<&'a MemoryRecord> for MemoryRecordJson<'a> {
             priority: record.priority,
             kind: memory_kind_name(record.kind),
             state: memory_state_name(record.state),
+            last_used_at_unix_seconds: record.last_used_at_unix_seconds,
+            use_count: record.use_count,
+            confirmed_count: record.confirmed_count,
+            last_confirmed_at_unix_seconds: record.last_confirmed_at_unix_seconds,
+            supersedes_id: record.supersedes_id.as_deref(),
+            expires_at_unix_seconds: record.expires_at_unix_seconds,
             content: &record.content,
         }
     }

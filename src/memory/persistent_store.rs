@@ -3,6 +3,8 @@
 //! This module owns durable SQLite I/O, private permissions, TSV migration and
 //! export compatibility, and stable record ordering.
 
+use std::cmp::Ordering;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
@@ -139,24 +141,79 @@ impl PersistentMemoryStore {
         Ok(record)
     }
 
+    /// Marks one memory record as selected for use by retrieval.
+    pub fn record_use(&self, id: &str, used_at_unix_seconds: u64) -> Result<MemoryRecord> {
+        let mut record = self.inspect(id)?;
+        record.last_used_at_unix_seconds = Some(used_at_unix_seconds);
+        record.use_count = record.use_count.saturating_add(1);
+        record.updated_at_unix_seconds = used_at_unix_seconds;
+        self.upsert(record.clone())?;
+        Ok(record)
+    }
+
+    /// Marks one memory record as explicitly confirmed by the operator.
+    pub fn confirm(&self, id: &str, confirmed_at_unix_seconds: u64) -> Result<MemoryRecord> {
+        let mut record = self.inspect(id)?;
+        record.confirmed_count = record.confirmed_count.saturating_add(1);
+        record.last_confirmed_at_unix_seconds = Some(confirmed_at_unix_seconds);
+        record.updated_at_unix_seconds = confirmed_at_unix_seconds;
+        self.upsert(record.clone())?;
+        Ok(record)
+    }
+
+    /// Marks an older memory as superseded by a newer memory record.
+    pub fn supersede(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        updated_at_unix_seconds: u64,
+    ) -> Result<MemoryRecord> {
+        if old_id == new_id {
+            return Err(MezError::invalid_args(
+                "a memory record cannot supersede itself",
+            ));
+        }
+        let _ = self.inspect(new_id)?;
+        let mut record = self.inspect(old_id)?;
+        record.state = MemoryState::Superseded;
+        record.supersedes_id = Some(new_id.to_string());
+        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        self.upsert(record.clone())?;
+        Ok(record)
+    }
+
     /// Returns records eligible for retention pruning and optionally deletes them.
     pub fn prune_expired(&self, now_unix_seconds: u64, dry_run: bool) -> Result<Vec<MemoryRecord>> {
-        let records = self
-            .list()?
-            .into_iter()
-            .filter(|record| {
-                record.state == MemoryState::Expired
-                    || record
-                        .expires_at_unix_seconds
-                        .is_some_and(|expires_at| expires_at <= now_unix_seconds)
-            })
-            .collect::<Vec<_>>();
+        self.enforce_retention(
+            MemoryRetentionPolicy {
+                now_unix_seconds,
+                max_records: None,
+                max_bytes: None,
+                archive_before_prune: false,
+            },
+            dry_run,
+        )
+    }
+
+    /// Enforces expiry, record-count, and byte-count retention policy.
+    pub fn enforce_retention(
+        &self,
+        policy: MemoryRetentionPolicy,
+        dry_run: bool,
+    ) -> Result<Vec<MemoryRecord>> {
+        let records = self.list()?;
+        let selected = retention_candidates(&records, policy);
         if !dry_run {
-            for record in &records {
-                let _ = self.delete(&record.id)?;
+            for record in &selected {
+                if policy.archive_before_prune && record.state != MemoryState::Expired {
+                    let _ =
+                        self.set_state(&record.id, MemoryState::Archived, policy.now_unix_seconds)?;
+                } else {
+                    let _ = self.delete(&record.id)?;
+                }
             }
         }
-        Ok(records)
+        Ok(selected)
     }
 
     /// Runs the export tsv operation for this subsystem.
@@ -243,6 +300,19 @@ pub struct MemorySearchResult {
     pub fts_rank: Option<f64>,
     /// Human-readable reason for retrieval/debug views.
     pub reason: String,
+}
+
+/// Retention policy applied to persistent memory records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryRetentionPolicy {
+    /// Current time used for expiry checks and archival updates.
+    pub now_unix_seconds: u64,
+    /// Maximum retained record count, when configured.
+    pub max_records: Option<usize>,
+    /// Maximum retained memory content bytes, when configured.
+    pub max_bytes: Option<usize>,
+    /// Archive non-expired over-limit records instead of deleting them.
+    pub archive_before_prune: bool,
 }
 
 /// Creates the SQLite schema and FTS index for persistent memory.
@@ -560,4 +630,82 @@ fn compare_search_results(
                 .cmp(&left.record.updated_at_unix_seconds)
         })
         .then_with(|| left.record.id.cmp(&right.record.id))
+}
+
+/// Selects records that exceed the configured retention policy.
+fn retention_candidates(
+    records: &[MemoryRecord],
+    policy: MemoryRetentionPolicy,
+) -> Vec<MemoryRecord> {
+    let mut selected = Vec::new();
+    let mut selected_ids = std::collections::BTreeSet::new();
+
+    for record in records {
+        if record.state == MemoryState::Expired
+            || record
+                .expires_at_unix_seconds
+                .is_some_and(|expires_at| expires_at <= policy.now_unix_seconds)
+        {
+            selected_ids.insert(record.id.clone());
+            selected.push(record.clone());
+        }
+    }
+
+    if let Some(max_records) = policy.max_records
+        && records.len() > max_records
+    {
+        let mut ordered = records.to_vec();
+        ordered.sort_by(compare_retention_records);
+        for record in ordered.into_iter().take(records.len() - max_records) {
+            if selected_ids.insert(record.id.clone()) {
+                selected.push(record);
+            }
+        }
+    }
+
+    if let Some(max_bytes) = policy.max_bytes {
+        let mut ordered = records.to_vec();
+        ordered.sort_by(compare_retention_records);
+        let mut retained_bytes = records
+            .iter()
+            .map(|record| record.content.len())
+            .sum::<usize>();
+        for record in ordered {
+            if retained_bytes <= max_bytes {
+                break;
+            }
+            retained_bytes = retained_bytes.saturating_sub(record.content.len());
+            if selected_ids.insert(record.id.clone()) {
+                selected.push(record);
+            }
+        }
+    }
+
+    selected.sort_by(compare_retention_records);
+    selected
+}
+
+/// Orders lower-value memory records before records that should be retained.
+fn compare_retention_records(left: &MemoryRecord, right: &MemoryRecord) -> Ordering {
+    retention_state_rank(left.state)
+        .cmp(&retention_state_rank(right.state))
+        .then_with(|| left.priority.cmp(&right.priority))
+        .then_with(|| left.confirmed_count.cmp(&right.confirmed_count))
+        .then_with(|| left.use_count.cmp(&right.use_count))
+        .then_with(|| {
+            left.updated_at_unix_seconds
+                .cmp(&right.updated_at_unix_seconds)
+        })
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+/// Returns the pruning precedence for one lifecycle state.
+fn retention_state_rank(state: MemoryState) -> u8 {
+    match state {
+        MemoryState::Expired => 0,
+        MemoryState::Superseded => 1,
+        MemoryState::Archived => 2,
+        MemoryState::Stale => 3,
+        MemoryState::Active => 4,
+    }
 }

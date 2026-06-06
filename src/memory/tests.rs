@@ -1,8 +1,9 @@
 //! Unit tests for session and persistent memory behavior.
 
 use super::{
-    MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest, MemorySource,
-    PersistentMemoryStore, SessionMemoryStore, decode_scope, encode_scope, fs,
+    MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest,
+    MemorySource, MemoryState, PersistentMemoryStore, SessionMemoryStore, decode_scope,
+    encode_scope, fs,
 };
 /// Runs the record operation for this subsystem.
 ///
@@ -133,6 +134,74 @@ fn persistent_memory_imports_legacy_tsv_and_searches_fts() {
         })
         .unwrap();
     assert_eq!(matches[0].record.id, "legacy");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies persistent memory tracks use confirmation supersession and retention.
+///
+/// This regression scenario documents the lifecycle metadata that keeps memory
+/// retrieval auditable while retention can archive or prune lower-value records.
+#[test]
+fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
+    let root = std::env::temp_dir().join(format!("mez-memory-lifecycle-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record("old", MemoryScope::Global, "old workflow"))
+        .unwrap();
+    store
+        .upsert(record("new", MemoryScope::Global, "new workflow"))
+        .unwrap();
+    store
+        .upsert(record("extra", MemoryScope::Global, "extra workflow"))
+        .unwrap();
+
+    let used = store.record_use("old", 20).unwrap();
+    assert_eq!(used.last_used_at_unix_seconds, Some(20));
+    assert_eq!(used.use_count, 1);
+
+    let confirmed = store.confirm("new", 21).unwrap();
+    assert_eq!(confirmed.last_confirmed_at_unix_seconds, Some(21));
+    assert_eq!(confirmed.confirmed_count, 1);
+
+    let superseded = store.supersede("old", "new", 22).unwrap();
+    assert_eq!(superseded.state, MemoryState::Superseded);
+    assert_eq!(superseded.supersedes_id.as_deref(), Some("new"));
+
+    let dry_run = store
+        .enforce_retention(
+            MemoryRetentionPolicy {
+                now_unix_seconds: 23,
+                max_records: Some(2),
+                max_bytes: None,
+                archive_before_prune: true,
+            },
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        dry_run
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        ["old"]
+    );
+    assert_eq!(store.inspect("old").unwrap().state, MemoryState::Superseded);
+
+    let archived = store
+        .enforce_retention(
+            MemoryRetentionPolicy {
+                now_unix_seconds: 24,
+                max_records: Some(2),
+                max_bytes: None,
+                archive_before_prune: true,
+            },
+            false,
+        )
+        .unwrap();
+    assert_eq!(archived[0].id, "old");
+    assert_eq!(store.inspect("old").unwrap().state, MemoryState::Archived);
 
     let _ = fs::remove_dir_all(root);
 }

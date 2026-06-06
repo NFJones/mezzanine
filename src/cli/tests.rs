@@ -3951,6 +3951,127 @@ fn memory_cli_adds_inspects_edits_exports_and_deletes_records() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies memory cli manages lifecycle metadata and retention.
+///
+/// This regression scenario covers the operator-facing commands that mark
+/// memory use, confirmation, supersession, and retention effects.
+#[test]
+fn memory_cli_manages_lifecycle_metadata_and_retention() {
+    let (env, home) = test_env("memory-lifecycle-cli");
+    let mut stderr = Vec::new();
+
+    for id in ["old", "new", "extra"] {
+        let mut stdout = Vec::new();
+        run_with(
+            vec![
+                "mez".to_string(),
+                "memory".to_string(),
+                "add".to_string(),
+                id.to_string(),
+                "--scope".to_string(),
+                "global".to_string(),
+                "--content".to_string(),
+                format!("{id} workflow"),
+            ],
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+    }
+
+    let mut use_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "memory".to_string(),
+            "use".to_string(),
+            "old".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut use_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(use_stdout)
+            .unwrap()
+            .contains(r#""use_count":1"#)
+    );
+
+    let mut confirm_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "memory".to_string(),
+            "confirm".to_string(),
+            "new".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut confirm_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(confirm_stdout)
+            .unwrap()
+            .contains(r#""confirmed_count":1"#)
+    );
+
+    let mut supersede_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "memory".to_string(),
+            "supersede".to_string(),
+            "old".to_string(),
+            "new".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut supersede_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let supersede_output = String::from_utf8(supersede_stdout).unwrap();
+    assert!(supersede_output.contains(r#""state":"superseded""#));
+    assert!(supersede_output.contains(r#""supersedes_id":"new""#));
+
+    let paths = env.config_paths().unwrap();
+    fs::create_dir_all(paths.root()).unwrap();
+    fs::write(
+        paths.root().join("config.toml"),
+        "version = 11\n[memory]\nmax_records = 2\narchive_before_prune = true\n",
+    )
+    .unwrap();
+
+    let mut prune_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "memory".to_string(),
+            "prune".to_string(),
+            "--dry-run".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut prune_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(prune_stdout)
+            .unwrap()
+            .contains(r#""id":"old""#)
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies memory cli accepts user-managed sensitive persistent content.
 ///
 /// This regression scenario documents the behavior being protected so a
