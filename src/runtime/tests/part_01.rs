@@ -259,7 +259,7 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     assert!(resume.contains(r#""command":"resume-session""#), "{resume}");
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
-    assert!(resume.contains(r#"\"restarted_panes\":0"#), "{resume}");
+    assert!(resume.contains(r#"\"restarted_panes\":1"#), "{resume}");
 
     let _ = fs::remove_dir_all(root);
 }

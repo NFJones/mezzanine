@@ -2885,8 +2885,8 @@ impl RuntimeSessionService {
         let new_primary = self.session.attach_primary(primary_name, true)?;
         self.last_attach_at_unix_seconds = self.session.last_attached_at_unix_seconds;
         connection.rebind_caller_client(new_primary.clone());
-        let restarted_panes = 0usize;
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        let restarted_panes = self.restart_restored_pane_processes(None)?.len();
         self.append_lifecycle_event(
             EventKind::SnapshotChanged,
             format!(
