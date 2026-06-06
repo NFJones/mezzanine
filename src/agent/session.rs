@@ -706,6 +706,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "logout" => "log out of a provider account.",
         "list-mcp" => "list configured MCP servers and tools.",
         "memory" => "inspect or change persistent memory enablement.",
+        "remember" => "generate durable memories from the current context or a statement.",
         "model" => "inspect or change model and reasoning settings.",
         "latency" => "inspect or change latency/cost preference.",
         "routing" => "toggle pane-local automatic model sizing.",

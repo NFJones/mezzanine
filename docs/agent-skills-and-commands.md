@@ -112,6 +112,7 @@ Common slash commands:
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context. |
+| `/remember` | Generate durable memories from the current context or a supplied statement. |
 | `/loop` | Re-run a prompt from a fresh fork of the parent conversation until an iteration completes without `apply_patch` actions or the loop limit is reached. |
 | `/new` | Start a fresh pane conversation. |
 | `/resume` | Resume a saved pane conversation. |

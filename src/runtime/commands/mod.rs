@@ -50,6 +50,7 @@ use crate::agent::{
 };
 use crate::auth::AuthCredentialKind;
 use crate::error::MezErrorKind;
+use crate::memory::{MemoryKind, MemoryState};
 use crate::readline::ReadlineEdit;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
@@ -1006,6 +1007,19 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "remember"
+                {
+                    let remember_outcome = AgentShellCommandOutcome::Display {
+                        command: "remember".to_string(),
+                        body: "remember command requires async model execution".to_string(),
+                    };
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&remember_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "statusline"
                 {
                     let statusline_outcome =
@@ -1153,11 +1167,19 @@ impl RuntimeSessionService {
         let is_compact_command = slash_invocation
             .as_ref()
             .is_some_and(|invocation| invocation.name == "compact");
+        let is_remember_command = slash_invocation
+            .as_ref()
+            .is_some_and(|invocation| invocation.name == "remember");
         let is_list_mcp_command = slash_invocation
             .as_ref()
             .is_some_and(|invocation| invocation.name == "list-mcp");
         let is_prompt = !input.trim().is_empty() && slash_invocation.is_none();
-        if !is_model_command && !is_compact_command && !is_list_mcp_command && !is_prompt {
+        if !is_model_command
+            && !is_compact_command
+            && !is_remember_command
+            && !is_list_mcp_command
+            && !is_prompt
+        {
             return self.execute_agent_shell_command(primary_client_id, input);
         }
 
@@ -1267,6 +1289,19 @@ impl RuntimeSessionService {
                     &pane_id,
                     input,
                     Some(&compact_outcome),
+                ));
+            }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "remember"
+            {
+                let remember_outcome = self
+                    .execute_agent_shell_remember_command_async(&pane_id, input)
+                    .await?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&remember_outcome),
                 ));
             }
             if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
@@ -1535,6 +1570,204 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
+    }
+
+    /// Executes `/remember` by asking the active model to propose durable memories.
+    pub(super) async fn execute_agent_shell_remember_command_async(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("remember command must be a slash command"))?;
+        if !self.runtime_persistent_memory_enabled() {
+            return Err(MezError::invalid_state(
+                "remember requires persistent memory to be enabled; run /memory on first",
+            ));
+        }
+        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
+        let Some(config_root) = self.config_root.clone() else {
+            return Err(MezError::invalid_state(
+                "remember requires a configured Mezzanine config root",
+            ));
+        };
+        let source_text = if invocation.args.trim().is_empty() {
+            let context = self.agent_context_for_pane_prompt(
+                pane_id,
+                "[durable memory generation requested]",
+                100,
+            )?;
+            let context = self.apply_agent_shell_preference_context(pane_id, context)?;
+            runtime_remember_context_source(pane_id, &context)
+        } else {
+            format!(
+                "Source statement supplied by the user:\n{}",
+                invocation.args.trim()
+            )
+        };
+        let agent_id = format!("agent-{pane_id}");
+        let (model_profile_name, model_profile) =
+            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
+        let request = runtime_model_remember_request(
+            &model_profile,
+            pane_id,
+            &self.session.id.to_string(),
+            invocation.args.trim().is_empty(),
+            &source_text,
+        )?;
+        let provider =
+            self.runtime_model_provider_for_profile(&model_profile, "provider_remember")?;
+        let response = provider.send_request_async(&request).await?;
+        self.record_agent_provider_token_usage_with_profile(
+            pane_id,
+            response.usage,
+            response.usage,
+            Some(&model_profile),
+        );
+        self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
+        let candidates = runtime_remember_candidates_from_response(&response)?;
+        let scope = self.runtime_remember_scope_for_pane(pane_id);
+        let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+        let now = current_unix_seconds().max(1);
+        let mut stored = Vec::new();
+        for (index, candidate) in candidates.into_iter().take(6).enumerate() {
+            let id = format!(
+                "remember-{}-{}",
+                now,
+                runtime_remember_slug(&candidate.summary, index + 1)
+            );
+            let record = candidate.into_record(id, scope.clone(), now)?;
+            self.upsert_session_memory(record.clone())?;
+            store.upsert(record.clone())?;
+            stored.push(record);
+        }
+        if stored.is_empty() {
+            return Err(MezError::invalid_state(
+                "remember model response did not contain any acceptable memories",
+            ));
+        }
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "remember".to_string(),
+            body: format!(
+                "pane={} stored={} scope={} source=agent-remember model_profile={} provider={} model={} ids={}",
+                json_escape(pane_id),
+                stored.len(),
+                json_escape(&runtime_remember_scope_display(&scope)),
+                json_escape(&model_profile_name),
+                json_escape(&model_profile.provider),
+                json_escape(&model_profile.model),
+                runtime_string_array_json(
+                    &stored
+                        .iter()
+                        .map(|record| record.id.clone())
+                        .collect::<Vec<_>>()
+                )
+            ),
+            visibility,
+        })
+    }
+
+    /// Builds the durable memory scope used for `/remember` records.
+    fn runtime_remember_scope_for_pane(&self, pane_id: &str) -> MemoryScope {
+        self.pane_current_working_directory(pane_id)
+            .map(|path| MemoryScope::Project {
+                root: discover_project_root(&path).to_string_lossy().into_owned(),
+            })
+            .unwrap_or(MemoryScope::Global)
+    }
+
+    /// Builds an async provider suitable for one runtime-owned model command.
+    fn runtime_model_provider_for_profile(
+        &mut self,
+        model_profile: &ModelProfile,
+        audit_operation: &str,
+    ) -> Result<Box<dyn AsyncModelProvider>> {
+        let provider_config = self
+            .provider_registry
+            .provider(&model_profile.provider)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::config(format!(
+                    "provider `{}` for active model profile is not configured",
+                    model_profile.provider
+                ))
+            })?;
+        let api = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        self.append_credential_access_audit(
+            &model_profile.provider,
+            &provider_config.auth_profile,
+            audit_operation,
+            "requested",
+        )?;
+        let Some(auth_store) = self.auth_store.as_ref() else {
+            self.append_credential_access_audit(
+                &model_profile.provider,
+                &provider_config.auth_profile,
+                audit_operation,
+                "denied",
+            )?;
+            return Err(MezError::invalid_state(
+                "remember requires an attached provider auth store",
+            ));
+        };
+        let endpoint_override = provider_config
+            .base_url
+            .as_deref()
+            .filter(|endpoint| !endpoint.is_empty());
+        let provider_result: Result<Box<dyn AsyncModelProvider>> = match api {
+            ProviderApiCompatibility::OpenAiResponses => {
+                openai_responses_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &model_profile.provider,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::OpenAiChatCompletions => {
+                openai_compatible_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &model_profile.provider,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+            ProviderApiCompatibility::DeepSeekChatCompletions => {
+                deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &model_profile.provider,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+            }
+        };
+        match provider_result {
+            Ok(provider) => {
+                self.append_credential_access_audit(
+                    &model_profile.provider,
+                    &provider_config.auth_profile,
+                    audit_operation,
+                    "granted",
+                )?;
+                Ok(provider)
+            }
+            Err(error) => {
+                self.append_credential_access_audit(
+                    &model_profile.provider,
+                    &provider_config.auth_profile,
+                    audit_operation,
+                    "denied",
+                )?;
+                Err(error)
+            }
+        }
     }
 
     /// Returns whether persistent memory is enabled in the live effective config.
@@ -4049,6 +4282,285 @@ fn runtime_git_repository_root(working_directory: &PathBuf) -> Result<Option<Pat
         return Ok(None);
     }
     Ok(Some(PathBuf::from(root)))
+}
+
+/// Normalized memory candidate returned by the `/remember` model request.
+struct RuntimeRememberCandidate {
+    /// Durable memory taxonomy selected by the model and validated by runtime.
+    kind: MemoryKind,
+    /// Retrieval priority clamped to the persistent-memory valid range.
+    priority: u8,
+    /// One-line stable summary used for ids and display.
+    summary: String,
+    /// Search/index terms that should appear in stored content.
+    keywords: Vec<String>,
+    /// Relevance hints that help retrieval choose the record later.
+    cues: Vec<String>,
+    /// Durable body stored as the main memory content.
+    content: String,
+    /// Optional retention period requested by the model.
+    expires_in_days: Option<u64>,
+}
+
+impl RuntimeRememberCandidate {
+    /// Converts one validated model candidate into a persistent memory record.
+    fn into_record(self, id: String, scope: MemoryScope, now: u64) -> Result<MemoryRecord> {
+        let mut record = MemoryRecord::new_with_defaults(
+            id,
+            scope,
+            now,
+            now,
+            MemorySource::Agent,
+            self.priority,
+            runtime_remember_memory_content(&self),
+        );
+        record.kind = self.kind;
+        record.state = MemoryState::Active;
+        record.expires_at_unix_seconds = self
+            .expires_in_days
+            .and_then(|days| days.checked_mul(86_400))
+            .and_then(|seconds| now.checked_add(seconds));
+        record.validate_for_persistence()?;
+        Ok(record)
+    }
+}
+
+/// Builds bounded context source text for no-argument `/remember`.
+fn runtime_remember_context_source(pane_id: &str, context: &AgentContext) -> String {
+    let mut lines = vec![
+        format!("Pane: {pane_id}"),
+        format!("Context blocks supplied: {}", context.blocks.len()),
+    ];
+    for (index, block) in context.blocks.iter().enumerate() {
+        lines.push(format!(
+            "context_block={} source={} label={} content={}",
+            index,
+            compaction::runtime_context_source_kind_name(block.source),
+            json_escape(&block.label),
+            compaction::runtime_model_compaction_entry_content(&block.content)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Builds the provider request that asks the active model for durable memories.
+fn runtime_model_remember_request(
+    profile: &ModelProfile,
+    pane_id: &str,
+    session_id: &str,
+    context_mode: bool,
+    source_text: &str,
+) -> Result<ModelRequest> {
+    let agent_id = format!("agent-{pane_id}");
+    let turn_id = format!("remember-{session_id}-{pane_id}");
+    let mode = if context_mode { "context" } else { "statement" };
+    Ok(ModelRequest {
+        provider: profile.provider.clone(),
+        model: profile.model.clone(),
+        reasoning_effort: profile
+            .provider_options
+            .get("reasoning_effort")
+            .cloned()
+            .or_else(|| profile.reasoning_profile.clone()),
+        thinking_enabled: profile.thinking_enabled(),
+        prompt_cache_retention: profile.provider_options.get("prompt_cache_retention").cloned(),
+        latency_preference: profile.latency_preference.clone(),
+        max_output_tokens: profile.max_output_tokens(),
+        temperature: None,
+        prompt_cache_session_id: Some(session_id.to_string()),
+        prompt_cache_lineage_id: None,
+        turn_id,
+        agent_id,
+        available_mcp_tools: Vec::new(),
+        interaction_kind: ModelInteractionKind::ActionExecution,
+        allowed_actions: AllowedActionSet::say_only(),
+        stop: None,
+        messages: vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                content: "You are Mezzanine's durable memory generator. Extract only stable, reusable memories and omit credentials, secrets, tokens, sensitive personal data, and transient terminal noise unless the user explicitly supplied the exact statement to remember."
+                    .to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::DeveloperInstruction,
+                content: "Return exactly one final say action whose text is strict JSON with a top-level `memories` array. Each memory object must contain: `kind` (`preference`, `fact`, `procedure`, `episode`, `warning`, or `scratch`), `priority` (1-255), `summary`, `keywords` array, `cues` array, and `content`. Include only durable information that will help future turns. Make `content` self-contained and retrieval-friendly. For statement mode, use only the supplied statement as source. For context mode, return at most six high-value memories."
+                    .to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::Transcript,
+                content: format!("Remember mode: {mode}\n\n{source_text}"),
+            },
+        ],
+    })
+}
+
+/// Parses and validates memory candidates from a model response.
+fn runtime_remember_candidates_from_response(
+    response: &ModelResponse,
+) -> Result<Vec<RuntimeRememberCandidate>> {
+    let text = response
+        .action_batch
+        .as_ref()
+        .and_then(|batch| {
+            batch.actions.iter().find_map(|action| {
+                if let AgentActionPayload::Say { text, .. } = &action.payload {
+                    Some(text.trim())
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or_else(|| response.raw_text.trim());
+    let value = serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
+        MezError::invalid_state(format!(
+            "remember model response was not strict JSON: {error}"
+        ))
+    })?;
+    let memories = value
+        .get("memories")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("remember JSON must contain a memories array"))?;
+    memories
+        .iter()
+        .take(6)
+        .map(runtime_remember_candidate_from_value)
+        .collect()
+}
+
+/// Parses one model-authored memory candidate object.
+fn runtime_remember_candidate_from_value(
+    value: &serde_json::Value,
+) -> Result<RuntimeRememberCandidate> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| MezError::invalid_state("remember memory candidate must be an object"))?;
+    let kind = runtime_remember_kind(
+        object
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("fact"),
+    )?;
+    let priority = object
+        .get("priority")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(128)
+        .clamp(1, 255) as u8;
+    let summary = runtime_required_remember_string(object.get("summary"), "summary")?;
+    let content = runtime_required_remember_string(object.get("content"), "content")?;
+    Ok(RuntimeRememberCandidate {
+        kind,
+        priority,
+        summary,
+        keywords: runtime_remember_string_array(object.get("keywords")),
+        cues: runtime_remember_string_array(object.get("cues")),
+        content,
+        expires_in_days: object
+            .get("expires_in_days")
+            .and_then(serde_json::Value::as_u64),
+    })
+}
+
+/// Parses a required non-empty string from one `/remember` candidate field.
+fn runtime_required_remember_string(
+    value: Option<&serde_json::Value>,
+    field: &str,
+) -> Result<String> {
+    let text = value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| MezError::invalid_state(format!("remember candidate missing {field}")))?;
+    Ok(text.to_string())
+}
+
+/// Parses a string array from one optional `/remember` candidate field.
+fn runtime_remember_string_array(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+        .take(16)
+        .collect()
+}
+
+/// Parses a memory kind name accepted by `/remember` model output.
+fn runtime_remember_kind(kind: &str) -> Result<MemoryKind> {
+    match kind {
+        "preference" => Ok(MemoryKind::Preference),
+        "fact" => Ok(MemoryKind::Fact),
+        "procedure" => Ok(MemoryKind::Procedure),
+        "episode" => Ok(MemoryKind::Episode),
+        "warning" => Ok(MemoryKind::Warning),
+        "scratch" => Ok(MemoryKind::Scratch),
+        _ => Err(MezError::invalid_state(format!(
+            "unknown remember memory kind `{kind}`"
+        ))),
+    }
+}
+
+/// Formats retrieval-friendly text for one stored `/remember` memory.
+fn runtime_remember_memory_content(candidate: &RuntimeRememberCandidate) -> String {
+    let mut lines = vec![format!("Summary: {}", candidate.summary)];
+    if !candidate.keywords.is_empty() {
+        lines.push(format!("Keywords: {}", candidate.keywords.join(", ")));
+    }
+    if !candidate.cues.is_empty() {
+        lines.push(format!("Relevant when: {}", candidate.cues.join("; ")));
+    }
+    lines.push(format!("Memory: {}", candidate.content));
+    lines.join("\n")
+}
+
+/// Builds a stable local id slug from a model-authored memory summary.
+fn runtime_remember_slug(summary: &str, index: usize) -> String {
+    let mut slug = summary
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_lowercase())
+            } else if character.is_whitespace() || matches!(character, '-' | '_' | ':' | '/') {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        return format!("memory-{index}");
+    }
+    slug.chars().take(48).collect()
+}
+
+/// Formats a memory scope for command output.
+fn runtime_remember_scope_display(scope: &MemoryScope) -> String {
+    match scope {
+        MemoryScope::Global => "global".to_string(),
+        MemoryScope::Project { root } => format!("project:{root}"),
+        MemoryScope::Session { session_id } => format!("session:{session_id}"),
+        MemoryScope::Window {
+            session_id,
+            window_id,
+        } => format!("window:{session_id}:{window_id}"),
+        MemoryScope::Pane {
+            session_id,
+            pane_id,
+        } => format!("pane:{session_id}:{pane_id}"),
+        MemoryScope::Agent {
+            session_id,
+            agent_id,
+        } => format!("agent:{session_id}:{agent_id}"),
+    }
 }
 
 /// Runs the runtime git text operation for this subsystem.

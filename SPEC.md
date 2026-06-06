@@ -4892,6 +4892,20 @@ The baseline command capabilities are:
   `on`, `off`, `toggle`, and `status`, MUST display the active setting when
   invoked without arguments or with `status` or `show`, and MUST persist changes
   to `memory.enabled` in the primary user configuration.
+- `/remember`: Ask the active model to generate durable persistent-memory
+  records. Without arguments, it MUST derive a small bounded set of memory
+  candidates from the current pane context. With arguments, it MUST treat the
+  arguments as the source statement and generate memory candidates only from
+  that statement. The model request MUST ask for structured candidates that
+  include kind, priority, summary, keywords or aliases, retrieval cues, and the
+  durable body. Runtime code MUST validate and normalize accepted candidates
+  into persistent `MemoryRecord` values, generate record ids itself, mark the
+  source as agent-authored, prefer project scope when a pane project root is
+  known and global scope otherwise, and store retrieval-friendly content that
+  includes indexing keywords and relevance cues. The command MUST reject when
+  persistent memory is disabled. Agent-authored memory candidates MUST omit
+  credentials, secrets, tokens, personal data, and transient terminal noise
+  unless the user explicitly supplies the exact statement to remember.
 - `/model`: Inspect and change the active model and reasoning settings. The
   command MUST accept `list` to list models for the active provider, and MUST
   accept a provider model name with an optional reasoning level to select that
