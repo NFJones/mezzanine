@@ -7,10 +7,13 @@
 //! bounded candidate cards and selected ids; they never expose write access or
 //! direct full-store access to a model.
 
+use std::collections::BTreeSet;
+
 use super::{
     MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest, MemorySearchResult, MemorySource,
     MemoryState, PersistentMemoryStore, Result,
 };
+use crate::error::MezError;
 
 /// Request used by context assembly to retrieve relevant memory candidates.
 ///
@@ -42,6 +45,38 @@ pub struct MemoryRetrievalResult {
     pub candidates: Vec<MemorySearchResult>,
     /// Reason for the retrieval path used.
     pub reason: String,
+}
+
+/// Selected memory record plus model-facing provenance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedMemoryRecord {
+    /// Authoritative memory record selected for context injection.
+    pub record: MemoryRecord,
+    /// Selection path used for this memory.
+    pub selected_by: MemorySelectionSource,
+    /// Deterministic score or sidecar confidence.
+    pub score: Option<f64>,
+    /// Short bounded reason suitable for debug context.
+    pub reason: String,
+}
+
+/// Source that selected a memory record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemorySelectionSource {
+    /// Selected by deterministic local SQLite/FTS retrieval.
+    Deterministic,
+    /// Selected by a sidecar reranker after local candidate generation.
+    Sidecar,
+}
+
+impl MemorySelectionSource {
+    /// Returns the stable model/debug label for this selection source.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deterministic => "deterministic",
+            Self::Sidecar => "sidecar",
+        }
+    }
 }
 
 /// Bounded memory representation sent to a sidecar reranker.
@@ -150,6 +185,77 @@ pub struct MemorySidecarRerankSelection {
     pub selected: Vec<MemorySidecarRerankSelectionItem>,
     /// Optional summary for rejected candidates.
     pub rejected_summary: String,
+}
+
+/// Converts deterministic retrieval output into model-facing selected records.
+pub fn deterministic_selected_memory(
+    result: MemoryRetrievalResult,
+    include_reasons: bool,
+) -> Vec<SelectedMemoryRecord> {
+    result
+        .candidates
+        .into_iter()
+        .map(|candidate| SelectedMemoryRecord {
+            record: candidate.record,
+            selected_by: MemorySelectionSource::Deterministic,
+            score: Some(candidate.score),
+            reason: if include_reasons {
+                candidate.reason
+            } else {
+                String::new()
+            },
+        })
+        .collect()
+}
+
+/// Applies a validated sidecar rerank selection to local candidates.
+pub fn sidecar_selected_memory(
+    candidates: &[MemorySearchResult],
+    selection: &MemorySidecarRerankSelection,
+    max_selected_records: usize,
+    include_reasons: bool,
+) -> Result<Vec<SelectedMemoryRecord>> {
+    if selection.selected.is_empty() {
+        return Err(MezError::invalid_state(
+            "memory sidecar selected no records",
+        ));
+    }
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.record.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut selected = Vec::new();
+    for item in selection.selected.iter().take(max_selected_records.max(1)) {
+        if !(0.0..=1.0).contains(&item.confidence) {
+            return Err(MezError::invalid_state(
+                "memory sidecar confidence must be between 0 and 1",
+            ));
+        }
+        if item.id.trim().is_empty() || !candidate_ids.contains(item.id.as_str()) {
+            return Err(MezError::invalid_state(
+                "memory sidecar selected an id outside the candidate set",
+            ));
+        }
+        let Some(candidate) = candidates
+            .iter()
+            .find(|candidate| candidate.record.id == item.id)
+        else {
+            return Err(MezError::invalid_state(
+                "memory sidecar selected an unavailable candidate",
+            ));
+        };
+        selected.push(SelectedMemoryRecord {
+            record: candidate.record.clone(),
+            selected_by: MemorySelectionSource::Sidecar,
+            score: Some(item.confidence),
+            reason: if include_reasons {
+                item.reason.chars().take(240).collect()
+            } else {
+                String::new()
+            },
+        });
+    }
+    Ok(selected)
 }
 
 /// Retrieves persistent memory using deterministic SQLite/FTS policy.

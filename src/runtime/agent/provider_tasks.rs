@@ -7,6 +7,9 @@
 //! async actor and tests.
 
 use super::*;
+use crate::agent::AgentContext;
+use crate::runtime::runtime_effective_config_value;
+use crate::runtime::types::RuntimeMemorySidecarDispatch;
 
 impl RuntimeSessionService {
     /// Builds a runtime provider dispatch from one configured provider API.
@@ -93,6 +96,87 @@ impl RuntimeSessionService {
                 Err(error)
             }
         }
+    }
+
+    /// Builds optional memory sidecar dispatch metadata for one provider turn.
+    fn runtime_memory_sidecar_dispatch_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        context: &AgentContext,
+    ) -> Result<Option<RuntimeMemorySidecarDispatch>> {
+        let Some(config_root) = self.config_root.clone() else {
+            return Ok(None);
+        };
+        let root = runtime_effective_config_value(&self.config_layers)?;
+        let Some(memory) = root.get("memory").and_then(serde_json::Value::as_object) else {
+            return Ok(None);
+        };
+        if memory.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
+            || memory
+                .get("sidecar_enabled")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
+            return Ok(None);
+        }
+        let mode = memory
+            .get("sidecar_mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("off");
+        if mode == "off" {
+            return Ok(None);
+        }
+        let query_context = context
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| block.source == ContextSourceKind::UserInstruction)
+            .map(|block| block.content.clone())
+            .unwrap_or_else(|| turn.turn_id.clone());
+        let mut scopes = vec![crate::memory::MemoryScope::Global];
+        if let Some(path) = self.pane_current_working_directory(&turn.pane_id) {
+            scopes.push(crate::memory::MemoryScope::Project {
+                root: discover_project_root(&path).to_string_lossy().into_owned(),
+            });
+        }
+        Ok(Some(RuntimeMemorySidecarDispatch {
+            mode: mode.to_string(),
+            store_path: config_root.join("memory.sqlite"),
+            profile_name: None,
+            profile: None,
+            provider: None,
+            query_context,
+            scopes,
+            max_queries: memory
+                .get("sidecar_max_queries")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(5),
+            candidate_limit: memory
+                .get("candidate_limit")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(100),
+            max_selected_records: memory
+                .get("max_injected_records")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(12),
+            max_selected_bytes: memory
+                .get("max_injected_bytes")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(24_576),
+            include_selection_reasons: true,
+            fts_enabled: memory
+                .get("fts_enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+        }))
     }
 
     /// Claims one configured provider task for execution outside the runtime
@@ -372,6 +456,7 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
+        let memory_sidecar = self.runtime_memory_sidecar_dispatch_for_turn(&turn, &context)?;
         self.pending_agent_provider_tasks.remove(turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -382,6 +467,7 @@ impl RuntimeSessionService {
             turn,
             context,
             model_profile,
+            memory_sidecar,
             auto_sizing,
             auto_sizing_provider,
             auto_sizing_target_providers,

@@ -10,7 +10,7 @@ use crate::agent::validate_non_empty;
 use crate::error::Result;
 use crate::instructions::DiscoveredInstructionFile;
 use crate::mcp::{McpPromptSummary, McpPromptTool};
-use crate::memory::{MemoryRecord, MemoryScope};
+use crate::memory::{MemoryRecord, MemoryScope, SelectedMemoryRecord};
 use crate::permissions::PermissionPolicy;
 use crate::scheduler::{AgentScheduler, runnable_agent_ids};
 
@@ -50,6 +50,44 @@ pub fn append_memory_context(
                 memory_scope_summary(&record.scope)
             ),
             content: record.content.clone(),
+        });
+    }
+    AgentContext::new(context.blocks)
+}
+
+/// Appends already-selected memory records with retrieval provenance.
+///
+/// Selection and ranking happen before this helper is called, allowing runtime
+/// retrieval and future sidecar reranking to preserve their chosen ordering
+/// while still validating every authoritative record before provider use.
+pub fn append_selected_memory_context(
+    mut context: AgentContext,
+    selected_records: &[SelectedMemoryRecord],
+    max_records: usize,
+) -> Result<AgentContext> {
+    if max_records == 0 || selected_records.is_empty() {
+        return Ok(context);
+    }
+
+    for selected in selected_records.iter().take(max_records) {
+        selected.record.validate_for_persistence()?;
+        let provenance = if selected.reason.trim().is_empty() {
+            format!("selected_by={}", selected.selected_by.as_str())
+        } else {
+            format!(
+                "selected_by={} reason={}",
+                selected.selected_by.as_str(),
+                selected.reason
+            )
+        };
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::Memory,
+            label: format!(
+                "memory {} ({})",
+                selected.record.id,
+                memory_scope_summary(&selected.record.scope)
+            ),
+            content: format!("{provenance}\n{}", selected.record.content),
         });
     }
     AgentContext::new(context.blocks)

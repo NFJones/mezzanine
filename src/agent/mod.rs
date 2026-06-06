@@ -103,7 +103,7 @@ pub use context::{
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
     ModelProfileOverrides, ModelRequest, SelectedModelProfile, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
-    append_scheduler_context, assemble_model_request,
+    append_scheduler_context, append_selected_memory_context, assemble_model_request,
     assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
     compact_model_context_for_budget_with_retained_tail_percent,
     constrain_skill_actions_for_loaded_context, known_model_context_window_tokens,

@@ -16,7 +16,8 @@ mod surface;
 
 pub use appenders::{
     append_mcp_context, append_memory_context, append_permission_policy_context,
-    append_project_guidance_context, append_scheduler_context, set_project_guidance_context,
+    append_project_guidance_context, append_scheduler_context, append_selected_memory_context,
+    set_project_guidance_context,
 };
 pub use assembly::{assemble_model_request, assemble_model_request_with_retained_tail_percent};
 pub use compaction::{

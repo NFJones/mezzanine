@@ -84,6 +84,26 @@ pub(super) fn run_memory<W: Write>(
             let output = serialize_json(&MemoryDeleteJson { deleted })?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
+        MemoryCliCommand::Archive { id } => {
+            let record = store.set_state(&id, MemoryState::Archived, current_unix_seconds()?)?;
+            let output = memory_record_json(&record)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        MemoryCliCommand::Stale { id } => {
+            let record = store.set_state(&id, MemoryState::Stale, current_unix_seconds()?)?;
+            let output = memory_record_json(&record)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        MemoryCliCommand::Restore { id } => {
+            let record = store.set_state(&id, MemoryState::Active, current_unix_seconds()?)?;
+            let output = memory_record_json(&record)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        MemoryCliCommand::Prune { dry_run } => {
+            let records = store.prune_expired(current_unix_seconds()?, dry_run)?;
+            let output = memory_records_json(&records)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
         MemoryCliCommand::Export => {
             write!(stdout, "{}", store.export_tsv()?)?;
         }
@@ -170,6 +190,27 @@ enum MemoryCliCommand {
     Delete {
         /// Memory record id.
         id: String,
+    },
+    /// Archives one memory record so retrieval excludes it by default.
+    Archive {
+        /// Memory record id.
+        id: String,
+    },
+    /// Marks one memory record stale.
+    Stale {
+        /// Memory record id.
+        id: String,
+    },
+    /// Restores one memory record to active retrieval state.
+    Restore {
+        /// Memory record id.
+        id: String,
+    },
+    /// Deletes expired memory records, or lists them with `--dry-run`.
+    Prune {
+        /// Show records that would be pruned without deleting them.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
     /// Exports memory records as TSV.
     Export,

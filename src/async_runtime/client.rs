@@ -1316,6 +1316,7 @@ async fn execute_runtime_agent_provider_dispatch(
         turn,
         context,
         mut model_profile,
+        memory_sidecar: _,
         auto_sizing,
         auto_sizing_provider,
         auto_sizing_target_providers,

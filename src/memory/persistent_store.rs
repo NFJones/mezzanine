@@ -125,6 +125,40 @@ impl PersistentMemoryStore {
         Ok(changed > 0)
     }
 
+    /// Updates the lifecycle state for one persistent memory record.
+    pub fn set_state(
+        &self,
+        id: &str,
+        state: MemoryState,
+        updated_at_unix_seconds: u64,
+    ) -> Result<MemoryRecord> {
+        let mut record = self.inspect(id)?;
+        record.state = state;
+        record.updated_at_unix_seconds = updated_at_unix_seconds;
+        self.upsert(record.clone())?;
+        Ok(record)
+    }
+
+    /// Returns records eligible for retention pruning and optionally deletes them.
+    pub fn prune_expired(&self, now_unix_seconds: u64, dry_run: bool) -> Result<Vec<MemoryRecord>> {
+        let records = self
+            .list()?
+            .into_iter()
+            .filter(|record| {
+                record.state == MemoryState::Expired
+                    || record
+                        .expires_at_unix_seconds
+                        .is_some_and(|expires_at| expires_at <= now_unix_seconds)
+            })
+            .collect::<Vec<_>>();
+        if !dry_run {
+            for record in &records {
+                let _ = self.delete(&record.id)?;
+            }
+        }
+        Ok(records)
+    }
+
     /// Runs the export tsv operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

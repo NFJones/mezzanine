@@ -3319,6 +3319,37 @@ pub struct RuntimeAutoSizingDecision {
     pub rationale: String,
 }
 
+/// Bounded memory sidecar retrieval dispatch carried to a provider worker.
+#[derive(Debug, Clone)]
+pub struct RuntimeMemorySidecarDispatch {
+    /// Sidecar mode selected by configuration.
+    pub mode: String,
+    /// SQLite memory database path opened by the provider worker.
+    pub store_path: PathBuf,
+    /// Optional sidecar model profile name.
+    pub profile_name: Option<String>,
+    /// Optional sidecar model profile.
+    pub profile: Option<ModelProfile>,
+    /// Optional sidecar provider. When absent, deterministic fallback is used.
+    pub provider: Option<RuntimeAgentProviderDispatchProvider>,
+    /// Current task text used as deterministic fallback query context.
+    pub query_context: String,
+    /// Local scopes allowed for candidate retrieval.
+    pub scopes: Vec<crate::memory::MemoryScope>,
+    /// Maximum sidecar-planned search queries.
+    pub max_queries: usize,
+    /// Maximum local candidates sent to reranking.
+    pub candidate_limit: usize,
+    /// Maximum records injected into the main model context.
+    pub max_selected_records: usize,
+    /// Maximum selected memory bytes injected into the main model context.
+    pub max_selected_bytes: usize,
+    /// Whether model-visible memory blocks include selection reasons.
+    pub include_selection_reasons: bool,
+    /// Whether SQLite FTS query matching is enabled.
+    pub fts_enabled: bool,
+}
+
 /// Tracks a provider task after the async actor has claimed it from the queue.
 ///
 /// Provider workers run outside the serialized runtime actor. This record gives
@@ -3398,6 +3429,8 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub model_profile: ModelProfile,
+    /// Optional memory sidecar retrieval flow for this provider turn.
+    pub memory_sidecar: Option<RuntimeMemorySidecarDispatch>,
     /// Optional automatic sizing context for the worker's first provider step.
     pub auto_sizing: Option<RuntimeAutoSizingDispatch>,
     /// Optional router provider for auto-sizing when different from the main
