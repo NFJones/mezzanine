@@ -14,22 +14,21 @@ use super::{
     ContextSourceKind, ControlConnectionState, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
     DeferredConfigFileWrite, DeferredProjectConfigWrite, Envelope, EventKind, EventVisibility,
     HookEvent, McpApprovalSetting, McpExternalCapability, McpServerKind, McpServerStatus,
-    McpToolEffects, McpToolState, MemoryRecord, MessageConnection,
-    MessageServiceSnapshot, MezError, PaneCaptureSource, PaneId, PaneProcessStart,
-    PaneReadinessOverrideStore, PaneReadinessState, PaneResizeUpdate, Path, PathBuf,
-    ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
-    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
-    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
-    SenderIdentity, SessionRecord, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
-    SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
-    SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState,
-    SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
-    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState, SplitDirection,
-    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition, TerminalFrameStyle,
-    TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
+    McpToolEffects, McpToolState, MemoryRecord, MessageConnection, MessageServiceSnapshot,
+    MezError, PaneCaptureSource, PaneId, PaneProcessStart, PaneReadinessOverrideStore,
+    PaneReadinessState, PaneResizeUpdate, Path, PathBuf, ProjectTrustStore, Recipient, Result,
+    RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
+    RuntimeSnapshotOwnedCreationContext, RuntimeSubagentLineage, RuntimeSubagentPlacement,
+    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotAgentSession,
+    SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
+    SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
+    SnapshotFrameState, SnapshotMcpExternalCapability, SnapshotMcpServerState,
+    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository,
+    SnapshotState, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
+    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition,
+    TerminalFrameStyle, TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
     append_memory_context, append_permission_policy_context, append_scheduler_context,
     approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
     decode_control_frame, decode_mmp_frame, default_trust_database_path,
@@ -2801,7 +2800,8 @@ impl RuntimeSessionService {
         resume_plan: crate::snapshot::SnapshotResumePlan,
         caller_client_id: &crate::ids::ClientId,
     ) -> Result<String> {
-        let terminated_panes = self.terminate_all_runtime_pane_processes(true)?;
+        let terminated_panes =
+            self.pane_processes.tracked_pane_ids().len() + self.async_owned_pane_processes.len();
         self.stop_all_active_pane_pipes();
         self.active_copy_modes.clear();
         self.pane_screens.clear();
