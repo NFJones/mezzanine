@@ -240,3 +240,14 @@ impl From<io::Error> for MezError {
         }
     }
 }
+
+impl From<rusqlite::Error> for MezError {
+    /// Converts SQLite persistence failures into Mezzanine I/O errors.
+    ///
+    /// Memory storage is local durable I/O, so callers receive the same broad
+    /// error kind as filesystem persistence failures while retaining the
+    /// SQLite diagnostic message.
+    fn from(error: rusqlite::Error) -> Self {
+        Self::new(MezErrorKind::Io, error.to_string())
+    }
+}

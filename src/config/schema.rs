@@ -28,6 +28,7 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "theme",
     "themes",
     "history",
+    "memory",
     "agents",
     "model_profiles",
     "model_presets",
@@ -145,6 +146,13 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
+            pattern: "memory.<key>",
+            purpose: "Adjust persistent memory storage, retrieval, injection, and sidecar defaults.",
+            value_type: "string, integer, or boolean",
+            format: "storage/database_path/sidecar_mode/model_profile/fallback are strings, counts/timeouts are integers, flags are booleans.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
             pattern: "permissions.<key>",
             purpose: "Change high-level permission defaults and approval behavior.",
             value_type: "string or string array",
@@ -210,7 +218,7 @@ pub fn config_change_setting_path_annotations_markdown() -> String {
 /// model profile name, provider name, MCP server name, hook name, or theme alias.
 pub fn config_change_setting_path_description() -> String {
     format!(
-        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); session.<key> where key is one of [{}] except default_command; terminal.<key> where key is one of [{}]; shell.<key> where key is one of [{}] except path/executable/command, plus shell.env.<name>; keys.<key> where key is one of [{}]; layout.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; message_protocol.<key> where key is one of [{}]; control.<key> where key is one of [{}]; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; snapshots.<key> where key is one of [{}]; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
+        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); session.<key> where key is one of [{}] except default_command; terminal.<key> where key is one of [{}]; shell.<key> where key is one of [{}] except path/executable/command, plus shell.env.<name>; keys.<key> where key is one of [{}]; layout.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; message_protocol.<key> where key is one of [{}]; control.<key> where key is one of [{}]; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; snapshots.<key> where key is one of [{}]; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
         config_keys_except(SESSION_KEYS, &["default_command"]),
         TERMINAL_KEYS.join(", "),
         config_keys_except(SHELL_KEYS, &["path", "executable", "command"]),
@@ -219,6 +227,7 @@ pub fn config_change_setting_path_description() -> String {
         WINDOW_FRAME_KEYS.join(", "),
         PANE_FRAME_KEYS.join(", "),
         HISTORY_KEYS.join(", "),
+        MEMORY_KEYS.join(", "),
         AGENT_KEYS.join(", "),
         AGENT_AUTO_SIZING_KEYS.join(", "),
         config_keys_except(MODEL_PROFILE_KEYS, &["provider_options"]),
@@ -451,6 +460,31 @@ pub(super) const HISTORY_KEYS: &[&str] = &[
     "saved_sessions_limit",
     "persist",
     "search_mode",
+];
+
+/// Defines the MEMORY KEYS const used by this subsystem.
+///
+/// Keeping this value documented makes the contract explicit at the module
+/// boundary and avoids relying on call-site inference.
+pub(super) const MEMORY_KEYS: &[&str] = &[
+    "enabled",
+    "storage",
+    "database_path",
+    "max_records",
+    "max_bytes",
+    "max_injected_records",
+    "max_injected_bytes",
+    "candidate_limit",
+    "fts_enabled",
+    "sidecar_enabled",
+    "sidecar_mode",
+    "sidecar_model_profile",
+    "sidecar_planning_timeout_ms",
+    "sidecar_rerank_timeout_ms",
+    "sidecar_max_queries",
+    "sidecar_fallback",
+    "archive_before_prune",
+    "default_ttl_days",
 ];
 
 /// Defines the AGENT KEYS const used by this subsystem.

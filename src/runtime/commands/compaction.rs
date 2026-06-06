@@ -415,18 +415,18 @@ impl RuntimeSessionService {
             &task.model_profile,
             &summary,
         );
-        self.upsert_session_memory(MemoryRecord {
-            id: memory_id.clone(),
-            scope: MemoryScope::Pane {
+        self.upsert_session_memory(MemoryRecord::new_with_defaults(
+            memory_id.clone(),
+            MemoryScope::Pane {
                 session_id: self.session.id.to_string(),
                 pane_id: pane_id.to_string(),
             },
-            created_at_unix_seconds: now,
-            updated_at_unix_seconds: now,
-            source: MemorySource::Agent,
-            priority: 224,
+            now,
+            now,
+            MemorySource::Agent,
+            224,
             content,
-        })?;
+        ))?;
         let remaining_transcript_entries = self
             .agent_shell_store
             .retain_recent_transcript_entries(pane_id, task.retained_transcript_entries)?

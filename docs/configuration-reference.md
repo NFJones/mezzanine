@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `10`. On launch, Mezzanine migrates an
+The current config schema version is `11`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -60,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `10` | Config schema version. Do not change this. |
+| `version` | integer | `11` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -70,6 +70,7 @@ entry is shown.
 | `theme` | table | see below | Active theme aliases and colors. |
 | `themes` | map | `{}` | User-defined named themes. |
 | `history` | table | see below | Per-pane history buffering. |
+| `memory` | table | see below | Persistent memory storage, retrieval, injection, and sidecar defaults. |
 | `agents` | table | see below | Agent defaults and limits. |
 | `model_profiles` | map | default profiles shown below | Model profile definitions. |
 | `permissions` | table | see below | Approval, command, and authority policy. |
@@ -344,6 +345,29 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `history.saved_sessions_limit` | integer | `100` | Maximum saved agent conversations listed by `/resume`; older saved sessions are deleted when new conversations are created. |
 | `history.persist` | boolean | `true` | Persist retained history across supported restarts. |
 | `history.search_mode` | string | `"literal"` | Default history search mode. |
+
+### `memory`
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `memory.enabled` | boolean | `true` | Enable persistent memory commands and durable memory loading. |
+| `memory.storage` | string | `"sqlite"` | Persistent memory storage backend. Current builds use SQLite with TSV import/export compatibility. |
+| `memory.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/memory.sqlite`. |
+| `memory.max_records` | integer | `5000` | Planned retention cap for persistent records before archival or pruning. |
+| `memory.max_bytes` | integer | `10485760` | Planned persistent memory byte cap. |
+| `memory.max_injected_records` | integer | `12` | Maximum persistent memory records eligible for automatic context injection. |
+| `memory.max_injected_bytes` | integer | `24576` | Maximum bytes of persistent memory eligible for automatic context injection. |
+| `memory.candidate_limit` | integer | `100` | Maximum local candidates retrieved before injection or sidecar reranking. |
+| `memory.fts_enabled` | boolean | `true` | Enable SQLite FTS candidate search for memory queries. |
+| `memory.sidecar_enabled` | boolean | `false` | Enable future sidecar planning/reranking over bounded candidate cards. |
+| `memory.sidecar_mode` | string | `"off"` | Sidecar memory mode; deterministic fallback is always available. |
+| `memory.sidecar_model_profile` | string | `"memory-sidecar"` | Model profile name for future memory sidecar calls. |
+| `memory.sidecar_planning_timeout_ms` | integer | `1500` | Maximum sidecar query-planning time. |
+| `memory.sidecar_rerank_timeout_ms` | integer | `1500` | Maximum sidecar reranking time. |
+| `memory.sidecar_max_queries` | integer | `5` | Maximum sidecar-planned FTS queries per retrieval pass. |
+| `memory.sidecar_fallback` | string | `"deterministic"` | Fallback policy when sidecar planning or reranking fails validation. |
+| `memory.archive_before_prune` | boolean | `true` | Prefer archived state before destructive pruning. |
+| `memory.default_ttl_days` | integer | `180` | Default retention horizon for new expiring memory records. |
 
 ### `agents`
 

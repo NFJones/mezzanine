@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 10
+version = 11
 
 [session]
 detach_behavior = "keep-running"
@@ -172,6 +172,26 @@ rotate_lines = 1000
 saved_sessions_limit = 100
 persist = true
 search_mode = "literal"
+
+[memory]
+enabled = true
+storage = "sqlite"
+database_path = ""
+max_records = 5000
+max_bytes = 10485760
+max_injected_records = 12
+max_injected_bytes = 24576
+candidate_limit = 100
+fts_enabled = true
+sidecar_enabled = false
+sidecar_mode = "off"
+sidecar_model_profile = "memory-sidecar"
+sidecar_planning_timeout_ms = 1500
+sidecar_rerank_timeout_ms = 1500
+sidecar_max_queries = 5
+sidecar_fallback = "deterministic"
+archive_before_prune = true
+default_ttl_days = 180
 
 [agents]
 default_provider = "openai"

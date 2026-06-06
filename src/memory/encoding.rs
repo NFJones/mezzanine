@@ -3,7 +3,7 @@
 //! Session and persistent stores share these helpers so escaping, source names,
 //! scopes, and primitive parsing stay consistent.
 
-use super::{MemoryScope, MemorySource, MezError, Result};
+use super::{MemoryKind, MemoryScope, MemorySource, MemoryState, MezError, Result};
 
 /// Runs the encode scope operation for this subsystem.
 ///
@@ -100,6 +100,54 @@ pub(super) fn parse_source(value: &str) -> Result<MemorySource> {
     }
 }
 
+/// Returns the serialized name for one memory kind.
+pub(super) fn kind_name(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Preference => "preference",
+        MemoryKind::Fact => "fact",
+        MemoryKind::Procedure => "procedure",
+        MemoryKind::Episode => "episode",
+        MemoryKind::Warning => "warning",
+        MemoryKind::Scratch => "scratch",
+    }
+}
+
+/// Parses a serialized memory kind label.
+pub(super) fn parse_kind(value: &str) -> Result<MemoryKind> {
+    match value {
+        "preference" => Ok(MemoryKind::Preference),
+        "fact" => Ok(MemoryKind::Fact),
+        "procedure" => Ok(MemoryKind::Procedure),
+        "episode" => Ok(MemoryKind::Episode),
+        "warning" => Ok(MemoryKind::Warning),
+        "scratch" => Ok(MemoryKind::Scratch),
+        _ => Err(MezError::invalid_args("unknown memory kind")),
+    }
+}
+
+/// Returns the serialized name for one memory lifecycle state.
+pub(super) fn state_name(state: MemoryState) -> &'static str {
+    match state {
+        MemoryState::Active => "active",
+        MemoryState::Stale => "stale",
+        MemoryState::Superseded => "superseded",
+        MemoryState::Archived => "archived",
+        MemoryState::Expired => "expired",
+    }
+}
+
+/// Parses a serialized memory lifecycle state label.
+pub(super) fn parse_state(value: &str) -> Result<MemoryState> {
+    match value {
+        "active" => Ok(MemoryState::Active),
+        "stale" => Ok(MemoryState::Stale),
+        "superseded" => Ok(MemoryState::Superseded),
+        "archived" => Ok(MemoryState::Archived),
+        "expired" => Ok(MemoryState::Expired),
+        _ => Err(MezError::invalid_args("unknown memory state")),
+    }
+}
+
 /// Runs the parse u64 operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -109,6 +157,15 @@ pub(super) fn parse_u64(value: &str, label: &str) -> Result<u64> {
     value
         .parse::<u64>()
         .map_err(|_| MezError::invalid_args(format!("invalid {label}")))
+}
+
+/// Parses an optional unsigned integer field from persistent memory storage.
+pub(super) fn parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        parse_u64(value, label).map(Some)
+    }
 }
 
 /// Runs the escape field operation for this subsystem.

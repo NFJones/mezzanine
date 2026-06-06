@@ -5,9 +5,9 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    Args, CliEnv, CliOutputFormat, MemoryRecord, MemoryScope, MemorySource, MezError,
-    PersistentMemoryStore, Result, Serialize, Subcommand, Write, current_unix_seconds,
-    serialize_json, write_json_or_plain,
+    Args, CliEnv, CliOutputFormat, MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest,
+    MemorySource, MemoryState, MezError, PersistentMemoryStore, Result, Serialize, Subcommand,
+    Write, current_unix_seconds, serialize_json, write_json_or_plain,
 };
 
 // Memory subcommands and output formatting.
@@ -26,9 +26,25 @@ pub(super) fn run_memory<W: Write>(
     let paths = env.config_paths()?;
     let store = PersistentMemoryStore::under_config_root(paths.root());
 
-    match parsed.command.unwrap_or(MemoryCliCommand::List) {
-        MemoryCliCommand::List => {
-            let output = memory_records_json(&store.list()?)?;
+    match parsed.command.unwrap_or(MemoryCliCommand::List {
+        query: None,
+        scope: None,
+        kind: None,
+        state: None,
+        source: None,
+        limit: 0,
+    }) {
+        MemoryCliCommand::List {
+            query,
+            scope,
+            kind,
+            state,
+            source,
+            limit,
+        } => {
+            let records =
+                memory_records_for_filters(&store, query, scope, kind, state, source, limit)?;
+            let output = memory_records_json(&records)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Inspect { id } => {
@@ -40,18 +56,20 @@ pub(super) fn run_memory<W: Write>(
             scope,
             content,
             priority,
+            kind,
         } => {
             let scope = parse_memory_scope(&scope)?;
             let now = current_unix_seconds()?;
-            let record = MemoryRecord {
-                id: id.clone(),
+            let mut record = MemoryRecord::new_with_defaults(
+                id.clone(),
                 scope,
-                created_at_unix_seconds: now,
-                updated_at_unix_seconds: now,
-                source: MemorySource::User,
+                now,
+                now,
+                MemorySource::User,
                 priority,
                 content,
-            };
+            );
+            record.kind = parse_memory_kind(&kind)?;
             store.upsert(record)?;
             let output = memory_record_json(&store.inspect(&id)?)?;
             write_json_or_plain(stdout, output_format, &output)?;
@@ -69,6 +87,19 @@ pub(super) fn run_memory<W: Write>(
         MemoryCliCommand::Export => {
             write!(stdout, "{}", store.export_tsv()?)?;
         }
+        MemoryCliCommand::Search {
+            query,
+            scope,
+            kind,
+            state,
+            source,
+            limit,
+        } => {
+            let records =
+                memory_records_for_filters(&store, Some(query), scope, kind, state, source, limit)?;
+            let output = memory_records_json(&records)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
     }
     Ok(())
 }
@@ -85,7 +116,26 @@ pub(super) struct MemoryCliArgs {
 #[derive(Debug, Clone, Subcommand)]
 enum MemoryCliCommand {
     /// Lists configured memory records.
-    List,
+    List {
+        /// Optional full-text search query.
+        #[arg(long, allow_hyphen_values = true)]
+        query: Option<String>,
+        /// Optional exact memory scope filter.
+        #[arg(long)]
+        scope: Option<String>,
+        /// Optional memory kind filter.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Optional memory lifecycle state filter.
+        #[arg(long)]
+        state: Option<String>,
+        /// Optional memory source filter.
+        #[arg(long)]
+        source: Option<String>,
+        /// Maximum records to return; zero uses the store default.
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+    },
     /// Inspects one memory record by id.
     Inspect {
         /// Memory record id.
@@ -104,6 +154,9 @@ enum MemoryCliCommand {
         /// Memory priority from 0 to 255.
         #[arg(long, default_value_t = 10)]
         priority: u8,
+        /// Memory kind: preference, fact, procedure, episode, warning, or scratch.
+        #[arg(long, default_value = "fact")]
+        kind: String,
     },
     /// Edits the content for one memory record.
     Edit {
@@ -120,6 +173,62 @@ enum MemoryCliCommand {
     },
     /// Exports memory records as TSV.
     Export,
+    /// Searches memory records with SQLite FTS and metadata filters.
+    Search {
+        /// Full-text query.
+        #[arg(allow_hyphen_values = true)]
+        query: String,
+        /// Optional exact memory scope filter.
+        #[arg(long)]
+        scope: Option<String>,
+        /// Optional memory kind filter.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Optional memory lifecycle state filter.
+        #[arg(long)]
+        state: Option<String>,
+        /// Optional memory source filter.
+        #[arg(long)]
+        source: Option<String>,
+        /// Maximum records to return; zero uses the store default.
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+    },
+}
+
+/// Returns records matching CLI search and metadata filters.
+fn memory_records_for_filters(
+    store: &PersistentMemoryStore,
+    query: Option<String>,
+    scope: Option<String>,
+    kind: Option<String>,
+    state: Option<String>,
+    source: Option<String>,
+    limit: usize,
+) -> Result<Vec<MemoryRecord>> {
+    let has_filters = query
+        .as_deref()
+        .is_some_and(|query| !query.trim().is_empty())
+        || scope.is_some()
+        || kind.is_some()
+        || state.is_some()
+        || source.is_some()
+        || limit > 0;
+    if !has_filters {
+        return store.list();
+    }
+    Ok(store
+        .search(&MemorySearchRequest {
+            query,
+            scope: scope.as_deref().map(parse_memory_scope).transpose()?,
+            kind: kind.as_deref().map(parse_memory_kind).transpose()?,
+            state: state.as_deref().map(parse_memory_state).transpose()?,
+            source: source.as_deref().map(parse_memory_source).transpose()?,
+            limit,
+        })?
+        .into_iter()
+        .map(|result| result.record)
+        .collect())
 }
 /// Runs the memory records json operation for this subsystem.
 ///
@@ -158,6 +267,10 @@ struct MemoryRecordJson<'a> {
     source: &'static str,
     /// Memory priority from 0 to 255.
     priority: u8,
+    /// Retrieval kind label for this memory record.
+    kind: &'static str,
+    /// Lifecycle state label for this memory record.
+    state: &'static str,
     /// Stored memory content.
     content: &'a str,
 }
@@ -171,6 +284,8 @@ impl<'a> From<&'a MemoryRecord> for MemoryRecordJson<'a> {
             updated_at_unix_seconds: record.updated_at_unix_seconds,
             source: memory_source_name(record.source),
             priority: record.priority,
+            kind: memory_kind_name(record.kind),
+            state: memory_state_name(record.state),
             content: &record.content,
         }
     }
@@ -219,6 +334,71 @@ pub(super) fn memory_source_name(source: MemorySource) -> &'static str {
         MemorySource::Agent => "agent",
         MemorySource::Imported => "imported",
         MemorySource::Configuration => "configuration",
+    }
+}
+
+/// Returns the user-facing label for a memory kind.
+pub(super) fn memory_kind_name(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Preference => "preference",
+        MemoryKind::Fact => "fact",
+        MemoryKind::Procedure => "procedure",
+        MemoryKind::Episode => "episode",
+        MemoryKind::Warning => "warning",
+        MemoryKind::Scratch => "scratch",
+    }
+}
+
+/// Parses a memory kind CLI value.
+pub(super) fn parse_memory_kind(value: &str) -> Result<MemoryKind> {
+    match value {
+        "preference" => Ok(MemoryKind::Preference),
+        "fact" => Ok(MemoryKind::Fact),
+        "procedure" => Ok(MemoryKind::Procedure),
+        "episode" => Ok(MemoryKind::Episode),
+        "warning" => Ok(MemoryKind::Warning),
+        "scratch" => Ok(MemoryKind::Scratch),
+        _ => Err(MezError::invalid_args(
+            "memory kind must be preference, fact, procedure, episode, warning, or scratch",
+        )),
+    }
+}
+
+/// Returns the user-facing label for a memory lifecycle state.
+pub(super) fn memory_state_name(state: MemoryState) -> &'static str {
+    match state {
+        MemoryState::Active => "active",
+        MemoryState::Stale => "stale",
+        MemoryState::Superseded => "superseded",
+        MemoryState::Archived => "archived",
+        MemoryState::Expired => "expired",
+    }
+}
+
+/// Parses a memory lifecycle state CLI value.
+pub(super) fn parse_memory_state(value: &str) -> Result<MemoryState> {
+    match value {
+        "active" => Ok(MemoryState::Active),
+        "stale" => Ok(MemoryState::Stale),
+        "superseded" => Ok(MemoryState::Superseded),
+        "archived" => Ok(MemoryState::Archived),
+        "expired" => Ok(MemoryState::Expired),
+        _ => Err(MezError::invalid_args(
+            "memory state must be active, stale, superseded, archived, or expired",
+        )),
+    }
+}
+
+/// Parses a memory source CLI value.
+pub(super) fn parse_memory_source(value: &str) -> Result<MemorySource> {
+    match value {
+        "user" => Ok(MemorySource::User),
+        "agent" => Ok(MemorySource::Agent),
+        "imported" => Ok(MemorySource::Imported),
+        "configuration" => Ok(MemorySource::Configuration),
+        _ => Err(MezError::invalid_args(
+            "memory source must be user, agent, imported, or configuration",
+        )),
     }
 }
 

@@ -1,8 +1,8 @@
 //! Unit tests for session and persistent memory behavior.
 
 use super::{
-    MemoryRecord, MemoryScope, MemorySource, PersistentMemoryStore, SessionMemoryStore,
-    decode_scope, encode_scope, fs,
+    MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest, MemorySource,
+    PersistentMemoryStore, SessionMemoryStore, decode_scope, encode_scope, fs,
 };
 /// Runs the record operation for this subsystem.
 ///
@@ -10,15 +10,7 @@ use super::{
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn record(id: &str, scope: MemoryScope, content: &str) -> MemoryRecord {
-    MemoryRecord {
-        id: id.to_string(),
-        scope,
-        created_at_unix_seconds: 10,
-        updated_at_unix_seconds: 10,
-        source: MemorySource::Agent,
-        priority: 10,
-        content: content.to_string(),
-    }
+    MemoryRecord::new_with_defaults(id, scope, 10, 10, MemorySource::Agent, 10, content)
 }
 
 /// Verifies persistent memory accepts user-managed sensitive content.
@@ -104,6 +96,43 @@ fn persistent_memory_can_inspect_edit_export_and_delete() {
     );
     assert!(store.delete("m1").unwrap());
     assert!(store.inspect("m1").is_err());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies persistent memory imports legacy TSV and searches SQLite FTS.
+///
+/// This regression scenario documents the storage migration and retrieval
+/// behavior so failures point at a concrete persistence contract change.
+#[test]
+fn persistent_memory_imports_legacy_tsv_and_searches_fts() {
+    let root = std::env::temp_dir().join(format!("mez-memory-import-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let legacy_record = record(
+        "legacy",
+        MemoryScope::Global,
+        "prefer cargo nextest for suites",
+    );
+    fs::write(
+        root.join("memory.tsv"),
+        format!("{}\n", legacy_record.encode().unwrap()),
+    )
+    .unwrap();
+
+    let store = PersistentMemoryStore::under_config_root(&root);
+    let imported = store.inspect("legacy").unwrap();
+    assert_eq!(imported.content, "prefer cargo nextest for suites");
+
+    let matches = store
+        .search(&MemorySearchRequest {
+            query: Some("nextest".to_string()),
+            kind: Some(MemoryKind::Fact),
+            limit: 10,
+            ..MemorySearchRequest::default()
+        })
+        .unwrap();
+    assert_eq!(matches[0].record.id, "legacy");
 
     let _ = fs::remove_dir_all(root);
 }

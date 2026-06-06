@@ -4,8 +4,9 @@
 //! persistence and session-specific operations in sibling modules.
 
 use super::{
-    BTreeMap, MezError, PathBuf, Result, decode_scope, encode_scope, escape_field, parse_source,
-    parse_u64, source_name, split_fields, validate_non_empty, validate_scope,
+    BTreeMap, MezError, PathBuf, Result, decode_scope, encode_scope, escape_field, kind_name,
+    parse_kind, parse_optional_u64, parse_source, parse_state, parse_u64, source_name,
+    split_fields, state_name, validate_non_empty, validate_scope,
 };
 
 /// Carries Memory Scope state for this subsystem.
@@ -119,6 +120,47 @@ pub enum MemorySource {
     Configuration,
 }
 
+/// Classifies the durable role a memory record plays during retrieval.
+///
+/// Retrieval, retention, and future sidecar planning use this type to avoid
+/// applying one policy to preferences, facts, procedures, episodes, warnings,
+/// and scratch notes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MemoryKind {
+    /// Stable user or project preference.
+    Preference,
+    /// Durable factual memory.
+    #[default]
+    Fact,
+    /// Reusable workflow or command procedure.
+    Procedure,
+    /// Summarized interaction or task outcome.
+    Episode,
+    /// Known caveat, risk, or failure mode.
+    Warning,
+    /// Short-lived working memory.
+    Scratch,
+}
+
+/// Describes whether a memory record is eligible for retrieval and injection.
+///
+/// Active records are selected normally. Other states remain inspectable and
+/// exportable while retrieval can demote or exclude them according to policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MemoryState {
+    /// Eligible for retrieval and context injection.
+    #[default]
+    Active,
+    /// Eligible only with a staleness penalty or explicit query.
+    Stale,
+    /// Retained for audit but normally replaced by a newer record.
+    Superseded,
+    /// Retained for operator inspection but excluded from injection.
+    Archived,
+    /// Ready for pruning.
+    Expired,
+}
+
 /// Carries Memory Record state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -155,6 +197,28 @@ pub struct MemoryRecord {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub priority: u8,
+    /// Stores the retrieval kind for this memory record.
+    ///
+    /// The field controls filtering and ranking while defaulting legacy records
+    /// to fact memory during migration and TSV decoding.
+    pub kind: MemoryKind,
+    /// Stores the lifecycle state for this memory record.
+    ///
+    /// The field lets retrieval exclude archived, expired, or superseded
+    /// records without deleting operator-visible history.
+    pub state: MemoryState,
+    /// Stores the last time this memory was selected for use, if known.
+    pub last_used_at_unix_seconds: Option<u64>,
+    /// Stores the number of times this memory has been selected for use.
+    pub use_count: u64,
+    /// Stores the number of explicit confirmations for this memory.
+    pub confirmed_count: u64,
+    /// Stores the last explicit confirmation time, if known.
+    pub last_confirmed_at_unix_seconds: Option<u64>,
+    /// Stores the memory id this record supersedes, if any.
+    pub supersedes_id: Option<String>,
+    /// Stores the expiry time for retention policy, if any.
+    pub expires_at_unix_seconds: Option<u64>,
     /// Stores the content value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -219,6 +283,38 @@ impl MemoryRecord {
         record
     }
 
+    /// Builds a record with the legacy default retrieval metadata.
+    ///
+    /// Existing session and CLI call sites use this constructor when the caller
+    /// has not supplied kind, lifecycle, reinforcement, or retention metadata.
+    pub fn new_with_defaults(
+        id: impl Into<String>,
+        scope: MemoryScope,
+        created_at_unix_seconds: u64,
+        updated_at_unix_seconds: u64,
+        source: MemorySource,
+        priority: u8,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            scope,
+            created_at_unix_seconds,
+            updated_at_unix_seconds,
+            source,
+            priority,
+            kind: MemoryKind::Fact,
+            state: MemoryState::Active,
+            last_used_at_unix_seconds: None,
+            use_count: 0,
+            confirmed_count: 0,
+            last_confirmed_at_unix_seconds: None,
+            supersedes_id: None,
+            expires_at_unix_seconds: None,
+            content: content.into(),
+        }
+    }
+
     /// Runs the validate operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -237,6 +333,30 @@ impl MemoryRecord {
             ));
         }
         validate_scope(&self.scope)?;
+        if let Some(last_used_at) = self.last_used_at_unix_seconds
+            && last_used_at == 0
+        {
+            return Err(MezError::invalid_args(
+                "memory last used time must be non-zero unix seconds",
+            ));
+        }
+        if let Some(last_confirmed_at) = self.last_confirmed_at_unix_seconds
+            && last_confirmed_at == 0
+        {
+            return Err(MezError::invalid_args(
+                "memory last confirmed time must be non-zero unix seconds",
+            ));
+        }
+        if let Some(expires_at) = self.expires_at_unix_seconds
+            && expires_at == 0
+        {
+            return Err(MezError::invalid_args(
+                "memory expiry time must be non-zero unix seconds",
+            ));
+        }
+        if let Some(supersedes_id) = &self.supersedes_id {
+            validate_non_empty("superseded memory id", supersedes_id)?;
+        }
         validate_non_empty("memory content", &self.content)?;
         let _ = persistent;
         Ok(())
@@ -256,6 +376,14 @@ impl MemoryRecord {
             self.updated_at_unix_seconds.to_string(),
             source_name(self.source).to_string(),
             self.priority.to_string(),
+            kind_name(self.kind).to_string(),
+            state_name(self.state).to_string(),
+            optional_u64_field(self.last_used_at_unix_seconds),
+            self.use_count.to_string(),
+            self.confirmed_count.to_string(),
+            optional_u64_field(self.last_confirmed_at_unix_seconds),
+            self.supersedes_id.clone().unwrap_or_default(),
+            optional_u64_field(self.expires_at_unix_seconds),
             self.content.clone(),
         ]
         .into_iter()
@@ -271,23 +399,50 @@ impl MemoryRecord {
     /// on duplicated control-flow logic.
     pub(super) fn decode(line: &str) -> Result<Self> {
         let fields = split_fields(line)?;
-        if fields.len() != 7 {
+        if fields.len() != 7 && fields.len() != 15 {
             return Err(MezError::invalid_args(
                 "memory record has wrong field count",
             ));
         }
-        let record = Self {
-            id: fields[0].clone(),
-            scope: decode_scope(&fields[1])?,
-            created_at_unix_seconds: parse_u64(&fields[2], "created_at_unix_seconds")?,
-            updated_at_unix_seconds: parse_u64(&fields[3], "updated_at_unix_seconds")?,
-            source: parse_source(&fields[4])?,
-            priority: fields[5]
+        let mut record = Self::new_with_defaults(
+            fields[0].clone(),
+            decode_scope(&fields[1])?,
+            parse_u64(&fields[2], "created_at_unix_seconds")?,
+            parse_u64(&fields[3], "updated_at_unix_seconds")?,
+            parse_source(&fields[4])?,
+            fields[5]
                 .parse::<u8>()
                 .map_err(|_| MezError::invalid_args("invalid memory priority"))?,
-            content: fields[6].clone(),
-        };
+            fields.last().cloned().unwrap_or_default(),
+        );
+        if fields.len() == 15 {
+            record.kind = parse_kind(&fields[6])?;
+            record.state = parse_state(&fields[7])?;
+            record.last_used_at_unix_seconds =
+                parse_optional_u64(&fields[8], "last_used_at_unix_seconds")?;
+            record.use_count = parse_u64(&fields[9], "use_count")?;
+            record.confirmed_count = parse_u64(&fields[10], "confirmed_count")?;
+            record.last_confirmed_at_unix_seconds =
+                parse_optional_u64(&fields[11], "last_confirmed_at_unix_seconds")?;
+            record.supersedes_id = optional_string_field(&fields[12]);
+            record.expires_at_unix_seconds =
+                parse_optional_u64(&fields[13], "expires_at_unix_seconds")?;
+        }
         record.validate_for_persistence()?;
         Ok(record)
+    }
+}
+
+/// Formats an optional integer field for the TSV export format.
+fn optional_u64_field(value: Option<u64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+/// Parses an optional string field from the TSV export format.
+fn optional_string_field(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }

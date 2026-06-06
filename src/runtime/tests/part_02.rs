@@ -1459,7 +1459,7 @@ fn runtime_control_config_project_persistence_requires_trusted_root() {
     let project_config_dir = root.join(".mezzanine");
     let project_path = project_config_dir.join("config.toml");
     fs::create_dir_all(&project_config_dir).unwrap();
-    fs::write(&project_path, "version = 10\n[history]\nlines = 10\n").unwrap();
+    fs::write(&project_path, "version = 11\n[history]\nlines = 10\n").unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -2251,7 +2251,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 10\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 11\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -2439,7 +2439,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(&skill_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 10\n[history]\nlines = 11\n").unwrap();
+    fs::write(&overlay_path, "version = 11\n[history]\nlines = 11\n").unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
         "---\nname: review\ndescription: Project review workflow\n---\n\nReview this repository.\n",
@@ -2526,7 +2526,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 10\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 11\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
@@ -3091,17 +3091,17 @@ fn runtime_service_owns_session_memory_and_clears_it_on_kill() {
         .unwrap();
 
     service
-        .upsert_session_memory(MemoryRecord {
-            id: "runtime-note".to_string(),
-            scope: crate::memory::MemoryScope::Session {
+        .upsert_session_memory(MemoryRecord::new_with_defaults(
+            "runtime-note",
+            crate::memory::MemoryScope::Session {
                 session_id: service.session().id.to_string(),
             },
-            created_at_unix_seconds: 120,
-            updated_at_unix_seconds: 120,
-            source: crate::memory::MemorySource::User,
-            priority: 20,
-            content: "prefer focused regression tests".to_string(),
-        })
+            120,
+            120,
+            crate::memory::MemorySource::User,
+            20,
+            "prefer focused regression tests",
+        ))
         .unwrap();
 
     assert_eq!(service.memory_records().len(), 1);

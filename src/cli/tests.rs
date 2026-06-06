@@ -706,7 +706,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
     let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
 
     assert_eq!(layers.len(), 1);
-    assert_eq!(effective.get("version"), Some("10"));
+    assert_eq!(effective.get("version"), Some("11"));
     assert_eq!(
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
@@ -715,7 +715,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
         effective.get("agents.implementation_pressure_after_shell_actions"),
         Some("3")
     );
-    assert!(migrated.contains("version = 10"));
+    assert!(migrated.contains("version = 11"));
     assert!(migrated.contains("emoji_width = \"wide\""));
     assert!(migrated.contains("provider_refresh_leeway_seconds = 86400"));
     assert!(migrated.contains("implementation_pressure_after_shell_actions = 3"));
@@ -743,12 +743,12 @@ fn startup_config_layers_discover_project_overlays_and_apply_trust() {
     fs::create_dir_all(project.join(".mezzanine")).unwrap();
     fs::write(
         project.join(".mezzanine/config.toml"),
-        "version = 10\n[history]\nlines = 7\n",
+        "version = 11\n[history]\nlines = 7\n",
     )
     .unwrap();
     fs::write(
         nested.join(".mezzanine/config.toml"),
-        "version = 10\n[history]\nlines = 11\n",
+        "version = 11\n[history]\nlines = 11\n",
     )
     .unwrap();
 
@@ -3885,6 +3885,28 @@ fn memory_cli_adds_inspects_edits_exports_and_deletes_records() {
         String::from_utf8(list_stdout)
             .unwrap()
             .contains(r#""id":"m1""#)
+    );
+
+    let mut search_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "memory".to_string(),
+            "search".to_string(),
+            "all-targets".to_string(),
+            "--kind".to_string(),
+            "fact".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut search_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(search_stdout)
+            .unwrap()
+            .contains(r#""state":"active""#)
     );
 
     let mut export_stdout = Vec::new();

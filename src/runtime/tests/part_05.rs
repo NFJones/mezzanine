@@ -1887,45 +1887,45 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
         .bind_conversation("%1", "as1", 0)
         .unwrap();
     service
-        .upsert_session_memory(MemoryRecord {
-            id: "runtime-note".to_string(),
-            scope: crate::memory::MemoryScope::Session {
+        .upsert_session_memory(MemoryRecord::new_with_defaults(
+            "runtime-note",
+            crate::memory::MemoryScope::Session {
                 session_id: service.session().id.to_string(),
             },
-            created_at_unix_seconds: 1,
-            updated_at_unix_seconds: 1,
-            source: crate::memory::MemorySource::User,
-            priority: 255,
-            content: "generic memory should not be automatic context".to_string(),
-        })
+            1,
+            1,
+            crate::memory::MemorySource::User,
+            255,
+            "generic memory should not be automatic context",
+        ))
         .unwrap();
     service
-        .upsert_session_memory(MemoryRecord {
-            id: "compact-other".to_string(),
-            scope: crate::memory::MemoryScope::Pane {
+        .upsert_session_memory(MemoryRecord::new_with_defaults(
+            "compact-other",
+            crate::memory::MemoryScope::Pane {
                 session_id: service.session().id.to_string(),
                 pane_id: "%1".to_string(),
             },
-            created_at_unix_seconds: 2,
-            updated_at_unix_seconds: 2,
-            source: crate::memory::MemorySource::Agent,
-            priority: 255,
-            content: "other compaction should not leak".to_string(),
-        })
+            2,
+            2,
+            crate::memory::MemorySource::Agent,
+            255,
+            "other compaction should not leak",
+        ))
         .unwrap();
     service
-        .upsert_session_memory(MemoryRecord {
-            id: "compact-as1".to_string(),
-            scope: crate::memory::MemoryScope::Pane {
+        .upsert_session_memory(MemoryRecord::new_with_defaults(
+            "compact-as1",
+            crate::memory::MemoryScope::Pane {
                 session_id: service.session().id.to_string(),
                 pane_id: "%1".to_string(),
             },
-            created_at_unix_seconds: 3,
-            updated_at_unix_seconds: 3,
-            source: crate::memory::MemorySource::Agent,
-            priority: 128,
-            content: "active compact summary".to_string(),
-        })
+            3,
+            3,
+            crate::memory::MemorySource::Agent,
+            128,
+            "active compact summary",
+        ))
         .unwrap();
 
     let context = service

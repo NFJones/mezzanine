@@ -40,7 +40,10 @@ use crate::error::{MezError, Result};
 use crate::ids::ClientId;
 use crate::layout::Size;
 use crate::mcp::McpRegistry;
-use crate::memory::{MemoryRecord, MemoryScope, MemorySource, PersistentMemoryStore};
+use crate::memory::{
+    MemoryKind, MemoryRecord, MemoryScope, MemorySearchRequest, MemorySource, MemoryState,
+    PersistentMemoryStore,
+};
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
     discover_existing_overlays, discover_project_root,

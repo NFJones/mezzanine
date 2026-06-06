@@ -2335,7 +2335,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 10 is the current configuration schema version for this
+schema version 11 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -7147,15 +7147,21 @@ session is deleted.
 Persistent memory MAY survive across sessions only when enabled by the user.
 
 Persistent memory MUST be stored under `~/.config/mezzanine` or in an explicitly
-configured user-private location.
+configured user-private location. The default persistent store MUST be a
+user-private SQLite database named `memory.sqlite`; implementations MUST import
+legacy sibling `memory.tsv` data into SQLite without deleting the TSV backup.
 
 Persistent memory MUST be structured. Each memory record MUST include identity,
-scope, creation time, update time, source, confidence or priority, and content.
+scope, creation time, update time, source, confidence or priority, kind,
+lifecycle state, and content. Retrieval metadata SHOULD include last-used time,
+use count, confirmation counts, supersession, and expiry when available.
 
 Memory scopes MUST include at least global, project, session, window, pane, and
 agent.
 
-The user MUST be able to inspect, edit, export, and delete persistent memory.
+The user MUST be able to list, search, inspect, edit, export, and delete
+persistent memory. Search SHOULD use local full-text retrieval when available
+and MUST preserve deterministic priority, recency, and id ordering as a fallback.
 
 Persistent memory storage MUST NOT reject user-managed records solely because
 their content matches a heuristic sensitive-content pattern. Sensitive-content
