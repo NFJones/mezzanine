@@ -19,13 +19,12 @@ use super::encoding::{
     split_fields,
 };
 use super::types::{
-    PaneSnapshotPayload, SessionSnapshotPayload, SnapshotAgentSession,
+    LayoutLoadPlan, PaneSnapshotPayload, SessionSnapshotPayload, SnapshotAgentSession,
     SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
     SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
     SnapshotFrameState, SnapshotLayoutNode, SnapshotMcpExternalCapability, SnapshotMcpServerState,
     SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotPaneGeometry,
-    SnapshotResumePlan, SnapshotSessionState, SnapshotShellMetadata, WindowGroupSnapshotPayload,
-    WindowSnapshotPayload,
+    SnapshotSessionState, SnapshotShellMetadata, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
 
 /// Defines the SNAPSHOT PAYLOAD FORMAT VERSION const used by this subsystem.
@@ -313,7 +312,7 @@ impl SessionSnapshotPayload {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn resume_plan(&self) -> SnapshotResumePlan {
+    pub fn resume_plan(&self) -> LayoutLoadPlan {
         let restart_required_panes = self
             .windows
             .iter()
@@ -353,7 +352,7 @@ impl SessionSnapshotPayload {
             );
         }
 
-        SnapshotResumePlan {
+        LayoutLoadPlan {
             session_id: self.session_id.clone(),
             window_count: self.windows.len(),
             pane_count,

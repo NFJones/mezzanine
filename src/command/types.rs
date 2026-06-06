@@ -134,7 +134,7 @@ pub enum CommandOutcome {
     /// Represents a snapshot creation request that must be satisfied by a
     /// runtime/control snapshot repository rather than by the generic session
     /// fallback.
-    SnapshotCreate {
+    LayoutSave {
         /// Stores the command value for this data structure.
         command: String,
         /// Stores the optional user-visible snapshot name.
@@ -143,23 +143,21 @@ pub enum CommandOutcome {
     /// Represents a snapshot resume request that must be satisfied by a
     /// runtime/control snapshot repository rather than by the generic session
     /// fallback.
-    SnapshotResume {
+    LayoutLoad {
         /// Stores the command value for this data structure.
         command: String,
         /// Stores the requested snapshot selector.
-        selector: SnapshotResumeSelector,
+        selector: LayoutLoadSelector,
     },
 }
 
-/// Carries the normalized snapshot selector for `resume-session` commands.
+/// Carries the normalized snapshot selector for `load-layout` commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SnapshotResumeSelector {
-    /// Resume the snapshot with this explicit id.
-    SnapshotId(String),
-    /// Resume the latest snapshot visible to the current session target.
+pub enum LayoutLoadSelector {
+    /// Load the latest stored layout with this user-visible name.
+    Name(String),
+    /// Load the latest stored layout visible to the current runtime.
     Latest,
-    /// Resume the latest snapshot for the named session id.
-    LatestForSession(String),
 }
 
 /// Baseline command support level exposed by `list-commands`.
@@ -280,8 +278,8 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "mcp-logout",
     "mcp-status",
     "mcp-retry",
-    "snapshot-session",
-    "resume-session",
+    "save-layout",
+    "load-layout",
     "capture-pane",
     "save-buffer",
     "clear-history",
@@ -328,7 +326,7 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file" | "auth-login"
         | "auth-status" | "mcp-add" | "mcp-remove" | "mcp-login" | "mcp-logout" | "mcp-status"
         | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
-        "attach-session" | "list-sessions" | "snapshot-session" | "resume-session" => {
+        "attach-session" | "list-sessions" | "save-layout" | "load-layout" => {
             BaselineCommandStatus::ControlRequired
         }
         _ => BaselineCommandStatus::Implemented,

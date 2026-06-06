@@ -128,8 +128,8 @@ pub(super) fn hook_event_name(event: HookEvent) -> &'static str {
         HookEvent::PermissionDecision => "permission_decision",
         HookEvent::PreMcpToolUse => "pre_mcp_tool_use",
         HookEvent::PostMcpToolUse => "post_mcp_tool_use",
-        HookEvent::SnapshotCreate => "snapshot_create",
-        HookEvent::SnapshotResume => "snapshot_resume",
+        HookEvent::LayoutSave => "layout_save",
+        HookEvent::LayoutLoad => "layout_load",
     }
 }
 

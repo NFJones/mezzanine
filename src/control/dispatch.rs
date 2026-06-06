@@ -1729,7 +1729,7 @@ pub(super) fn dispatch_parsed_request(
             )?;
             Ok(r#"{"snapshots":[]}"#.to_string())
         }
-        ControlDispatchKind::SnapshotCreate => {
+        ControlDispatchKind::LayoutSave => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args("snapshot/create requires a params object")
             })?;
@@ -1741,7 +1741,7 @@ pub(super) fn dispatch_parsed_request(
                 "snapshot repository is not configured",
             ))
         }
-        ControlDispatchKind::SnapshotResume | ControlDispatchKind::SnapshotDelete => {
+        ControlDispatchKind::LayoutLoad | ControlDispatchKind::SnapshotDelete => {
             let params = request.params.as_deref().ok_or_else(|| {
                 MezError::invalid_args(format!("{} requires a params object", request.method))
             })?;

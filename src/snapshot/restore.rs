@@ -8,8 +8,8 @@ use crate::session::Session;
 use crate::shell::ResolvedShell;
 
 use super::types::{
-    SessionSnapshotPayload, SnapshotManifest, SnapshotRepository, SnapshotRestoreResult,
-    SnapshotResumePlan, SnapshotRollbackPlan, SnapshotState,
+    LayoutLoadPlan, SessionSnapshotPayload, SnapshotManifest, SnapshotRepository,
+    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotState,
 };
 
 impl SnapshotRepository {
@@ -18,9 +18,9 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn resume_plan(&self, snapshot_id: &str) -> Result<SnapshotResumePlan> {
+    pub fn resume_plan(&self, snapshot_id: &str) -> Result<LayoutLoadPlan> {
         let manifest = self.inspect(snapshot_id)?;
-        Ok(SnapshotResumePlan {
+        Ok(LayoutLoadPlan {
             session_id: manifest.state.session_id,
             window_count: manifest.state.window_count,
             pane_count: manifest.state.pane_count,
@@ -52,7 +52,7 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn latest_resume_plan(&self, session_id: Option<&str>) -> Result<SnapshotResumePlan> {
+    pub fn latest_resume_plan(&self, session_id: Option<&str>) -> Result<LayoutLoadPlan> {
         let latest = self.latest(session_id)?.ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,

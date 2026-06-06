@@ -6,7 +6,7 @@
 
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
-    KeyValueLine, MezError, Result, Session, SnapshotResumeSelector, baseline_commands,
+    KeyValueLine, LayoutLoadSelector, MezError, Result, Session, baseline_commands,
     explicit_shell_command_flag, flag_value, mcp_server_id, mcp_transport_target, positional_args,
     positional_args_before_double_dash, repeated_flag_values, shell_command_after_double_dash,
     shell_command_from_words,
@@ -556,8 +556,8 @@ fn terminal_command_category(name: &str) -> &'static str {
         | "show-metrics" => "diagnostics and help",
         "approve-observer" | "attach-session" | "choose-observer" | "detach-client"
         | "kill-session" | "list-clients" | "list-observers" | "list-sessions"
-        | "reject-observer" | "rename-session" | "resume-session" | "revoke-observer"
-        | "snapshot-session" => "sessions and clients",
+        | "reject-observer" | "rename-session" | "load-layout" | "revoke-observer"
+        | "save-layout" => "sessions and clients",
         _ => "windows, groups, and panes",
     }
 }
@@ -629,7 +629,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "rename-session" => "rename the current or target session.",
         "rename-window" => "rename a window.",
         "resize-pane" => "resize a pane.",
-        "resume-session" => "resume a saved session or snapshot.",
+        "load-layout" => "resume a saved session or snapshot.",
         "revoke-observer" => "revoke an approved observer.",
         "rotate-pane" => "rotate panes in the active window.",
         "save-buffer" => "save a paste buffer.",
@@ -643,7 +643,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "show-messages" => "show diagnostics, pending approvals, and observer requests.",
         "show-metrics" => "show async runtime counters and histograms.",
         "show-options" => "show effective options.",
-        "snapshot-session" => "create a structured session snapshot.",
+        "save-layout" => "create a structured session snapshot.",
         "source-file" => "load a configuration file.",
         "split-window" => "split the active or target pane.",
         "swap-pane" => "exchange two panes.",
@@ -939,39 +939,29 @@ pub(super) fn pipe_pane_display(invocation: &CommandInvocation) -> String {
     )
 }
 
-/// Returns the optional user-visible snapshot name for a snapshot-session command.
+/// Returns the optional user-visible snapshot name for a save-layout command.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn snapshot_session_name(invocation: &CommandInvocation) -> Option<String> {
+pub(super) fn save_layout_name(invocation: &CommandInvocation) -> Option<String> {
     flag_value(&invocation.args, "-n")
         .or_else(|| flag_value(&invocation.args, "--name"))
         .or_else(|| positional_args(invocation).first().copied())
         .map(str::to_string)
 }
 
-/// Returns the normalized snapshot selector for a resume-session command.
+/// Returns the normalized snapshot selector for a load-layout command.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn resume_session_selector(invocation: &CommandInvocation) -> SnapshotResumeSelector {
-    if let Some(snapshot_id) = flag_value(&invocation.args, "--snapshot") {
-        return SnapshotResumeSelector::SnapshotId(snapshot_id.to_string());
-    }
-    let latest = invocation.args.iter().any(|arg| arg == "--latest");
-    let session_id = flag_value(&invocation.args, "--session");
-    if latest || session_id.is_some() {
-        return match session_id {
-            Some(session_id) => SnapshotResumeSelector::LatestForSession(session_id.to_string()),
-            None => SnapshotResumeSelector::Latest,
-        };
-    }
-    positional_args(invocation)
-        .first()
-        .map(|snapshot_id| SnapshotResumeSelector::SnapshotId((*snapshot_id).to_string()))
-        .unwrap_or(SnapshotResumeSelector::Latest)
+pub(super) fn load_layout_selector(invocation: &CommandInvocation) -> LayoutLoadSelector {
+    flag_value(&invocation.args, "--name")
+        .or_else(|| flag_value(&invocation.args, "-n"))
+        .or_else(|| positional_args(invocation).first().copied())
+        .map(|name| LayoutLoadSelector::Name(name.to_string()))
+        .unwrap_or(LayoutLoadSelector::Latest)
 }
 
 /// Runs the show messages display operation for this subsystem.

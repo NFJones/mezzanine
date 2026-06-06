@@ -3406,8 +3406,8 @@ pub(super) fn runtime_hook_event_from_config(value: &str) -> Result<HookEvent> {
         "permission_decision" | "PermissionDecision" => Ok(HookEvent::PermissionDecision),
         "pre_mcp_tool_use" | "PreMcpToolUse" => Ok(HookEvent::PreMcpToolUse),
         "post_mcp_tool_use" | "PostMcpToolUse" => Ok(HookEvent::PostMcpToolUse),
-        "snapshot_create" | "SnapshotCreate" => Ok(HookEvent::SnapshotCreate),
-        "snapshot_resume" | "SnapshotResume" => Ok(HookEvent::SnapshotResume),
+        "layout_save" | "LayoutSave" => Ok(HookEvent::LayoutSave),
+        "layout_load" | "LayoutLoad" => Ok(HookEvent::LayoutLoad),
         _ => Err(MezError::config(format!(
             "unsupported hook event `{value}`"
         ))),

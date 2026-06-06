@@ -32,7 +32,7 @@ use crate::permissions::{
 };
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 use crate::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};
-use crate::snapshot::{SnapshotKind, SnapshotRepository, SnapshotResumePlan, SnapshotState};
+use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
 
 /// Exposes the authz module boundary.
 ///

@@ -232,7 +232,7 @@ fn temp_root(name: &str) -> PathBuf {
 /// Verifies terminal snapshot commands use the live runtime snapshot repository.
 ///
 /// The command prompt should no longer return command-layer placeholders for
-/// `snapshot-session` or `resume-session` when a daemon has configured snapshot
+/// `save-layout` or `load-layout` when a daemon has configured snapshot
 /// storage. This protects the bridge from parsed colon commands to the same
 /// runtime control paths used by JSON-RPC snapshot clients.
 #[test]
@@ -246,17 +246,17 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
         .unwrap();
 
     let create = service
-        .execute_terminal_command(&primary, "snapshot-session --name checkpoint")
+        .execute_terminal_command(&primary, "save-layout --name checkpoint")
         .unwrap();
-    assert!(create.contains(r#""command":"snapshot-session""#), "{create}");
+    assert!(create.contains(r#""command":"save-layout""#), "{create}");
     assert!(create.contains(r#""kind":"display""#), "{create}");
     assert!(create.contains(r#"\"snapshot\""#), "{create}");
     assert!(create.contains(r#"\"name\":\"checkpoint\""#), "{create}");
 
     let resume = service
-        .execute_terminal_command(&primary, "resume-session --latest")
+        .execute_terminal_command(&primary, "load-layout --latest")
         .unwrap();
-    assert!(resume.contains(r#""command":"resume-session""#), "{resume}");
+    assert!(resume.contains(r#""command":"load-layout""#), "{resume}");
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
     assert!(resume.contains(r#"\"restarted_panes\":1"#), "{resume}");
@@ -266,8 +266,8 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
 
 /// Verifies unscoped terminal snapshot resume selects the newest restorable snapshot.
 ///
-/// A user-visible `:resume-session --latest` command should be able to restore
-/// the snapshot most recently created by `:snapshot-session` even when the live
+/// A user-visible `:load-layout --latest` command should be able to restore
+/// the snapshot most recently created by `:save-layout` even when the live
 /// daemon has a different session id after restart. Scoping `--latest` to the
 /// current session id made the command unable to find persisted snapshots from
 /// previous daemon sessions, so this regression uses two runtime services that
@@ -285,7 +285,7 @@ fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_session
         .unwrap();
 
     let create = creating_service
-        .execute_terminal_command(&creating_primary, "snapshot-session --name restart-point")
+        .execute_terminal_command(&creating_primary, "save-layout --name restart-point")
         .unwrap();
     assert!(create.contains(r#"\"name\":\"restart-point\""#), "{create}");
 
@@ -297,7 +297,7 @@ fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_session
     let live_session_id = resuming_service.session.id.to_string();
 
     let resume = resuming_service
-        .execute_terminal_command(&resuming_primary, "resume-session --latest")
+        .execute_terminal_command(&resuming_primary, "load-layout --latest")
         .unwrap();
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(
@@ -312,7 +312,7 @@ fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_session
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies `:resume-session --latest` revives a detached snapshot into a live
+/// Verifies `:load-layout --latest` revives a detached snapshot into a live
 /// running session before restored pane restart begins.
 ///
 /// Snapshot payloads preserve detached lifecycle state so users can resume a
@@ -330,7 +330,7 @@ fn runtime_terminal_snapshot_resume_latest_revives_detached_snapshot_session() {
         .unwrap();
 
     let create = creating_service
-        .execute_terminal_command(&creating_primary, "snapshot-session --name detached-restart")
+        .execute_terminal_command(&creating_primary, "save-layout --name detached-restart")
         .unwrap();
     assert!(create.contains(r#"\"name\":\"detached-restart\""#), "{create}");
 
@@ -345,7 +345,7 @@ fn runtime_terminal_snapshot_resume_latest_revives_detached_snapshot_session() {
         .unwrap();
 
     let resume = resuming_service
-        .execute_terminal_command(&resuming_primary, "resume-session --latest")
+        .execute_terminal_command(&resuming_primary, "load-layout --latest")
         .unwrap();
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");

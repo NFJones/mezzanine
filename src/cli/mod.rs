@@ -57,8 +57,8 @@ use crate::runtime::{
 use crate::session::Session;
 use crate::shell::resolve_shell;
 use crate::snapshot::{
-    SessionSnapshotPayload, SnapshotKind, SnapshotRepository, SnapshotRestoreResult,
-    SnapshotResumePlan, SnapshotRollbackPlan, SnapshotState,
+    LayoutLoadPlan, SessionSnapshotPayload, SnapshotKind, SnapshotRepository,
+    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotState,
 };
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalOutputModes, ClientViewRole,

@@ -30,7 +30,7 @@ type FreshSnapshotLayout = (
 impl Session {
     /// Replaces only the user-visible layout and pane metadata from a snapshot.
     ///
-    /// Runtime `resume-session` uses this path when it should behave like a
+    /// Runtime `load-layout` uses this path when it should behave like a
     /// user manually recreated the saved groups, windows, panes, titles, and
     /// pane working directories. Session identity, clients, observers,
     /// configuration generation, and other runtime-owned state are deliberately

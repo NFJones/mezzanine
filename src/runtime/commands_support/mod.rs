@@ -31,7 +31,7 @@ use crate::agent::{
     ContextSourceKind, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
     append_mcp_context, assemble_model_request_with_retained_tail_percent,
 };
-use crate::command::SnapshotResumeSelector;
+use crate::command::LayoutLoadSelector;
 use crate::control::ControlConnectionState;
 use crate::layout::SplitDirection;
 use crate::snapshot::{SnapshotRepository, SnapshotState};
@@ -71,7 +71,7 @@ pub(super) fn execute_runtime_command_sequence(
         }
         let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
         let outcome =
-            resolve_runtime_snapshot_command_outcome(service, &mut active_client_id, outcome)?;
+            resolve_runtime_layout_command_outcome(service, &mut active_client_id, outcome)?;
         if runtime_command_requires_pty_sync(invocation) {
             service.sync_tracked_pty_sizes()?;
         }
@@ -109,7 +109,7 @@ pub(super) async fn execute_runtime_command_sequence_async(
         }
         let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
         let outcome =
-            resolve_runtime_snapshot_command_outcome(service, &mut active_client_id, outcome)?;
+            resolve_runtime_layout_command_outcome(service, &mut active_client_id, outcome)?;
         if runtime_command_requires_pty_sync(invocation) {
             service.sync_tracked_pty_sizes()?;
         }
@@ -119,67 +119,90 @@ pub(super) async fn execute_runtime_command_sequence_async(
 }
 
 /// Resolves typed snapshot command outcomes through the live runtime snapshot repository.
-fn resolve_runtime_snapshot_command_outcome(
+fn resolve_runtime_layout_command_outcome(
     service: &mut RuntimeSessionService,
     active_client_id: &mut crate::ids::ClientId,
     outcome: CommandOutcome,
 ) -> Result<CommandOutcome> {
     match outcome {
-        CommandOutcome::SnapshotCreate { command, name } => {
+        CommandOutcome::LayoutSave { command, name } => {
             let Some(snapshots) = service.snapshot_repository.clone() else {
-                return Ok(CommandOutcome::SnapshotCreate { command, name });
+                return Ok(CommandOutcome::LayoutSave { command, name });
             };
-            let body =
-                runtime_snapshot_create_command(service, active_client_id, &snapshots, name)?;
+            let body = runtime_layout_save_command(service, active_client_id, &snapshots, name)?;
             Ok(CommandOutcome::Display { command, body })
         }
-        CommandOutcome::SnapshotResume { command, selector } => {
+        CommandOutcome::LayoutLoad { command, selector } => {
             let Some(snapshots) = service.snapshot_repository.clone() else {
-                return Ok(CommandOutcome::SnapshotResume { command, selector });
+                return Ok(CommandOutcome::LayoutLoad { command, selector });
             };
             let body =
-                runtime_snapshot_resume_command(service, active_client_id, &snapshots, &selector)?;
+                runtime_layout_load_command(service, active_client_id, &snapshots, &selector)?;
             Ok(CommandOutcome::Display { command, body })
         }
         outcome => Ok(outcome),
     }
 }
 
-/// Creates a live session snapshot through the same runtime control path as JSON-RPC clients.
-fn runtime_snapshot_create_command(
+/// Creates a version-four UUID string for an unnamed saved layout.
+fn new_layout_uuid() -> String {
+    let mut bytes: [u8; 16] = rand::random();
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
+/// Saves the current layout through the runtime snapshot repository path.
+fn runtime_layout_save_command(
     service: &mut RuntimeSessionService,
     active_client_id: &mut crate::ids::ClientId,
     snapshots: &SnapshotRepository,
     name: Option<String>,
 ) -> Result<String> {
     let snapshot_count = snapshots.list()?.len();
+    let layout_name = name.unwrap_or_else(new_layout_uuid);
     let idempotency_key = format!(
-        "terminal-command:snapshot-session:{}:{}:{}",
+        "terminal-command:save-layout:{}:{}:{}:{}",
         service.session.id,
         current_unix_seconds(),
-        snapshot_count
+        snapshot_count,
+        layout_name
     );
-    let name_json = name
-        .as_deref()
-        .map(|name| format!(r#""{}""#, json_escape(name)))
-        .unwrap_or_else(|| "null".to_string());
     let body = format!(
-        r#"{{"jsonrpc":"2.0","id":1,"method":"snapshot/create","params":{{"target":{{"default":true}},"name":{},"idempotency_key":"{}"}}}}"#,
-        name_json,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"snapshot/create","params":{{"target":{{"default":true}},"name":"{}","idempotency_key":"{}"}}}}"#,
+        json_escape(&layout_name),
         json_escape(&idempotency_key)
     );
     dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)
 }
 
 /// Resumes a live session snapshot through the runtime snapshot resume control path.
-fn runtime_snapshot_resume_command(
+fn runtime_layout_load_command(
     service: &mut RuntimeSessionService,
     active_client_id: &mut crate::ids::ClientId,
     snapshots: &SnapshotRepository,
-    selector: &SnapshotResumeSelector,
+    selector: &LayoutLoadSelector,
 ) -> Result<String> {
-    let snapshot_id = runtime_snapshot_id_for_selector(snapshots, selector)?;
-    let idempotency_key = format!("terminal-command:resume-session:{snapshot_id}");
+    let snapshot_id = runtime_layout_id_for_selector(snapshots, selector)?;
+    let idempotency_key = format!("terminal-command:load-layout:{snapshot_id}");
     let body = format!(
         r#"{{"jsonrpc":"2.0","id":1,"method":"snapshot/resume","params":{{"snapshot_id":"{}","idempotency_key":"{}"}}}}"#,
         json_escape(&snapshot_id),
@@ -207,22 +230,35 @@ fn dispatch_runtime_snapshot_terminal_command(
     Ok(response)
 }
 
-/// Resolves a resume-session selector to a concrete snapshot id.
-fn runtime_snapshot_id_for_selector(
+/// Resolves a load-layout selector to a concrete snapshot id.
+fn runtime_layout_id_for_selector(
     snapshots: &SnapshotRepository,
-    selector: &SnapshotResumeSelector,
+    selector: &LayoutLoadSelector,
 ) -> Result<String> {
     match selector {
-        SnapshotResumeSelector::SnapshotId(snapshot_id) => Ok(snapshot_id.clone()),
-        SnapshotResumeSelector::Latest => runtime_latest_snapshot_id(snapshots, None),
-        SnapshotResumeSelector::LatestForSession(session_id) => {
-            runtime_latest_snapshot_id(snapshots, Some(session_id))
-        }
+        LayoutLoadSelector::Name(name) => runtime_latest_named_layout_id(snapshots, name),
+        LayoutLoadSelector::Latest => runtime_latest_layout_id(snapshots, None),
     }
 }
 
+/// Returns the latest restorable layout id with the requested user-visible name.
+fn runtime_latest_named_layout_id(snapshots: &SnapshotRepository, name: &str) -> Result<String> {
+    snapshots
+        .list()?
+        .into_iter()
+        .filter(|snapshot| snapshot.restorable && snapshot.name.as_deref() == Some(name))
+        .max_by(runtime_compare_snapshot_recency)
+        .map(|snapshot| snapshot.id)
+        .ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                format!("no stored layout named {name} found"),
+            )
+        })
+}
+
 /// Returns the latest restorable snapshot id, optionally scoped to a session.
-fn runtime_latest_snapshot_id(
+fn runtime_latest_layout_id(
     snapshots: &SnapshotRepository,
     session_id: Option<&str>,
 ) -> Result<String> {

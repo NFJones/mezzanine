@@ -6,9 +6,9 @@
 
 use super::serve::{ServeCliArgs, assign_unique_live_session_id};
 use super::{
-    Args, CliEnv, CliOutputFormat, ConfigPaths, LoadedRuntimeConfig, MezError, ParsedServeOptions,
-    RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup, RuntimeSessionService, Serialize,
-    SnapshotKind, SnapshotRepository, SnapshotRestoreResult, SnapshotResumePlan,
+    Args, CliEnv, CliOutputFormat, ConfigPaths, LayoutLoadPlan, LoadedRuntimeConfig, MezError,
+    ParsedServeOptions, RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup,
+    RuntimeSessionService, Serialize, SnapshotKind, SnapshotRepository, SnapshotRestoreResult,
     SnapshotRollbackPlan, SnapshotState, SocketSelection, Subcommand, Write,
     apply_default_serve_auxiliary_sockets, cli_idempotency_key, current_unix_seconds, json_escape,
     json_optional, json_string_array, load_runtime_config_layers, resolve_shell,
@@ -187,9 +187,9 @@ enum SnapshotCliCommand {
         snapshot_id: String,
     },
     /// Restores one snapshot into a model or live daemon.
-    Resume(SnapshotResumeCliArgs),
+    Resume(LayoutLoadCliArgs),
     /// Restores the latest matching snapshot into a model or live daemon.
-    ResumeLatest(SnapshotResumeLatestCliArgs),
+    ResumeLatest(LayoutLoadLatestCliArgs),
     /// Shows the restore plan for one snapshot.
     ResumePlan {
         /// Snapshot id.
@@ -211,7 +211,7 @@ enum SnapshotCliCommand {
 
 /// Typed process CLI arguments for `mez snapshot resume`.
 #[derive(Debug, Clone, clap::Args)]
-pub(super) struct SnapshotResumeCliArgs {
+pub(super) struct LayoutLoadCliArgs {
     /// Snapshot id.
     snapshot_id: String,
     /// Restores the snapshot into a live foreground daemon.
@@ -227,7 +227,7 @@ pub(super) struct SnapshotResumeCliArgs {
 
 /// Typed process CLI arguments for `mez snapshot resume-latest`.
 #[derive(Debug, Clone, clap::Args)]
-pub(super) struct SnapshotResumeLatestCliArgs {
+pub(super) struct LayoutLoadLatestCliArgs {
     /// Optional session id filter.
     #[arg(long)]
     session_id: Option<String>,
@@ -396,7 +396,7 @@ pub(super) fn snapshot_json(snapshot: &SnapshotState) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn resume_plan_json(plan: &SnapshotResumePlan) -> String {
+pub(super) fn resume_plan_json(plan: &LayoutLoadPlan) -> String {
     let restart_required = plan
         .restart_required_panes
         .iter()

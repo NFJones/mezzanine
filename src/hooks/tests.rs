@@ -779,7 +779,7 @@ fn event_planning_applies_matcher_groups_to_payload() {
 fn completed_events_cannot_be_retroactively_blocked() {
     let hook = HookDefinition {
         id: "snapshot".to_string(),
-        event: HookEvent::SnapshotResume,
+        event: HookEvent::LayoutLoad,
         invocation: HookInvocation::Program {
             command: "false".to_string(),
             args: Vec::new(),
@@ -794,7 +794,7 @@ fn completed_events_cannot_be_retroactively_blocked() {
     let plan = plan_hook(&hook).unwrap().unwrap();
     let failure = HookFailure {
         hook_id: "snapshot".to_string(),
-        event: HookEvent::SnapshotResume,
+        event: HookEvent::LayoutLoad,
         kind: HookFailureKind::ExitNonZero,
         message: "failed".to_string(),
         retryable: false,

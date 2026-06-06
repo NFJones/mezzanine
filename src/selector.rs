@@ -807,11 +807,11 @@ fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
             ]));
             candidates.extend(value_candidates(&["stdio", "streamable-http"]));
         }
-        "snapshot-session" => {
+        "save-layout" => {
             candidates.extend(flag_candidates(&["--name"]));
         }
-        "resume-session" => {
-            candidates.extend(flag_candidates(&["--snapshot", "--session", "--latest"]));
+        "load-layout" => {
+            candidates.extend(flag_candidates(&["--name"]));
         }
         "list-themes" | "set-theme" => {
             candidates.extend(value_candidates(crate::terminal::BUILTIN_UI_THEME_NAMES));
@@ -926,8 +926,8 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "auth-login" => Some(" [--provider <openai|deepseek>] [--browser|--device-code|--api-key]"),
         "mcp-add" => Some(" <name> --transport <stdio|streamable-http>"),
         "mcp-remove" | "mcp-retry" => Some(" <name>"),
-        "snapshot-session" => Some(" [--name name]"),
-        "resume-session" => Some(" [snapshot-id|--snapshot id|--latest [--session id]]"),
+        "save-layout" => Some(" [--name name]"),
+        "load-layout" => Some(" [--name name]"),
         "capture-pane" => Some(" [-t target-pane] [--start n] [--end n]"),
         "save-buffer" => Some(" [-b buffer] <path>"),
         "search-history" => Some(" [-t target-pane] <query>"),
@@ -1081,8 +1081,8 @@ fn command_accepts_path_argument(surface: SelectorSurface, command: &str) -> boo
                 | "new-group"
                 | "split-window"
                 | "auth-login"
-                | "snapshot-session"
-                | "resume-session"
+                | "save-layout"
+                | "load-layout"
         ),
         SelectorSurface::AgentCommand => false,
     }

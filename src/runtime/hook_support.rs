@@ -83,9 +83,9 @@ pub(super) fn runtime_hook_event_for_lifecycle(
             Some(HookEvent::WindowCreate)
         }
         EventKind::SnapshotChanged if payload.contains("snapshot_restore") => {
-            Some(HookEvent::SnapshotResume)
+            Some(HookEvent::LayoutLoad)
         }
-        EventKind::SnapshotChanged => Some(HookEvent::SnapshotCreate),
+        EventKind::SnapshotChanged => Some(HookEvent::LayoutSave),
         EventKind::AgentStatus if payload.contains(r#""turn_started""#) => {
             Some(HookEvent::AgentTurnStart)
         }
@@ -125,8 +125,8 @@ pub(super) fn runtime_hook_event_name(event: HookEvent) -> &'static str {
         HookEvent::PermissionDecision => "permission_decision",
         HookEvent::PreMcpToolUse => "pre_mcp_tool_use",
         HookEvent::PostMcpToolUse => "post_mcp_tool_use",
-        HookEvent::SnapshotCreate => "snapshot_create",
-        HookEvent::SnapshotResume => "snapshot_resume",
+        HookEvent::LayoutSave => "layout_save",
+        HookEvent::LayoutLoad => "layout_load",
     }
 }
 

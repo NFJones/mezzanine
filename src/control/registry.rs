@@ -107,9 +107,9 @@ pub(super) enum ControlDispatchKind {
     /// List snapshots.
     SnapshotList,
     /// Create a snapshot.
-    SnapshotCreate,
+    LayoutSave,
     /// Resume a snapshot.
-    SnapshotResume,
+    LayoutLoad,
     /// Delete a snapshot.
     SnapshotDelete,
     /// List project trust entries.
@@ -474,12 +474,12 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
     },
     ControlMethodSpec {
         method: "snapshot/create",
-        dispatch: ControlDispatchKind::SnapshotCreate,
+        dispatch: ControlDispatchKind::LayoutSave,
         params_schema: ControlParamsSchema::Allowed(&["target", "name", "idempotency_key"]),
     },
     ControlMethodSpec {
         method: "snapshot/resume",
-        dispatch: ControlDispatchKind::SnapshotResume,
+        dispatch: ControlDispatchKind::LayoutLoad,
         params_schema: ControlParamsSchema::Allowed(&["snapshot_id", "idempotency_key"]),
     },
     ControlMethodSpec {

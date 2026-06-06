@@ -20,7 +20,7 @@ use super::{
     create_buffer_display, execute_auth_login, export_history_display, flag_value,
     key_chord_notation, list_baseline_commands, list_buffers_display, list_clients,
     list_current_session, list_default_key_bindings, list_default_themes, list_groups,
-    list_observers, list_panes, list_windows, mark_pane_ready_audit_record,
+    list_observers, list_panes, list_windows, load_layout_selector, mark_pane_ready_audit_record,
     mark_pane_ready_warning_display, mcp_add_plan_display, mcp_login_plan_display,
     mcp_logout_plan_display, mcp_remove_plan_display, mcp_retry_plan_display, mcp_server_id,
     mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
@@ -28,9 +28,8 @@ use super::{
     parse_command_sequence, parse_config_command_value, paste_buffer_display,
     paste_clipboard_display, persist_command_config_mutation, persist_command_theme_config,
     persist_config_text, persist_mcp_add, persist_mcp_remove, pipe_pane_display, positional_args,
-    resume_session_selector, save_buffer_display, search_history_display, set_option_args,
-    set_theme_arg, show_default_options, show_messages_display, show_metrics_display,
-    snapshot_session_name, validate_config_file,
+    save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
+    show_default_options, show_messages_display, show_metrics_display, validate_config_file,
 };
 
 use std::fs;
@@ -791,13 +790,13 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: pipe_pane_display(invocation),
         }),
-        "snapshot-session" => Ok(CommandOutcome::SnapshotCreate {
+        "save-layout" => Ok(CommandOutcome::LayoutSave {
             command: invocation.name.clone(),
-            name: snapshot_session_name(invocation),
+            name: save_layout_name(invocation),
         }),
-        "resume-session" => Ok(CommandOutcome::SnapshotResume {
+        "load-layout" => Ok(CommandOutcome::LayoutLoad {
             command: invocation.name.clone(),
-            selector: resume_session_selector(invocation),
+            selector: load_layout_selector(invocation),
         }),
         "show-messages" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),

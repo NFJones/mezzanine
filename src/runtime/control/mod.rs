@@ -394,7 +394,7 @@ fn pane_id_from_runtime_agent_id(agent_id: &str) -> Option<PaneId> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_snapshot_resume_plan_json(plan: &crate::snapshot::SnapshotResumePlan) -> String {
+fn runtime_snapshot_resume_plan_json(plan: &crate::snapshot::LayoutLoadPlan) -> String {
     format!(
         r#"{{"session_id":"{}","window_count":{},"pane_count":{},"restart_required_panes":{},"limitations":{}}}"#,
         json_escape(&plan.session_id),
@@ -2797,7 +2797,7 @@ impl RuntimeSessionService {
         &mut self,
         snapshot_id: &str,
         payload: crate::snapshot::SessionSnapshotPayload,
-        resume_plan: crate::snapshot::SnapshotResumePlan,
+        resume_plan: crate::snapshot::LayoutLoadPlan,
         caller_client_id: &crate::ids::ClientId,
     ) -> Result<String> {
         let terminated_panes =

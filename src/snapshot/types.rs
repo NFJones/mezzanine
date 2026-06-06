@@ -927,7 +927,7 @@ pub enum SnapshotSessionState {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotResumePlan {
+pub struct LayoutLoadPlan {
     /// Stores the session id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1008,5 +1008,5 @@ pub struct SnapshotRestoreResult {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub resume_plan: SnapshotResumePlan,
+    pub resume_plan: LayoutLoadPlan,
 }

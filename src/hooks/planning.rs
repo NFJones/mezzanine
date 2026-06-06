@@ -122,7 +122,7 @@ fn default_on_failure(definition: &HookDefinition) -> HookOnFailure {
         HookEvent::PreShellCommand
         | HookEvent::PermissionRequest
         | HookEvent::PreMcpToolUse
-        | HookEvent::SnapshotResume => HookOnFailure::Block,
+        | HookEvent::LayoutLoad => HookOnFailure::Block,
         HookEvent::AgentTurnStart | HookEvent::UserPromptSubmit if definition.agent_hook => {
             HookOnFailure::Block
         }

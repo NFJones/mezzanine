@@ -824,7 +824,7 @@ pub(super) async fn run_foreground_control_daemon(
         ProjectTrustStore::load_from_file(&trust_path)?,
         Some(trust_path),
     );
-    let snapshot_repository = SnapshotRepository::new(config.root.join("snapshots"));
+    let snapshot_repository = SnapshotRepository::new(config.root.join("layouts"));
     service.set_snapshot_repository(snapshot_repository.clone());
     service.replace_config_layers_async(config.layers).await?;
     if let Some(auth_store) = service.auth_store().cloned() {

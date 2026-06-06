@@ -36,14 +36,14 @@ mod restore;
 mod types;
 
 pub use types::{
-    PaneSnapshotPayload, SessionSnapshotPayload, SnapshotAgentSession,
+    LayoutLoadPlan, PaneSnapshotPayload, SessionSnapshotPayload, SnapshotAgentSession,
     SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
     SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
     SnapshotFrameState, SnapshotKind, SnapshotLayoutNode, SnapshotManifest,
     SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
     SnapshotMcpToolState, SnapshotPaneCapture, SnapshotPaneGeometry, SnapshotRepository,
-    SnapshotRestoreResult, SnapshotResumePlan, SnapshotRollbackPlan, SnapshotSessionState,
-    SnapshotShellMetadata, SnapshotState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotSessionState, SnapshotShellMetadata,
+    SnapshotState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
 
 /// Exposes the tests module boundary.

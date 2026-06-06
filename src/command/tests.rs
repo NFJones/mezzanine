@@ -8,8 +8,8 @@
 
 use super::plans::{CommandPlan, ResizePanePlan, command_plan_from_invocation};
 use super::{
-    AuditLog, AuthStore, CommandOutcome, PaneReadinessOverrideStore, PaneReadinessState,
-    SnapshotResumeSelector, baseline_commands, execute_auth_command, execute_command,
+    AuditLog, AuthStore, CommandOutcome, LayoutLoadSelector, PaneReadinessOverrideStore,
+    PaneReadinessState, baseline_commands, execute_auth_command, execute_command,
     execute_command_sequence, execute_config_store_command, execute_mark_pane_ready_command,
     execute_mcp_config_command, parse_command_sequence,
 };
@@ -1206,8 +1206,8 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("search-history:status=runtime-required"));
     assert!(body.contains("export-history:status=runtime-required"));
     assert!(body.contains("pipe-pane:status=runtime-required"));
-    assert!(body.contains("snapshot-session:status=control-required"));
-    assert!(body.contains("resume-session:status=control-required"));
+    assert!(body.contains("save-layout:status=control-required"));
+    assert!(body.contains("load-layout:status=control-required"));
     assert!(body.contains("list-observers:status=implemented"));
     assert!(body.contains("choose-observer:status=implemented"));
     assert!(body.contains("approve-observer:status=runtime-required"));
@@ -1254,7 +1254,7 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("rebalance-window"), "{help}");
     assert!(help.contains("set-theme"), "{help}");
     assert!(help.contains("agent-shell"), "{help}");
-    assert!(help.contains("snapshot-session"), "{help}");
+    assert!(help.contains("save-layout"), "{help}");
     assert!(help.contains("\n## Key bindings\n"), "{help}");
     assert!(help.contains("key"), "{help}");
     assert!(help.contains("source"), "{help}");
@@ -1594,12 +1594,12 @@ fn paste_and_history_commands_report_live_terminal_requirements() {
     let snapshot = execute_command(
         &mut session,
         &primary,
-        &parse_command_sequence("snapshot-session --name checkpoint").unwrap()[0],
+        &parse_command_sequence("save-layout --name checkpoint").unwrap()[0],
     )
     .unwrap();
     match snapshot {
-        CommandOutcome::SnapshotCreate { command, name } => {
-            assert_eq!(command, "snapshot-session");
+        CommandOutcome::LayoutSave { command, name } => {
+            assert_eq!(command, "save-layout");
             assert_eq!(name.as_deref(), Some("checkpoint"));
         }
         outcome => panic!("expected snapshot create outcome, got {outcome:?}"),
@@ -1608,35 +1608,29 @@ fn paste_and_history_commands_report_live_terminal_requirements() {
     let resume = execute_command(
         &mut session,
         &primary,
-        &parse_command_sequence("resume-session snap-1").unwrap()[0],
+        &parse_command_sequence("load-layout --name checkpoint").unwrap()[0],
     )
     .unwrap();
     match resume {
-        CommandOutcome::SnapshotResume { command, selector } => {
-            assert_eq!(command, "resume-session");
-            assert_eq!(
-                selector,
-                SnapshotResumeSelector::SnapshotId("snap-1".to_string())
-            );
+        CommandOutcome::LayoutLoad { command, selector } => {
+            assert_eq!(command, "load-layout");
+            assert_eq!(selector, LayoutLoadSelector::Name("checkpoint".to_string()));
         }
-        outcome => panic!("expected snapshot resume outcome, got {outcome:?}"),
+        outcome => panic!("expected layout load outcome, got {outcome:?}"),
     }
 
     let resume_latest = execute_command(
         &mut session,
         &primary,
-        &parse_command_sequence("resume-session --latest --session session-1").unwrap()[0],
+        &parse_command_sequence("load-layout").unwrap()[0],
     )
     .unwrap();
     match resume_latest {
-        CommandOutcome::SnapshotResume { command, selector } => {
-            assert_eq!(command, "resume-session");
-            assert_eq!(
-                selector,
-                SnapshotResumeSelector::LatestForSession("session-1".to_string())
-            );
+        CommandOutcome::LayoutLoad { command, selector } => {
+            assert_eq!(command, "load-layout");
+            assert_eq!(selector, LayoutLoadSelector::Latest);
         }
-        outcome => panic!("expected latest snapshot resume outcome, got {outcome:?}"),
+        outcome => panic!("expected latest layout load outcome, got {outcome:?}"),
     }
 
     let error = execute_command(

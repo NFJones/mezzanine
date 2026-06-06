@@ -306,7 +306,7 @@ impl RuntimeSessionService {
         payload: &SessionSnapshotPayload,
     ) -> Result<()> {
         if let Some(block) = self.run_configured_pre_action_hooks(
-            HookEvent::SnapshotResume,
+            HookEvent::LayoutLoad,
             &format!(
                 r#"{{"session_id":"{}","windows":{},"panes":{}}}"#,
                 json_escape(&payload.session_id),

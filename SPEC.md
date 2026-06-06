@@ -1448,8 +1448,8 @@ The command language MUST include commands equivalent to:
 - `auth-status`
 - `mcp-add`
 - `mcp-remove`
-- `snapshot-session`
-- `resume-session`
+- `save-layout`
+- `load-layout`
 - `capture-pane`
 - `save-buffer`
 - `clear-history`
@@ -1534,8 +1534,8 @@ The baseline commands MUST have the following semantics:
 | `mcp-add` | Add an MCP server configuration after validation and permission checks. Project-scoped MCP additions MUST require project trust. |
 | `mcp-remove` | Remove or disable an MCP server configuration from the requested persistence target. |
 | `mcp-retry` | Clear current-session MCP blacklist state for an enabled configured server, reconnect or restart its transport, rediscover its tools, and report whether the server became available or remained unavailable. |
-| `snapshot-session` | Create a structured session snapshot according to snapshot policy. The command MUST report which process state cannot be snapshotted. |
-| `resume-session` | Resume from a saved live session or snapshot. Snapshot resume MUST visibly identify restarted pane primary PIDs. |
+| `save-layout` | Store the current window-group, window, and pane topology with user-assigned group, window, and pane names and each pane's current working directory when available. It MUST accept `--name <name>`; when omitted, the stored layout name MUST default to a generated UUID. The layout store MUST NOT include pane process state, terminal history, client state, agent state, approvals, messages, or MCP runtime state. |
+| `load-layout` | Clear the current group, window, and pane layout and recreate the stored layout in the current session. It MUST accept `--name <name>`; when omitted, it MUST load the newest stored layout. Each recreated pane MUST start a new shell process in the saved current working directory when that directory still exists, otherwise in `$HOME`. It MUST NOT attempt to reattach or restore previous pane processes or session runtime state. |
 | `capture-pane` | Capture visible or historical content from a target pane. History-inclusive capture MUST exclude alternate-screen content. |
 | `save-buffer` | Persist a paste buffer to a path or named store subject to file-write permissions. |
 | `clear-history` | Clear the target pane's normal history buffer after confirmation unless policy permits without prompting. It MUST NOT affect the current visible screen unless explicitly requested. |
@@ -5439,8 +5439,8 @@ The baseline control methods are:
 | `project/trust/decide` | `{ "project_root": string, "decision": "trust" \| "reject", "reason": string \| null, "idempotency_key": string }` | `{ "project": ProjectTrustState, "diagnostics": [Diagnostic] }` | Primary-only mutating method. Trusting a project MUST validate and apply pending overlays as part of the decision. If validation fails, Mezzanine MUST leave those overlays unapplied and report diagnostics. |
 | `project/trust/revoke` | `{ "project_root": string, "reason": string \| null, "idempotency_key": string }` | `{ "project": ProjectTrustState, "diagnostics": [Diagnostic] }` | Primary-only mutating method. Must reload effective configuration without revoked overlays. |
 | `snapshot/list` | `{ "target": SessionTarget \| null }` | `{ "snapshots": [SnapshotState] }` | Read-only and naturally idempotent. |
-| `snapshot/create` | `{ "target": SessionTarget, "name": string \| null, "idempotency_key": string }` | `{ "snapshot": SnapshotState }` | Mutating. |
-| `snapshot/resume` | `{ "snapshot_id": string, "idempotency_key": string }` | `{ "session": SessionState }` | Mutating. |
+| `snapshot/create` | `{ "target": SessionTarget, "name": string \| null, "idempotency_key": string }` | `{ "snapshot": SnapshotState }` | Mutating internal layout persistence path used by `save-layout`; terminal layout saves MUST persist under the layout store and MUST include layout topology and pane working-directory metadata only. |
+| `snapshot/resume` | `{ "snapshot_id": string, "idempotency_key": string }` | `{ "session": SessionState }` | Mutating internal layout load path used by `load-layout`; terminal layout loads MUST recreate the stored layout in the current session with fresh pane shell processes. |
 | `snapshot/delete` | `{ "snapshot_id": string, "idempotency_key": string }` | `{ "deleted": boolean }` | Mutating. |
 | `mcp/list` | `{ "target": SessionTarget \| null }` | `{ "servers": [McpServerState], "tools": [McpToolState] }` | Read-only and naturally idempotent. |
 | `mcp/retry` | `{ "server_id": string, "idempotency_key": string }` | `{ "server_id": string, "retried": boolean, "previous_status": string, "status": string, "retryable_before_retry": boolean, "rediscovered": boolean, "tools": number, "reason": string \| null, "diagnostics": [Diagnostic] }` | Primary-only mutating method. Clears session blacklist state for the configured enabled server, drops stale MCP transport state, attempts rediscovery, and reports whether the retry succeeded or was blacklisted again. |
@@ -7058,8 +7058,8 @@ Mezzanine MUST support hook events equivalent to:
 - `PermissionDecision`
 - `PreMcpToolUse`
 - `PostMcpToolUse`
-- `SnapshotCreate`
-- `SnapshotResume`
+- `LayoutSave`
+- `LayoutLoad`
 
 Hook handlers MUST support program invocations launched outside the pane shell.
 
@@ -7118,7 +7118,7 @@ The valid `on_failure` policies are:
 
 If `on_failure` is omitted, Mezzanine MUST apply these defaults:
 
-- `PreShellCommand`, `PermissionRequest`, `PreMcpToolUse`, `SnapshotResume`, and
+- `PreShellCommand`, `PermissionRequest`, `PreMcpToolUse`, `LayoutLoad`, and
   hooks that provide or modify a permission decision default to `block`.
 - `UserPromptSubmit` and `AgentTurnStart` default to `block` when the hook is
   configured to inject instructions, mutate policy, or alter the pending action;
@@ -7126,7 +7126,7 @@ If `on_failure` is omitted, Mezzanine MUST apply these defaults:
 - `SessionStart` defaults to `block` only when the hook is marked `required`;
   otherwise it defaults to `warn`.
 - `SessionStop`, `ClientDetach`, `PostShellCommand`, `PermissionDecision`,
-  `PostMcpToolUse`, `SnapshotCreate`, and lifecycle notification hooks default
+  `PostMcpToolUse`, `LayoutSave`, and lifecycle notification hooks default
   to `warn`.
 - Hooks whose triggering event has already completed MUST NOT retroactively
   claim that the completed event was blocked; they MAY trigger compensating

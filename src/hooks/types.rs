@@ -108,12 +108,12 @@ pub enum HookEvent {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    SnapshotCreate,
+    LayoutSave,
     /// Represents the Snapshot Resume case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    SnapshotResume,
+    LayoutLoad,
 }
 
 /// Carries Hook Invocation state for this subsystem.
