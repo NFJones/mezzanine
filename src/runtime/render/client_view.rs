@@ -487,6 +487,7 @@ impl RuntimeSessionService {
     fn runtime_agent_working_footer_state_label(&self, turn: &AgentTurnRecord) -> &'static str {
         match self.runtime_agent_frame_status(turn) {
             "queued" => "queued",
+            "remembering" => "remembering",
             "thinking" => "thinking",
             "executing" => "executing",
             "waiting" => "waiting",
@@ -831,7 +832,13 @@ impl RuntimeSessionService {
             .is_some_and(|turn| {
                 matches!(
                     self.runtime_agent_frame_status(turn),
-                    "queued" | "running" | "thinking" | "executing" | "waiting" | "compacting"
+                    "queued"
+                        | "running"
+                        | "remembering"
+                        | "thinking"
+                        | "executing"
+                        | "waiting"
+                        | "compacting"
                 )
             })
     }
@@ -1205,6 +1212,13 @@ impl RuntimeSessionService {
         }
         if self.runtime_agent_turn_is_auto_sizing_routing(turn) {
             return "routing";
+        }
+        if self
+            .claimed_agent_provider_tasks
+            .get(&turn.turn_id)
+            .is_some_and(|claim| claim.memory_sidecar)
+        {
+            return "remembering";
         }
         if self.pending_agent_provider_tasks.contains(&turn.turn_id)
             || self

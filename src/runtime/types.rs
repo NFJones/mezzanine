@@ -3322,17 +3322,15 @@ pub struct RuntimeAutoSizingDecision {
 /// Bounded memory sidecar retrieval dispatch carried to a provider worker.
 #[derive(Debug, Clone)]
 pub struct RuntimeMemorySidecarDispatch {
-    /// Sidecar mode selected by configuration.
-    pub mode: String,
     /// SQLite memory database path opened by the provider worker.
     pub store_path: PathBuf,
-    /// Optional sidecar model profile name.
-    pub profile_name: Option<String>,
-    /// Optional sidecar model profile.
-    pub profile: Option<ModelProfile>,
-    /// Optional sidecar provider. When absent, deterministic fallback is used.
-    pub provider: Option<RuntimeAgentProviderDispatchProvider>,
-    /// Current task text used as deterministic fallback query context.
+    /// Sidecar model profile name selected from configuration.
+    pub profile_name: String,
+    /// Resolved sidecar model profile.
+    pub profile: ModelProfile,
+    /// Sidecar provider used for planning and reranking calls.
+    pub provider: RuntimeAgentProviderDispatchProvider,
+    /// Current task text used as sidecar query context.
     pub query_context: String,
     /// Local scopes allowed for candidate retrieval.
     pub scopes: Vec<crate::memory::MemoryScope>,
@@ -3361,6 +3359,8 @@ pub(super) struct RuntimeAgentProviderClaim {
     pub turn_id: String,
     /// Agent identity that owns the turn.
     pub agent_id: String,
+    /// Whether the claimed worker is expected to run memory sidecar retrieval.
+    pub memory_sidecar: bool,
     /// Timer generation associated with the current claim lease.
     pub generation: u64,
     /// Unix timestamp, in milliseconds, when the provider task was claimed.

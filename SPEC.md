@@ -2335,7 +2335,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 11 is the current configuration schema version for this
+schema version 12 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -5519,8 +5519,8 @@ allocation among children and MUST be sufficient to reconstruct the layout.
 `AgentState` MUST include `id`, `version`, `session_id`, `pane_id`, `status`,
 `visible`, `conversation_id`, `model_profile`, `cooperation_mode`,
 `read_scopes`, `write_scopes`, and `last_turn_id`. `status` MUST be one of
-`idle`, `running`, `waiting_approval`, `blocked`, `compacting`, `failed`, or
-`stopped`.
+`idle`, `running`, `remembering`, `waiting_approval`, `blocked`, `compacting`,
+`failed`, or `stopped`.
 
 `AgentTaskState` MUST include `id`, `version`, `agent_id`, `state`,
 `created_at`, `started_at`, `finished_at`, `prompt_preview`, `approval_ids`,
@@ -7152,6 +7152,24 @@ Persistent memory MAY survive across sessions only when enabled by the user.
 Persistent memory MUST be disabled by default in the baseline configuration and
 MUST be enableable through persistent configuration or the pane-local
 `/memory on` slash command.
+
+When persistent memory is enabled for an agent turn, Mezzanine MUST activate the
+memory sidecar for that turn. The sidecar MUST run at the start of the provider
+turn before the main model request receives persistent memory context. While the
+sidecar is active, visible agent status SHOULD report `remembering`.
+
+The sidecar flow MUST be mediated by runtime code rather than direct model
+store access. First, Mezzanine MUST prompt the configured sidecar model with
+bounded turn context and allowed memory scopes so it can return a validated
+query plan. Mezzanine MUST execute only the validated local memory-store
+queries. Second, Mezzanine MUST prompt the sidecar model with bounded candidate
+cards from those local results so it can select specific memory ids and
+selection reasons. Mezzanine MUST validate selected ids against the candidate
+set, apply configured record and byte caps, mark selected records as used, and
+inject only those authoritative selected records into the main model context for
+the duration of the current turn. If planning, local retrieval, or selection
+fails, Mezzanine MUST continue the main turn without persistent-memory
+injection for that turn.
 
 Persistent memory MUST be stored under `~/.config/mezzanine` or in an explicitly
 configured user-private location. The default persistent store MUST be a

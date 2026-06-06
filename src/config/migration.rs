@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 11;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 12;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +96,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             10 => {
                 current_text = migrate_v10_to_v11(format, &current_text)?;
                 current_version = 11;
+            }
+            11 => {
+                current_text = migrate_v11_to_v12(format, &current_text)?;
+                current_version = 12;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -837,6 +841,62 @@ fn migrate_json_compatible_v10_to_v11(format: ConfigFormat, text: &str) -> Resul
     }
 }
 
+/// Applies the version 11 to version 12 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v11_to_v12(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v11_to_v12(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v11_to_v12(format, text),
+    }
+}
+
+/// Applies the version 11 to version 12 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v11_to_v12(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    for path in removed_v12_paths() {
+        remove_toml_path(&mut document, path)?;
+    }
+    set_toml_path_item(&mut document, "version", toml_edit::value(12))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 11 to version 12 migration to JSON and YAML config files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v11_to_v12(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    for path in removed_v12_paths() {
+        remove_json_path(&mut document, path);
+    }
+    set_json_path_value(&mut document, "version", serde_json::json!(12))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
 /// Parses a JSON or YAML config file into a JSON value tree.
 ///
 /// # Parameters
@@ -872,6 +932,15 @@ fn removed_v2_paths() -> &'static [&'static str] {
         "shell.path",
         "shell.executable",
         "shell.command",
+    ]
+}
+
+/// Returns config paths removed from the current schema during v12 migration.
+fn removed_v12_paths() -> &'static [&'static str] {
+    &[
+        "memory.sidecar_enabled",
+        "memory.sidecar_mode",
+        "memory.sidecar_fallback",
     ]
 }
 

@@ -147,9 +147,9 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
         },
         ConfigChangePathAnnotation {
             pattern: "memory.<key>",
-            purpose: "Adjust persistent memory storage, retrieval, injection, and sidecar defaults.",
+            purpose: "Adjust persistent memory storage, retrieval, injection, and sidecar limits.",
             value_type: "string, integer, or boolean",
-            format: "storage/database_path/sidecar_mode/model_profile/fallback are strings, counts/timeouts are integers, flags are booleans.",
+            format: "storage/database_path/sidecar_model_profile are strings, counts/timeouts are integers, flags are booleans.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -476,13 +476,10 @@ pub(super) const MEMORY_KEYS: &[&str] = &[
     "max_injected_bytes",
     "candidate_limit",
     "fts_enabled",
-    "sidecar_enabled",
-    "sidecar_mode",
     "sidecar_model_profile",
     "sidecar_planning_timeout_ms",
     "sidecar_rerank_timeout_ms",
     "sidecar_max_queries",
-    "sidecar_fallback",
     "archive_before_prune",
     "default_ttl_days",
 ];

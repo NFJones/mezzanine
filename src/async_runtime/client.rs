@@ -20,18 +20,25 @@ use super::{
     run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
 };
 use crate::agent::{
-    ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
-    AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderErrorRetryClass, ReqwestProviderHttpTransport,
+    ActionResult, ActionStatus, AgentActionPayload, AgentContext, AgentTurnExecution,
+    AgentTurnRecord, AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderErrorRetryClass, ReqwestProviderHttpTransport,
     execute_network_action_with_transport_async, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
 use crate::ids::AgentId;
+use crate::memory::{
+    MemoryKind, MemoryRetrievalRequest, MemoryScope, MemorySearchResult, MemorySidecarPlan,
+    MemorySidecarRerankSelection, MemorySidecarRerankSelectionItem, MemorySource, MemoryState,
+    PersistentMemoryStore, candidate_cards, retrieve_persistent_memory, sidecar_selected_memory,
+};
+use crate::runtime::RuntimeMemorySidecarDispatch;
 use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use crate::terminal::{TerminalFdInterest, TerminalStyleSpan};
-use std::time::Duration;
+use serde::Deserialize;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -1314,9 +1321,9 @@ async fn execute_runtime_agent_provider_dispatch(
 ) -> Result<super::AgentTurnExecution> {
     let RuntimeAgentProviderDispatch {
         turn,
-        context,
+        mut context,
         mut model_profile,
-        memory_sidecar: _,
+        memory_sidecar,
         auto_sizing,
         auto_sizing_provider,
         auto_sizing_target_providers,
@@ -1436,6 +1443,52 @@ async fn execute_runtime_agent_provider_dispatch(
         selected_auto_sizing_profile,
         &auto_sizing_target_providers,
     );
+    if let Some(memory_sidecar) = memory_sidecar.as_ref() {
+        match &memory_sidecar.provider {
+            RuntimeAgentProviderDispatchProvider::OpenAi(sidecar_provider) => {
+                let sidecar_execution = runtime_execute_memory_sidecar_with_async_provider(
+                    sidecar_provider,
+                    memory_sidecar,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    sidecar_execution.token_usage_by_model(),
+                );
+                context = sidecar_execution.context;
+            }
+            RuntimeAgentProviderDispatchProvider::DeepSeek(sidecar_provider) => {
+                let sidecar_execution = runtime_execute_memory_sidecar_with_async_provider(
+                    sidecar_provider,
+                    memory_sidecar,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    sidecar_execution.token_usage_by_model(),
+                );
+                context = sidecar_execution.context;
+            }
+            RuntimeAgentProviderDispatchProvider::OpenAiCompatible(sidecar_provider) => {
+                let sidecar_execution = runtime_execute_memory_sidecar_with_async_provider(
+                    sidecar_provider,
+                    memory_sidecar,
+                    &turn,
+                    &context,
+                )
+                .await;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    sidecar_execution.token_usage_by_model(),
+                );
+                context = sidecar_execution.context;
+            }
+        }
+    }
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
@@ -1534,6 +1587,537 @@ fn runtime_provider_dispatch_after_auto_sizing(
         return (target_provider, selected_profile);
     }
     (provider, current_profile)
+}
+
+/// Result of one internal memory sidecar retrieval pass.
+struct RuntimeMemorySidecarExecution {
+    /// Main-model context after optional memory injection.
+    context: AgentContext,
+    /// Token usage reported by sidecar planning and reranking requests.
+    token_usage_by_model: std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+}
+
+impl RuntimeMemorySidecarExecution {
+    /// Returns the sidecar usage as a per-model accounting map.
+    fn token_usage_by_model(
+        &self,
+    ) -> std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        self.token_usage_by_model.clone()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MemorySidecarPlanJson {
+    queries: Vec<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    candidate_limit: Option<usize>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemorySidecarSelectionJson {
+    selected: Vec<MemorySidecarSelectionItemJson>,
+    #[serde(default)]
+    rejected_summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemorySidecarSelectionItemJson {
+    id: String,
+    confidence: f64,
+    reason: String,
+}
+
+/// Executes the two-call memory sidecar flow before the main provider request.
+async fn runtime_execute_memory_sidecar_with_async_provider<P: AsyncModelProvider>(
+    provider: &P,
+    sidecar: &RuntimeMemorySidecarDispatch,
+    turn: &AgentTurnRecord,
+    context: &AgentContext,
+) -> RuntimeMemorySidecarExecution {
+    let mut token_usage_by_model = std::collections::BTreeMap::new();
+    let mut output = RuntimeMemorySidecarExecution {
+        context: context.clone(),
+        token_usage_by_model: std::collections::BTreeMap::new(),
+    };
+    let plan_request = runtime_memory_sidecar_plan_request(sidecar, turn, context);
+    let plan_response = match provider.send_request_async(&plan_request).await {
+        Ok(response) => response,
+        Err(_) => return output,
+    };
+    record_memory_sidecar_usage(&mut token_usage_by_model, sidecar, &plan_response);
+    let plan = match runtime_memory_sidecar_plan_from_response(sidecar, &plan_response) {
+        Ok(plan) => plan,
+        Err(_) => {
+            output.token_usage_by_model = token_usage_by_model;
+            return output;
+        }
+    };
+    let candidates = match runtime_memory_sidecar_candidates(sidecar, &plan) {
+        Ok(candidates) if !candidates.is_empty() => candidates,
+        _ => {
+            output.token_usage_by_model = token_usage_by_model;
+            return output;
+        }
+    };
+    let rerank_request = runtime_memory_sidecar_rerank_request(sidecar, turn, &candidates);
+    let rerank_response = match provider.send_request_async(&rerank_request).await {
+        Ok(response) => response,
+        Err(_) => {
+            output.token_usage_by_model = token_usage_by_model;
+            return output;
+        }
+    };
+    record_memory_sidecar_usage(&mut token_usage_by_model, sidecar, &rerank_response);
+    let selection = match runtime_memory_sidecar_selection_from_response(&rerank_response) {
+        Ok(selection) => selection,
+        Err(_) => {
+            output.token_usage_by_model = token_usage_by_model;
+            return output;
+        }
+    };
+    let selected = match sidecar_selected_memory(
+        &candidates,
+        &selection,
+        sidecar.max_selected_records,
+        sidecar.include_selection_reasons,
+    ) {
+        Ok(selected) if !selected.is_empty() => selected,
+        _ => {
+            output.token_usage_by_model = token_usage_by_model;
+            return output;
+        }
+    };
+    let mut selected_within_bytes = Vec::new();
+    let mut selected_bytes = 0usize;
+    for selected_record in selected {
+        let projected = selected_bytes.saturating_add(selected_record.record.content.len());
+        if projected > sidecar.max_selected_bytes {
+            break;
+        }
+        selected_bytes = projected;
+        selected_within_bytes.push(selected_record);
+    }
+    let store = PersistentMemoryStore::new(&sidecar.store_path);
+    let used_at = memory_sidecar_current_unix_seconds().max(1);
+    for selected_record in &selected_within_bytes {
+        let _ = store.record_use(&selected_record.record.id, used_at);
+    }
+    output.context = crate::agent::append_selected_memory_context(
+        context.clone(),
+        &selected_within_bytes,
+        sidecar.max_selected_records,
+    )
+    .unwrap_or_else(|_| context.clone());
+    output.token_usage_by_model = token_usage_by_model;
+    output
+}
+
+fn record_memory_sidecar_usage(
+    usage_by_model: &mut std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    sidecar: &RuntimeMemorySidecarDispatch,
+    response: &ModelResponse,
+) {
+    if response.usage.is_zero() {
+        return;
+    }
+    let key = ModelTokenUsageKey::new(sidecar.profile.provider.clone(), response.model.clone());
+    usage_by_model
+        .entry(key)
+        .or_default()
+        .add_assign(response.usage);
+}
+
+fn runtime_memory_sidecar_plan_request(
+    sidecar: &RuntimeMemorySidecarDispatch,
+    turn: &AgentTurnRecord,
+    context: &AgentContext,
+) -> ModelRequest {
+    ModelRequest {
+        provider: sidecar.profile.provider.clone(),
+        model: sidecar.profile.model.clone(),
+        reasoning_effort: sidecar
+            .profile
+            .provider_options
+            .get("reasoning_effort")
+            .cloned()
+            .or_else(|| sidecar.profile.reasoning_profile.clone()),
+        thinking_enabled: sidecar.profile.thinking_enabled(),
+        latency_preference: sidecar.profile.latency_preference.clone(),
+        prompt_cache_retention: sidecar.profile.provider_options.get("prompt_cache_retention").cloned(),
+        max_output_tokens: sidecar.profile.max_output_tokens(),
+        temperature: None,
+        stop: None,
+        prompt_cache_session_id: None,
+        prompt_cache_lineage_id: None,
+        turn_id: format!("{}:memory-sidecar-plan", turn.turn_id),
+        agent_id: turn.agent_id.clone(),
+        available_mcp_tools: Vec::new(),
+        interaction_kind: ModelInteractionKind::AutoSizing,
+        allowed_actions: crate::agent::AllowedActionSet::say_only(),
+        messages: vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                content: "You are Mezzanine's memory sidecar planner. Return only a JSON object for local memory retrieval. Do not answer the user, call tools, or request capabilities."
+                    .to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::DeveloperInstruction,
+                content: runtime_memory_sidecar_plan_policy(sidecar),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: runtime_memory_sidecar_context_projection(sidecar, context),
+            },
+        ],
+    }
+}
+
+fn runtime_memory_sidecar_rerank_request(
+    sidecar: &RuntimeMemorySidecarDispatch,
+    turn: &AgentTurnRecord,
+    candidates: &[MemorySearchResult],
+) -> ModelRequest {
+    ModelRequest {
+        provider: sidecar.profile.provider.clone(),
+        model: sidecar.profile.model.clone(),
+        reasoning_effort: sidecar
+            .profile
+            .provider_options
+            .get("reasoning_effort")
+            .cloned()
+            .or_else(|| sidecar.profile.reasoning_profile.clone()),
+        thinking_enabled: sidecar.profile.thinking_enabled(),
+        latency_preference: sidecar.profile.latency_preference.clone(),
+        prompt_cache_retention: sidecar.profile.provider_options.get("prompt_cache_retention").cloned(),
+        max_output_tokens: sidecar.profile.max_output_tokens(),
+        temperature: None,
+        stop: None,
+        prompt_cache_session_id: None,
+        prompt_cache_lineage_id: None,
+        turn_id: format!("{}:memory-sidecar-rerank", turn.turn_id),
+        agent_id: turn.agent_id.clone(),
+        available_mcp_tools: Vec::new(),
+        interaction_kind: ModelInteractionKind::AutoSizing,
+        allowed_actions: crate::agent::AllowedActionSet::say_only(),
+        messages: vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::System,
+                content: "You are Mezzanine's memory sidecar selector. Return only a JSON object selecting candidate memory ids for the main model. Do not answer the user, call tools, or request capabilities."
+                    .to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::DeveloperInstruction,
+                content: format!(
+                    "Select up to {} memory ids from the candidate cards. Return JSON with selected=[{{id, confidence, reason}}] and rejected_summary. Confidence must be between 0 and 1.",
+                    sidecar.max_selected_records
+                ),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: runtime_memory_sidecar_candidate_payload(sidecar, candidates),
+            },
+        ],
+    }
+}
+
+fn runtime_memory_sidecar_plan_policy(sidecar: &RuntimeMemorySidecarDispatch) -> String {
+    format!(
+        "Plan local persistent-memory retrieval for the current turn. Return JSON with queries, optional scope, optional kind, optional state, optional source, candidate_limit, and reason. queries must be 1..={} short strings. candidate_limit must be 1..={}. Allowed scopes: {}. kind may be preference, fact, procedure, episode, warning, or scratch. state may be active or stale; omit it unless needed. source may be user, agent, imported, or configuration.",
+        sidecar.max_queries,
+        sidecar.candidate_limit,
+        sidecar
+            .scopes
+            .iter()
+            .map(memory_sidecar_scope_label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn runtime_memory_sidecar_context_projection(
+    sidecar: &RuntimeMemorySidecarDispatch,
+    context: &AgentContext,
+) -> String {
+    let mut blocks = vec![format!("current_task:\n{}", sidecar.query_context)];
+    blocks.extend(context.blocks.iter().rev().take(12).rev().map(|block| {
+        format!(
+            "[{}:{}]\n{}",
+            memory_sidecar_context_source_label(block.source),
+            block.label,
+            block.content.chars().take(2_000).collect::<String>()
+        )
+    }));
+    blocks.join("\n\n")
+}
+
+fn runtime_memory_sidecar_candidate_payload(
+    sidecar: &RuntimeMemorySidecarDispatch,
+    candidates: &[MemorySearchResult],
+) -> String {
+    let candidates = candidate_cards(candidates, 600)
+        .into_iter()
+        .map(|card| {
+            serde_json::json!({
+                "id": card.id,
+                "scope": card.scope,
+                "kind": memory_kind_name(card.kind),
+                "state": memory_state_name(card.state),
+                "source": memory_source_name(card.source),
+                "priority": card.priority,
+                "updated_at_unix_seconds": card.updated_at_unix_seconds,
+                "use_count": card.use_count,
+                "snippet": card.snippet,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "task": sidecar.query_context,
+        "candidates": candidates,
+    })
+    .to_string()
+}
+
+fn runtime_memory_sidecar_plan_from_response(
+    sidecar: &RuntimeMemorySidecarDispatch,
+    response: &ModelResponse,
+) -> Result<MemorySidecarPlan> {
+    let parsed = serde_json::from_str::<MemorySidecarPlanJson>(response.raw_text.trim()).map_err(
+        |error| MezError::invalid_state(format!("memory sidecar plan JSON failed: {error}")),
+    )?;
+    let queries = parsed
+        .queries
+        .into_iter()
+        .map(|query| query.trim().chars().take(240).collect::<String>())
+        .filter(|query| !query.is_empty())
+        .take(sidecar.max_queries.max(1))
+        .collect::<Vec<_>>();
+    if queries.is_empty() {
+        return Err(MezError::invalid_state(
+            "memory sidecar plan has no queries",
+        ));
+    }
+    let scope = parsed
+        .scope
+        .as_deref()
+        .map(|scope| parse_memory_sidecar_scope(scope, &sidecar.scopes))
+        .transpose()?;
+    Ok(MemorySidecarPlan {
+        queries,
+        scope,
+        kind: parsed.kind.as_deref().map(parse_memory_kind).transpose()?,
+        state: parsed
+            .state
+            .as_deref()
+            .map(parse_memory_state)
+            .transpose()?,
+        source: parsed
+            .source
+            .as_deref()
+            .map(parse_memory_source)
+            .transpose()?,
+        candidate_limit: parsed
+            .candidate_limit
+            .filter(|limit| *limit > 0)
+            .unwrap_or(sidecar.candidate_limit)
+            .min(sidecar.candidate_limit),
+        reason: parsed
+            .reason
+            .unwrap_or_default()
+            .chars()
+            .take(240)
+            .collect(),
+    })
+}
+
+fn runtime_memory_sidecar_selection_from_response(
+    response: &ModelResponse,
+) -> Result<MemorySidecarRerankSelection> {
+    let parsed = serde_json::from_str::<MemorySidecarSelectionJson>(response.raw_text.trim())
+        .map_err(|error| {
+            MezError::invalid_state(format!("memory sidecar selection JSON failed: {error}"))
+        })?;
+    Ok(MemorySidecarRerankSelection {
+        selected: parsed
+            .selected
+            .into_iter()
+            .map(|item| MemorySidecarRerankSelectionItem {
+                id: item.id,
+                confidence: item.confidence,
+                reason: item.reason,
+            })
+            .collect(),
+        rejected_summary: parsed.rejected_summary.unwrap_or_default(),
+    })
+}
+
+fn runtime_memory_sidecar_candidates(
+    sidecar: &RuntimeMemorySidecarDispatch,
+    plan: &MemorySidecarPlan,
+) -> Result<Vec<MemorySearchResult>> {
+    let store = PersistentMemoryStore::new(&sidecar.store_path);
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for query in &plan.queries {
+        let scopes = if let Some(scope) = plan.scope.clone() {
+            vec![scope]
+        } else {
+            sidecar.scopes.clone()
+        };
+        for scope in scopes {
+            let result = retrieve_persistent_memory(
+                &store,
+                &MemoryRetrievalRequest {
+                    query: sidecar.fts_enabled.then(|| query.clone()),
+                    scope: Some(scope),
+                    kind: plan.kind,
+                    state: plan.state.or(Some(MemoryState::Active)),
+                    source: plan.source,
+                    candidate_limit: plan.candidate_limit.min(sidecar.candidate_limit),
+                    injection_limit: 0,
+                },
+            )?;
+            for candidate in result.candidates {
+                if seen.insert(candidate.record.id.clone()) {
+                    candidates.push(candidate);
+                }
+                if candidates.len() >= sidecar.candidate_limit {
+                    return Ok(candidates);
+                }
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn memory_sidecar_scope_label(scope: &MemoryScope) -> String {
+    match scope {
+        MemoryScope::Global => "global".to_string(),
+        MemoryScope::Project { root } => format!("project:{root}"),
+        MemoryScope::Session { session_id } => format!("session:{session_id}"),
+        MemoryScope::Window {
+            session_id,
+            window_id,
+        } => format!("window:{session_id}:{window_id}"),
+        MemoryScope::Pane {
+            session_id,
+            pane_id,
+        } => format!("pane:{session_id}:{pane_id}"),
+        MemoryScope::Agent {
+            session_id,
+            agent_id,
+        } => format!("agent:{session_id}:{agent_id}"),
+    }
+}
+
+fn parse_memory_sidecar_scope(value: &str, allowed: &[MemoryScope]) -> Result<MemoryScope> {
+    allowed
+        .iter()
+        .find(|scope| memory_sidecar_scope_label(scope) == value.trim())
+        .cloned()
+        .ok_or_else(|| MezError::invalid_state("memory sidecar requested an unavailable scope"))
+}
+
+fn parse_memory_kind(value: &str) -> Result<MemoryKind> {
+    match value.trim() {
+        "preference" => Ok(MemoryKind::Preference),
+        "fact" => Ok(MemoryKind::Fact),
+        "procedure" => Ok(MemoryKind::Procedure),
+        "episode" => Ok(MemoryKind::Episode),
+        "warning" => Ok(MemoryKind::Warning),
+        "scratch" => Ok(MemoryKind::Scratch),
+        _ => Err(MezError::invalid_state(
+            "memory sidecar requested an unknown kind",
+        )),
+    }
+}
+
+fn parse_memory_state(value: &str) -> Result<MemoryState> {
+    match value.trim() {
+        "active" => Ok(MemoryState::Active),
+        "stale" => Ok(MemoryState::Stale),
+        _ => Err(MezError::invalid_state(
+            "memory sidecar requested an unsupported state",
+        )),
+    }
+}
+
+fn parse_memory_source(value: &str) -> Result<MemorySource> {
+    match value.trim() {
+        "user" => Ok(MemorySource::User),
+        "agent" => Ok(MemorySource::Agent),
+        "imported" => Ok(MemorySource::Imported),
+        "configuration" => Ok(MemorySource::Configuration),
+        _ => Err(MezError::invalid_state(
+            "memory sidecar requested an unknown source",
+        )),
+    }
+}
+
+fn memory_sidecar_current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(1)
+}
+
+fn memory_sidecar_context_source_label(source: ContextSourceKind) -> &'static str {
+    match source {
+        ContextSourceKind::System => "system",
+        ContextSourceKind::UserInstruction => "user",
+        ContextSourceKind::DeveloperInstruction => "developer",
+        ContextSourceKind::Policy => "policy",
+        ContextSourceKind::Configuration => "configuration",
+        ContextSourceKind::LocalMessage => "local_message",
+        ContextSourceKind::RuntimeHint => "runtime",
+        ContextSourceKind::ProjectGuidance => "project_guidance",
+        _ => "context",
+    }
+}
+
+fn memory_kind_name(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Preference => "preference",
+        MemoryKind::Fact => "fact",
+        MemoryKind::Procedure => "procedure",
+        MemoryKind::Episode => "episode",
+        MemoryKind::Warning => "warning",
+        MemoryKind::Scratch => "scratch",
+    }
+}
+
+fn memory_state_name(state: MemoryState) -> &'static str {
+    match state {
+        MemoryState::Active => "active",
+        MemoryState::Stale => "stale",
+        MemoryState::Superseded => "superseded",
+        MemoryState::Archived => "archived",
+        MemoryState::Expired => "expired",
+    }
+}
+
+fn memory_source_name(source: MemorySource) -> &'static str {
+    match source {
+        MemorySource::User => "user",
+        MemorySource::Agent => "agent",
+        MemorySource::Imported => "imported",
+        MemorySource::Configuration => "configuration",
+    }
 }
 
 /// Executes runtime-owned network actions before returning provider work to the

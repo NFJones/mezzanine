@@ -30,10 +30,9 @@ use super::{
     TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition,
     TerminalFrameStyle, TranscriptEntry, TranscriptRole, TrustDecision, agent_state_control_method,
     append_memory_context, append_permission_policy_context, append_scheduler_context,
-    append_selected_memory_context, approval_decide_scope_persistence,
-    compare_permission_preset_authority, current_unix_seconds, decode_control_frame,
-    decode_mmp_frame, default_trust_database_path, destination_target_checked_resolved,
-    discover_project_root, dispatch_control_request_cached,
+    approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
+    decode_control_frame, decode_mmp_frame, default_trust_database_path,
+    destination_target_checked_resolved, discover_project_root, dispatch_control_request_cached,
     dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
@@ -1060,8 +1059,6 @@ impl RuntimeSessionService {
             });
         }
         let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
-        let persistent_memory_records =
-            self.selected_persistent_memory_for_pane_prompt(pane_id, prompt, 12);
         if let Some(block) =
             Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
         {
@@ -1075,7 +1072,6 @@ impl RuntimeSessionService {
         let context = AgentContext::new(blocks)?;
         let context = append_permission_policy_context(context, &self.permission_policy)?;
         let context = append_scheduler_context(context, &self.agent_scheduler)?;
-        let context = append_selected_memory_context(context, &persistent_memory_records, 12)?;
         append_memory_context(context, &context_memory_records, 1)
     }
 
@@ -1142,112 +1138,6 @@ impl RuntimeSessionService {
             .into_iter()
             .filter(|record| record.id == compact_memory_id)
             .collect()
-    }
-
-    /// Selects persistent memories relevant to one provider-bound prompt.
-    ///
-    /// The local retrieval path is deterministic and remains the fallback for
-    /// future model-sidecar selection. It queries project and global scopes
-    /// separately so project-specific notes do not pull unrelated projects into
-    /// the prompt while still allowing durable global preferences to apply.
-    fn selected_persistent_memory_for_pane_prompt(
-        &self,
-        pane_id: &str,
-        prompt: &str,
-        max_records: usize,
-    ) -> Vec<crate::memory::SelectedMemoryRecord> {
-        let Some(config_root) = self.config_root.as_ref() else {
-            return Vec::new();
-        };
-        let memory_config = super::runtime_effective_config_value(&self.config_layers)
-            .ok()
-            .and_then(|root| {
-                root.get("memory")
-                    .and_then(|value| value.as_object())
-                    .cloned()
-            });
-        if memory_config
-            .as_ref()
-            .and_then(|config| config.get("enabled"))
-            .and_then(serde_json::Value::as_bool)
-            == Some(false)
-        {
-            return Vec::new();
-        }
-        let max_records = memory_config
-            .as_ref()
-            .and_then(|config| config.get("max_injected_records"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(max_records);
-        let candidate_limit = memory_config
-            .as_ref()
-            .and_then(|config| config.get("candidate_limit"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok())
-            .filter(|value| *value > 0)
-            .unwrap_or_else(|| max_records.saturating_mul(4).max(max_records));
-        let max_bytes = memory_config
-            .as_ref()
-            .and_then(|config| config.get("max_injected_bytes"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(usize::MAX);
-        let fts_enabled = memory_config
-            .as_ref()
-            .and_then(|config| config.get("fts_enabled"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        if max_records == 0 || max_bytes == 0 {
-            return Vec::new();
-        }
-        let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
-        let project_scope = self.pane_current_working_directory(pane_id).map(|path| {
-            crate::memory::MemoryScope::Project {
-                root: discover_project_root(&path).to_string_lossy().into_owned(),
-            }
-        });
-        let mut scopes = vec![Some(crate::memory::MemoryScope::Global)];
-        if let Some(scope) = project_scope {
-            scopes.push(Some(scope));
-        }
-        let mut selected = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        for scope in scopes {
-            let request = crate::memory::MemoryRetrievalRequest {
-                query: fts_enabled.then(|| prompt.to_string()),
-                scope,
-                kind: None,
-                state: Some(crate::memory::MemoryState::Active),
-                source: None,
-                candidate_limit,
-                injection_limit: max_records,
-            };
-            let Ok(result) = crate::memory::retrieve_persistent_memory(&store, &request) else {
-                continue;
-            };
-            for record in crate::memory::deterministic_selected_memory(result, true) {
-                if seen.insert(record.record.id.clone()) {
-                    let projected_bytes = selected
-                        .iter()
-                        .map(|selected: &crate::memory::SelectedMemoryRecord| {
-                            selected.record.content.len()
-                        })
-                        .sum::<usize>()
-                        .saturating_add(record.record.content.len());
-                    if projected_bytes > max_bytes {
-                        return selected;
-                    }
-                    selected.push(record);
-                }
-                if selected.len() >= max_records {
-                    return selected;
-                }
-            }
-        }
-        selected
     }
 
     /// Builds an explicit model-facing notice for compacted conversation memory.

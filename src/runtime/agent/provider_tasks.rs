@@ -111,21 +111,63 @@ impl RuntimeSessionService {
         let Some(memory) = root.get("memory").and_then(serde_json::Value::as_object) else {
             return Ok(None);
         };
-        if memory.get("enabled").and_then(serde_json::Value::as_bool) == Some(false)
-            || memory
-                .get("sidecar_enabled")
-                .and_then(serde_json::Value::as_bool)
-                != Some(true)
-        {
+        if memory.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
             return Ok(None);
         }
-        let mode = memory
-            .get("sidecar_mode")
+        let profile_name = memory
+            .get("sidecar_model_profile")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("off");
-        if mode == "off" {
+            .filter(|profile| !profile.trim().is_empty())
+            .unwrap_or("memory-sidecar")
+            .to_string();
+        let profile = match self.provider_registry.resolve_profile(&profile_name) {
+            Ok(profile) => profile,
+            Err(error) => {
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!(
+                        "memory sidecar profile unavailable profile={} error_kind={} error={}",
+                        profile_name,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message()
+                    ),
+                )?;
+                return Ok(None);
+            }
+        };
+        let Some(provider_config) = self.provider_registry.provider(&profile.provider).cloned()
+        else {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "memory sidecar provider `{}` is not configured",
+                    profile.provider
+                ),
+            )?;
             return Ok(None);
-        }
+        };
+        let provider = match self.runtime_dispatch_provider_from_config(
+            &profile.provider,
+            &provider_config,
+            "memory_sidecar",
+        ) {
+            Ok(provider) => provider,
+            Err(error) => {
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!(
+                        "memory sidecar provider unavailable provider={} error_kind={} error={}",
+                        profile.provider,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message()
+                    ),
+                )?;
+                return Ok(None);
+            }
+        };
         let query_context = context
             .blocks
             .iter()
@@ -139,12 +181,24 @@ impl RuntimeSessionService {
                 root: discover_project_root(&path).to_string_lossy().into_owned(),
             });
         }
+        let store_path = memory
+            .get("database_path")
+            .and_then(serde_json::Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| {
+                let path = std::path::PathBuf::from(path);
+                if path.is_absolute() {
+                    path
+                } else {
+                    config_root.join(path)
+                }
+            })
+            .unwrap_or_else(|| config_root.join("memory.sqlite"));
         Ok(Some(RuntimeMemorySidecarDispatch {
-            mode: mode.to_string(),
-            store_path: config_root.join("memory.sqlite"),
-            profile_name: None,
-            profile: None,
-            provider: None,
+            store_path,
+            profile_name,
+            profile,
+            provider,
             query_context,
             scopes,
             max_queries: memory
@@ -798,6 +852,7 @@ impl RuntimeSessionService {
             RuntimeAgentProviderClaim {
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
+                memory_sidecar: dispatch.memory_sidecar.is_some(),
                 generation,
                 claimed_at_unix_ms: current_unix_millis(),
                 timeout_ms,
