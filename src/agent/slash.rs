@@ -221,6 +221,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("init", &[], SlashCommandEffect::FileMutation, true),
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
+        slash("memory", &[], SlashCommandEffect::PolicyMutation, true),
         slash("model", &[], SlashCommandEffect::PolicyMutation, true),
         slash("thinking", &[], SlashCommandEffect::PolicyMutation, true),
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
@@ -537,6 +538,10 @@ fn execute_agent_shell_command_with_context_inner(
                 command,
                 reason: "MCP listing requires the live MCP registry".to_string(),
             },
+        },
+        "memory" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "persistent memory enablement changes require the live runtime".to_string(),
         },
         "latency" => AgentShellCommandOutcome::RequiresRuntime {
             command,

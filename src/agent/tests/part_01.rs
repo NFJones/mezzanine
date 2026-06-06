@@ -1724,7 +1724,11 @@ fn agent_shell_executes_builtin_slash_command_effects() {
     assert!(body.contains("| Work control |  |  |"), "{body}");
     assert!(body.find("/approval").unwrap() < body.find("/approve").unwrap());
     assert!(!body.contains("/agent"), "{body}");
-    assert!(!body.contains("/memory"), "{body}");
+    assert!(body.contains("| `/memory` |"), "{body}");
+    assert!(
+        body.contains("inspect or change persistent memory enablement."),
+        "{body}"
+    );
     assert!(!body.contains("/mention"), "{body}");
     assert!(!body.contains("/plan"), "{body}");
     assert!(!body.contains("/plugins"), "{body}");

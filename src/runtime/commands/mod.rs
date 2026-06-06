@@ -9,13 +9,13 @@ use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext, AgentId,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, AgentTurnRecord,
     AgentTurnState, BTreeMap, BTreeSet, BlockedApprovalRequest, BlockedApprovalState, Command,
-    CommandInvocation, ConfigFormat, ConfigScope, ContextBlock, ContextSourceKind,
-    DEFAULT_AUTO_SIZING_ROUTER_PROFILE, DeferredAgentPromptHistoryWrite,
-    DeferredProjectInstructionWrite, EventKind, HookEvent, MemoryRecord, MemoryScope, MemorySource,
-    MezError, ModelProfile, ModelProfileOverrides, Path, PathBuf, RUNTIME_LATENCY_PREFERENCES,
-    Result, RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
-    RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatchProvider, RuntimeAgentTurnSteering,
-    RuntimeAgentTurnStop, RuntimeAutoSizingConfig, RuntimeModelPreset,
+    CommandInvocation, ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
+    ConfigPaths, ConfigScope, ContextBlock, ContextSourceKind, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
+    DeferredAgentPromptHistoryWrite, DeferredProjectInstructionWrite, EventKind, HookEvent,
+    MemoryRecord, MemoryScope, MemorySource, MezError, ModelProfile, ModelProfileOverrides, Path,
+    PathBuf, RUNTIME_LATENCY_PREFERENCES, Result, RuntimeAgentCompactionDispatch,
+    RuntimeAgentCompactionTask, RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatchProvider,
+    RuntimeAgentTurnSteering, RuntimeAgentTurnStop, RuntimeAutoSizingConfig, RuntimeModelPreset,
     RuntimeModelProfileOverrideScope, RuntimeSessionService, ScheduledWork, ScheduledWorkKind,
     SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision, Value,
     agent_shell_visibility_json_name, agent_subshell_enter_command, compose_effective_config,
@@ -24,8 +24,9 @@ use super::{
     json_escape, parse_command_sequence, parse_slash_command, runtime_add_command_rule,
     runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
     runtime_agent_shell_stop_response_json, runtime_agent_turn_state_name,
-    runtime_append_auth_logout_audit, runtime_approval_command, runtime_approval_policy_name,
-    runtime_bypass_approvals_command, runtime_command_outcomes_json, runtime_cooperation_mode_name,
+    runtime_append_auth_logout_audit, runtime_apply_persisted_config_mutation_batch,
+    runtime_approval_command, runtime_approval_policy_name, runtime_bypass_approvals_command,
+    runtime_command_outcomes_json, runtime_cooperation_mode_name, runtime_effective_config_value,
     runtime_execution_ready_for_provider_continuation, runtime_fit_status_line,
     runtime_list_command_rules_display, runtime_mezzanine_error_code, runtime_model_command_args,
     runtime_model_override_scope_for_args, runtime_model_override_scope_name,
@@ -55,6 +56,7 @@ use crate::runtime::config::{
 };
 use crate::transcript::ConversationSummary;
 use base64::Engine;
+use std::fs;
 
 mod compaction;
 mod model;
@@ -993,6 +995,17 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&trust_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "memory"
+                {
+                    let memory_outcome =
+                        self.execute_agent_shell_memory_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&memory_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "statusline"
                 {
                     let statusline_outcome =
@@ -1256,6 +1269,17 @@ impl RuntimeSessionService {
                     Some(&compact_outcome),
                 ));
             }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "memory"
+            {
+                let memory_outcome = self.execute_agent_shell_memory_command(&pane_id, input)?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&memory_outcome),
+                ));
+            }
             Ok(runtime_agent_shell_command_response_json(
                 &pane_id,
                 input,
@@ -1465,6 +1489,110 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
+    }
+
+    /// Executes `/memory` against the persisted persistent-memory enablement flag.
+    pub(super) fn execute_agent_shell_memory_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("memory command must be a slash command"))?;
+        let mode = runtime_single_mode_arg(&invocation.args, "memory", "status")?;
+        let enabled_before = self.runtime_persistent_memory_enabled();
+        if matches!(mode.as_str(), "status" | "show") {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "memory".to_string(),
+                body: format!(
+                    "pane={} enabled={} source=memory.enabled",
+                    json_escape(pane_id),
+                    enabled_before
+                ),
+            });
+        }
+        let enabled = match mode.as_str() {
+            "on" => true,
+            "off" => false,
+            "toggle" => !enabled_before,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "memory slash command expects on, off, toggle, status, or no argument",
+                ));
+            }
+        };
+        let report = self.persist_memory_enabled_config(enabled)?;
+        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "memory".to_string(),
+            body: format!(
+                "pane={} enabled={} changed={} source=memory.enabled config_path={} deferred={}",
+                json_escape(pane_id),
+                enabled,
+                enabled != enabled_before || report.changed,
+                json_escape(&report.path.to_string_lossy()),
+                report.deferred
+            ),
+            visibility,
+        })
+    }
+
+    /// Returns whether persistent memory is enabled in the live effective config.
+    fn runtime_persistent_memory_enabled(&self) -> bool {
+        runtime_effective_config_value(&self.config_layers)
+            .ok()
+            .and_then(|root| {
+                root.get("memory")
+                    .and_then(|memory| memory.get("enabled"))
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Persists and applies the configured persistent-memory enablement flag.
+    fn persist_memory_enabled_config(
+        &mut self,
+        enabled: bool,
+    ) -> Result<super::commands_support::RuntimePersistedConfigMutationBatchReport> {
+        let path = self.runtime_primary_config_path_for_agent_command()?;
+        runtime_apply_persisted_config_mutation_batch(
+            self,
+            path,
+            &[ConfigMutation {
+                path: "memory.enabled".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::Boolean(enabled)),
+            }],
+            "agent/slash:memory",
+        )
+    }
+
+    /// Finds or creates the private primary config file for slash-command persistence.
+    fn runtime_primary_config_path_for_agent_command(&mut self) -> Result<PathBuf> {
+        if let Some(path) = self
+            .config_layers
+            .iter()
+            .find(|layer| layer.scope == ConfigScope::Primary && layer.path.is_some())
+            .and_then(|layer| layer.path.clone())
+        {
+            return Ok(path);
+        }
+        let root = self.config_root.clone().ok_or_else(|| {
+            MezError::config(
+                "memory slash command requires a configured config root or primary config file",
+            )
+        })?;
+        let path = ConfigPaths::from_root(root).ensure_default_config()?;
+        let format = ConfigFormat::from_path(&path)?;
+        let text = fs::read_to_string(&path)?;
+        self.config_layers.push(crate::config::ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text,
+        });
+        Ok(path)
     }
 
     /// Executes `/personality` against pane-scoped response style state.

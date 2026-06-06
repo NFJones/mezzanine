@@ -4888,6 +4888,10 @@ The baseline command capabilities are:
   thinking toggle MUST reject the command without mutating model profiles.
 - `/logout`: Log out of a provider account.
 - `/list-mcp`: List configured Model Context Protocol servers and tools.
+- `/memory`: Inspect or change persistent memory enablement. It MUST accept
+  `on`, `off`, `toggle`, and `status`, MUST display the active setting when
+  invoked without arguments or with `status` or `show`, and MUST persist changes
+  to `memory.enabled` in the primary user configuration.
 - `/model`: Inspect and change the active model and reasoning settings. The
   command MUST accept `list` to list models for the active provider, and MUST
   accept a provider model name with an optional reasoning level to select that
@@ -7145,6 +7149,9 @@ Session memory is scoped to one Mezzanine session and MUST be removed when the
 session is deleted.
 
 Persistent memory MAY survive across sessions only when enabled by the user.
+Persistent memory MUST be disabled by default in the baseline configuration and
+MUST be enableable through persistent configuration or the pane-local
+`/memory on` slash command.
 
 Persistent memory MUST be stored under `~/.config/mezzanine` or in an explicitly
 configured user-private location. The default persistent store MUST be a

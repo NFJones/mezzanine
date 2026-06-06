@@ -666,7 +666,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "diff"
         | "list-modified-files" => "copy and diagnostics",
         "approval" | "approve" | "routing" | "init" | "latency" | "list-mcp" | "log-level"
-        | "directive" | "logout" | "model" | "permissions" | "personality" | "trust" => {
+        | "memory" | "directive" | "logout" | "model" | "permissions" | "personality" | "trust" => {
             "configuration"
         }
         "help" | "list-sessions" | "list-skills" => "discovery",
@@ -705,6 +705,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "init" => "generate a project instruction scaffold.",
         "logout" => "log out of a provider account.",
         "list-mcp" => "list configured MCP servers and tools.",
+        "memory" => "inspect or change persistent memory enablement.",
         "model" => "inspect or change model and reasoning settings.",
         "latency" => "inspect or change latency/cost preference.",
         "routing" => "toggle pane-local automatic model sizing.",

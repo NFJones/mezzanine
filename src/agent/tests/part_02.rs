@@ -350,6 +350,7 @@ fn slash_command_registry_contains_required_baseline_commands() {
         "thinking",
         "logout",
         "list-mcp",
+        "memory",
         "model",
         "loop",
         "stop",
@@ -369,9 +370,7 @@ fn slash_command_registry_contains_required_baseline_commands() {
         !commands.contains("fast"),
         "removed command must stay absent"
     );
-    for removed in [
-        "agent", "memory", "mention", "plan", "plugins", "ps", "review",
-    ] {
+    for removed in ["agent", "mention", "plan", "plugins", "ps", "review"] {
         assert!(
             !commands.contains(removed),
             "removed command must stay absent: {removed}"
@@ -441,6 +440,11 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     assert_eq!(loop_command.args, "review the docs");
     assert_eq!(loop_command.effect, SlashCommandEffect::SessionMutation);
     assert!(!loop_command.queueable_while_running);
+    let memory = parse_slash_command("/memory toggle").unwrap().unwrap();
+    assert_eq!(memory.name, "memory");
+    assert_eq!(memory.args, "toggle");
+    assert_eq!(memory.effect, SlashCommandEffect::PolicyMutation);
+    assert!(memory.queueable_while_running);
     assert_eq!(
         parse_slash_command("/sessions").unwrap_err().kind(),
         crate::error::MezErrorKind::InvalidArgs
@@ -462,7 +466,6 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     );
     for removed in [
         "/agent",
-        "/memory",
         "/mention",
         "/plan",
         "/plugins",
