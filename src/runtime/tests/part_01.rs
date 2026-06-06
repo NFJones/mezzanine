@@ -245,6 +245,11 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    let old_pane_start = service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let old_pane_id = old_pane_start.pane_id.clone();
+    assert!(service.pane_processes().contains_pane(&old_pane_id));
 
     let create = service
         .execute_terminal_command(&primary, "save-layout --name checkpoint")
@@ -260,7 +265,19 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
     assert!(resume.contains(r#""command":"load-layout""#), "{resume}");
     assert!(resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(resume.contains(r#"\"primary_client_id\":"#), "{resume}");
+    assert!(resume.contains(r#"\"terminated_panes\":1"#), "{resume}");
     assert!(resume.contains(r#"\"restarted_panes\":1"#), "{resume}");
+    assert!(!service.pane_processes().contains_pane(&old_pane_id));
+    let tracked_pane_ids = service.pane_processes().tracked_pane_ids();
+    assert_eq!(tracked_pane_ids.len(), 1);
+    assert_ne!(tracked_pane_ids[0], old_pane_id);
+    let live_pane_ids = service
+        .session()
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+        .collect::<Vec<_>>();
+    assert!(!live_pane_ids.contains(&old_pane_id));
 
     let create_after_resume = service
         .execute_terminal_command(&primary, "save-layout --name checkpoint-after-load")

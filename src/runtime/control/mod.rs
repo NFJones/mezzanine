@@ -2800,14 +2800,26 @@ impl RuntimeSessionService {
         resume_plan: crate::snapshot::LayoutLoadPlan,
         caller_client_id: &crate::ids::ClientId,
     ) -> Result<String> {
-        let terminated_panes =
-            self.pane_processes.tracked_pane_ids().len() + self.async_owned_pane_processes.len();
+        let previous_session = self.session.clone();
+        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
+        let mut prepared_session = self.session.clone();
+        prepared_session.replace_layout_from_snapshot_payload(&payload)?;
         let replaced_pane_ids = self
             .session
             .windows()
             .iter()
             .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
             .collect::<Vec<_>>();
+        let replaced_pane_id_refs = replaced_pane_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        self.stop_active_pane_pipes_for(replaced_pane_id_refs.as_slice());
+        let terminated_panes =
+            self.terminate_runtime_pane_processes(replaced_pane_id_refs.iter().copied(), true)?;
+        for pane_id in &replaced_pane_ids {
+            self.cleanup_removed_pane_runtime_state(pane_id);
+        }
         self.active_copy_modes.clear();
         self.pane_screens.clear();
         self.pane_transaction_osc_screens.clear();
@@ -2846,8 +2858,7 @@ impl RuntimeSessionService {
         self.blocked_approvals = Default::default();
         self.session_approvals = Default::default();
 
-        self.session
-            .replace_layout_from_snapshot_payload(&payload)?;
+        self.session = prepared_session;
         self.session.state = crate::session::SessionState::Running;
         let restored_at = current_unix_seconds();
         self.window_created_at_unix_seconds = self
@@ -2862,12 +2873,32 @@ impl RuntimeSessionService {
             })
             .collect();
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        let restarted_panes = self.restart_restored_pane_processes(None)?.len();
-        let replaced_pane_id_refs = replaced_pane_ids
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        self.stop_active_pane_pipes_for(replaced_pane_id_refs.as_slice());
+        let restarted_panes = match self.restart_restored_pane_processes(None) {
+            Ok(starts) => starts.len(),
+            Err(error) => {
+                let restored_pane_ids = self.pane_processes.tracked_pane_ids();
+                let restored_pane_id_refs = restored_pane_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                let _ = self
+                    .terminate_runtime_pane_processes(restored_pane_id_refs.iter().copied(), true);
+                for pane_id in &restored_pane_ids {
+                    self.cleanup_removed_pane_runtime_state(pane_id);
+                }
+                self.session = previous_session;
+                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
+                for pane_id in &replaced_pane_ids {
+                    let _ = self.session.set_pane_live_state(pane_id, false);
+                }
+                self.lifecycle_state =
+                    RuntimeLifecycleState::from_session_state(self.session.state);
+                let _ = self.restart_restored_pane_processes(None);
+                return Err(MezError::invalid_state(format!(
+                    "load-layout failed to start restored pane shells and rolled back to the previous layout: {error}"
+                )));
+            }
+        };
         self.append_lifecycle_event(
             EventKind::SnapshotChanged,
             format!(
