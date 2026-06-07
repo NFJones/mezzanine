@@ -274,12 +274,12 @@ Useful slash commands include:
 | `/list-skills` | Show the skills available to the active pane.         |
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions. |
-| `/remember`    | Generate durable memories from context or a statement. |
+| `/remember`    | Generate durable memories from context or a statement while opportunistically pruning expired persistent records. |
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
 | `/stop`        | Interrupt the active turn.                            |
 | `/new`         | Start a fresh conversation for the pane.              |
 | `/resume`      | Resume one of the most recent saved conversations.    |
-| `/compact`     | Compact conversation context.                         |
+| `/compact`     | Compact conversation context while opportunistically pruning expired persistent records. |
 | `/exit`        | Hide the agent shell.                                 |
 
 Normal logging shows prompts, assistant text, concise progress, approvals,

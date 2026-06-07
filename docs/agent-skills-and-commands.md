@@ -111,8 +111,8 @@ Common slash commands:
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
-| `/compact` | Compact older conversation context. |
-| `/remember` | Generate durable memories from the current context or a supplied statement. |
+| `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
+| `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
 | `/loop` | Re-run a prompt from a fresh fork of the parent conversation until an iteration completes without `apply_patch` actions or the loop limit is reached. |
 | `/new` | Start a fresh pane conversation. |
 | `/resume` | Resume a saved pane conversation. |

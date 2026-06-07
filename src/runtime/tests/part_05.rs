@@ -590,6 +590,230 @@ fn complete_runtime_test_compaction(
     );
 }
 
+/// Verifies `/compact` opportunistically prunes expired persistent memories
+/// before queueing model-backed compaction while preserving non-expired
+/// persistent records in both disk and session state.
+#[test]
+fn runtime_agent_shell_compact_prunes_expired_persistent_memory_before_queueing() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "compact-prune-memory".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[memory]
+enabled = true
+[agents]
+default_provider = "openai"
+default_model_profile = "compact-prune-test"
+[providers.openai]
+kind = "openai"
+models = ["gpt-compact-prune-test"]
+default_model = "gpt-compact-prune-test"
+[model_profiles.compact-prune-test]
+provider = "openai"
+model = "gpt-compact-prune-test"
+context_window_tokens = 4500
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let config_root = temp_root("runtime-agent-compact-prune-memory");
+    service.set_config_root(config_root.clone());
+    let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+    let mut expired = crate::memory::MemoryRecord::new_with_defaults(
+        "expired-compact-memory".to_string(),
+        crate::memory::MemoryScope::Global,
+        1,
+        1,
+        crate::memory::MemorySource::User,
+        100,
+        "expired compact memory".to_string(),
+    );
+    expired.expires_at_unix_seconds = Some(2);
+    let live = crate::memory::MemoryRecord::new_with_defaults(
+        "live-compact-memory".to_string(),
+        crate::memory::MemoryScope::Global,
+        1,
+        1,
+        crate::memory::MemorySource::User,
+        100,
+        "live compact memory".to_string(),
+    );
+    service.upsert_session_memory(expired.clone()).unwrap();
+    service.upsert_session_memory(live.clone()).unwrap();
+    store.upsert(expired).unwrap();
+    store.upsert(live).unwrap();
+
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-prune"));
+    transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: "compact-prune".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: crate::transcript::TranscriptRole::User,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "compact this transcript".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "compact-prune", 1)
+        .unwrap();
+
+    let compact = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compact-prune","method":"agent/shell/command","params":{"idempotency_key":"compact-prune","input":"/compact"}}"#,
+        &primary,
+    );
+
+    assert!(compact.contains("state=queued"), "{compact}");
+    let persisted_ids = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    assert!(
+        !persisted_ids.iter().any(|id| id == "expired-compact-memory"),
+        "{persisted_ids:?}"
+    );
+    assert!(
+        persisted_ids.iter().any(|id| id == "live-compact-memory"),
+        "{persisted_ids:?}"
+    );
+    let session_ids = service
+        .memory_records()
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    assert!(
+        !session_ids.iter().any(|id| id == "expired-compact-memory"),
+        "{session_ids:?}"
+    );
+    assert!(
+        session_ids.iter().any(|id| id == "live-compact-memory"),
+        "{session_ids:?}"
+    );
+}
+
+/// Verifies `/remember` opportunistically prunes expired persistent memories
+/// before queueing model-backed memory generation while preserving non-expired
+/// persistent records in both disk and session state.
+#[test]
+fn runtime_agent_shell_remember_prunes_expired_persistent_memory_before_queueing() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "remember-prune-memory".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[memory]
+enabled = true
+[agents]
+default_provider = "openai"
+default_model_profile = "remember-prune-test"
+[providers.openai]
+kind = "openai"
+models = ["gpt-remember-prune-test"]
+default_model = "gpt-remember-prune-test"
+[model_profiles.remember-prune-test]
+provider = "openai"
+model = "gpt-remember-prune-test"
+context_window_tokens = 4500
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let config_root = temp_root("runtime-agent-remember-prune-memory");
+    service.set_config_root(config_root.clone());
+    let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+    let mut expired = crate::memory::MemoryRecord::new_with_defaults(
+        "expired-remember-memory".to_string(),
+        crate::memory::MemoryScope::Global,
+        1,
+        1,
+        crate::memory::MemorySource::User,
+        100,
+        "expired remember memory".to_string(),
+    );
+    expired.expires_at_unix_seconds = Some(2);
+    let live = crate::memory::MemoryRecord::new_with_defaults(
+        "live-remember-memory".to_string(),
+        crate::memory::MemoryScope::Global,
+        1,
+        1,
+        crate::memory::MemorySource::User,
+        100,
+        "live remember memory".to_string(),
+    );
+    service.upsert_session_memory(expired.clone()).unwrap();
+    service.upsert_session_memory(live.clone()).unwrap();
+    store.upsert(expired).unwrap();
+    store.upsert(live).unwrap();
+
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let remember = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"remember-prune","method":"agent/shell/command","params":{"idempotency_key":"remember-prune","input":"/remember Keep the release checklist current."}}"#,
+        &primary,
+    );
+
+    assert!(remember.contains("state=queued"), "{remember}");
+    let persisted_ids = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    assert!(
+        !persisted_ids.iter().any(|id| id == "expired-remember-memory"),
+        "{persisted_ids:?}"
+    );
+    assert!(
+        persisted_ids.iter().any(|id| id == "live-remember-memory"),
+        "{persisted_ids:?}"
+    );
+    let session_ids = service
+        .memory_records()
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    assert!(
+        !session_ids.iter().any(|id| id == "expired-remember-memory"),
+        "{session_ids:?}"
+    );
+    assert!(
+        session_ids.iter().any(|id| id == "live-remember-memory"),
+        "{session_ids:?}"
+    );
+}
+
 /// Verifies that `/compact` converts the active conversation transcript into a
 /// bounded pane-scoped memory record, retains a raw recent transcript tail, and
 /// feeds both into the next prompt context. This keeps context pressure

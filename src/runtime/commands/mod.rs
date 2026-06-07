@@ -1605,7 +1605,7 @@ impl RuntimeSessionService {
             ));
         }
         let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(_) = self.config_root.as_ref() else {
             return Err(MezError::invalid_state(
                 "remember requires a configured Mezzanine config root",
             ));
@@ -1620,6 +1620,7 @@ impl RuntimeSessionService {
                 "cannot remember while pane {pane_id} is compacting"
             )));
         }
+        let _ = self.runtime_prune_expired_persistent_memory_best_effort();
         let source_text = if invocation.args.trim().is_empty() {
             let context = self.agent_context_for_pane_prompt(
                 pane_id,
@@ -1664,7 +1665,6 @@ impl RuntimeSessionService {
                 model_profile.provider, model_profile.model
             ),
         )?;
-        let _ = config_root;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "remember".to_string(),
             body: format!(
@@ -1913,6 +1913,27 @@ impl RuntimeSessionService {
             })
             .filter(|days| *days > 0)
             .unwrap_or(180)
+    }
+
+    /// Best-effort prunes expired persistent memory records from disk and session state.
+    pub(in crate::runtime) fn runtime_prune_expired_persistent_memory_best_effort(
+        &mut self,
+    ) -> usize {
+        if !self.runtime_persistent_memory_enabled() {
+            return 0;
+        }
+        let Some(config_root) = self.config_root.clone() else {
+            return 0;
+        };
+        let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+        let now = current_unix_seconds().max(1);
+        let Ok(pruned) = store.prune_expired(now, false) else {
+            return 0;
+        };
+        for record in &pruned {
+            let _ = self.session_memory_mut().delete(&record.id);
+        }
+        pruned.len()
     }
 
     /// Persists and applies the configured persistent-memory enablement flag.

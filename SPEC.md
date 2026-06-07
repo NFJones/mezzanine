@@ -4865,7 +4865,10 @@ The baseline command capabilities are:
   user `/compact` MUST attempt real transcript compaction whenever active
   durable transcript entries exist, regardless of retained-tail budget. It MUST
   no-op only when there are no transcript
-  entries to compact or no durable transcript entries are available.
+  entries to compact or no durable transcript entries are available. When
+  persistent memory is enabled and a config root is available, `/compact`
+  SHOULD opportunistically prune expired persistent-memory records before it
+  builds compaction context or queues model-backed work.
 - `/copy`: Copy the latest non-empty model-authored `say.text` emitted for
   the active pane. The command MUST accept `pane`, `buffer [name]`, and
   `clipboard` targets using the same target semantics as `/copy-trace-log` and
@@ -4906,6 +4909,8 @@ The baseline command capabilities are:
   that statement. The model request MUST ask for structured candidates that
   include kind, priority, summary, keywords or aliases, retrieval cues, and the
   durable body. Runtime code MUST validate and normalize accepted candidates
+  and SHOULD opportunistically prune expired persistent-memory records before it
+  assembles the source context or queues model-backed memory generation.
   into persistent `MemoryRecord` values, generate record ids itself, mark the
   source as agent-authored, prefer project scope when a pane project root is
   known and global scope otherwise, and store retrieval-friendly content that

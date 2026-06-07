@@ -63,6 +63,7 @@ impl RuntimeSessionService {
                 "cannot compact conversation while pane {pane_id} is already compacting"
             )));
         }
+        let _ = self.runtime_prune_expired_persistent_memory_best_effort();
         if transcript_entries == 0 {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
