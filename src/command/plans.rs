@@ -63,6 +63,8 @@ pub(super) enum CommandPlan {
     NextLayout { command: String },
     /// Rebalance the active window.
     RebalanceWindow { command: String },
+    /// Control pane input synchronization for the active window.
+    SynchronizePanes(SynchronizePanesPlan),
     /// Toggle pane zoom.
     ZoomPane { command: String },
     /// Resize a pane or toggle zoom through resize syntax.
@@ -309,6 +311,28 @@ pub(super) struct DetachClientPlan {
     pub(super) target: Option<String>,
 }
 
+/// Requested synchronization mode for the active window's panes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SynchronizePanesMode {
+    /// Enable synchronized pane input.
+    On,
+    /// Disable synchronized pane input.
+    Off,
+    /// Toggle synchronized pane input.
+    Toggle,
+    /// Report synchronized pane input state.
+    Status,
+}
+
+/// Parsed command data for synchronize-panes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SynchronizePanesPlan {
+    /// Original command name.
+    pub(super) command: String,
+    /// Requested synchronization mode.
+    pub(super) mode: SynchronizePanesMode,
+}
+
 /// Converts one parsed command invocation into a typed session-mutation plan.
 pub(super) fn command_plan_from_invocation(invocation: &CommandInvocation) -> Result<CommandPlan> {
     let command = invocation.name.clone();
@@ -354,6 +378,9 @@ pub(super) fn command_plan_from_invocation(invocation: &CommandInvocation) -> Re
         "select-layout" => Ok(CommandPlan::SelectLayout(layout_plan(invocation)?)),
         "next-layout" => Ok(CommandPlan::NextLayout { command }),
         "rebalance-window" => Ok(CommandPlan::RebalanceWindow { command }),
+        "synchronize-panes" | "sync-panes" => Ok(CommandPlan::SynchronizePanes(
+            synchronize_panes_plan(invocation)?,
+        )),
         "zoom-pane" => Ok(CommandPlan::ZoomPane { command }),
         "resize-pane" | "resizep" => Ok(CommandPlan::ResizePane(resize_pane_plan(invocation)?)),
         "kill-pane" | "killp" => Ok(CommandPlan::KillPane(force_target_plan(invocation))),
@@ -399,6 +426,28 @@ fn observer_target_plan(
     Ok(ObserverTargetPlan {
         command: invocation.name.clone(),
         target: target.to_string(),
+    })
+}
+
+fn synchronize_panes_plan(invocation: &CommandInvocation) -> Result<SynchronizePanesPlan> {
+    let mode = match positional_args(invocation)
+        .first()
+        .copied()
+        .unwrap_or("toggle")
+    {
+        "on" => SynchronizePanesMode::On,
+        "off" => SynchronizePanesMode::Off,
+        "toggle" => SynchronizePanesMode::Toggle,
+        "status" => SynchronizePanesMode::Status,
+        _ => {
+            return Err(MezError::invalid_args(
+                "synchronize-panes accepts on, off, toggle, or status",
+            ));
+        }
+    };
+    Ok(SynchronizePanesPlan {
+        command: invocation.name.clone(),
+        mode,
     })
 }
 

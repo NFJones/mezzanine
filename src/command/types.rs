@@ -234,6 +234,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "next-layout",
     "select-layout",
     "rebalance-window",
+    "synchronize-panes",
     "zoom-pane",
     "swap-pane",
     "break-pane",

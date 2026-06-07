@@ -6,7 +6,7 @@
 
 use super::plans::{
     CommandPlan, PaneSelectionPlan, ResizePanePlan, SwapPaneNeighbor, SwapPanePlan,
-    command_plan_from_invocation,
+    SynchronizePanesMode, command_plan_from_invocation,
 };
 use super::{
     AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, ConfigMutation,
@@ -464,6 +464,24 @@ fn execute_command_plan(
             CommandOutcome::Display {
                 command,
                 body: format!("layout={}", policy.name()),
+            }
+        }
+        CommandPlan::SynchronizePanes(plan) => {
+            let enabled = match plan.mode {
+                SynchronizePanesMode::On => {
+                    session.set_active_window_panes_synchronized(primary_client_id, true)?
+                }
+                SynchronizePanesMode::Off => {
+                    session.set_active_window_panes_synchronized(primary_client_id, false)?
+                }
+                SynchronizePanesMode::Toggle => {
+                    session.toggle_active_window_panes_synchronized(primary_client_id)?
+                }
+                SynchronizePanesMode::Status => session.active_window_panes_synchronized(),
+            };
+            CommandOutcome::Display {
+                command: plan.command,
+                body: format!("synchronize-panes={}", if enabled { "on" } else { "off" }),
             }
         }
         CommandPlan::ZoomPane { command } => {

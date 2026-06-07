@@ -243,9 +243,9 @@ full-screen alternate-screen pane copies the visible pane text without adding it
 to scrollback or default agent context.
 
 The Mezzanine command prompt accepts commands such as `new-window`,
-`split-window`, `select-pane`, `set-theme`, `list-keys`, `show-options`, and
-`refresh-provider-info`. Commands entered there are parsed by Mezzanine, not by
-the pane shell.
+`split-window`, `select-pane`, `synchronize-panes`, `set-theme`, `list-keys`,
+`show-options`, and `refresh-provider-info`. Commands entered there are parsed
+by Mezzanine, not by the pane shell.
 
 Command output shown in the pager supports `/` text search. Submit a query to
 jump to the next match; submit `/` with an empty query to repeat the last search,

@@ -12,7 +12,7 @@ use crate::shell::ResolvedShell;
 use crate::snapshot::{
     SessionSnapshotPayload, SnapshotSessionState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
 use super::types::{PaneStateMetadata, Session, SessionState, WindowGroup};
@@ -309,6 +309,7 @@ impl Session {
             last_active_group_index,
             active_window_index,
             last_active_window_index: None,
+            synchronized_window_ids: BTreeSet::new(),
             pane_state_metadata,
             clients: Vec::new(),
             observers: Vec::new(),

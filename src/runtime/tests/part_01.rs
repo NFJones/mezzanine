@@ -4096,6 +4096,42 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
     assert_eq!(prompt_repaint, b"\r$ ");
 }
 
+/// Verifies that synchronized panes fan out primary foreground input to every
+/// pane in the active window. The deferred pane-I/O path is the foreground
+/// async terminal path, so it must preserve one ordered input payload per pane
+/// instead of only writing to the active pane.
+#[test]
+fn runtime_deferred_foreground_input_synchronizes_active_window_panes() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "split-window; synchronize-panes on")
+        .unwrap();
+
+    let (report, deferred) = service
+        .apply_attached_terminal_step_plan_deferred_pane_io(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 2);
+    assert_eq!(deferred.len(), 2);
+    assert_eq!(deferred[0].pane_id, "%1");
+    assert_eq!(deferred[0].bytes, b"a");
+    assert_eq!(deferred[1].pane_id, "%2");
+    assert_eq!(deferred[1].bytes, b"a");
+}
+
 /// Verifies large foreground paste payloads stay intact and exit copy mode.
 ///
 /// Host clipboard paste can deliver tens or hundreds of kilobytes as one

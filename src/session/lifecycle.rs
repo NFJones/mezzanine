@@ -7,7 +7,7 @@ use crate::error::{MezError, Result};
 use crate::ids::{ClientId, IdFactory};
 use crate::layout::{Size, Window};
 use crate::shell::ResolvedShell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
 use super::types::{
@@ -45,6 +45,7 @@ impl Session {
             last_active_group_index: None,
             active_window_index: 0,
             last_active_window_index: None,
+            synchronized_window_ids: BTreeSet::new(),
             pane_state_metadata: BTreeMap::new(),
             clients: Vec::new(),
             observers: Vec::new(),
@@ -79,6 +80,12 @@ impl Session {
     /// on duplicated control-flow logic.
     pub fn active_window(&self) -> Option<&Window> {
         self.windows.get(self.active_window_index)
+    }
+
+    /// Returns whether pane input synchronization is active for the active window.
+    pub fn active_window_panes_synchronized(&self) -> bool {
+        self.active_window()
+            .is_some_and(|window| self.synchronized_window_ids.contains(window.id.as_str()))
     }
 
     /// Runs the clients operation for this subsystem.

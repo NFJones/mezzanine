@@ -524,26 +524,33 @@ impl RuntimeSessionService {
                         report.full_redraw_required = true;
                     } else {
                         if defer_pane_io {
-                            let descriptor = self.active_window_pane_descriptor(None)?;
-                            self.clear_shell_output_filters_for_foreground_input(
-                                descriptor.pane_id.as_str(),
-                            );
-                            self.active_copy_modes.remove(descriptor.pane_id.as_str());
-                            self.scrollback_copy_mode_panes
-                                .remove(descriptor.pane_id.as_str());
-                            deferred_pane_inputs.push(DeferredPaneInput {
-                                pane_id: descriptor.pane_id.to_string(),
-                                bytes: input.clone(),
-                                priority: false,
-                            });
-                            report.forwarded_bytes =
-                                report.forwarded_bytes.saturating_add(input.len());
+                            let descriptors = self.active_window_input_descriptors()?;
+                            for descriptor in descriptors {
+                                self.clear_shell_output_filters_for_foreground_input(
+                                    descriptor.pane_id.as_str(),
+                                );
+                                self.active_copy_modes.remove(descriptor.pane_id.as_str());
+                                self.scrollback_copy_mode_panes
+                                    .remove(descriptor.pane_id.as_str());
+                                deferred_pane_inputs.push(DeferredPaneInput {
+                                    pane_id: descriptor.pane_id.to_string(),
+                                    bytes: input.clone(),
+                                    priority: false,
+                                });
+                                report.forwarded_bytes =
+                                    report.forwarded_bytes.saturating_add(input.len());
+                            }
                         } else {
-                            let dispatch =
-                                self.write_input_to_pane(primary_client_id, None, input)?;
-                            report.forwarded_bytes = report
-                                .forwarded_bytes
-                                .saturating_add(dispatch.bytes_written);
+                            for descriptor in self.active_window_input_descriptors()? {
+                                let dispatch = self.write_input_to_pane_descriptor(
+                                    primary_client_id,
+                                    &descriptor,
+                                    input,
+                                )?;
+                                report.forwarded_bytes = report
+                                    .forwarded_bytes
+                                    .saturating_add(dispatch.bytes_written);
+                            }
                         }
                     }
                 }

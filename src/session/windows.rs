@@ -291,6 +291,35 @@ impl Session {
         Ok(())
     }
 
+    /// Sets pane input synchronization for the active window.
+    pub fn set_active_window_panes_synchronized(
+        &mut self,
+        primary_client_id: &ClientId,
+        enabled: bool,
+    ) -> Result<bool> {
+        self.require_primary(primary_client_id)?;
+        let window = self
+            .active_window()
+            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        let window_id = window.id.to_string();
+        if enabled {
+            self.synchronized_window_ids.insert(window_id);
+        } else {
+            self.synchronized_window_ids.remove(&window_id);
+        }
+        self.record_event();
+        Ok(enabled)
+    }
+
+    /// Toggles pane input synchronization for the active window.
+    pub fn toggle_active_window_panes_synchronized(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<bool> {
+        let enabled = !self.active_window_panes_synchronized();
+        self.set_active_window_panes_synchronized(primary_client_id, enabled)
+    }
+
     /// Selects a window group by id, index, name, or navigation alias.
     pub fn select_group(&mut self, primary_client_id: &ClientId, target: &str) -> Result<()> {
         self.require_primary(primary_client_id)?;

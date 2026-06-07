@@ -631,6 +631,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "save-layout" => "create a structured session snapshot.",
         "source-file" => "load a configuration file.",
         "split-window" => "split the active or target pane.",
+        "synchronize-panes" => "send primary input to every pane in the active window.",
         "swap-pane" => "exchange two panes.",
         "unbind-key" => "remove a live key binding.",
         "zoom-pane" => "toggle zoom for the active or target pane.",

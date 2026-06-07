@@ -6,7 +6,7 @@
 use crate::ids::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
 use crate::layout::{Size, Window};
 use crate::shell::ResolvedShell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Carries Client Role state for this subsystem.
 ///
@@ -408,6 +408,11 @@ pub struct Session {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) last_active_window_index: Option<usize>,
+    /// Stores window ids whose panes receive synchronized primary input.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) synchronized_window_ids: BTreeSet<String>,
     /// Stores the pane state metadata value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

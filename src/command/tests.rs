@@ -1098,6 +1098,7 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("break-pane:status=implemented"));
     assert!(body.contains("join-pane:status=implemented"));
     assert!(body.contains("rebalance-window:status=implemented"));
+    assert!(body.contains("synchronize-panes:status=implemented"));
     assert!(body.contains("attach-session:status=control-required"));
     assert!(body.contains("list-sessions:status=control-required"));
     assert!(body.contains("copy-mode:status=runtime-required"));
@@ -1174,6 +1175,7 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("| `list-keys` |"), "{help}");
     assert!(help.contains("show-metrics"), "{help}");
     assert!(help.contains("rebalance-window"), "{help}");
+    assert!(help.contains("synchronize-panes"), "{help}");
     assert!(help.contains("set-theme"), "{help}");
     assert!(help.contains("agent-shell"), "{help}");
     assert!(help.contains("save-layout"), "{help}");
@@ -1216,6 +1218,42 @@ fn help_command_describes_mezzanine_command_set() {
     let last_binding = trailing_lines.next().unwrap_or_default();
     assert!(last_binding.contains("C-a ~"), "{help}");
     assert!(last_binding.contains("show-messages"), "{help}");
+}
+
+/// Verifies that `synchronize-panes` accepts all documented modes and stores
+/// active-window state without affecting the command parser's normal sequence
+/// execution rules. The command is intentionally window-scoped, so status must
+/// follow the active window rather than a global toggle.
+#[test]
+fn synchronize_panes_controls_active_window_state() {
+    let (mut session, primary) = test_session();
+
+    let outcomes = execute_command_sequence(
+        &mut session,
+        &primary,
+        "synchronize-panes status; synchronize-panes on; synchronize-panes status; synchronize-panes toggle; synchronize-panes off",
+    )
+    .unwrap();
+    let bodies = outcomes.into_iter().map(display_body).collect::<Vec<_>>();
+
+    assert_eq!(
+        bodies,
+        vec![
+            "synchronize-panes=off",
+            "synchronize-panes=on",
+            "synchronize-panes=on",
+            "synchronize-panes=off",
+            "synchronize-panes=off",
+        ]
+    );
+    let error =
+        execute_command_sequence(&mut session, &primary, "synchronize-panes maybe").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("synchronize-panes accepts on, off, toggle, or status"),
+        "{error}"
+    );
 }
 
 /// Verifies that agent-scoped commands with slash-command equivalents are no

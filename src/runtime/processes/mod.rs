@@ -3669,6 +3669,29 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Returns the pane descriptors that should receive primary input.
+    pub(super) fn active_window_input_descriptors(&self) -> Result<Vec<PaneDescriptor>> {
+        let window = self
+            .session
+            .active_window()
+            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+        let panes = if self.session.active_window_panes_synchronized() {
+            window.panes().iter().collect::<Vec<_>>()
+        } else {
+            vec![window.active_pane()]
+        };
+        Ok(panes
+            .into_iter()
+            .map(|pane| PaneDescriptor {
+                window_id: window.id.clone(),
+                pane_id: pane.id.clone(),
+                size: self
+                    .pane_process_size_for(window, pane.id.as_str())
+                    .unwrap_or(pane.size),
+            })
+            .collect())
+    }
+
     /// Runs the find pane descriptor operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
