@@ -1141,6 +1141,8 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         }
         let row = index.saturating_add(1);
         if allow_segment_updates
+            && previous_spans.is_empty()
+            && spans.is_empty()
             && let Some(span_update) =
                 encode_safe_changed_row_span_update(row, previous_line, line, previous_spans, spans)
         {
