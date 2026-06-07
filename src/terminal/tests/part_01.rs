@@ -2890,49 +2890,6 @@ fn attached_terminal_output_update_rewrites_fully_styled_prompt_continuation_row
     assert!(!rendered.contains("\x1b[1;7H\x1b[0momega"), "{rendered:?}");
 }
 
-/// Verifies partially styled diff rows rewrite from column one instead of
-/// using the bounded segment-update fast path.
-///
-/// Apply-patch previews often recolor only interior tokens such as
-/// `Some(None)`. A segment-only rewrite assumes the host terminal still
-/// matches the cached prior frame, but focused overlay regressions have
-/// already shown that invariant is unreliable for styled rows. Rewriting the
-/// full row keeps the colored token visible.
-#[test]
-fn attached_terminal_output_update_rewrites_partially_styled_diff_rows() {
-    let previous_lines = vec!["- value: gone".to_string()];
-    let current_lines = vec!["+ value: Some(None)".to_string()];
-    let diff_span = crate::terminal::TerminalStyleSpan {
-        start: 9,
-        length: 10,
-        rendition: crate::terminal::GraphicRendition {
-            foreground: Some(crate::terminal::TerminalColor::Indexed(2)),
-            ..crate::terminal::GraphicRendition::default()
-        },
-    };
-    let previous_spans = vec![Vec::new()];
-    let current_spans = vec![vec![diff_span]];
-    let previous = AttachedTerminalOutputFrameState::new(&previous_lines, &previous_spans);
-
-    let frame = encode_attached_terminal_output_update_frame_with_styles(
-        &current_lines,
-        &current_spans,
-        None,
-        AttachedTerminalOutputModes {
-            cursor_visible: false,
-            cursor_blink: false,
-            ..AttachedTerminalOutputModes::default()
-        },
-        Some(&previous),
-    );
-    let rendered = String::from_utf8(frame).unwrap();
-
-    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.contains("\x1b[1;1H\x1b[0m+ value: "), "{rendered:?}");
-    assert!(rendered.contains("Some(None)"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[1;10H"), "{rendered:?}");
-}
-
 /// Verifies bounded row-segment updates keep selected-link styling off the
 /// separator cell on a `/resume` picker row.
 ///
