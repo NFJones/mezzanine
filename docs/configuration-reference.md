@@ -350,7 +350,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `memory.enabled` | boolean | `false` | Enable persistent memory commands, durable memory loading, and gated on-demand memory MAAP actions. |
+| `memory.enabled` | boolean | `true` | Enable persistent memory commands, durable memory loading, and gated on-demand memory MAAP actions. |
 | `memory.storage` | string | `"sqlite"` | Persistent memory storage backend. Current builds use SQLite with TSV import/export compatibility. |
 | `memory.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/memory.sqlite`. |
 | `memory.max_records` | integer | `5000` | Retention cap for persistent records before archival or pruning. |

@@ -144,7 +144,12 @@ pub(super) fn run_memory<W: Write>(
             write_json_or_plain(stdout, output_format, &output)?;
         }
         MemoryCliCommand::Export => {
-            write!(stdout, "{}", store.export_tsv()?)?;
+            if output_format == CliOutputFormat::Json {
+                let output = memory_records_json(&store.list()?)?;
+                write_json_or_plain(stdout, output_format, &output)?;
+            } else {
+                write!(stdout, "{}", store.export_tsv()?)?;
+            }
         }
         MemoryCliCommand::Search {
             query,
@@ -154,6 +159,7 @@ pub(super) fn run_memory<W: Write>(
             source,
             limit,
         } => {
+            validate_memory_query(&query)?;
             let records =
                 memory_records_for_filters(&store, Some(query), scope, kind, state, source, limit)?;
             let output = memory_records_json(&records)?;
@@ -344,6 +350,9 @@ fn memory_records_for_filters(
     source: Option<String>,
     limit: usize,
 ) -> Result<Vec<MemoryRecord>> {
+    if let Some(query) = query.as_deref() {
+        validate_memory_query(query)?;
+    }
     let has_filters = query
         .as_deref()
         .is_some_and(|query| !query.trim().is_empty())
@@ -367,6 +376,17 @@ fn memory_records_for_filters(
         .into_iter()
         .map(|result| result.record)
         .collect())
+}
+
+/// Validates that a CLI memory query contains searchable text.
+fn validate_memory_query(query: &str) -> Result<()> {
+    if query.trim().is_empty() {
+        Err(MezError::invalid_args(
+            "memory search query must not be empty",
+        ))
+    } else {
+        Ok(())
+    }
 }
 /// Runs the memory records json operation for this subsystem.
 ///
@@ -571,11 +591,13 @@ pub(super) fn parse_memory_scope(value: &str) -> Result<MemoryScope> {
         return Ok(MemoryScope::Global);
     }
     if let Some(root) = value.strip_prefix("project:") {
+        validate_memory_scope_component("project memory root", root)?;
         return Ok(MemoryScope::Project {
             root: root.to_string(),
         });
     }
     if let Some(session_id) = value.strip_prefix("session:") {
+        validate_memory_scope_component("session memory id", session_id)?;
         return Ok(MemoryScope::Session {
             session_id: session_id.to_string(),
         });
@@ -621,4 +643,13 @@ pub(super) fn split_memory_scope_pair(value: &str, label: &str) -> Result<(Strin
         )));
     }
     Ok((first.to_string(), second.to_string()))
+}
+
+/// Rejects empty memory scope components before constructing typed scopes.
+fn validate_memory_scope_component(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        Err(MezError::invalid_args(format!("{label} must not be empty")))
+    } else {
+        Ok(())
+    }
 }

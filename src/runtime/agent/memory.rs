@@ -117,15 +117,8 @@ impl RuntimeSessionService {
         match &action.payload {
             AgentActionPayload::MemorySearch { query, limit } => {
                 let limit = memory_action_limit(*limit);
-                let request = crate::memory::MemorySearchRequest {
-                    query: Some(query.clone()),
-                    scope: None,
-                    kind: None,
-                    state: Some(crate::memory::MemoryState::Active),
-                    source: None,
-                    limit,
-                };
-                match store.search(&request) {
+                let scopes = self.memory_action_search_scopes(turn);
+                match search_runtime_memory_scopes(&store, query, &scopes, limit) {
                     Ok(results) => Ok(memory_search_action_result(turn, action, query, &results)),
                     Err(error) => ActionResult::failed(
                         turn,
@@ -224,9 +217,34 @@ impl RuntimeSessionService {
             .filter(|seconds| *seconds > 0)
         {
             record.expiration_duration_seconds = Some(seconds);
-            record.expires_at_unix_seconds = now.checked_add(seconds);
+            record.expires_at_unix_seconds = Some(now.checked_add(seconds).ok_or_else(|| {
+                MezError::invalid_args("memory default_ttl_days is too large to store")
+            })?);
         }
         Ok(record)
+    }
+
+    /// Returns the runtime-visible persistent scopes for a memory search.
+    fn memory_action_search_scopes(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> Vec<crate::memory::MemoryScope> {
+        let mut scopes = vec![crate::memory::MemoryScope::Global];
+        if let Some(project_scope) = self.memory_action_project_scope(&turn.pane_id) {
+            scopes.push(project_scope);
+        }
+        scopes
+    }
+
+    /// Returns the current pane project scope used by runtime memory actions.
+    fn memory_action_project_scope(&self, pane_id: &str) -> Option<crate::memory::MemoryScope> {
+        self.pane_current_working_directory(pane_id).map(|root| {
+            crate::memory::MemoryScope::Project {
+                root: crate::project::discover_project_root(&root)
+                    .to_string_lossy()
+                    .into_owned(),
+            }
+        })
     }
 
     /// Chooses the durable scope for a memory action.
@@ -238,14 +256,52 @@ impl RuntimeSessionService {
         match scope.unwrap_or("project") {
             "global" => crate::memory::MemoryScope::Global,
             "project" => self
-                .pane_current_working_directory(&turn.pane_id)
-                .map(|root| crate::memory::MemoryScope::Project {
-                    root: root.to_string_lossy().into_owned(),
-                })
+                .memory_action_project_scope(&turn.pane_id)
                 .unwrap_or(crate::memory::MemoryScope::Global),
             _ => crate::memory::MemoryScope::Global,
         }
     }
+}
+
+/// Searches all runtime-visible scopes and applies the final bounded limit.
+fn search_runtime_memory_scopes(
+    store: &crate::memory::PersistentMemoryStore,
+    query: &str,
+    scopes: &[crate::memory::MemoryScope],
+    limit: usize,
+) -> Result<Vec<crate::memory::MemorySearchResult>> {
+    let mut results = Vec::new();
+    for scope in scopes {
+        results.extend(store.search(&crate::memory::MemorySearchRequest {
+            query: Some(query.to_string()),
+            scope: Some(scope.clone()),
+            kind: None,
+            state: Some(crate::memory::MemoryState::Active),
+            source: None,
+            limit,
+        })?);
+    }
+    results.sort_by(compare_runtime_memory_results);
+    results.truncate(limit);
+    Ok(results)
+}
+
+/// Orders runtime memory search results by score, recency, and id.
+fn compare_runtime_memory_results(
+    left: &crate::memory::MemorySearchResult,
+    right: &crate::memory::MemorySearchResult,
+) -> std::cmp::Ordering {
+    right
+        .score
+        .partial_cmp(&left.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            right
+                .record
+                .updated_at_unix_seconds
+                .cmp(&left.record.updated_at_unix_seconds)
+        })
+        .then_with(|| left.record.id.cmp(&right.record.id))
 }
 
 /// Returns the bounded search result limit for a memory action.
