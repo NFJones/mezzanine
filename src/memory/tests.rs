@@ -1,9 +1,9 @@
 //! Unit tests for session and persistent memory behavior.
 
 use super::{
-    MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest,
-    MemorySource, MemoryState, PersistentMemoryStore, SessionMemoryStore, decode_scope,
-    encode_scope, fs,
+    MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryRetrievalRequest, MemoryScope,
+    MemorySearchRequest, MemorySource, MemoryState, PersistentMemoryStore, SessionMemoryStore,
+    decode_scope, encode_scope, fs, retrieve_persistent_memory,
 };
 /// Runs the record operation for this subsystem.
 ///
@@ -211,6 +211,211 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
         .unwrap();
     assert_eq!(archived[0].id, "old");
     assert_eq!(store.inspect("old").unwrap().state, MemoryState::Archived);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies TSV export preserves every extended memory metadata field.
+///
+/// This regression scenario covers the 16-field export format produced by
+/// `MemoryRecord::encode()` so imports do not silently reset kind, lifecycle,
+/// reinforcement, supersession, expiry, or retention-duration metadata.
+#[test]
+fn memory_record_tsv_round_trip_preserves_extended_metadata() {
+    let mut original = record(
+        "metadata",
+        MemoryScope::Project {
+            root: "/work/repo".to_string(),
+        },
+        "remember the full metadata contract",
+    );
+    original.kind = MemoryKind::Warning;
+    original.state = MemoryState::Stale;
+    original.last_used_at_unix_seconds = Some(20);
+    original.use_count = 3;
+    original.confirmed_count = 2;
+    original.last_confirmed_at_unix_seconds = Some(21);
+    original.supersedes_id = Some("older".to_string());
+    original.expires_at_unix_seconds = Some(1_000);
+    original.expiration_duration_seconds = Some(600);
+
+    let decoded = MemoryRecord::decode(&original.encode().unwrap()).unwrap();
+
+    assert_eq!(decoded, original);
+}
+
+/// Verifies persistent memory applies metadata filters before final limits.
+///
+/// This regression scenario seeds a higher-ranked record outside the requested
+/// scope ahead of a lower-ranked in-scope record. A small result limit must not
+/// let an early SQL limit drop the only valid match before metadata filtering.
+#[test]
+fn persistent_memory_search_filters_before_limiting_results() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-memory-search-filter-limit-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record(
+            "other-project",
+            MemoryScope::Project {
+                root: "/work/other".to_string(),
+            },
+            "prefer fast tests",
+        ))
+        .unwrap();
+    store
+        .upsert(record(
+            "target-project",
+            MemoryScope::Project {
+                root: "/work/target".to_string(),
+            },
+            "prefer focused tests",
+        ))
+        .unwrap();
+
+    let matches = store
+        .search(&MemorySearchRequest {
+            scope: Some(MemoryScope::Project {
+                root: "/work/target".to_string(),
+            }),
+            limit: 1,
+            ..MemorySearchRequest::default()
+        })
+        .unwrap();
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].record.id, "target-project");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies punctuation-only FTS queries never reach SQLite as empty MATCH text.
+///
+/// This regression scenario exercises untrusted free-text normalization with a
+/// query that contains no searchable tokens. Search may use deterministic
+/// fallback ordering, but it must not surface a SQLite FTS syntax error.
+#[test]
+fn persistent_memory_search_accepts_punctuation_only_queries() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-memory-punctuation-query-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record("punctuation", MemoryScope::Global, "ordinary note"))
+        .unwrap();
+
+    let matches = store
+        .search(&MemorySearchRequest {
+            query: Some("!!!".to_string()),
+            limit: 10,
+            ..MemorySearchRequest::default()
+        })
+        .unwrap();
+
+    assert_eq!(matches[0].record.id, "punctuation");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies archive-before-prune can still make record-count caps effective.
+///
+/// This regression scenario runs retention twice with a one-record cap. The
+/// first pass archives the over-limit record for operator visibility, and the
+/// second pass deletes the already-archived record so it stops holding the cap
+/// open forever.
+#[test]
+fn archive_before_prune_deletes_already_archived_records_on_later_passes() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-memory-archive-before-prune-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record("older", MemoryScope::Global, "older workflow"))
+        .unwrap();
+    let mut newer = record("newer", MemoryScope::Global, "newer workflow");
+    newer.priority = 20;
+    store.upsert(newer).unwrap();
+
+    let policy = MemoryRetentionPolicy {
+        now_unix_seconds: 50,
+        max_records: Some(1),
+        max_bytes: None,
+        archive_before_prune: true,
+    };
+    let first_pass = store.enforce_retention(policy, false).unwrap();
+    assert_eq!(first_pass[0].id, "older");
+    assert_eq!(store.inspect("older").unwrap().state, MemoryState::Archived);
+
+    let second_pass = store.enforce_retention(policy, false).unwrap();
+
+    assert_eq!(second_pass[0].id, "older");
+    assert!(store.inspect("older").is_err());
+    assert_eq!(store.list().unwrap().len(), 1);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies expiry refresh overflow is rejected instead of clearing expiry.
+///
+/// This regression scenario protects retention metadata from becoming
+/// non-expiring when a use timestamp plus refresh duration exceeds `u64::MAX`.
+#[test]
+fn record_use_rejects_expiry_refresh_overflow() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-memory-record-use-overflow-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    let mut expiring = record("overflow", MemoryScope::Global, "overflow note");
+    expiring.expires_at_unix_seconds = Some(100);
+    expiring.expiration_duration_seconds = Some(10);
+    store.upsert(expiring).unwrap();
+
+    assert!(store.record_use("overflow", u64::MAX - 5).is_err());
+    assert_eq!(
+        store.inspect("overflow").unwrap().expires_at_unix_seconds,
+        Some(100)
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a zero injection limit disables persistent memory injection.
+///
+/// This regression scenario distinguishes candidate search defaults from the
+/// model-facing injection cap. A configured injection limit of zero must return
+/// no injectable candidates rather than acting like an unlimited setting.
+#[test]
+fn persistent_memory_retrieval_zero_injection_limit_returns_no_candidates() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-memory-zero-injection-limit-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root);
+    store
+        .upsert(record("candidate", MemoryScope::Global, "candidate note"))
+        .unwrap();
+
+    let result = retrieve_persistent_memory(
+        &store,
+        &MemoryRetrievalRequest {
+            candidate_limit: 10,
+            injection_limit: 0,
+            ..MemoryRetrievalRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(result.candidates.is_empty());
 
     let _ = fs::remove_dir_all(root);
 }

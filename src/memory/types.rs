@@ -426,7 +426,7 @@ impl MemoryRecord {
                 .map_err(|_| MezError::invalid_args("invalid memory priority"))?,
             fields.last().cloned().unwrap_or_default(),
         );
-        if fields.len() == 15 {
+        if fields.len() >= 15 {
             record.kind = parse_kind(&fields[6])?;
             record.state = parse_state(&fields[7])?;
             record.last_used_at_unix_seconds =

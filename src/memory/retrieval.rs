@@ -56,9 +56,7 @@ pub fn retrieve_persistent_memory(
         limit: request.candidate_limit,
     };
     let mut candidates = store.search(&search_request)?;
-    if request.injection_limit > 0 {
-        candidates.truncate(request.injection_limit);
-    }
+    candidates.truncate(request.injection_limit);
     let reason = if request
         .query
         .as_deref()

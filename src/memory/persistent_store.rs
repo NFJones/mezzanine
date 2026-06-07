@@ -148,7 +148,10 @@ impl PersistentMemoryStore {
         record.use_count = record.use_count.saturating_add(1);
         record.updated_at_unix_seconds = used_at_unix_seconds;
         if let Some(duration) = record.expiration_duration_seconds {
-            record.expires_at_unix_seconds = used_at_unix_seconds.checked_add(duration);
+            record.expires_at_unix_seconds =
+                Some(used_at_unix_seconds.checked_add(duration).ok_or_else(|| {
+                    MezError::invalid_args("memory expiration refresh overflowed unix seconds")
+                })?);
         }
         self.upsert(record.clone())?;
         Ok(record)
@@ -208,7 +211,9 @@ impl PersistentMemoryStore {
         let selected = retention_candidates(&records, policy);
         if !dry_run {
             for record in &selected {
-                if policy.archive_before_prune && record.state != MemoryState::Expired {
+                if policy.archive_before_prune
+                    && !matches!(record.state, MemoryState::Archived | MemoryState::Expired)
+                {
                     let _ =
                         self.set_state(&record.id, MemoryState::Archived, policy.now_unix_seconds)?;
                 } else {
@@ -523,7 +528,12 @@ fn search_records(
         .as_deref()
         .filter(|query| !query.trim().is_empty())
     {
-        search_records_with_query(connection, request, query)
+        let fts_query = normalized_fts_query(query);
+        if fts_query.is_empty() {
+            search_records_without_query(connection, request)
+        } else {
+            search_records_with_query(connection, request, &fts_query)
+        }
     } else {
         search_records_without_query(connection, request)
     }
@@ -543,9 +553,8 @@ fn normalized_fts_query(query: &str) -> String {
 fn search_records_with_query(
     connection: &Connection,
     request: &MemorySearchRequest,
-    query: &str,
+    fts_query: &str,
 ) -> Result<Vec<MemorySearchResult>> {
-    let fts_query = normalized_fts_query(query);
     let mut statement = connection.prepare(
         "SELECT r.id, r.scope, r.created_at, r.updated_at, r.source, r.priority,
                 r.kind, r.state, r.last_used_at, r.use_count, r.confirmed_count,
@@ -555,10 +564,9 @@ fn search_records_with_query(
          FROM memory_records_fts
          JOIN memory_records r ON r.rowid = memory_records_fts.rowid
          WHERE memory_records_fts MATCH ?1
-         ORDER BY rank ASC, r.priority DESC, r.updated_at DESC, r.id ASC
-         LIMIT ?2",
+         ORDER BY rank ASC, r.priority DESC, r.updated_at DESC, r.id ASC",
     )?;
-    let rows = statement.query_map(params![fts_query, search_limit(request.limit)], |row| {
+    let rows = statement.query_map(params![fts_query], |row| {
         Ok((row_to_record(row)?, row.get::<_, f64>(16)?))
     })?;
     let mut results = Vec::new();
@@ -590,10 +598,9 @@ fn search_records_without_query(
                 last_used_at, use_count, confirmed_count, last_confirmed_at,
                 supersedes_id, expires_at, expiration_duration_seconds, content
          FROM memory_records
-         ORDER BY priority DESC, updated_at DESC, id ASC
-         LIMIT ?1",
+         ORDER BY priority DESC, updated_at DESC, id ASC",
     )?;
-    let rows = statement.query_map(params![search_limit(request.limit)], row_to_record)?;
+    let rows = statement.query_map([], row_to_record)?;
     let mut results = Vec::new();
     for row in rows {
         let record = row?;
@@ -665,7 +672,6 @@ fn retention_candidates(
 ) -> Vec<MemoryRecord> {
     let mut selected = Vec::new();
     let mut selected_ids = std::collections::BTreeSet::new();
-
     for record in records {
         if record.state == MemoryState::Expired
             || record
