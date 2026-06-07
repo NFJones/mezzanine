@@ -1899,7 +1899,7 @@ impl RuntimeSessionService {
                     .and_then(|memory| memory.get("enabled"))
                     .and_then(serde_json::Value::as_bool)
             })
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 
     /// Returns the configured default memory TTL in days.

@@ -266,6 +266,176 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     let _ = fs::remove_dir_all(audit_root);
 }
 
+/// Verifies runtime memory actions append audit records that name the action
+/// and preserve compact argument metadata without storing raw freeform text.
+///
+/// This regression keeps memory search and store behavior aligned with other
+/// runtime-owned action families so operators can diagnose what executed from
+/// the audit log alone.
+#[test]
+fn runtime_executes_memory_actions_and_audits_action_arguments() {
+    let mut service = test_runtime_service();
+    let audit_root = temp_root("runtime-memory-audit");
+    let audit_path = audit_root.join("audit.jsonl");
+    let config_root = temp_root("runtime-memory-action-config");
+    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+    store
+        .upsert(crate::memory::MemoryRecord::new_with_defaults(
+            "seed-memory".to_string(),
+            crate::memory::MemoryScope::Project {
+                root: crate::project::discover_project_root(&std::env::current_dir().unwrap())
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            1,
+            1,
+            crate::memory::MemorySource::User,
+            50,
+            "prompt cache details".to_string(),
+        ))
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-memory-turn","input":"use memory"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let search = crate::agent::AgentAction {
+        id: "mem-search".to_string(),
+        rationale: "search memory".to_string(),
+        payload: crate::agent::AgentActionPayload::MemorySearch {
+            query: "prompt cache".to_string(),
+            limit: Some(3),
+        },
+    };
+    let store_action = crate::agent::AgentAction {
+        id: "mem-store".to_string(),
+        rationale: "store memory".to_string(),
+        payload: crate::agent::AgentActionPayload::MemoryStore {
+            kind: "preference".to_string(),
+            priority: Some(80),
+            scope: Some("project".to_string()),
+            keywords: vec!["prompt".to_string(), "cache".to_string()],
+            content: "remember prompt cache".to_string(),
+            expires_in_days: Some(7),
+        },
+    };
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "using memory".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![search.clone(), store_action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            crate::agent::ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                action_id: search.id.clone(),
+                action_type: "memory_search",
+                status: ActionStatus::Running,
+                content: Vec::new(),
+                structured_content_json: None,
+                is_error: false,
+                error: None,
+            },
+            crate::agent::ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                action_id: store_action.id.clone(),
+                action_type: "memory_store",
+                status: ActionStatus::Running,
+                content: Vec::new(),
+                structured_content_json: None,
+                is_error: false,
+                error: None,
+            },
+        ],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .execute_running_memory_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(execution.action_results[1].status, ActionStatus::Succeeded);
+
+    let records = fs::read_to_string(&audit_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|record| record["action"] == "runtime_memory_action")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2, "{records:?}");
+
+    let search_record = records
+        .iter()
+        .find(|record| record["metadata"]["action_id"] == "mem-search")
+        .unwrap();
+    assert_eq!(search_record["metadata"]["action_type"], "memory_search");
+    assert_eq!(search_record["metadata"]["limit"], "3");
+    assert_eq!(search_record["metadata"]["query_bytes"], "12");
+    assert!(search_record["metadata"].get("query_sha256").is_some());
+
+    let store_record = records
+        .iter()
+        .find(|record| record["metadata"]["action_id"] == "mem-store")
+        .unwrap();
+    assert_eq!(store_record["metadata"]["action_type"], "memory_store");
+    assert_eq!(store_record["metadata"]["kind"], "preference");
+    assert_eq!(store_record["metadata"]["priority"], "80");
+    assert_eq!(store_record["metadata"]["scope"], "project");
+    assert_eq!(store_record["metadata"]["keyword_count"], "2");
+    assert_eq!(store_record["metadata"]["content_bytes"], "21");
+    assert_eq!(store_record["metadata"]["expires_in_days"], "7");
+    assert!(store_record["metadata"].get("content_sha256").is_some());
+    let _ = fs::remove_dir_all(audit_root);
+}
+
 /// Verifies full-access mode satisfies MCP tool prompt approval while still
 /// executing the call through the normal MCP registry and transport path.
 ///

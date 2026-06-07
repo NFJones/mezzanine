@@ -199,7 +199,7 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
         AgentCapability::Memory if !request.memory_actions_enabled => CapabilityDecision {
             granted: false,
             allowed_actions: AllowedActionSet::capability_decision(),
-            reason: "memory capability requires memory.enabled to be true in runtime config"
+            reason: "memory capability requires persistent memory to be enabled in runtime config"
                 .to_string(),
         },
         _ => CapabilityDecision {

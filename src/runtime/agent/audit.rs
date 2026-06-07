@@ -102,6 +102,81 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Appends an audit event for a runtime-owned persistent-memory action.
+    ///
+    /// Freeform search and store content is hashed rather than written
+    /// directly so durable-memory inputs remain diagnosable without leaking the
+    /// full user-authored payload into the audit log.
+    pub(in crate::runtime) fn append_agent_memory_action_audit(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        outcome: &str,
+    ) -> Result<()> {
+        let Some(audit_log) = self.audit_log.as_mut() else {
+            return Ok(());
+        };
+        let mut record = AuditRecord::new(
+            self.session.id.to_string(),
+            AuditActor {
+                kind: "agent".to_string(),
+                id: turn.agent_id.clone(),
+            },
+            "external_integration",
+            "runtime_memory_action",
+        )
+        .with_pane_id(turn.pane_id.clone())
+        .with_agent_id(turn.agent_id.clone())
+        .with_metadata("turn_id", turn.turn_id.clone())
+        .with_metadata("action_id", action.id.clone())
+        .with_metadata("action_type", action.action_type().to_string());
+        match &action.payload {
+            AgentActionPayload::MemorySearch { query, limit } => {
+                record = record
+                    .with_metadata("query_bytes", query.len().to_string())
+                    .with_metadata(
+                        "query_sha256",
+                        exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, query),
+                    );
+                if let Some(limit) = limit {
+                    record = record.with_metadata("limit", limit.to_string());
+                }
+            }
+            AgentActionPayload::MemoryStore {
+                kind,
+                priority,
+                scope,
+                keywords,
+                content,
+                expires_in_days,
+            } => {
+                record = record
+                    .with_metadata("kind", kind.clone())
+                    .with_metadata("priority", priority.unwrap_or(50).min(100).to_string())
+                    .with_metadata(
+                        "scope",
+                        scope.clone().unwrap_or_else(|| "project".to_string()),
+                    )
+                    .with_metadata("keyword_count", keywords.len().to_string())
+                    .with_metadata("content_bytes", content.len().to_string())
+                    .with_metadata(
+                        "content_sha256",
+                        exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, content),
+                    );
+                if let Some(expires_in_days) = expires_in_days {
+                    record = record.with_metadata("expires_in_days", expires_in_days.to_string());
+                }
+            }
+            _ => {}
+        }
+        record.policy_mode =
+            runtime_permission_preset_name(self.permission_policy.preset).to_string();
+        record.approval_state = "not_required_or_preapproved".to_string();
+        record.outcome = outcome.to_string();
+        let _ = audit_log.append(record.sanitized())?;
+        Ok(())
+    }
+
     /// Runs the append credential access audit operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -3767,11 +3767,11 @@ The baseline action types are:
 - `config_change`: Propose a live configuration change.
 - `memory_search`: Search runtime-owned persistent memory records after the
   `memory` capability has been granted. This action MUST be available only when
-  persistent memory is enabled.
+  persistent memory is enabled in the effective runtime configuration.
 - `memory_store`: Store one runtime-owned persistent memory record after the
   `memory` capability has been granted. This action MUST be available only when
-  persistent memory is enabled and MUST follow the persistent-memory safety
-  requirements in this specification.
+  persistent memory is enabled in the effective runtime configuration and MUST
+  follow the persistent-memory safety requirements in this specification.
 - `mcp_call`: Invoke an available MCP tool.
 - `complete`: Mark the turn complete.
 - `abort`: Reserved for controller-owned terminal failures and legacy transcript
@@ -7174,10 +7174,11 @@ Mezzanine MUST distinguish session memory from persistent memory.
 Session memory is scoped to one Mezzanine session and MUST be removed when the
 session is deleted.
 
-Persistent memory MAY survive across sessions only when enabled by the user.
-Persistent memory MUST be disabled by default in the baseline configuration and
-MUST be enableable through persistent configuration or the pane-local
-`/memory on` slash command.
+Persistent memory MAY survive across sessions only when enabled in the
+effective runtime configuration.
+Persistent memory MUST be enabled by default in the baseline configuration and
+MUST remain disableable through persistent configuration or the pane-local
+`/memory off` slash command.
 
 When persistent memory is enabled for an agent turn, Mezzanine MAY expose
 runtime-owned memory actions to the main model so it can store and load durable

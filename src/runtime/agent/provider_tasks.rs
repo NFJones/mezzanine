@@ -392,6 +392,7 @@ impl RuntimeSessionService {
             subagent_scope,
             available_mcp_servers,
             available_mcp_tools: mcp_summary.available_tools,
+            memory_actions_enabled: self.runtime_persistent_memory_enabled(),
             loop_turn: self.agent_loop_turns.get(turn_id).cloned(),
         }))
     }

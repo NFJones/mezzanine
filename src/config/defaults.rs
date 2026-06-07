@@ -174,7 +174,7 @@ persist = true
 search_mode = "literal"
 
 [memory]
-enabled = false
+enabled = true
 storage = "sqlite"
 database_path = ""
 max_records = 5000

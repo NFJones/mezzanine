@@ -1434,6 +1434,7 @@ async fn execute_runtime_agent_provider_dispatch(
         subagent_scope,
         available_mcp_servers,
         available_mcp_tools,
+        memory_actions_enabled,
         loop_turn: _,
     } = dispatch;
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
@@ -1555,7 +1556,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled: false,
+                memory_actions_enabled,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1580,7 +1581,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled: false,
+                memory_actions_enabled,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1605,7 +1606,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled: false,
+                memory_actions_enabled,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(

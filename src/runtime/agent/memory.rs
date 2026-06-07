@@ -12,7 +12,7 @@ const MAX_MEMORY_ACTION_LIMIT: usize = 20;
 
 impl RuntimeSessionService {
     /// Executes provider-produced persistent-memory actions for one running turn.
-    pub(super) fn execute_running_memory_actions_for_turn(
+    pub(in crate::runtime) fn execute_running_memory_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -53,7 +53,10 @@ impl RuntimeSessionService {
                     ),
                 )?;
             }
-            execution.action_results[index] = self.execute_memory_action_for_turn(turn, &action)?;
+            let result = self.execute_memory_action_for_turn(turn, &action)?;
+            let outcome = format!("{:?}", result.status).to_ascii_lowercase();
+            self.append_agent_memory_action_audit(turn, &action, &outcome)?;
+            execution.action_results[index] = result;
             executed = executed.saturating_add(1);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(

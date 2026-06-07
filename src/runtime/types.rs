@@ -3447,6 +3447,12 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub available_mcp_tools: Vec<McpPromptTool>,
+    /// Whether persistent memory actions are enabled for this provider turn.
+    ///
+    /// Async provider workers execute outside the runtime actor, so the live
+    /// memory gate must be carried with the dispatch instead of recomputed from
+    /// unavailable actor-owned state.
+    pub memory_actions_enabled: bool,
     /// Optional `/loop` controller metadata for this provider turn.
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
 }
