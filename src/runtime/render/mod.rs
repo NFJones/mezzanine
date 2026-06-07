@@ -2657,12 +2657,9 @@ impl RuntimeSessionService {
         })?;
         let mut bytes = String::new();
         if previous_line_count > 0 {
-            for index in 0..previous_line_count {
-                if index > 0 {
-                    bytes.push_str("\x1b[1A");
-                }
-                bytes.push_str("\r\x1b[2K");
-            }
+            bytes.push_str(&clear_agent_shell_output_status_lines_sequence(
+                previous_line_count,
+            ));
         } else {
             let cursor = screen.cursor_state();
             let current_line_has_content = screen
@@ -2699,13 +2696,7 @@ impl RuntimeSessionService {
             return Ok(());
         };
         if let Some(screen) = self.pane_screens.get_mut(pane_id) {
-            let mut bytes = String::new();
-            for index in 0..lines.len() {
-                if index > 0 {
-                    bytes.push_str("\x1b[1A");
-                }
-                bytes.push_str("\r\x1b[2K");
-            }
+            let bytes = clear_agent_shell_output_status_lines_sequence(lines.len());
             Self::feed_agent_terminal_screen(
                 screen,
                 bytes.as_bytes(),
@@ -4627,15 +4618,36 @@ fn copy_selection_rendition(
     rendition
 }
 
+/// Returns the terminal bytes used to remove a transient live shell-output tail.
+///
+/// The live tail is not durable transcript content, so clearing it must also
+/// clear its SGR state. Otherwise erased cells can retain the status-row
+/// rendition in the screen model and focused attached-pane rendering can later
+/// compose stale status styling with syntax-colored apply-patch diff tokens.
+fn clear_agent_shell_output_status_lines_sequence(line_count: usize) -> String {
+    if line_count == 0 {
+        return String::new();
+    }
+    let mut bytes = String::from("\x1b[0m");
+    for index in 0..line_count {
+        if index > 0 {
+            bytes.push_str("\x1b[1A");
+        }
+        bytes.push_str("\r\x1b[2K");
+    }
+    bytes.push_str("\x1b[0m\r");
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AgentRenderedLine, AgentRenderedLineKind, agent_action_result_uses_diff_preview,
-        agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
-        readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
-        render_command_markdown_body_lines, rendered_line_rendition_at,
-        runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
-        runtime_display_overlay_rendered_line_style_spans,
+        agent_thinking_display_lines_for_width, clear_agent_shell_output_status_lines_sequence,
+        command_preview_terminal_rendered_lines, readable_agent_diff_display_lines,
+        readable_agent_diff_display_lines_for_width, render_command_markdown_body_lines,
+        rendered_line_rendition_at, runtime_agent_shell_markdown_overlay_content,
+        runtime_command_display_overlay_content, runtime_display_overlay_rendered_line_style_spans,
         runtime_display_overlay_rendered_selection_start,
         runtime_display_overlay_selection_prefix_columns, runtime_human_readable_display_lines,
         wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
@@ -4668,6 +4680,23 @@ mod tests {
         };
 
         assert!(agent_action_result_uses_diff_preview(&patch));
+    }
+
+    /// Verifies transient live shell-output tails reset SGR before clearing.
+    ///
+    /// The focused attached-pane renderer reads styles from the live terminal
+    /// screen, not from the durable transcript. A status-tail clear that erases
+    /// rows without resetting SGR can leave status styling on blank cells and
+    /// make later syntax-colored apply-patch diff tokens appear missing only in
+    /// the focused pane.
+    #[test]
+    fn shell_output_status_clear_resets_sgr_around_erased_tail_rows() {
+        let bytes = clear_agent_shell_output_status_lines_sequence(3);
+
+        assert_eq!(
+            bytes,
+            "\x1b[0m\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[0m\r"
+        );
     }
 
     /// Verifies semantic action diff output is parsed into compact display rows
