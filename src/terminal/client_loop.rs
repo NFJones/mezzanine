@@ -1313,6 +1313,45 @@ fn terminal_output_style_spans_drop_hidden_spans_for_matching_diff_row_slices() 
     assert!(style_spans.is_empty(), "{style_spans:?}");
 }
 
+/// Verifies later overlay spans preserve earlier diff-token foreground colors.
+///
+/// This regression covers the focused apply-patch preview path where a later
+/// selection or focus overlay contributes background styling on top of an
+/// existing syntax or diff foreground. The attached-terminal encoder must merge
+/// the overlapping spans instead of letting the later overlay replace the whole
+/// rendition, or Rust tokens such as `Some` can become invisible in focused
+/// panes.
+#[cfg(test)]
+#[test]
+fn terminal_output_style_spans_merge_overlay_background_with_diff_foreground() {
+    let encoded = encode_styled_terminal_line(
+        "+ value: Some(None)",
+        &[
+            TerminalStyleSpan {
+                start: 9,
+                length: 4,
+                rendition: super::GraphicRendition {
+                    foreground: Some(super::TerminalColor::Indexed(2)),
+                    ..super::GraphicRendition::default()
+                },
+            },
+            TerminalStyleSpan {
+                start: 9,
+                length: 4,
+                rendition: super::GraphicRendition {
+                    background: Some(super::TerminalColor::Indexed(4)),
+                    ..super::GraphicRendition::default()
+                },
+            },
+        ],
+    );
+
+    assert!(
+        encoded.contains("+ value: \x1b[0;32;44mSome"),
+        "{encoded:?}"
+    );
+}
+
 /// Runs the output row count changed operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1626,21 +1665,48 @@ fn sanitize_terminal_output_grapheme(grapheme: &str) -> String {
 
 /// Returns the active rendition at a display column.
 ///
-/// Spans must be in composition order (later spans override earlier ones).
-/// This function iterates in reverse, picking the last-applied span that
-/// covers the column. Callers must ensure spans are either from
-/// [`terminal_styled_lines_from_canvas`] or from canvas-composed sources
-/// where later spans represent later composition layers.
+/// Spans must be in composition order so later spans can augment earlier ones.
+/// This function folds every covering span in that order, preserving earlier
+/// attributes when a later overlay leaves them unspecified. Callers must ensure
+/// spans are either from [`terminal_styled_lines_from_canvas`] or from
+/// canvas-composed sources where later spans represent later composition
+/// layers.
 fn rendition_at_column(
     style_spans: &[TerminalStyleSpan],
     column: usize,
 ) -> super::GraphicRendition {
     style_spans
         .iter()
-        .rev()
-        .find(|span| column >= span.start && column < span.start.saturating_add(span.length))
-        .map(|span| span.rendition)
-        .unwrap_or_default()
+        .filter(|span| column >= span.start && column < span.start.saturating_add(span.length))
+        .fold(super::GraphicRendition::default(), |active, span| {
+            merge_graphic_renditions(active, span.rendition)
+        })
+}
+
+/// Merges one later style layer into the accumulated active rendition.
+///
+/// Terminal style spans act as partial overlays rather than full terminal-state
+/// snapshots. Later overlays such as copy-selection highlights should keep an
+/// earlier diff or syntax foreground unless they explicitly replace that color.
+fn merge_graphic_renditions(
+    active: super::GraphicRendition,
+    overlay: super::GraphicRendition,
+) -> super::GraphicRendition {
+    super::GraphicRendition {
+        bold: active.bold || overlay.bold,
+        dim: active.dim || overlay.dim,
+        italic: active.italic || overlay.italic,
+        underline: active.underline
+            || overlay.underline
+            || active.double_underline
+            || overlay.double_underline,
+        double_underline: active.double_underline || overlay.double_underline,
+        strikethrough: active.strikethrough || overlay.strikethrough,
+        inverse: active.inverse || overlay.inverse,
+        hidden: active.hidden || overlay.hidden,
+        foreground: overlay.foreground.or(active.foreground),
+        background: overlay.background.or(active.background),
+    }
 }
 
 /// Runs the sgr sequence operation for this subsystem.
