@@ -26,6 +26,7 @@ impl PersistentMemoryStore {
     pub fn under_config_root(config_root: impl Into<PathBuf>) -> Self {
         Self {
             path: config_root.into().join("memory.sqlite"),
+            fts_enabled: true,
         }
     }
 
@@ -35,7 +36,16 @@ impl PersistentMemoryStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            fts_enabled: true,
+        }
+    }
+
+    /// Returns a copy of this store with SQLite FTS setup and query use toggled.
+    pub fn with_fts_enabled(mut self, fts_enabled: bool) -> Self {
+        self.fts_enabled = fts_enabled;
+        self
     }
 
     /// Runs the path operation for this subsystem.
@@ -179,12 +189,14 @@ impl PersistentMemoryStore {
                 "a memory record cannot supersede itself",
             ));
         }
-        let _ = self.inspect(new_id)?;
+        let mut new_record = self.inspect(new_id)?;
         let mut record = self.inspect(old_id)?;
         record.state = MemoryState::Superseded;
-        record.supersedes_id = Some(new_id.to_string());
         record.updated_at_unix_seconds = updated_at_unix_seconds;
         self.upsert(record.clone())?;
+        new_record.supersedes_id = Some(old_id.to_string());
+        new_record.updated_at_unix_seconds = updated_at_unix_seconds;
+        self.upsert(new_record)?;
         Ok(record)
     }
 
@@ -241,7 +253,7 @@ impl PersistentMemoryStore {
     /// Searches persistent memory with SQLite FTS and metadata filters.
     pub fn search(&self, request: &MemorySearchRequest) -> Result<Vec<MemorySearchResult>> {
         let connection = self.open()?;
-        search_records(&connection, request)
+        search_records(&connection, request, self.fts_enabled)
     }
 
     /// Opens and initializes the SQLite-backed persistent memory store.
@@ -252,7 +264,7 @@ impl PersistentMemoryStore {
         }
         let existed = self.path.exists();
         let mut connection = Connection::open(&self.path)?;
-        initialize_schema(&mut connection)?;
+        initialize_schema(&mut connection, self.fts_enabled)?;
         if !existed {
             self.import_legacy_tsv(&mut connection)?;
         }
@@ -324,7 +336,7 @@ pub struct MemoryRetentionPolicy {
 }
 
 /// Creates the SQLite schema and FTS index for persistent memory.
-fn initialize_schema(connection: &mut Connection) -> Result<()> {
+fn initialize_schema(connection: &mut Connection, fts_enabled: bool) -> Result<()> {
     connection.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA foreign_keys = ON;
@@ -359,8 +371,11 @@ fn initialize_schema(connection: &mut Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS memory_records_state_kind_idx ON memory_records(state, kind);
          CREATE INDEX IF NOT EXISTS memory_records_priority_updated_idx
              ON memory_records(priority DESC, updated_at DESC, id ASC);
-         CREATE INDEX IF NOT EXISTS memory_records_source_idx ON memory_records(source);
-         CREATE VIRTUAL TABLE IF NOT EXISTS memory_records_fts USING fts5(
+         CREATE INDEX IF NOT EXISTS memory_records_source_idx ON memory_records(source);",
+    )?;
+    if fts_enabled {
+        connection.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS memory_records_fts USING fts5(
              id UNINDEXED,
              content,
              kind,
@@ -383,7 +398,14 @@ fn initialize_schema(connection: &mut Connection) -> Result<()> {
              INSERT INTO memory_records_fts(rowid, id, content, kind, source, scope_text)
              VALUES (new.rowid, new.id, new.content, new.kind, new.source, new.scope_text);
          END;",
-    )?;
+        )?;
+    } else {
+        connection.execute_batch(
+            "DROP TRIGGER IF EXISTS memory_records_ai;
+             DROP TRIGGER IF EXISTS memory_records_ad;
+             DROP TRIGGER IF EXISTS memory_records_au;",
+        )?;
+    }
     ensure_memory_schema_migrations(connection)?;
     connection.execute(
         "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description)
@@ -522,11 +544,12 @@ fn scope_text(scope: &MemoryScope) -> String {
 fn search_records(
     connection: &Connection,
     request: &MemorySearchRequest,
+    fts_enabled: bool,
 ) -> Result<Vec<MemorySearchResult>> {
     if let Some(query) = request
         .query
         .as_deref()
-        .filter(|query| !query.trim().is_empty())
+        .filter(|query| fts_enabled && !query.trim().is_empty())
     {
         let fts_query = normalized_fts_query(query);
         if fts_query.is_empty() {

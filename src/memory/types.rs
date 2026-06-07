@@ -252,6 +252,8 @@ pub struct PersistentMemoryStore {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) path: PathBuf,
+    /// Whether SQLite FTS tables and query paths are enabled for this store.
+    pub(super) fts_enabled: bool,
 }
 
 impl MemoryRecord {

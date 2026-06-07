@@ -176,7 +176,11 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
 
     let superseded = store.supersede("old", "new", 22).unwrap();
     assert_eq!(superseded.state, MemoryState::Superseded);
-    assert_eq!(superseded.supersedes_id.as_deref(), Some("new"));
+    assert_eq!(superseded.supersedes_id, None);
+    assert_eq!(
+        store.inspect("new").unwrap().supersedes_id.as_deref(),
+        Some("old")
+    );
 
     let dry_run = store
         .enforce_retention(
@@ -416,6 +420,43 @@ fn persistent_memory_retrieval_zero_injection_limit_returns_no_candidates() {
     .unwrap();
 
     assert!(result.candidates.is_empty());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies disabling FTS still permits deterministic queried search.
+///
+/// This regression scenario protects the `memory.fts_enabled = false` contract:
+/// opening the store must not create the FTS table or triggers, and queries must
+/// still return deterministic metadata-ranked results instead of using MATCH.
+#[test]
+fn persistent_memory_search_uses_fallback_when_fts_is_disabled() {
+    let root = std::env::temp_dir().join(format!("mez-memory-fts-disabled-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = PersistentMemoryStore::under_config_root(&root).with_fts_enabled(false);
+    store
+        .upsert(record("candidate", MemoryScope::Global, "candidate note"))
+        .unwrap();
+
+    let matches = store
+        .search(&MemorySearchRequest {
+            query: Some("candidate".to_string()),
+            limit: 10,
+            ..MemorySearchRequest::default()
+        })
+        .unwrap();
+
+    assert_eq!(matches[0].record.id, "candidate");
+    assert_eq!(matches[0].fts_rank, None);
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    let fts_table_count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'memory_records_fts'",
+            [],
+            |row| row.get::<_, u64>(0),
+        )
+        .unwrap();
+    assert_eq!(fts_table_count, 0);
 
     let _ = fs::remove_dir_all(root);
 }

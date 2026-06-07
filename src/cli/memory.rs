@@ -25,7 +25,9 @@ pub(super) fn run_memory<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     let paths = env.config_paths()?;
-    let store = PersistentMemoryStore::under_config_root(paths.root());
+    let memory_config = cli_memory_config(&env)?;
+    let store = PersistentMemoryStore::under_config_root(paths.root())
+        .with_fts_enabled(memory_config.fts_enabled);
 
     match parsed.command.unwrap_or(MemoryCliCommand::List {
         query: None,
@@ -313,16 +315,42 @@ enum MemoryCliCommand {
 
 /// Builds the configured persistent-memory retention policy for CLI pruning.
 fn memory_retention_policy(env: &CliEnv, now_unix_seconds: u64) -> Result<MemoryRetentionPolicy> {
+    let memory_config = cli_memory_config(env)?;
+    Ok(MemoryRetentionPolicy {
+        now_unix_seconds,
+        max_records: memory_config.max_records,
+        max_bytes: memory_config.max_bytes,
+        archive_before_prune: memory_config.archive_before_prune,
+    })
+}
+
+/// Effective CLI memory configuration used before opening the persistent store.
+struct CliMemoryConfig {
+    /// Maximum retained memory records, when configured.
+    max_records: Option<usize>,
+    /// Maximum retained memory content bytes, when configured.
+    max_bytes: Option<usize>,
+    /// Whether retention archives active records before deleting them.
+    archive_before_prune: bool,
+    /// Whether SQLite FTS setup and query use are enabled.
+    fts_enabled: bool,
+}
+
+/// Loads memory configuration values needed by CLI memory commands.
+fn cli_memory_config(env: &CliEnv) -> Result<CliMemoryConfig> {
     let paths = env.config_paths()?;
     let layers = load_primary_config_layers(&paths)?;
     let root = runtime_effective_config_value(&layers)?;
     let memory = root.get("memory").and_then(serde_json::Value::as_object);
-    Ok(MemoryRetentionPolicy {
-        now_unix_seconds,
+    Ok(CliMemoryConfig {
         max_records: memory_config_usize(memory, "max_records"),
         max_bytes: memory_config_usize(memory, "max_bytes"),
         archive_before_prune: memory
             .and_then(|config| config.get("archive_before_prune"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        fts_enabled: memory
+            .and_then(|config| config.get("fts_enabled"))
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
     })

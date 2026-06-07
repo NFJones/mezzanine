@@ -4095,7 +4095,7 @@ fn memory_cli_manages_lifecycle_metadata_and_retention() {
     .unwrap();
     let supersede_output = String::from_utf8(supersede_stdout).unwrap();
     assert!(supersede_output.contains(r#""state":"superseded""#));
-    assert!(supersede_output.contains(r#""supersedes_id":"new""#));
+    assert!(supersede_output.contains(r#""supersedes_id":null"#));
 
     let paths = env.config_paths().unwrap();
     fs::create_dir_all(paths.root()).unwrap();
