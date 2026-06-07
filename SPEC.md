@@ -7180,10 +7180,12 @@ queries. Second, Mezzanine MUST prompt the sidecar model with bounded candidate
 cards from those local results so it can select specific memory ids and
 selection reasons. Mezzanine MUST validate selected ids against the candidate
 set, apply configured record and byte caps, mark selected records as used, and
-inject only those authoritative selected records into the main model context for
-the duration of the current turn. If planning, local retrieval, or selection
-fails, Mezzanine MUST continue the main turn without persistent-memory
-injection for that turn.
+extend selected records' expiry by their stored expiration duration from the
+current wall-clock time, and inject only those authoritative selected records
+into the main model context for the duration of the current turn. Records that
+are retrieved or inspected but not injected MUST NOT have their expiry extended.
+If planning, local retrieval, or selection fails, Mezzanine MUST continue the
+main turn without persistent-memory injection for that turn.
 
 Persistent memory MUST be stored under `~/.config/mezzanine` or in an explicitly
 configured user-private location. The default persistent store MUST be a
@@ -7193,7 +7195,9 @@ legacy sibling `memory.tsv` data into SQLite without deleting the TSV backup.
 Persistent memory MUST be structured. Each memory record MUST include identity,
 scope, creation time, update time, source, confidence or priority, kind,
 lifecycle state, and content. Retrieval metadata SHOULD include last-used time,
-use count, confirmation counts, supersession, and expiry when available.
+use count, confirmation counts, supersession, expiry when available, and an
+expiration duration used to refresh expiring records when they are selected and
+used.
 
 Memory scopes MUST include at least global, project, session, window, pane, and
 agent.

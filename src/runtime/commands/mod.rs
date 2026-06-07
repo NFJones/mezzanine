@@ -1643,6 +1643,7 @@ impl RuntimeSessionService {
             &self.session.id.to_string(),
             invocation.args.trim().is_empty(),
             &source_text,
+            self.runtime_memory_default_ttl_days(),
         )?;
         self.agent_remembering_panes
             .insert(pane_id.to_string(), current_unix_seconds().max(1));
@@ -1710,7 +1711,12 @@ impl RuntimeSessionService {
                 now,
                 runtime_remember_slug(&candidate.summary, index + 1)
             );
-            let record = candidate.into_record(id, task.scope.clone(), now)?;
+            let record = candidate.into_record(
+                id,
+                task.scope.clone(),
+                now,
+                self.runtime_memory_default_ttl_days(),
+            )?;
             self.upsert_session_memory(record.clone())?;
             store.upsert(record.clone())?;
             stored.push(record);
@@ -1894,6 +1900,19 @@ impl RuntimeSessionService {
                     .and_then(serde_json::Value::as_bool)
             })
             .unwrap_or(false)
+    }
+
+    /// Returns the configured default memory TTL in days.
+    fn runtime_memory_default_ttl_days(&self) -> u64 {
+        runtime_effective_config_value(&self.config_layers)
+            .ok()
+            .and_then(|root| {
+                root.get("memory")
+                    .and_then(|memory| memory.get("default_ttl_days"))
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .filter(|days| *days > 0)
+            .unwrap_or(180)
     }
 
     /// Persists and applies the configured persistent-memory enablement flag.
@@ -4418,7 +4437,13 @@ struct RuntimeRememberCandidate {
 
 impl RuntimeRememberCandidate {
     /// Converts one validated model candidate into a persistent memory record.
-    fn into_record(self, id: String, scope: MemoryScope, now: u64) -> Result<MemoryRecord> {
+    fn into_record(
+        self,
+        id: String,
+        scope: MemoryScope,
+        now: u64,
+        default_ttl_days: u64,
+    ) -> Result<MemoryRecord> {
         let mut record = MemoryRecord::new_with_defaults(
             id,
             scope,
@@ -4430,10 +4455,17 @@ impl RuntimeRememberCandidate {
         );
         record.kind = self.kind;
         record.state = MemoryState::Active;
-        record.expires_at_unix_seconds = self
-            .expires_in_days
-            .and_then(|days| days.checked_mul(86_400))
-            .and_then(|seconds| now.checked_add(seconds));
+        let ttl_days = self.expires_in_days.unwrap_or(default_ttl_days).max(1);
+        let duration = ttl_days.checked_mul(86_400).ok_or_else(|| {
+            MezError::invalid_state("remember memory expiration duration overflow")
+        })?;
+        record.expiration_duration_seconds = Some(duration);
+        record.expires_at_unix_seconds = now.checked_add(duration);
+        if record.expires_at_unix_seconds.is_none() {
+            return Err(MezError::invalid_state(
+                "remember memory expiration timestamp overflow",
+            ));
+        }
         record.validate_for_persistence()?;
         Ok(record)
     }
@@ -4464,6 +4496,7 @@ fn runtime_model_remember_request(
     session_id: &str,
     context_mode: bool,
     source_text: &str,
+    default_ttl_days: u64,
 ) -> Result<ModelRequest> {
     let agent_id = format!("agent-{pane_id}");
     let turn_id = format!("remember-{session_id}-{pane_id}");
@@ -4499,8 +4532,7 @@ fn runtime_model_remember_request(
             ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::DeveloperInstruction,
-                content: "Return exactly one final say action whose text is strict JSON with a top-level `memories` array. Each memory object must contain: `kind` (`preference`, `fact`, `procedure`, `episode`, `warning`, or `scratch`), `priority` (1-255), `summary`, `keywords` array, `cues` array, and `content`. Include only durable information that will help future turns. Make `content` self-contained and retrieval-friendly. For statement mode, use only the supplied statement as source. For context mode, return at most six high-value memories."
-                    .to_string(),
+                content: format!("Return exactly one final say action whose text is strict JSON with a top-level `memories` array. Each memory object must contain: `kind` (`preference`, `fact`, `procedure`, `episode`, `warning`, or `scratch`), `priority` (1-255), `summary`, `keywords` array, `cues` array, and `content`. Include optional `expires_in_days` only when the source implies a more appropriate retention period; otherwise omit it and Mezzanine will use the configured default of {default_ttl_days} days. Include only durable information that will help future turns. Make `content` self-contained and retrieval-friendly. For statement mode, use only the supplied statement as source. For context mode, return at most six high-value memories.")
             },
             ModelMessage {
                 role: ModelMessageRole::User,

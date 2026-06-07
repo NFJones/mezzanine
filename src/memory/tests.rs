@@ -161,6 +161,15 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
     assert_eq!(used.last_used_at_unix_seconds, Some(20));
     assert_eq!(used.use_count, 1);
 
+    let mut expiring = record("expiring", MemoryScope::Global, "useful workflow");
+    expiring.expires_at_unix_seconds = Some(110);
+    expiring.expiration_duration_seconds = Some(100);
+    store.upsert(expiring).unwrap();
+    let refreshed = store.record_use("expiring", 30).unwrap();
+    assert_eq!(refreshed.last_used_at_unix_seconds, Some(30));
+    assert_eq!(refreshed.expires_at_unix_seconds, Some(130));
+    assert_eq!(refreshed.expiration_duration_seconds, Some(100));
+
     let confirmed = store.confirm("new", 21).unwrap();
     assert_eq!(confirmed.last_confirmed_at_unix_seconds, Some(21));
     assert_eq!(confirmed.confirmed_count, 1);
@@ -173,7 +182,7 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
         .enforce_retention(
             MemoryRetentionPolicy {
                 now_unix_seconds: 23,
-                max_records: Some(2),
+                max_records: Some(3),
                 max_bytes: None,
                 archive_before_prune: true,
             },
@@ -193,7 +202,7 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
         .enforce_retention(
             MemoryRetentionPolicy {
                 now_unix_seconds: 24,
-                max_records: Some(2),
+                max_records: Some(3),
                 max_bytes: None,
                 archive_before_prune: true,
             },

@@ -421,6 +421,8 @@ struct MemoryRecordJson<'a> {
     supersedes_id: Option<&'a str>,
     /// Expiry time used by retention policy.
     expires_at_unix_seconds: Option<u64>,
+    /// Retention duration used to refresh expiry after use.
+    expiration_duration_seconds: Option<u64>,
     /// Stored memory content.
     content: &'a str,
 }
@@ -442,6 +444,7 @@ impl<'a> From<&'a MemoryRecord> for MemoryRecordJson<'a> {
             last_confirmed_at_unix_seconds: record.last_confirmed_at_unix_seconds,
             supersedes_id: record.supersedes_id.as_deref(),
             expires_at_unix_seconds: record.expires_at_unix_seconds,
+            expiration_duration_seconds: record.expiration_duration_seconds,
             content: &record.content,
         }
     }

@@ -219,6 +219,8 @@ pub struct MemoryRecord {
     pub supersedes_id: Option<String>,
     /// Stores the expiry time for retention policy, if any.
     pub expires_at_unix_seconds: Option<u64>,
+    /// Stores the retention duration used to refresh expiry after use.
+    pub expiration_duration_seconds: Option<u64>,
     /// Stores the content value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -311,6 +313,7 @@ impl MemoryRecord {
             last_confirmed_at_unix_seconds: None,
             supersedes_id: None,
             expires_at_unix_seconds: None,
+            expiration_duration_seconds: None,
             content: content.into(),
         }
     }
@@ -354,6 +357,13 @@ impl MemoryRecord {
                 "memory expiry time must be non-zero unix seconds",
             ));
         }
+        if let Some(duration) = self.expiration_duration_seconds
+            && duration == 0
+        {
+            return Err(MezError::invalid_args(
+                "memory expiration duration must be non-zero seconds",
+            ));
+        }
         if let Some(supersedes_id) = &self.supersedes_id {
             validate_non_empty("superseded memory id", supersedes_id)?;
         }
@@ -384,6 +394,7 @@ impl MemoryRecord {
             optional_u64_field(self.last_confirmed_at_unix_seconds),
             self.supersedes_id.clone().unwrap_or_default(),
             optional_u64_field(self.expires_at_unix_seconds),
+            optional_u64_field(self.expiration_duration_seconds),
             self.content.clone(),
         ]
         .into_iter()
@@ -399,7 +410,7 @@ impl MemoryRecord {
     /// on duplicated control-flow logic.
     pub(super) fn decode(line: &str) -> Result<Self> {
         let fields = split_fields(line)?;
-        if fields.len() != 7 && fields.len() != 15 {
+        if fields.len() != 7 && fields.len() != 15 && fields.len() != 16 {
             return Err(MezError::invalid_args(
                 "memory record has wrong field count",
             ));
@@ -427,6 +438,10 @@ impl MemoryRecord {
             record.supersedes_id = optional_string_field(&fields[12]);
             record.expires_at_unix_seconds =
                 parse_optional_u64(&fields[13], "expires_at_unix_seconds")?;
+            if fields.len() == 16 {
+                record.expiration_duration_seconds =
+                    parse_optional_u64(&fields[14], "expiration_duration_seconds")?;
+            }
         }
         record.validate_for_persistence()?;
         Ok(record)

@@ -14,7 +14,7 @@ use super::{
     source_name, state_name,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const LEGACY_TSV_FILE_NAME: &str = "memory.tsv";
 
 impl PersistentMemoryStore {
@@ -57,7 +57,7 @@ impl PersistentMemoryStore {
         let mut statement = connection.prepare(
             "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
                     last_used_at, use_count, confirmed_count, last_confirmed_at,
-                    supersedes_id, expires_at, content
+                    supersedes_id, expires_at, expiration_duration_seconds, content
              FROM memory_records
              ORDER BY id ASC",
         )?;
@@ -76,7 +76,7 @@ impl PersistentMemoryStore {
         let mut statement = connection.prepare(
             "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
                     last_used_at, use_count, confirmed_count, last_confirmed_at,
-                    supersedes_id, expires_at, content
+                    supersedes_id, expires_at, expiration_duration_seconds, content
              FROM memory_records
              WHERE id = ?1",
         )?;
@@ -147,6 +147,9 @@ impl PersistentMemoryStore {
         record.last_used_at_unix_seconds = Some(used_at_unix_seconds);
         record.use_count = record.use_count.saturating_add(1);
         record.updated_at_unix_seconds = used_at_unix_seconds;
+        if let Some(duration) = record.expiration_duration_seconds {
+            record.expires_at_unix_seconds = used_at_unix_seconds.checked_add(duration);
+        }
         self.upsert(record.clone())?;
         Ok(record)
     }
@@ -340,6 +343,7 @@ fn initialize_schema(connection: &mut Connection) -> Result<()> {
              last_confirmed_at INTEGER,
              supersedes_id TEXT,
              expires_at INTEGER,
+             expiration_duration_seconds INTEGER,
              content TEXT NOT NULL,
              scope_text TEXT NOT NULL,
              CHECK (priority >= 0 AND priority <= 255),
@@ -375,11 +379,29 @@ fn initialize_schema(connection: &mut Connection) -> Result<()> {
              VALUES (new.rowid, new.id, new.content, new.kind, new.source, new.scope_text);
          END;",
     )?;
+    ensure_memory_schema_migrations(connection)?;
     connection.execute(
         "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description)
          VALUES (?1, strftime('%s', 'now'), ?2)",
         params![SCHEMA_VERSION, "create sqlite memory store with fts"],
     )?;
+    Ok(())
+}
+
+/// Applies additive SQLite migrations for persistent memory records.
+fn ensure_memory_schema_migrations(connection: &Connection) -> Result<()> {
+    let has_duration_column = connection
+        .prepare("PRAGMA table_info(memory_records)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "expiration_duration_seconds");
+    if !has_duration_column {
+        connection.execute(
+            "ALTER TABLE memory_records ADD COLUMN expiration_duration_seconds INTEGER",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -390,8 +412,8 @@ fn upsert_record(connection: &Connection, record: &MemoryRecord) -> Result<()> {
         "INSERT INTO memory_records (
              id, scope, created_at, updated_at, source, priority, kind, state,
              last_used_at, use_count, confirmed_count, last_confirmed_at,
-             supersedes_id, expires_at, content, scope_text
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             supersedes_id, expires_at, expiration_duration_seconds, content, scope_text
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(id) DO UPDATE SET
              scope = excluded.scope,
              created_at = excluded.created_at,
@@ -406,6 +428,7 @@ fn upsert_record(connection: &Connection, record: &MemoryRecord) -> Result<()> {
              last_confirmed_at = excluded.last_confirmed_at,
              supersedes_id = excluded.supersedes_id,
              expires_at = excluded.expires_at,
+             expiration_duration_seconds = excluded.expiration_duration_seconds,
              content = excluded.content,
              scope_text = excluded.scope_text",
         params![
@@ -423,6 +446,7 @@ fn upsert_record(connection: &Connection, record: &MemoryRecord) -> Result<()> {
             record.last_confirmed_at_unix_seconds,
             record.supersedes_id,
             record.expires_at_unix_seconds,
+            record.expiration_duration_seconds,
             record.content,
             scope_text(&record.scope),
         ],
@@ -458,7 +482,8 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
         last_confirmed_at_unix_seconds: row.get(11)?,
         supersedes_id: row.get(12)?,
         expires_at_unix_seconds: row.get(13)?,
-        content: row.get(14)?,
+        expiration_duration_seconds: row.get(14)?,
+        content: row.get(15)?,
     })
 }
 
@@ -524,7 +549,8 @@ fn search_records_with_query(
     let mut statement = connection.prepare(
         "SELECT r.id, r.scope, r.created_at, r.updated_at, r.source, r.priority,
                 r.kind, r.state, r.last_used_at, r.use_count, r.confirmed_count,
-                r.last_confirmed_at, r.supersedes_id, r.expires_at, r.content,
+                r.last_confirmed_at, r.supersedes_id, r.expires_at,
+                r.expiration_duration_seconds, r.content,
                 bm25(memory_records_fts) AS rank
          FROM memory_records_fts
          JOIN memory_records r ON r.rowid = memory_records_fts.rowid
@@ -533,7 +559,7 @@ fn search_records_with_query(
          LIMIT ?2",
     )?;
     let rows = statement.query_map(params![fts_query, search_limit(request.limit)], |row| {
-        Ok((row_to_record(row)?, row.get::<_, f64>(15)?))
+        Ok((row_to_record(row)?, row.get::<_, f64>(16)?))
     })?;
     let mut results = Vec::new();
     for row in rows {
@@ -562,7 +588,7 @@ fn search_records_without_query(
     let mut statement = connection.prepare(
         "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
                 last_used_at, use_count, confirmed_count, last_confirmed_at,
-                supersedes_id, expires_at, content
+                supersedes_id, expires_at, expiration_duration_seconds, content
          FROM memory_records
          ORDER BY priority DESC, updated_at DESC, id ASC
          LIMIT ?1",

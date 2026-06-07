@@ -364,7 +364,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `memory.sidecar_rerank_timeout_ms` | integer | `1500` | Maximum sidecar reranking time. |
 | `memory.sidecar_max_queries` | integer | `5` | Maximum sidecar-planned FTS queries per retrieval pass. |
 | `memory.archive_before_prune` | boolean | `true` | Archive non-expired over-limit records before destructive pruning. |
-| `memory.default_ttl_days` | integer | `180` | Default retention horizon for new expiring memory records. |
+| `memory.default_ttl_days` | integer | `180` | Default retention horizon for model-generated memory records when the model does not provide `expires_in_days`. Records store this as an expiration duration so selected-and-used memories refresh their expiry from wall-clock time. |
 
 ### `agents`
 
