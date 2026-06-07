@@ -278,6 +278,16 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
         .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
         .collect::<Vec<_>>();
     assert!(!live_pane_ids.contains(&old_pane_id));
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.payload.contains(r#""layout":"resized""#)),
+        "{events:?}"
+    );
 
     let create_after_resume = service
         .execute_terminal_command(&primary, "save-layout --name checkpoint-after-load")

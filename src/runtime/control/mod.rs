@@ -2874,7 +2874,10 @@ impl RuntimeSessionService {
             .collect();
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
         let restarted_panes = match self.restart_restored_pane_processes(None) {
-            Ok(starts) => starts.len(),
+            Ok(starts) => {
+                self.sync_tracked_pty_sizes()?;
+                starts.len()
+            }
             Err(error) => {
                 let restored_pane_ids = self.pane_processes.tracked_pane_ids();
                 let restored_pane_id_refs = restored_pane_ids
