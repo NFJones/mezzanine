@@ -2384,10 +2384,73 @@ pub(super) fn rendered_line_rendition_at(
 ) -> GraphicRendition {
     spans
         .iter()
-        .rev()
-        .find(|span| column >= span.start && column < span.start.saturating_add(span.length))
-        .map(|span| span.rendition)
-        .unwrap_or_default()
+        .filter(|span| column >= span.start && column < span.start.saturating_add(span.length))
+        .fold(GraphicRendition::default(), |active, span| {
+            merge_agent_rendered_line_renditions(active, span.rendition)
+        })
+}
+
+/// Merges layered rendered-line style spans without treating partial overlays
+/// as full terminal-state replacements.
+fn merge_agent_rendered_line_renditions(
+    mut active: GraphicRendition,
+    overlay: GraphicRendition,
+) -> GraphicRendition {
+    if overlay.background.is_some() {
+        return overlay;
+    }
+    active.bold |= overlay.bold;
+    active.dim |= overlay.dim;
+    active.italic |= overlay.italic;
+    active.underline |= overlay.underline;
+    active.double_underline |= overlay.double_underline;
+    active.strikethrough |= overlay.strikethrough;
+    active.inverse |= overlay.inverse;
+    active.hidden |= overlay.hidden;
+    if overlay.foreground.is_some() {
+        active.foreground = overlay.foreground;
+    }
+    if overlay.background.is_some() {
+        active.background = overlay.background;
+    }
+    active
+}
+
+/// Verifies syntax-token foreground spans preserve surrounding diff emphasis.
+///
+/// Apply-patch previews can layer syntax colors over diff addition/deletion
+/// styling. The focused pane path renders from the live terminal screen, so
+/// dropping the base diff attributes at colored tokens can make those symbols
+/// visually diverge from the same row in unfocused or copy-mode redraws.
+#[cfg(test)]
+#[test]
+fn rendered_line_rendition_at_merges_diff_base_with_syntax_foreground() {
+    let base = GraphicRendition {
+        foreground: Some(TerminalColor::Indexed(2)),
+        bold: true,
+        ..GraphicRendition::default()
+    };
+    let syntax = GraphicRendition {
+        foreground: Some(TerminalColor::Indexed(6)),
+        ..GraphicRendition::default()
+    };
+    let spans = [
+        TerminalStyleSpan {
+            start: 0,
+            length: 20,
+            rendition: base,
+        },
+        TerminalStyleSpan {
+            start: 9,
+            length: 4,
+            rendition: syntax,
+        },
+    ];
+
+    let rendition = rendered_line_rendition_at(&spans, 10);
+
+    assert_eq!(rendition.foreground, syntax.foreground);
+    assert!(rendition.bold);
 }
 
 /// Chooses the presentation style for one generated diff preview line.
