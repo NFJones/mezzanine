@@ -3285,6 +3285,55 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     poll_until_exit(&mut service);
 }
 
+/// Verifies runtime service restarts restored panes at the rendered PTY size
+/// instead of the raw saved layout pane size.
+///
+/// Restored shells must start with the same content-area dimensions used by
+/// normal pane creation so cursor placement and shell redraws stay aligned with
+/// framed and split layouts immediately after `load-layout`.
+#[test]
+fn runtime_service_restarts_restored_panes_with_rendered_process_sizes() {
+    let mut original = test_session();
+    let primary = original.attach_primary("primary", true).unwrap();
+    original
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restored = Session::from_snapshot_payload(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        &payload,
+    )
+    .unwrap();
+    let restored_pane_sizes: Vec<Size> = restored
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes().iter().map(|pane| pane.size))
+        .collect();
+    let mut service = RuntimeSessionService::with_event_log(
+        restored,
+        PathBuf::from("/tmp/mez-1000/restored-size-alignment.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+
+    let starts = service
+        .restart_restored_pane_processes(Some("true"))
+        .unwrap();
+    let started_sizes: Vec<Size> = starts.iter().map(|start| start.size).collect();
+    let tracked_sizes: Vec<Size> = service
+        .tracked_pane_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.size)
+        .collect();
+
+    assert_eq!(started_sizes.len(), restored_pane_sizes.len());
+    assert_eq!(started_sizes, tracked_sizes);
+    assert_ne!(started_sizes, restored_pane_sizes);
+    poll_until_exit(&mut service);
+}
+
 /// Verifies runtime snapshot resume treats saved pane working directories as
 /// best-effort metadata when fresh pane process startup cannot use them.
 ///

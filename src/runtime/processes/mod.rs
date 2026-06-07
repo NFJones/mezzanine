@@ -201,10 +201,13 @@ impl RuntimeSessionService {
                     if pane.live || self.pane_processes.contains_pane(pane.id.as_str()) {
                         None
                     } else {
+                        let size = self
+                            .pane_process_size_for(window, pane.id.as_str())
+                            .unwrap_or(pane.size);
                         Some(PaneDescriptor {
                             window_id: window.id.clone(),
                             pane_id: pane.id.clone(),
-                            size: pane.size,
+                            size,
                         })
                     }
                 })
