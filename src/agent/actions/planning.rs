@@ -243,6 +243,14 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     task_prompt.len()
                 )),
             )),
+            AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. } => {
+                Ok(ActionResult::running(
+                    turn,
+                    action,
+                    vec!["memory action accepted for runtime execution".to_string()],
+                    Some(r#"{"state":"pending_runtime_memory"}"#.to_string()),
+                ))
+            }
             AgentActionPayload::ConfigChange {
                 setting_path,
                 operation,

@@ -1480,6 +1480,98 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
     );
 }
 
+/// Verifies memory actions plan as runtime-owned work instead of falling
+/// through the shell-action planner.
+///
+/// Persistent memory operations execute through the runtime store after the
+/// planner marks them as running. This regression ensures the planner produces
+/// a pending runtime result so memory actions can continue instead of failing
+/// with the shell-backed-action planning error.
+#[test]
+fn turn_runner_accepts_memory_store_for_runtime_execution() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Memory,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "store the requested memory".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![AgentAction {
+                    id: "memory-1".to_string(),
+                    rationale: "store durable project context".to_string(),
+                    payload: AgentActionPayload::MemoryStore {
+                        kind: "fact".to_string(),
+                        priority: Some(60),
+                        scope: Some("project".to_string()),
+                        keywords: vec!["memory".to_string(), "regression".to_string()],
+                        content: "remember this regression scenario".to_string(),
+                        expires_in_days: Some(7),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+                memory_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "remember this for later".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert_eq!(
+        execution.action_results[0].content_texts(),
+        vec!["memory action accepted for runtime execution"]
+    );
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""state":"pending_runtime_memory""#));
+}
+
 /// Verifies that auto-allow uses the model rationale as its reasonableness
 /// assessment. The reduced MAAP shape no longer carries a separate approval
 /// hint field.
