@@ -1407,6 +1407,31 @@ pub(super) fn runtime_terminal_render_rate_limit_fps_from_config(root: &Value) -
     })
 }
 
+/// Returns the configured hidden shell-output preview tail line count.
+pub(super) fn runtime_terminal_shell_output_preview_lines_from_config(
+    root: &Value,
+) -> Result<usize> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(5);
+    };
+    let Some(value) = terminal.get("shell_output_preview_lines") else {
+        return Ok(5);
+    };
+    let Some(lines) = value.as_u64() else {
+        return Err(MezError::config(
+            "terminal.shell_output_preview_lines must be a positive integer",
+        ));
+    };
+    if lines == 0 {
+        return Err(MezError::config(
+            "terminal.shell_output_preview_lines must be greater than zero",
+        ));
+    }
+    usize::try_from(lines).map_err(|_| {
+        MezError::config("terminal.shell_output_preview_lines is too large for this platform")
+    })
+}
+
 /// Returns whether optional terminal animations should render as static UI.
 pub(super) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {

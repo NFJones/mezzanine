@@ -635,8 +635,14 @@ pub(super) fn trailing_mez_osc_prefix_fragment(bytes: &[u8]) -> Vec<u8> {
     Vec::new()
 }
 
-/// Returns the latest non-empty model-visible shell output line.
-pub(super) fn latest_agent_shell_transaction_output_line(output: &str) -> Option<String> {
+/// Returns the latest non-empty model-visible shell output lines.
+pub(super) fn latest_agent_shell_transaction_output_lines(
+    output: &str,
+    max_lines: usize,
+) -> Vec<String> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
     let raw_output = output;
     let decoded = decode_shell_output_transport_with_diagnostics(output);
     let output = if decoded.diagnostics.saw_begin_marker {
@@ -650,17 +656,21 @@ pub(super) fn latest_agent_shell_transaction_output_line(output: &str) -> Option
     } else {
         output.to_string()
     };
-    output
+    let mut lines = output
         .replace("\r\n", "\n")
         .replace('\r', "\n")
         .lines()
         .rev()
         .map(sanitized_shell_output_status_line)
         .map(|line| line.trim_end().to_string())
-        .find(|line| {
+        .filter(|line| {
             let trimmed = line.trim();
             !trimmed.is_empty() && !shell_observation_line_looks_like_prompt(trimmed)
         })
+        .take(max_lines)
+        .collect::<Vec<_>>();
+    lines.reverse();
+    lines
 }
 
 /// Sanitizes one transient shell-output status line for pane rendering.

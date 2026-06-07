@@ -58,7 +58,8 @@ use super::{
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_reduced_motion_from_config,
     runtime_terminal_render_rate_limit_fps_from_config,
-    runtime_terminal_resize_debounce_ms_from_config, runtime_terminal_term_from_config,
+    runtime_terminal_resize_debounce_ms_from_config,
+    runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
     runtime_ui_theme_from_config, runtime_window_frame_position_from_config,
     runtime_window_frame_right_status_template_from_config, runtime_window_frame_style_from_config,
     runtime_window_frame_template_from_config, runtime_window_frame_visible_fields_from_config,
@@ -269,6 +270,7 @@ impl RuntimeSessionService {
             terminal_emoji_width,
             terminal_resize_debounce_ms: 200,
             terminal_render_rate_limit_fps: 5,
+            terminal_shell_output_preview_lines: 5,
             terminal_reduced_motion: false,
             terminal_clipboard: "external".to_string(),
             ui_theme: crate::terminal::UiTheme::default(),
@@ -781,6 +783,8 @@ impl RuntimeSessionService {
         crate::terminal::set_terminal_emoji_width(terminal_emoji_width);
         self.terminal_resize_debounce_ms = terminal_resize_debounce_ms;
         self.terminal_render_rate_limit_fps = terminal_render_rate_limit_fps;
+        self.terminal_shell_output_preview_lines =
+            runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
         self.terminal_reduced_motion = terminal_reduced_motion;
         self.terminal_clipboard = terminal_clipboard;
         self.host_clipboard = host_clipboard;

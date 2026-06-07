@@ -1151,12 +1151,12 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
-/// Verifies hidden model shell commands expose a single live latest-output row.
+/// Verifies hidden model shell commands expose a bounded live latest-output tail.
 ///
 /// Normal logging hides raw PTY output, but users still need lightweight
-/// progress for long-running commands. The latest cleaned stdout/stderr line
-/// should replace the previous transient row and disappear when the next durable
-/// agent transcript line is written.
+/// progress for long-running commands. The latest cleaned stdout/stderr lines
+/// should replace the previous transient preview block and disappear when the
+/// next durable agent transcript line is written.
 #[test]
 fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     let mut service = test_runtime_service();
@@ -1288,7 +1288,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!second_text.contains("first output"), "{second_text}");
+    assert!(second_text.contains("first output"), "{second_text}");
     assert!(second_text.contains("second output"), "{second_text}");
     let theme = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())

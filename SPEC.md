@@ -1836,14 +1836,15 @@ segment, Mezzanine SHOULD leave the segment intact and rely on normal terminal
 soft wrapping instead of inserting a hard split. Full
 Mezzanine-owned wrapper commands and wrapper output MUST remain trace-only.
 While a model-authored shell command is running and raw shell output is hidden,
-Mezzanine SHOULD render the latest non-empty cleaned command-output line as a
-single transient row immediately below the command preview. New command-output
-lines SHOULD replace that row in place instead of appending transcript history,
-and the next durable agent transcript row SHOULD clear or overwrite it. If a
-PTY read contains both a Mezzanine transaction-end marker and the parent shell's
-next prompt repaint, prompt bytes after the marker MUST NOT be considered
-command output for this transient row. The transient row SHOULD use the same
-muted foreground treatment as agent thinking or status text.
+Mezzanine SHOULD render the latest non-empty cleaned command-output lines as a
+transient preview block immediately below the command preview. The preview block
+MUST be bounded by `terminal.shell_output_preview_lines`, which defaults to 5.
+New command-output lines SHOULD replace that block in place instead of appending
+transcript history, and the next durable agent transcript row SHOULD clear or
+overwrite it. If a PTY read contains both a Mezzanine transaction-end marker and
+the parent shell's next prompt repaint, prompt bytes after the marker MUST NOT
+be considered command output for this transient preview. The transient preview
+SHOULD use the same muted foreground treatment as agent thinking or status text.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,
 because broad but finite inspection batches are ordinary agent work. Mezzanine
 MUST still prevent provably duplicate file mutations from replaying after the
@@ -2335,7 +2336,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 12 is the current configuration schema version for this
+schema version 13 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.

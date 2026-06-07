@@ -496,12 +496,12 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 Some(format!("{path} must be true or false"))
             }
         }
-        "terminal.cursor_blink_interval_ms" | "terminal.resize_debounce_ms" => {
-            match value.parse::<u64>() {
-                Ok(interval) if interval > 0 => None,
-                _ => Some(format!("{path} must be a positive integer")),
-            }
-        }
+        "terminal.cursor_blink_interval_ms"
+        | "terminal.resize_debounce_ms"
+        | "terminal.shell_output_preview_lines" => match value.parse::<u64>() {
+            Ok(interval) if interval > 0 => None,
+            _ => Some(format!("{path} must be a positive integer")),
+        },
         "terminal.render_rate_limit_fps" => match value.parse::<u64>() {
             Ok(_) => None,
             _ => Some(format!("{path} must be a non-negative integer")),

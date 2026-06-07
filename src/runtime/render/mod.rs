@@ -2602,17 +2602,17 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Updates the transient status row for a hidden running shell command.
+    /// Updates the transient status rows for a hidden running shell command.
     ///
-    /// The row intentionally has no trailing newline. Later output replaces it
-    /// in place, while the next durable agent transcript append clears it before
-    /// writing normal log content.
-    pub(super) fn append_agent_shell_output_status_line_to_terminal_buffer(
+    /// The preview intentionally has no trailing newline after its final row.
+    /// Later output replaces it in place, while the next durable agent
+    /// transcript append clears it before writing normal log content.
+    pub(super) fn append_agent_shell_output_status_lines_to_terminal_buffer(
         &mut self,
         pane_id: &str,
-        line: &str,
+        lines: &[String],
     ) -> Result<()> {
-        if self.agent_shell_view_enabled(pane_id) || line.trim().is_empty() {
+        if self.agent_shell_view_enabled(pane_id) || lines.is_empty() {
             return Ok(());
         }
         let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
@@ -2637,15 +2637,32 @@ impl RuntimeSessionService {
         let content_columns = columns
             .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
             .max(1);
-        let line =
-            fit_agent_terminal_text_width(&sanitized_agent_terminal_line(line), content_columns);
-        let has_existing_status_line = self.agent_shell_output_status_lines.contains_key(pane_id);
+        let lines = lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                fit_agent_terminal_text_width(&sanitized_agent_terminal_line(line), content_columns)
+            })
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let previous_line_count = self
+            .agent_shell_output_status_lines
+            .get(pane_id)
+            .map(Vec::len)
+            .unwrap_or(0);
         let screen = self.pane_screens.get_mut(pane_id).ok_or_else(|| {
             MezError::invalid_state("agent terminal presentation screen was not initialized")
         })?;
         let mut bytes = String::new();
-        if has_existing_status_line {
-            bytes.push_str("\r\x1b[2K");
+        if previous_line_count > 0 {
+            for index in 0..previous_line_count {
+                if index > 0 {
+                    bytes.push_str("\x1b[1A");
+                }
+                bytes.push_str("\r\x1b[2K");
+            }
         } else {
             let cursor = screen.cursor_state();
             let current_line_has_content = screen
@@ -2658,30 +2675,42 @@ impl RuntimeSessionService {
                 bytes.push_str("\r\n");
             }
         }
-        append_styled_agent_terminal_line(
-            &mut bytes,
-            AgentTerminalPresentationStyle::Status,
-            &line,
-            &self.ui_theme,
-        );
-        bytes.push_str("\x1b[0m");
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                bytes.push_str("\r\n");
+            }
+            append_styled_agent_terminal_line(
+                &mut bytes,
+                AgentTerminalPresentationStyle::Status,
+                line,
+                &self.ui_theme,
+            );
+            bytes.push_str("\x1b[0m");
+        }
         Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "updating shell output status")?;
         self.agent_shell_output_status_lines
-            .insert(pane_id.to_string(), line);
+            .insert(pane_id.to_string(), lines);
         Ok(())
     }
 
-    /// Clears a transient shell-output status row if one is active for a pane.
+    /// Clears transient shell-output status rows if one is active for a pane.
     fn clear_agent_shell_output_status_line(&mut self, pane_id: &str) -> Result<()> {
-        if self
-            .agent_shell_output_status_lines
-            .remove(pane_id)
-            .is_none()
-        {
+        let Some(lines) = self.agent_shell_output_status_lines.remove(pane_id) else {
             return Ok(());
-        }
+        };
         if let Some(screen) = self.pane_screens.get_mut(pane_id) {
-            Self::feed_agent_terminal_screen(screen, b"\r\x1b[2K", "clearing shell output status")?;
+            let mut bytes = String::new();
+            for index in 0..lines.len() {
+                if index > 0 {
+                    bytes.push_str("\x1b[1A");
+                }
+                bytes.push_str("\r\x1b[2K");
+            }
+            Self::feed_agent_terminal_screen(
+                screen,
+                bytes.as_bytes(),
+                "clearing shell output status",
+            )?;
         }
         Ok(())
     }

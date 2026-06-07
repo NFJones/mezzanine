@@ -3904,6 +3904,12 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) terminal_render_rate_limit_fps: u64,
+    /// Stores the hidden shell-output preview tail line count for this data
+    /// structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) terminal_shell_output_preview_lines: usize,
     /// Stores whether optional terminal animations should be disabled.
     ///
     /// The field is part of structured state exchanged across this module
@@ -4321,10 +4327,10 @@ pub struct RuntimeSessionService {
     /// Tracks pane-local transient shell-output status rows for hidden agent
     /// shell commands.
     ///
-    /// The row is display-only progress feedback: each new command-output line
-    /// replaces the prior row, and the next durable agent transcript line clears
-    /// it before writing its own content.
-    pub(super) agent_shell_output_status_lines: BTreeMap<String, String>,
+    /// The rows are display-only progress feedback: each output tail update
+    /// replaces the prior preview block, and the next durable agent transcript
+    /// line clears it before writing its own content.
+    pub(super) agent_shell_output_status_lines: BTreeMap<String, Vec<String>>,
     /// Panes currently replaying durable agent presentation entries.
     ///
     /// Replay writes use the same terminal append primitives as live agent

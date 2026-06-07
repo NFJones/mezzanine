@@ -60,6 +60,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         bytes: &[u8],
     ) {
+        let output_preview_lines = self.terminal_shell_output_preview_lines;
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
@@ -101,24 +102,26 @@ impl RuntimeSessionService {
                 if appended < text.len() {
                     transaction.observed_output_truncated = true;
                 }
-                if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind
-                    && let Some(line) = latest_agent_shell_transaction_output_line(
+                if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind {
+                    let lines = latest_agent_shell_transaction_output_lines(
                         &transaction.observed_output_preview,
-                    )
-                {
-                    status_line_updates.push((
-                        transaction.turn_id.clone(),
-                        action_id.clone(),
-                        transaction.pane_id.clone(),
-                        line,
-                    ));
+                        output_preview_lines,
+                    );
+                    if !lines.is_empty() {
+                        status_line_updates.push((
+                            transaction.turn_id.clone(),
+                            action_id.clone(),
+                            transaction.pane_id.clone(),
+                            lines,
+                        ));
+                    }
                 }
             }
         }
-        for (turn_id, action_id, pane_id, line) in status_line_updates {
+        for (turn_id, action_id, pane_id, lines) in status_line_updates {
             if self.agent_shell_transaction_action_shows_live_output(&turn_id, &action_id) {
-                let _ =
-                    self.append_agent_shell_output_status_line_to_terminal_buffer(&pane_id, &line);
+                let _ = self
+                    .append_agent_shell_output_status_lines_to_terminal_buffer(&pane_id, &lines);
             }
         }
     }
