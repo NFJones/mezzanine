@@ -70,7 +70,7 @@ entry is shown.
 | `theme` | table | see below | Active theme aliases and colors. |
 | `themes` | map | `{}` | User-defined named themes. |
 | `history` | table | see below | Per-pane history buffering. |
-| `memory` | table | see below | Persistent memory storage, retrieval, injection, and sidecar defaults. |
+| `memory` | table | see below | Persistent memory storage, retrieval, injection, and retention defaults. |
 | `agents` | table | see below | Agent defaults and limits. |
 | `model_profiles` | map | default profiles shown below | Model profile definitions. |
 | `permissions` | table | see below | Approval, command, and authority policy. |
@@ -357,12 +357,8 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `memory.max_bytes` | integer | `10485760` | Persistent memory content-byte cap enforced by `mez memory prune`. |
 | `memory.max_injected_records` | integer | `12` | Maximum persistent memory records eligible for automatic context injection. |
 | `memory.max_injected_bytes` | integer | `24576` | Maximum bytes of persistent memory eligible for automatic context injection. |
-| `memory.candidate_limit` | integer | `100` | Maximum local candidates retrieved before sidecar selection. |
+| `memory.candidate_limit` | integer | `100` | Maximum local candidates retrieved before memory injection or on-demand memory search selection. |
 | `memory.fts_enabled` | boolean | `true` | Enable SQLite FTS candidate search for memory queries. |
-| `memory.sidecar_model_profile` | string | `"memory-sidecar"` | Model profile name for memory sidecar planning and reranking calls. |
-| `memory.sidecar_planning_timeout_ms` | integer | `1500` | Maximum sidecar query-planning time. |
-| `memory.sidecar_rerank_timeout_ms` | integer | `1500` | Maximum sidecar reranking time. |
-| `memory.sidecar_max_queries` | integer | `5` | Maximum sidecar-planned FTS queries per retrieval pass. |
 | `memory.archive_before_prune` | boolean | `true` | Archive non-expired over-limit records before destructive pruning. |
 | `memory.default_ttl_days` | integer | `180` | Default retention horizon for model-generated memory records when the model does not provide `expires_in_days`. Records store this as an expiration duration so selected-and-used memories refresh their expiry from wall-clock time. |
 

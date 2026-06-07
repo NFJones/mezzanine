@@ -937,11 +937,7 @@ fn removed_v2_paths() -> &'static [&'static str] {
 
 /// Returns config paths removed from the current schema during v12 migration.
 fn removed_v12_paths() -> &'static [&'static str] {
-    &[
-        "memory.sidecar_enabled",
-        "memory.sidecar_mode",
-        "memory.sidecar_fallback",
-    ]
+    &[]
 }
 
 /// Copies one default TOML item into the target document if it is absent.

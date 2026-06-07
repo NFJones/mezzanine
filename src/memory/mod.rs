@@ -44,12 +44,7 @@ mod types;
 mod validation;
 
 pub use persistent_store::{MemoryRetentionPolicy, MemorySearchRequest, MemorySearchResult};
-pub use retrieval::{
-    MemoryCandidateCard, MemoryRetrievalRequest, MemoryRetrievalResult, MemorySelectionSource,
-    MemorySidecarFallbackReason, MemorySidecarPlan, MemorySidecarRerankSelection,
-    MemorySidecarRerankSelectionItem, MemorySidecarState, SelectedMemoryRecord, candidate_cards,
-    deterministic_selected_memory, retrieve_persistent_memory, sidecar_selected_memory,
-};
+pub use retrieval::{MemoryRetrievalRequest, MemoryRetrievalResult, retrieve_persistent_memory};
 pub use types::{
     MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, PersistentMemoryStore,
     SessionMemoryStore,

@@ -122,7 +122,7 @@ pub enum MemorySource {
 
 /// Classifies the durable role a memory record plays during retrieval.
 ///
-/// Retrieval, retention, and future sidecar planning use this type to avoid
+/// Retrieval and retention use this type to avoid
 /// applying one policy to preferences, facts, procedures, episodes, warnings,
 /// and scratch notes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

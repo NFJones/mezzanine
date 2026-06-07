@@ -183,10 +183,6 @@ max_injected_records = 12
 max_injected_bytes = 24576
 candidate_limit = 100
 fts_enabled = true
-sidecar_model_profile = "memory-sidecar"
-sidecar_planning_timeout_ms = 1500
-sidecar_rerank_timeout_ms = 1500
-sidecar_max_queries = 5
 archive_before_prune = true
 default_ttl_days = 180
 

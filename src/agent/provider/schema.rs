@@ -132,7 +132,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task specifically needs durable memory lookup or storage; do not use this surface as a routine preflight, and do not replace the memory sidecar's automatic retrieval role. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task specifically needs durable memory lookup or storage; do not use this surface as a routine preflight. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -575,7 +575,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "Search persistent memory only when durable prior context is needed for the current task. Keep queries focused and avoid using this as a routine preflight because the memory sidecar already performs automatic retrieval.",
+                "Search persistent memory only when durable prior context is needed for the current task. Keep queries focused and avoid using this as a routine preflight.",
             ),
             (
                 "limit",

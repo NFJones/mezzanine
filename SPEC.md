@@ -7174,25 +7174,14 @@ Persistent memory MUST be disabled by default in the baseline configuration and
 MUST be enableable through persistent configuration or the pane-local
 `/memory on` slash command.
 
-When persistent memory is enabled for an agent turn, Mezzanine MUST activate the
-memory sidecar for that turn. The sidecar MUST run at the start of the provider
-turn before the main model request receives persistent memory context. While the
-sidecar is active, visible agent status SHOULD report `remembering`.
-
-The sidecar flow MUST be mediated by runtime code rather than direct model
-store access. First, Mezzanine MUST prompt the configured sidecar model with
-bounded turn context and allowed memory scopes so it can return a validated
-query plan. Mezzanine MUST execute only the validated local memory-store
-queries. Second, Mezzanine MUST prompt the sidecar model with bounded candidate
-cards from those local results so it can select specific memory ids and
-selection reasons. Mezzanine MUST validate selected ids against the candidate
-set, apply configured record and byte caps, mark selected records as used, and
-extend selected records' expiry by their stored expiration duration from the
-current wall-clock time, and inject only those authoritative selected records
-into the main model context for the duration of the current turn. Records that
-are retrieved or inspected but not injected MUST NOT have their expiry extended.
-If planning, local retrieval, or selection fails, Mezzanine MUST continue the
-main turn without persistent-memory injection for that turn.
+When persistent memory is enabled for an agent turn, Mezzanine MAY expose
+runtime-owned memory actions to the main model so it can store and load durable
+records when needed for the current task. Mezzanine MUST NOT run a separate
+memory model for planning, retrieval, reranking, or context injection.
+Records selected and used through runtime-owned memory actions MUST be marked as
+used, and expiring records MUST have their expiry extended by their stored
+expiration duration from the current wall-clock time. Records that are retrieved
+or inspected but not used MUST NOT have their expiry extended.
 
 Persistent memory MUST be stored under `~/.config/mezzanine` or in an explicitly
 configured user-private location. The default persistent store MUST be a
@@ -7230,10 +7219,9 @@ When persistent memory is enabled, the provider action surface MAY expose a
 gated `memory` capability whose concrete action subset contains
 `memory_search` and `memory_store`. These on-demand actions MUST execute
 through the runtime-owned persistent store, MUST return bounded action results
-for provider continuation, and MUST NOT replace the memory sidecar's automatic
-retrieval role or be used as a routine preflight for every task. When persistent
-memory is disabled, the harness MUST deny the `memory` capability and MUST NOT
-expose `memory_search` or `memory_store`.
+for provider continuation, and MUST NOT be used as a routine preflight for every
+task. When persistent memory is disabled, the harness MUST deny the `memory`
+capability and MUST NOT expose `memory_search` or `memory_store`.
 
 Memory content MUST have lower priority than system requirements, active user
 instructions, active policy, and project instruction files.

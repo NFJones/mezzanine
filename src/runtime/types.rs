@@ -3320,35 +3320,6 @@ pub struct RuntimeAutoSizingDecision {
     pub rationale: String,
 }
 
-/// Bounded memory sidecar retrieval dispatch carried to a provider worker.
-#[derive(Debug, Clone)]
-pub struct RuntimeMemorySidecarDispatch {
-    /// SQLite memory database path opened by the provider worker.
-    pub store_path: PathBuf,
-    /// Sidecar model profile name selected from configuration.
-    pub profile_name: String,
-    /// Resolved sidecar model profile.
-    pub profile: ModelProfile,
-    /// Sidecar provider used for planning and reranking calls.
-    pub provider: RuntimeAgentProviderDispatchProvider,
-    /// Current task text used as sidecar query context.
-    pub query_context: String,
-    /// Local scopes allowed for candidate retrieval.
-    pub scopes: Vec<crate::memory::MemoryScope>,
-    /// Maximum sidecar-planned search queries.
-    pub max_queries: usize,
-    /// Maximum local candidates sent to reranking.
-    pub candidate_limit: usize,
-    /// Maximum records injected into the main model context.
-    pub max_selected_records: usize,
-    /// Maximum selected memory bytes injected into the main model context.
-    pub max_selected_bytes: usize,
-    /// Whether model-visible memory blocks include selection reasons.
-    pub include_selection_reasons: bool,
-    /// Whether SQLite FTS query matching is enabled.
-    pub fts_enabled: bool,
-}
-
 /// Tracks a provider task after the async actor has claimed it from the queue.
 ///
 /// Provider workers run outside the serialized runtime actor. This record gives
@@ -3360,8 +3331,6 @@ pub(super) struct RuntimeAgentProviderClaim {
     pub turn_id: String,
     /// Agent identity that owns the turn.
     pub agent_id: String,
-    /// Whether the claimed worker is expected to run memory sidecar retrieval.
-    pub memory_sidecar: bool,
     /// Timer generation associated with the current claim lease.
     pub generation: u64,
     /// Unix timestamp, in milliseconds, when the provider task was claimed.
@@ -3430,8 +3399,6 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub model_profile: ModelProfile,
-    /// Optional memory sidecar retrieval flow for this provider turn.
-    pub memory_sidecar: Option<RuntimeMemorySidecarDispatch>,
     /// Optional automatic sizing context for the worker's first provider step.
     pub auto_sizing: Option<RuntimeAutoSizingDispatch>,
     /// Optional router provider for auto-sizing when different from the main

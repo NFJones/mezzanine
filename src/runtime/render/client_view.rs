@@ -1237,13 +1237,6 @@ impl RuntimeSessionService {
         if self.runtime_agent_turn_is_auto_sizing_routing(turn) {
             return "routing";
         }
-        if self
-            .claimed_agent_provider_tasks
-            .get(&turn.turn_id)
-            .is_some_and(|claim| claim.memory_sidecar)
-        {
-            return "remembering";
-        }
         if self.pending_agent_provider_tasks.contains(&turn.turn_id)
             || self
                 .claimed_agent_provider_tasks
