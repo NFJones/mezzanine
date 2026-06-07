@@ -22,12 +22,18 @@ use super::{
 };
 use crate::ids::SessionId;
 use crate::snapshot::SnapshotRepository;
+use crate::{
+    control::{CONTROL_CONTENT_TYPE, encode_control_body},
+    framing::ProtocolFrameCodec,
+};
+use futures_util::StreamExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::Child;
+use tokio_util::codec::Framed;
 
 // Foreground daemon startup and serve options.
 
@@ -36,6 +42,13 @@ use tokio::process::Child;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 static LIVE_SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+/// Maximum body length accepted for the background daemon startup probe.
+const BACKGROUND_DAEMON_STARTUP_PROBE_MAX_CONTENT_LENGTH: usize = 1024 * 1024;
+/// JSON-RPC id used by the background daemon startup probe.
+const BACKGROUND_DAEMON_STARTUP_PROBE_ID: &str = "cli-startup-probe";
+/// A harmless request that proves the daemon control actor is serving frames.
+const BACKGROUND_DAEMON_STARTUP_PROBE_REQUEST: &str =
+    r#"{"jsonrpc":"2.0","id":"cli-startup-probe","method":"session/get","params":{}}"#;
 
 /// Runs the run new operation for this subsystem.
 ///
@@ -250,6 +263,13 @@ impl BackgroundControlDaemon {
         let child = tokio::process::Command::from(command).spawn()?;
         Ok(Self { child })
     }
+
+    /// Stops the child process owned by a startup-observation test.
+    #[cfg(test)]
+    pub(super) async fn terminate_for_test(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
+    }
 }
 
 /// Runs the wait for background control daemon operation for this subsystem.
@@ -263,14 +283,9 @@ pub(super) async fn wait_for_background_control_daemon(
 ) -> Result<()> {
     let deadline = Instant::now() + StdDuration::from_secs(5);
     while Instant::now() < deadline {
-        match tokio::net::UnixStream::connect(socket_path).await {
-            Ok(_) => return Ok(()),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                ) =>
-            {
+        match probe_background_control_daemon(socket_path).await {
+            Ok(()) => return Ok(()),
+            Err(error) if retryable_background_daemon_probe_error(&error) => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let retry_delay = remaining.min(StdDuration::from_millis(20));
                 tokio::select! {
@@ -280,12 +295,86 @@ pub(super) async fn wait_for_background_control_daemon(
                     _ = tokio::time::sleep(retry_delay) => {}
                 }
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(MezError::invalid_state(format!(
+                    "background daemon startup probe failed: {error}"
+                )));
+            }
         }
     }
     Err(MezError::invalid_state(
         "background daemon did not accept connections before timeout",
     ))
+}
+
+/// Sends one framed startup probe through the control socket.
+///
+/// A connect-only probe can succeed as soon as the socket is bound, before the
+/// session has started its initial pane process or the async control actor is
+/// serving requests. Waiting for a framed response proves the background
+/// daemon has reached the user-visible control boundary.
+async fn probe_background_control_daemon(socket_path: &std::path::Path) -> Result<()> {
+    let stream = tokio::net::UnixStream::connect(socket_path).await?;
+    let codec = ProtocolFrameCodec::new(BACKGROUND_DAEMON_STARTUP_PROBE_MAX_CONTENT_LENGTH)?;
+    let mut framed = Framed::new(stream, codec);
+    framed
+        .get_mut()
+        .write_all(&encode_control_body(
+            BACKGROUND_DAEMON_STARTUP_PROBE_REQUEST,
+        ))
+        .await?;
+    framed.get_mut().flush().await?;
+
+    let frame = framed.next().await.ok_or_else(|| {
+        MezError::invalid_state("background daemon closed startup probe before responding")
+    })??;
+    if frame.content_type != CONTROL_CONTENT_TYPE {
+        return Err(MezError::invalid_state(
+            "background daemon startup probe returned unexpected content type",
+        ));
+    }
+    validate_background_daemon_startup_probe_response(&frame.body)?;
+    Ok(())
+}
+
+/// Returns whether a startup probe failure may clear during daemon startup.
+fn retryable_background_daemon_probe_error(error: &MezError) -> bool {
+    matches!(
+        error.io_kind(),
+        Some(
+            std::io::ErrorKind::NotFound
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::UnexpectedEof
+        )
+    ) || (error.kind() == crate::error::MezErrorKind::InvalidState
+        && error
+            .message()
+            .contains("closed startup probe before responding"))
+}
+
+/// Validates that the daemon answered the startup probe request.
+fn validate_background_daemon_startup_probe_response(body: &str) -> Result<()> {
+    let value = serde_json::from_str::<serde_json::Value>(body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "background daemon startup probe returned invalid JSON: {error}"
+        ))
+    })?;
+    if value.get("id").and_then(serde_json::Value::as_str)
+        != Some(BACKGROUND_DAEMON_STARTUP_PROBE_ID)
+    {
+        return Err(MezError::invalid_state(
+            "background daemon startup probe returned mismatched response id",
+        ));
+    }
+    if value.get("result").is_none() && value.get("error").is_none() {
+        return Err(MezError::invalid_state(
+            "background daemon startup probe returned no result or error",
+        ));
+    }
+    Ok(())
 }
 
 /// Runs the background daemon exit error operation for this subsystem.

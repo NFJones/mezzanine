@@ -907,6 +907,63 @@ fn new_session_daemon_startup_error_includes_child_stderr() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies background daemon startup waits for a complete control response.
+///
+/// The daemon binds its socket before pane startup and actor supervision are
+/// ready. A connect-only readiness check can therefore report success while the
+/// child is still starting or about to exit, making the immediate attach fail
+/// with a reset socket. This regression server accepts the probe immediately
+/// but delays its framed response so the wait helper must not return early.
+#[test]
+fn new_session_daemon_startup_waits_for_control_probe_response() {
+    let (_env, home) = test_env("new-daemon-probe-response");
+    let socket_path = home.join("runtime").join("daemon-probe.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _addr) = listener.accept().unwrap();
+        let mut request = [0; 1024];
+        let read = stream.read(&mut request).unwrap();
+        assert!(
+            String::from_utf8_lossy(&request[..read]).contains("cli-startup-probe"),
+            "{}",
+            String::from_utf8_lossy(&request[..read])
+        );
+        thread::sleep(Duration::from_millis(100));
+        stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-startup-probe","error":{"code":-32003,"message":"first control request must be control/initialize"}}"#,
+            ))
+            .unwrap();
+    });
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("sleep 5")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let started = Instant::now();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let mut daemon = super::serve::BackgroundControlDaemon::spawn(command).unwrap();
+            super::serve::wait_for_background_control_daemon(&socket_path, &mut daemon)
+                .await
+                .unwrap();
+            daemon.terminate_for_test().await;
+        });
+
+    assert!(
+        started.elapsed() >= Duration::from_millis(80),
+        "startup probe returned before the control response was written"
+    );
+    server.join().unwrap();
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies dry run new builds default session model.
 ///
 /// This regression scenario documents the behavior being protected so a
