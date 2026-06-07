@@ -132,7 +132,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task specifically needs durable memory lookup or storage; do not use this surface as a routine preflight. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store when the current task specifically needs durable memory lookup or storage; during non-trivial investigation, diagnosis, or planning, consider one focused early memory search for potentially useful prior context, but do not use this surface as a routine preflight and do not treat memory results as primary evidence. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES

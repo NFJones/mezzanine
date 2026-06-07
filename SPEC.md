@@ -7225,7 +7225,12 @@ gated `memory` capability whose concrete action subset contains
 `memory_search` and `memory_store`. These on-demand actions MUST execute
 through the runtime-owned persistent store, MUST return bounded action results
 for provider continuation, and MUST NOT be used as a routine preflight for every
-task. When persistent memory is disabled, the harness MUST deny the `memory`
+task. During non-trivial investigation, diagnosis, or planning, agents SHOULD
+consider one focused early memory search for potentially useful prior context,
+but MUST treat retrieved memory as secondary hints and MUST confirm important
+conclusions against current artifacts, repository state, tests, logs, or other
+current action results before relying on them. When persistent memory is
+disabled, the harness MUST deny the `memory`
 capability and MUST NOT expose `memory_search` or `memory_store`.
 
 Memory content MUST have lower priority than system requirements, active user
