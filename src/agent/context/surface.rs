@@ -64,6 +64,8 @@ pub enum AgentCapability {
     Subagent,
     /// Request a Mezzanine configuration change.
     ConfigChange,
+    /// Search or store persistent memory records.
+    Memory,
 }
 
 impl AgentCapability {
@@ -77,6 +79,7 @@ impl AgentCapability {
             AgentCapability::Mcp => "mcp",
             AgentCapability::Subagent => "subagent",
             AgentCapability::ConfigChange => "config_change",
+            AgentCapability::Memory => "memory",
         }
     }
 
@@ -90,6 +93,7 @@ impl AgentCapability {
             "mcp" => Some(AgentCapability::Mcp),
             "subagent" => Some(AgentCapability::Subagent),
             "config_change" => Some(AgentCapability::ConfigChange),
+            "memory" => Some(AgentCapability::Memory),
             _ => None,
         }
     }
@@ -104,6 +108,7 @@ impl AgentCapability {
             "mcp",
             "subagent",
             "config_change",
+            "memory",
         ]
     }
 }
@@ -135,6 +140,10 @@ pub enum AllowedAction {
     ConfigChange,
     /// MCP tool call.
     McpCall,
+    /// Search persistent memory records.
+    MemorySearch,
+    /// Store one persistent memory record.
+    MemoryStore,
     /// Abort the turn.
     Abort,
 }
@@ -155,6 +164,8 @@ impl AllowedAction {
             AllowedAction::SpawnAgent => "spawn_agent",
             AllowedAction::ConfigChange => "config_change",
             AllowedAction::McpCall => "mcp_call",
+            AllowedAction::MemorySearch => "memory_search",
+            AllowedAction::MemoryStore => "memory_store",
             AllowedAction::Abort => "abort",
         }
     }
@@ -174,6 +185,8 @@ impl AllowedAction {
             "spawn_agent" => Some(AllowedAction::SpawnAgent),
             "config_change" => Some(AllowedAction::ConfigChange),
             "mcp_call" => Some(AllowedAction::McpCall),
+            "memory_search" => Some(AllowedAction::MemorySearch),
+            "memory_store" => Some(AllowedAction::MemoryStore),
             "abort" => Some(AllowedAction::Abort),
             _ => None,
         }
@@ -227,6 +240,9 @@ impl AllowedActionSet {
                 output.extend([AllowedAction::SendMessage, AllowedAction::SpawnAgent])
             }
             AgentCapability::ConfigChange => output.extend([AllowedAction::ConfigChange]),
+            AgentCapability::Memory => {
+                output.extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore])
+            }
         }
         output
     }

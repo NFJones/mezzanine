@@ -219,6 +219,7 @@ fn runtime_auto_sizing_request(
         turn_id: format!("{}:auto-sizing", turn.turn_id),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),
+        memory_actions_enabled: false,
         interaction_kind: ModelInteractionKind::AutoSizing,
         allowed_actions: AllowedActionSet::say_only(),
         messages,

@@ -108,6 +108,7 @@ impl ModelRequestBuilder {
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-1".to_string(),
                 available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
                 interaction_kind: ModelInteractionKind::ActionExecution,
                 allowed_actions: AllowedActionSet::action_execution_base(),
                 messages: Vec::new(),

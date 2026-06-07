@@ -1208,6 +1208,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
                 interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: crate::agent::AllowedActionSet::for_capability(
                     crate::agent::AgentCapability::Shell,

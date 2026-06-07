@@ -423,6 +423,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
         subagent_scope: None,
         available_mcp_servers: vec!["fs".to_string()],
         available_mcp_tools: &tools,
+                memory_actions_enabled: false,
     };
     let mut ledger = AgentTurnLedger::new(false);
     runner
@@ -561,6 +562,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -683,6 +685,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -792,6 +795,7 @@ fn turn_runner_capability_limit_execution_matches_terminal_batch() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -912,6 +916,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1035,6 +1040,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1130,6 +1136,7 @@ fn turn_runner_accepts_say_with_capability_request() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1234,6 +1241,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1333,6 +1341,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1438,6 +1447,7 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let error = runner
@@ -1520,6 +1530,7 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let error = runner
@@ -1602,6 +1613,7 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let error = runner
@@ -1693,6 +1705,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1765,6 +1778,7 @@ fn turn_runner_fails_response_without_action_batch() {
         subagent_scope: None,
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
+                memory_actions_enabled: false,
     };
 
     let execution = runner
@@ -1843,7 +1857,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         value["tools"].as_array().unwrap().len(),
-        8,
+        9,
         "all stable OpenAI MAAP function surfaces should remain advertised"
     );
     let schema_properties = capability_tool["parameters"]["properties"]
@@ -3796,7 +3810,7 @@ fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_s
     let action_types = openai_tool_action_types(current_tool);
 
     assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
-    assert_eq!(value["tools"].as_array().unwrap().len(), 9);
+    assert_eq!(value["tools"].as_array().unwrap().len(), 10);
     assert!(action_types.contains(&"say".to_string()));
     assert!(action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"shell_command".to_string()));

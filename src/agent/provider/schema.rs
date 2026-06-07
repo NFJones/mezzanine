@@ -36,6 +36,8 @@ pub(super) enum OpenAiMaapToolSurface {
     Subagent,
     /// Configuration mutation request surface.
     ConfigChange,
+    /// Persistent memory search and storage surface.
+    Memory,
     /// Narrow fallback for uncommon composite capability grants.
     CurrentRequest,
 }
@@ -60,6 +62,7 @@ impl OpenAiMaapToolSurface {
             Self::Mcp,
             Self::Subagent,
             Self::ConfigChange,
+            Self::Memory,
         ]
     }
 
@@ -74,6 +77,7 @@ impl OpenAiMaapToolSurface {
             Self::Mcp => "submit_maap_mcp_actions",
             Self::Subagent => "submit_maap_subagent_actions",
             Self::ConfigChange => "submit_maap_config_change_actions",
+            Self::Memory => "submit_maap_memory_actions",
             Self::CurrentRequest => "submit_maap_current_actions",
         }
     }
@@ -127,6 +131,12 @@ impl OpenAiMaapToolSurface {
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
+            Self::Memory => format!(
+                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task specifically needs durable memory lookup or storage; do not use this surface as a routine preflight, and do not replace the memory sidecar's automatic retrieval role. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
             Self::CurrentRequest => format!(
                 "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
@@ -147,6 +157,7 @@ impl OpenAiMaapToolSurface {
             Self::Mcp => AllowedActionSet::for_capability(AgentCapability::Mcp),
             Self::Subagent => AllowedActionSet::for_capability(AgentCapability::Subagent),
             Self::ConfigChange => AllowedActionSet::for_capability(AgentCapability::ConfigChange),
+            Self::Memory => AllowedActionSet::for_capability(AgentCapability::Memory),
             Self::CurrentRequest => AllowedActionSet::capability_decision(),
         }
     }
@@ -187,6 +198,7 @@ pub(super) fn openai_maap_tool_surface_for_request(
             AgentCapability::ConfigChange,
             OpenAiMaapToolSurface::ConfigChange,
         ),
+        (AgentCapability::Memory, OpenAiMaapToolSurface::Memory),
     ] {
         if *allowed_actions == AllowedActionSet::for_capability(capability) {
             return surface;
@@ -300,6 +312,8 @@ fn maap_action_schema(
             AllowedAction::SendMessage => action_schemas.push(maap_send_message_action_schema()),
             AllowedAction::SpawnAgent => action_schemas.push(maap_spawn_agent_action_schema()),
             AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema()),
+            AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
+            AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
             AllowedAction::McpCall => action_schemas.extend(
                 sorted_mcp_prompt_tools(available_mcp_tools)
                     .into_iter()
@@ -551,6 +565,91 @@ fn maap_fetch_url_action_schema() -> serde_json::Value {
             "Use only for explicit http:// or https:// external URLs. For file://, local paths, or created outputs use shell_command; not for random/test/generated local data or replacing apply_patch/shell_command.",
         )],
         &["url"],
+    )
+}
+
+/// Runs the maap memory search action schema operation for this subsystem.
+fn maap_memory_search_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "memory_search",
+        [
+            described_string_property(
+                "query",
+                "Search persistent memory only when durable prior context is needed for the current task. Keep queries focused and avoid using this as a routine preflight because the memory sidecar already performs automatic retrieval.",
+            ),
+            (
+                "limit",
+                serde_json::json!({
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Optional maximum records to return. Use small limits; omit for the runtime default."
+                }),
+            ),
+        ],
+        &["query", "limit"],
+    )
+}
+
+/// Runs the maap memory store action schema operation for this subsystem.
+fn maap_memory_store_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "memory_store",
+        [
+            (
+                "kind",
+                serde_json::json!({
+                    "type": "string",
+                    "enum": ["preference", "fact", "procedure", "episode", "warning", "scratch"],
+                    "description": "Durable memory kind. Store only stable, reusable information that helps future turns."
+                }),
+            ),
+            (
+                "priority",
+                serde_json::json!({
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Optional retrieval priority from 0 to 100. Omit unless the memory should clearly be easier or harder to retrieve than ordinary records."
+                }),
+            ),
+            (
+                "scope",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["global", "project", null],
+                    "description": "Optional durable scope hint. Prefer project for repository-specific facts and global only for cross-project user preferences or stable facts."
+                }),
+            ),
+            (
+                "keywords",
+                serde_json::json!({
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Search anchors or aliases to embed with the memory content for later retrieval. Use a short focused list."
+                }),
+            ),
+            described_string_property(
+                "content",
+                "Durable memory body to store. Do not store secrets, credentials, tokens, sensitive personal data, or transient terminal noise unless the user explicitly instructed storing that exact content.",
+            ),
+            (
+                "expires_in_days",
+                serde_json::json!({
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "description": "Optional retention period in days. Omit to use memory.default_ttl_days."
+                }),
+            ),
+        ],
+        &[
+            "kind",
+            "priority",
+            "scope",
+            "keywords",
+            "content",
+            "expires_in_days",
+        ],
     )
 }
 

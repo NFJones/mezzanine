@@ -193,6 +193,28 @@ pub enum AgentActionPayload {
         /// Optional maximum number of bytes to print.
         max_bytes: Option<u64>,
     },
+    /// Searches persistent memory through the runtime-owned memory store.
+    MemorySearch {
+        /// Search query used for memory FTS and deterministic retrieval.
+        query: String,
+        /// Maximum number of records to return.
+        limit: Option<u64>,
+    },
+    /// Stores one agent-authored persistent memory through the runtime.
+    MemoryStore {
+        /// Durable memory taxonomy label.
+        kind: String,
+        /// Retrieval priority from 0 to 100.
+        priority: Option<u64>,
+        /// Optional target scope hint: global or project.
+        scope: Option<String>,
+        /// Search/index terms stored with the memory content.
+        keywords: Vec<String>,
+        /// Durable memory body.
+        content: String,
+        /// Optional retention period in days.
+        expires_in_days: Option<u64>,
+    },
     /// Represents the Send Message case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -636,6 +658,8 @@ impl AgentAction {
             AgentActionPayload::ApplyPatch { .. } => "apply_patch",
             AgentActionPayload::WebSearch { .. } => "web_search",
             AgentActionPayload::FetchUrl { .. } => "fetch_url",
+            AgentActionPayload::MemorySearch { .. } => "memory_search",
+            AgentActionPayload::MemoryStore { .. } => "memory_store",
             AgentActionPayload::SendMessage { .. } => "send_message",
             AgentActionPayload::SpawnAgent { .. } => "spawn_agent",
             AgentActionPayload::ConfigChange { .. } => "config_change",
@@ -697,6 +721,46 @@ impl AgentAction {
             AgentActionPayload::FetchUrl { url, .. } => {
                 validate_non_empty("fetch url", url)?;
                 validate_runtime_http_url("fetch url", url)
+            }
+            AgentActionPayload::MemorySearch { query, limit } => {
+                validate_non_empty("memory search query", query)?;
+                if matches!(limit, Some(0)) {
+                    return Err(MezError::invalid_args(
+                        "memory search limit must be greater than zero",
+                    ));
+                }
+                Ok(())
+            }
+            AgentActionPayload::MemoryStore {
+                kind,
+                priority,
+                scope,
+                content,
+                expires_in_days,
+                ..
+            } => {
+                validate_non_empty("memory kind", kind)?;
+                validate_non_empty("memory content", content)?;
+                if let Some(priority) = priority
+                    && *priority > 100
+                {
+                    return Err(MezError::invalid_args(
+                        "memory priority must be between 0 and 100",
+                    ));
+                }
+                if let Some(scope) = scope
+                    && !matches!(scope.as_str(), "global" | "project")
+                {
+                    return Err(MezError::invalid_args(
+                        "memory scope must be global or project",
+                    ));
+                }
+                if matches!(expires_in_days, Some(0)) {
+                    return Err(MezError::invalid_args(
+                        "memory expires_in_days must be greater than zero",
+                    ));
+                }
+                Ok(())
             }
             AgentActionPayload::SendMessage {
                 recipient,
@@ -1033,6 +1097,18 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
                 max_bytes: optional_nullable_u64(object, "max_bytes")?,
             }
         }
+        "memory_search" => AgentActionPayload::MemorySearch {
+            query: required_string(object, "query")?.to_string(),
+            limit: optional_nullable_u64(object, "limit")?,
+        },
+        "memory_store" => AgentActionPayload::MemoryStore {
+            kind: required_string(object, "kind")?.to_string(),
+            priority: optional_nullable_u64(object, "priority")?,
+            scope: optional_string(object, "scope")?.map(str::to_string),
+            keywords: optional_string_array(object, "keywords")?,
+            content: required_string(object, "content")?.to_string(),
+            expires_in_days: optional_nullable_u64(object, "expires_in_days")?,
+        },
         "send_message" => AgentActionPayload::SendMessage {
             recipient: required_string(object, "recipient")?.to_string(),
             content_type: required_string(object, "content_type")?.to_string(),

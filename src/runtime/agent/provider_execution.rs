@@ -169,6 +169,7 @@ impl RuntimeSessionService {
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
+                memory_actions_enabled: self.runtime_persistent_memory_enabled(),
             };
             match runner.run_turn_ref_with_allowed_actions(
                 &mut provider_ledger,
@@ -403,6 +404,7 @@ impl RuntimeSessionService {
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
+                memory_actions_enabled: self.runtime_persistent_memory_enabled(),
             };
             match runner.run_turn_ref_with_allowed_actions(
                 &mut provider_ledger,
@@ -1051,6 +1053,8 @@ impl RuntimeSessionService {
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
+        let memory_actions_executed =
+            self.execute_running_memory_actions_for_turn(turn, &mut execution)?;
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         self.append_agent_trace_maap_action_results(
@@ -1204,7 +1208,8 @@ impl RuntimeSessionService {
                     .saturating_add(network_actions_executed)
                     .saturating_add(message_actions_executed)
                     .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed),
+                    .saturating_add(config_actions_executed)
+                    .saturating_add(memory_actions_executed),
                 persisted_transcript_entries
             ),
         )?;
@@ -1220,7 +1225,8 @@ impl RuntimeSessionService {
                     .saturating_add(network_actions_executed)
                     .saturating_add(message_actions_executed)
                     .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed),
+                    .saturating_add(config_actions_executed)
+                    .saturating_add(memory_actions_executed),
                 persisted_transcript_entries,
             ),
         )?;
@@ -1303,6 +1309,8 @@ impl RuntimeSessionService {
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
+        let memory_actions_executed =
+            self.execute_running_memory_actions_for_turn(turn, &mut execution)?;
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         self.append_agent_trace_maap_action_results(
@@ -1456,7 +1464,8 @@ impl RuntimeSessionService {
                     .saturating_add(network_actions_executed)
                     .saturating_add(message_actions_executed)
                     .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed),
+                    .saturating_add(config_actions_executed)
+                    .saturating_add(memory_actions_executed),
                 persisted_transcript_entries
             ),
         )?;
@@ -1472,7 +1481,8 @@ impl RuntimeSessionService {
                     .saturating_add(network_actions_executed)
                     .saturating_add(message_actions_executed)
                     .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed),
+                    .saturating_add(config_actions_executed)
+                    .saturating_add(memory_actions_executed),
                 persisted_transcript_entries,
             ),
         )?;

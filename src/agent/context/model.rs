@@ -478,6 +478,11 @@ pub struct ModelRequest {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub available_mcp_tools: Vec<McpPromptTool>,
+    /// Whether persistent-memory MAAP actions may be exposed for this request.
+    ///
+    /// Runtime sets this only when persistent memory is enabled. The sidecar
+    /// retrieval flow remains separate from these on-demand main-model actions.
+    pub memory_actions_enabled: bool,
     /// Stores the interaction kind for this provider request.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -1520,6 +1520,21 @@ pub(super) fn runtime_agent_pending_approval_log_line(approval: &BlockedApproval
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_action_summary(action: &AgentAction) -> Option<String> {
+    match &action.payload {
+        AgentActionPayload::MemorySearch { query, .. } => {
+            return Some(format!(
+                "memory search {}",
+                runtime_agent_terminal_preview(query)
+            ));
+        }
+        AgentActionPayload::MemoryStore { kind, .. } => {
+            return Some(format!(
+                "memory store {}",
+                runtime_agent_terminal_preview(kind)
+            ));
+        }
+        _ => {}
+    }
     let summary = local_action_summary(action)
         .ok()
         .flatten()
@@ -1590,6 +1605,8 @@ pub(super) fn runtime_agent_action_rationale_repeats_visible_summary(action: &Ag
         | AgentActionPayload::SendMessage { .. }
         | AgentActionPayload::SpawnAgent { .. }
         | AgentActionPayload::ConfigChange { .. }
+        | AgentActionPayload::MemorySearch { .. }
+        | AgentActionPayload::MemoryStore { .. }
         | AgentActionPayload::RequestSkills
         | AgentActionPayload::CallSkill { .. } => false,
         AgentActionPayload::ApplyPatch { .. }
@@ -1641,6 +1658,8 @@ pub(super) fn runtime_agent_action_has_runtime_visible_effect(action: &AgentActi
             | AgentActionPayload::SendMessage { .. }
             | AgentActionPayload::SpawnAgent { .. }
             | AgentActionPayload::ConfigChange { .. }
+            | AgentActionPayload::MemorySearch { .. }
+            | AgentActionPayload::MemoryStore { .. }
     )
 }
 
@@ -1738,6 +1757,12 @@ pub(super) fn runtime_agent_user_action_phrase(
                 runtime_agent_terminal_preview(setting_path)
             ),
         )),
+        AgentActionPayload::MemorySearch { query, .. } => {
+            Some(("memory search", runtime_agent_terminal_preview(query)))
+        }
+        AgentActionPayload::MemoryStore { kind, .. } => {
+            Some(("memory store", runtime_agent_terminal_preview(kind)))
+        }
         AgentActionPayload::RequestSkills => Some(("skill lookup", "available skills".to_string())),
         AgentActionPayload::CallSkill { name, .. } => {
             Some(("skill load", runtime_agent_terminal_preview(name)))

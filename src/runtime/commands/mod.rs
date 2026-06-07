@@ -1891,7 +1891,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns whether persistent memory is enabled in the live effective config.
-    fn runtime_persistent_memory_enabled(&self) -> bool {
+    pub(in crate::runtime) fn runtime_persistent_memory_enabled(&self) -> bool {
         runtime_effective_config_value(&self.config_layers)
             .ok()
             .and_then(|root| {
@@ -1903,7 +1903,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the configured default memory TTL in days.
-    fn runtime_memory_default_ttl_days(&self) -> u64 {
+    pub(in crate::runtime) fn runtime_memory_default_ttl_days(&self) -> u64 {
         runtime_effective_config_value(&self.config_layers)
             .ok()
             .and_then(|root| {
@@ -4519,6 +4519,7 @@ fn runtime_model_remember_request(
         turn_id,
         agent_id,
         available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::say_only(),
         stop: None,

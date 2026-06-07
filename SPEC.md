@@ -3474,7 +3474,7 @@ remain a capability-decision request and MUST NOT expose the denied executable
 actions.
 
 The baseline capability names are `respond_only`, `shell`, `network_search`,
-`network_fetch`, `mcp`, `subagent`, and `config_change`.
+`network_fetch`, `mcp`, `subagent`, `config_change`, and `memory`.
 
 The harness MUST parse model action proposals into Mezzanine Agent Action
 Protocol version 1 objects before executing them.
@@ -3765,6 +3765,13 @@ The baseline action types are:
 - `send_message`: Send a local message through MMP.
 - `spawn_agent`: Request subagent pane creation through the control endpoint.
 - `config_change`: Propose a live configuration change.
+- `memory_search`: Search runtime-owned persistent memory records after the
+  `memory` capability has been granted. This action MUST be available only when
+  persistent memory is enabled.
+- `memory_store`: Store one runtime-owned persistent memory record after the
+  `memory` capability has been granted. This action MUST be available only when
+  persistent memory is enabled and MUST follow the persistent-memory safety
+  requirements in this specification.
 - `mcp_call`: Invoke an available MCP tool.
 - `complete`: Mark the turn complete.
 - `abort`: Reserved for controller-owned terminal failures and legacy transcript
@@ -7218,6 +7225,15 @@ Agents MUST NOT store secrets in persistent memory.
 Agents MUST NOT store sensitive terminal output, credentials, private keys,
 tokens, or personal data in persistent memory unless the user explicitly
 instructs the agent to do so for that specific content.
+
+When persistent memory is enabled, the provider action surface MAY expose a
+gated `memory` capability whose concrete action subset contains
+`memory_search` and `memory_store`. These on-demand actions MUST execute
+through the runtime-owned persistent store, MUST return bounded action results
+for provider continuation, and MUST NOT replace the memory sidecar's automatic
+retrieval role or be used as a routine preflight for every task. When persistent
+memory is disabled, the harness MUST deny the `memory` capability and MUST NOT
+expose `memory_search` or `memory_store`.
 
 Memory content MUST have lower priority than system requirements, active user
 instructions, active policy, and project instruction files.

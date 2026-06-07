@@ -398,6 +398,24 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
         AgentActionPayload::FetchUrl { url, .. } => {
             format!("fetch_url url={}", bounded_transcript_field(url))
         }
+        AgentActionPayload::MemorySearch { query, limit } => format!(
+            "memory_search query={} limit={}",
+            bounded_transcript_field(query),
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        ),
+        AgentActionPayload::MemoryStore {
+            kind,
+            content,
+            keywords,
+            ..
+        } => format!(
+            "memory_store kind={} content_bytes={} keyword_count={}",
+            bounded_transcript_field(kind),
+            content.len(),
+            keywords.len()
+        ),
         AgentActionPayload::SendMessage {
             recipient, payload, ..
         } => format!(

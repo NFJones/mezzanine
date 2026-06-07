@@ -70,6 +70,8 @@ pub struct AgentTurnRunner<'a, P> {
     pub available_mcp_servers: Vec<String>,
     /// Structured `available_mcp_tools` value carried by this API type.
     pub available_mcp_tools: &'a [McpPromptTool],
+    /// Whether persistent-memory MAAP actions may be exposed for this turn.
+    pub memory_actions_enabled: bool,
 }
 
 #[cfg(test)]
@@ -117,6 +119,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             request.allowed_actions = allowed_actions;
         }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
+        request.memory_actions_enabled = self.memory_actions_enabled;
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
         let mut response_request: ModelRequest;
@@ -485,6 +488,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             request.allowed_actions = allowed_actions;
         }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
+        request.memory_actions_enabled = self.memory_actions_enabled;
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
         let mut response_request: ModelRequest;

@@ -72,6 +72,7 @@ mod config_change;
 mod failures;
 mod lifecycle;
 mod mcp_network;
+mod memory;
 mod messages;
 mod outcome;
 mod presentation;
@@ -312,6 +313,7 @@ mod tests {
                 turn_id: "turn-2".to_string(),
                 agent_id: "agent-1".to_string(),
                 available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
                 interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: crate::agent::AllowedActionSet::action_execution_base(),
                 messages: Vec::new(),

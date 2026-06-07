@@ -625,6 +625,34 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             data.insert("format".to_string(), serde_json::json!(format));
             data.insert("max_bytes".to_string(), serde_json::json!(max_bytes));
         }
+        AgentActionPayload::MemorySearch { query, limit } => {
+            data.insert(
+                "query".to_string(),
+                runtime_bounded_trace_string_value(query),
+            );
+            data.insert("limit".to_string(), serde_json::json!(limit));
+        }
+        AgentActionPayload::MemoryStore {
+            kind,
+            priority,
+            scope,
+            keywords,
+            content,
+            expires_in_days,
+        } => {
+            data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert("priority".to_string(), serde_json::json!(priority));
+            data.insert("scope".to_string(), serde_json::json!(scope));
+            data.insert("keywords".to_string(), serde_json::json!(keywords));
+            data.insert(
+                "content".to_string(),
+                runtime_bounded_trace_string_value(content),
+            );
+            data.insert(
+                "expires_in_days".to_string(),
+                serde_json::json!(expires_in_days),
+            );
+        }
         AgentActionPayload::SendMessage {
             recipient,
             content_type,

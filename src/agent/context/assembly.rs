@@ -132,6 +132,10 @@ pub fn assemble_model_request_with_retained_tail_percent(
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),
+        memory_actions_enabled: profile
+            .provider_options
+            .get("memory_actions_enabled")
+            .is_some_and(|value| value == "true"),
         interaction_kind: ModelInteractionKind::CapabilityDecision,
         allowed_actions: AllowedActionSet::capability_decision(),
         stop: if is_deepseek {

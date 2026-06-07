@@ -979,7 +979,9 @@ fn runtime_capability_for_response(
             | crate::agent::AgentActionPayload::RequestSkills
             | crate::agent::AgentActionPayload::CallSkill { .. }
             | crate::agent::AgentActionPayload::Complete
-            | crate::agent::AgentActionPayload::Abort { .. } => None,
+            | crate::agent::AgentActionPayload::Abort { .. }
+            | crate::agent::AgentActionPayload::MemorySearch { .. }
+            | crate::agent::AgentActionPayload::MemoryStore { .. } => None,
         })
 }
 
@@ -1151,6 +1153,7 @@ fn runtime_model_request_fixture_for_agent(
         turn_id: turn_id.to_string(),
         agent_id: agent_id.to_string(),
         available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
         interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
         allowed_actions: crate::agent::AllowedActionSet::capability_decision(),
         messages: vec![crate::agent::ModelMessage {

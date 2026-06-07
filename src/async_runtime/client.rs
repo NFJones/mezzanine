@@ -1609,6 +1609,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
+                memory_actions_enabled: false,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1633,6 +1634,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
+                memory_actions_enabled: false,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1657,6 +1659,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
+                memory_actions_enabled: false,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1870,6 +1873,7 @@ fn runtime_memory_sidecar_plan_request(
         turn_id: format!("{}:memory-sidecar-plan", turn.turn_id),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
         interaction_kind: ModelInteractionKind::AutoSizing,
         allowed_actions: crate::agent::AllowedActionSet::say_only(),
         messages: vec![
@@ -1918,6 +1922,7 @@ fn runtime_memory_sidecar_rerank_request(
         turn_id: format!("{}:memory-sidecar-rerank", turn.turn_id),
         agent_id: turn.agent_id.clone(),
         available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
         interaction_kind: ModelInteractionKind::AutoSizing,
         allowed_actions: crate::agent::AllowedActionSet::say_only(),
         messages: vec![
@@ -2711,6 +2716,7 @@ mod tests {
             turn_id: "compact-conversation".to_string(),
             agent_id: "agent-%1".to_string(),
             available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::say_only(),
             messages: Vec::new(),

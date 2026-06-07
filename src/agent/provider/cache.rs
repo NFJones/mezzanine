@@ -535,6 +535,7 @@ mod tests {
             turn_id: "turn-1".to_string(),
             agent_id: "agent-1".to_string(),
             available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
             interaction_kind: ModelInteractionKind::CapabilityDecision,
             allowed_actions: AllowedActionSet::capability_decision(),
             messages: vec![

@@ -106,7 +106,9 @@ impl RuntimeSessionService {
                 AgentActionPayload::McpCall { .. }
                 | AgentActionPayload::SendMessage { .. }
                 | AgentActionPayload::SpawnAgent { .. }
-                | AgentActionPayload::ConfigChange { .. } => {
+                | AgentActionPayload::ConfigChange { .. }
+                | AgentActionPayload::MemorySearch { .. }
+                | AgentActionPayload::MemoryStore { .. } => {
                     pending_runtime_visible_action = true;
                 }
                 AgentActionPayload::Complete => {}

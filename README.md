@@ -273,7 +273,7 @@ Useful slash commands include:
 | `/directive`   | Show or set a session-scoped developer addendum.      |
 | `/list-skills` | Show the skills available to the active pane.         |
 | `/list-mcp`    | List configured MCP tools.                            |
-| `/memory`      | Inspect or change persistent memory enablement.       |
+| `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions. |
 | `/remember`    | Generate durable memories from context or a statement. |
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
 | `/stop`        | Interrupt the active turn.                            |

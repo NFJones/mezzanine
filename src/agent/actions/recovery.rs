@@ -196,6 +196,12 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
             reason: "mcp capability requires at least one available MCP tool in runtime context"
                 .to_string(),
         },
+        AgentCapability::Memory if !request.memory_actions_enabled => CapabilityDecision {
+            granted: false,
+            allowed_actions: AllowedActionSet::capability_decision(),
+            reason: "memory capability requires memory.enabled to be true in runtime config"
+                .to_string(),
+        },
         _ => CapabilityDecision {
             granted: true,
             allowed_actions: AllowedActionSet::for_capability(capability),

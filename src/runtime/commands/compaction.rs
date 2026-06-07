@@ -571,6 +571,7 @@ pub(super) fn runtime_model_compaction_request(
         turn_id,
         agent_id,
         available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::say_only(),
         messages: vec![
