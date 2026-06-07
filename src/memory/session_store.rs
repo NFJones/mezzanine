@@ -42,8 +42,15 @@ impl SessionMemoryStore {
     /// on duplicated control-flow logic.
     pub fn clear_session(&mut self, session_id: &str) -> usize {
         let before = self.records.len();
-        self.records
-            .retain(|_, record| !scope_belongs_to_session(&record.scope, session_id));
+        self.records.retain(|_, record| {
+            matches!(
+                record.scope,
+                super::MemoryScope::Session { .. }
+                    | super::MemoryScope::Window { .. }
+                    | super::MemoryScope::Pane { .. }
+                    | super::MemoryScope::Agent { .. }
+            ) && !scope_belongs_to_session(&record.scope, session_id)
+        });
         before - self.records.len()
     }
 

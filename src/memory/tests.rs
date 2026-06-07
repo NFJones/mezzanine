@@ -32,7 +32,7 @@ fn persistent_memory_accepts_sensitive_content_without_heuristic_rejection() {
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn session_memory_clears_records_for_deleted_session() {
+fn session_memory_clears_session_and_persistent_cache_records_for_deleted_session() {
     let mut store = SessionMemoryStore::default();
     store
         .upsert(record(
@@ -57,11 +57,11 @@ fn session_memory_clears_records_for_deleted_session() {
         .upsert(record("m3", MemoryScope::Global, "global note"))
         .unwrap();
 
-    assert_eq!(store.clear_session("$1"), 2);
+    assert_eq!(store.clear_session("$1"), 3);
 
     assert!(store.inspect("m1").is_none());
     assert!(store.inspect("m2").is_none());
-    assert!(store.inspect("m3").is_some());
+    assert!(store.inspect("m3").is_none());
 }
 
 /// Verifies persistent memory can inspect edit export and delete.
