@@ -1280,12 +1280,14 @@ the user.
 Terminal commands whose successful effect is immediately observable, such as
 prefix forwarding, theme changes, option changes, binding changes, and source or
 refresh operations, SHOULD take effect without opening a modal display overlay
-that the user must dismiss. Short acknowledgement output from such commands
-SHOULD be appended to the active pane transcript instead. Commands that return
-reference information, selector choices, or diagnostics SHOULD continue to use
-the display overlay. Display overlay scrolling MUST clamp to the available
-content range; PageDown, mouse wheel scrolling, and selection navigation MUST
-NOT leave the overlay scrolled past its final rendered content.
+that the user must dismiss. Commands that do not produce useful output SHOULD
+avoid durable display output entirely. Short acknowledgement output from such
+commands SHOULD be rendered as a transient window status-bar notice rather than
+being appended to the active pane transcript. Commands that return reference
+information, selector choices, or diagnostics SHOULD continue to use the display
+overlay. Display overlay scrolling MUST clamp to the available content range;
+PageDown, mouse wheel scrolling, and selection navigation MUST NOT leave the
+overlay scrolled past its final rendered content.
 
 ### 7.2 Default Prefix Bindings
 

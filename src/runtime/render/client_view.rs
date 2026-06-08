@@ -243,11 +243,16 @@ impl RuntimeSessionService {
             *line = text;
         }
         if let Some(spans) = view.line_style_spans.get_mut(row) {
+            let rendition = if message.starts_with("mez error:") || message.starts_with("error:") {
+                self.ui_theme.colors.agent_status_failed.rendition()
+            } else {
+                self.ui_theme.colors.agent_status_running.rendition()
+            };
             spans.clear();
             spans.push(TerminalStyleSpan {
                 start: 0,
                 length: width,
-                rendition: self.ui_theme.colors.agent_status_failed.rendition(),
+                rendition,
             });
         }
         if view.cursor_row == row {

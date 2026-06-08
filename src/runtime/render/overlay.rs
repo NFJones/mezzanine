@@ -96,6 +96,10 @@ pub(super) fn runtime_primary_prompt_input(
 /// actions. Plain output remains line-oriented because legacy command display
 /// bodies are key/value text rather than presentation markup.
 pub(super) enum RuntimeAgentShellDisplayOutput {
+    /// No user-facing display should be rendered for this command response.
+    Suppressed,
+    /// One-line command feedback rendered through the transient status bar.
+    TransientStatus(Vec<String>),
     /// Preformatted display lines for plain text and diagnostic responses.
     Lines(Vec<String>),
     /// Display content rendered through the command overlay pager.
@@ -113,12 +117,27 @@ pub(super) fn runtime_agent_shell_display_output(
 ) -> Result<RuntimeAgentShellDisplayOutput> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("agent shell response is not valid JSON"))?;
+    let kind = parsed.get("kind").and_then(serde_json::Value::as_str);
+    let command = parsed
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    if kind == Some("mutated") {
+        if command
+            .as_deref()
+            .is_some_and(runtime_agent_shell_suppressed_mutation_command_name)
+        {
+            return Ok(RuntimeAgentShellDisplayOutput::Suppressed);
+        }
+        if let Some(body) = parsed.get("body").and_then(serde_json::Value::as_str) {
+            let mut lines = runtime_human_readable_display_lines(body);
+            lines.truncate(200);
+            return Ok(RuntimeAgentShellDisplayOutput::TransientStatus(lines));
+        }
+        return Ok(RuntimeAgentShellDisplayOutput::Suppressed);
+    }
     let mut lines = Vec::new();
     if let Some(body) = parsed.get("body").and_then(serde_json::Value::as_str) {
-        let command = parsed
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned);
         let content_type = parsed
             .get("content_type")
             .and_then(serde_json::Value::as_str)
@@ -129,19 +148,55 @@ pub(super) fn runtime_agent_shell_display_output(
                 lines.truncate(200);
                 return Ok(RuntimeAgentShellDisplayOutput::Lines(lines));
             }
-            let content = runtime_agent_shell_markdown_overlay_content(command, body, ui_theme);
+            let content =
+                runtime_agent_shell_markdown_overlay_content(command.clone(), body, ui_theme);
             if runtime_command_display_should_open_overlay(&content) {
                 return Ok(RuntimeAgentShellDisplayOutput::Overlay(content));
+            }
+            if command
+                .as_deref()
+                .is_some_and(runtime_agent_shell_transient_display_command_name)
+            {
+                let mut lines = runtime_human_readable_display_lines(body);
+                lines.truncate(200);
+                return Ok(RuntimeAgentShellDisplayOutput::TransientStatus(lines));
             }
             lines.extend(runtime_human_readable_display_lines(body));
             lines.truncate(200);
             return Ok(RuntimeAgentShellDisplayOutput::Lines(lines));
         } else {
             lines.extend(runtime_human_readable_display_lines(body));
+            if command
+                .as_deref()
+                .is_some_and(runtime_agent_shell_transient_display_command_name)
+            {
+                lines.truncate(200);
+                return Ok(RuntimeAgentShellDisplayOutput::TransientStatus(lines));
+            }
         }
     }
     lines.truncate(200);
     Ok(RuntimeAgentShellDisplayOutput::Lines(lines))
+}
+
+/// Returns true for slash-command mutations whose success is already visible.
+fn runtime_agent_shell_suppressed_mutation_command_name(command: &str) -> bool {
+    matches!(command, "clear" | "new" | "prompt")
+}
+
+/// Returns true for slash-command displays that should not enter pane logs.
+fn runtime_agent_shell_transient_display_command_name(command: &str) -> bool {
+    matches!(
+        command,
+        "approval"
+            | "directive"
+            | "latency"
+            | "log-level"
+            | "memory"
+            | "personality"
+            | "routing"
+            | "thinking"
+    )
 }
 
 /// Renders slash-command markdown display output into the command overlay
@@ -236,6 +291,20 @@ pub(super) fn runtime_primary_error_status_text(line: &str) -> String {
         normalized
     } else {
         format!("mez error: {normalized}")
+    }
+}
+
+/// Formats a successful command acknowledgement for the transient status overlay.
+pub(super) fn runtime_primary_notice_status_text(line: &str) -> String {
+    let normalized = line
+        .trim()
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    if normalized.starts_with("mez:") {
+        normalized
+    } else {
+        format!("mez: {normalized}")
     }
 }
 
@@ -504,6 +573,55 @@ pub(super) fn runtime_command_display_should_open_overlay(
         .command
         .as_deref()
         .is_some_and(runtime_immediate_terminal_command_name)
+}
+
+/// Returns the transient status line for short terminal command feedback.
+pub(super) fn runtime_command_display_transient_status_line(
+    content: &RuntimeCommandDisplayOverlayContent,
+) -> Option<String> {
+    if !content.selections.is_empty() {
+        return None;
+    }
+    if !content
+        .command
+        .as_deref()
+        .is_some_and(runtime_transient_terminal_command_name)
+    {
+        return None;
+    }
+    content
+        .lines
+        .iter()
+        .find(|line| !line.trim().is_empty())
+        .cloned()
+}
+
+/// Returns true for terminal commands whose one-line feedback is transient.
+pub(super) fn runtime_transient_terminal_command_name(command: &str) -> bool {
+    matches!(
+        command,
+        "auth-status"
+            | "agent-shell"
+            | "bind-key"
+            | "copy-selection"
+            | "create-buffer"
+            | "mark-pane-ready"
+            | "next-layout"
+            | "paste-buffer"
+            | "paste-clipboard"
+            | "pipe-pane"
+            | "rebalance-window"
+            | "refresh-provider-info"
+            | "resize-pane"
+            | "select-layout"
+            | "send-prefix"
+            | "set-option"
+            | "set-theme"
+            | "source-file"
+            | "synchronize-panes"
+            | "unbind-key"
+            | "zoom-pane"
+    )
 }
 
 /// Returns true for terminal commands whose success is already observable.

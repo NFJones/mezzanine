@@ -4092,14 +4092,12 @@ fn runtime_agent_shell_approval_command_mutates_live_policy() {
     );
 }
 
-/// Verifies terse slash-command display output is written to the pane instead
-/// of opening the modal command-output pager.
+/// Verifies terse slash-command display output uses transient status feedback.
 ///
-/// One-line status acknowledgements are part of the agent pane transcript and
-/// should not force the user to dismiss a full-screen overlay just to continue
-/// typing in the pane-local prompt.
+/// One-line status acknowledgements should stay out of the durable agent pane
+/// transcript while still giving brief feedback in the window status bar.
 #[test]
-fn runtime_agent_shell_single_line_display_logs_to_pane_without_overlay() {
+fn runtime_agent_shell_single_line_display_uses_transient_status_without_overlay() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -4128,13 +4126,20 @@ fn runtime_agent_shell_single_line_display_logs_to_pane_without_overlay() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
     assert!(service.primary_display_overlay.is_none());
+    assert!(
+        service
+            .primary_error_status_overlay
+            .as_deref()
+            .is_some_and(|message| message.contains("approval policy: ask")),
+        "{:?}",
+        service.primary_error_status_overlay
+    );
     let pane_text = service
         .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(pane_text.contains("approval policy: ask"), "{pane_text}");
-    assert!(pane_text.contains("source: runtime-policy"), "{pane_text}");
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
+    assert!(!pane_text.contains("approval policy: ask"), "{pane_text}");
+    assert!(!pane_text.contains("source: runtime-policy"), "{pane_text}");
 }
 
 /// Verifies an explicit `/approval` choice is stored as a live override and

@@ -4693,12 +4693,20 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
     assert!(service.primary_prompt_input.is_none());
     assert!(service.primary_display_overlay.is_none());
     assert_eq!(service.paste_buffers.get("ack"), Some("hello"));
+    assert!(
+        service
+            .primary_error_status_overlay
+            .as_deref()
+            .is_some_and(|message| message.contains("buffer: ack")),
+        "{:?}",
+        service.primary_error_status_overlay
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("mez: buffer: ack"), "{pane_text}");
-    assert!(pane_text.contains("created=true"), "{pane_text}");
+    assert!(!pane_text.contains("mez: buffer: ack"), "{pane_text}");
+    assert!(!pane_text.contains("created=true"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
 }

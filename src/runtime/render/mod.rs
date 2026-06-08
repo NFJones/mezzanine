@@ -313,6 +313,20 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Shows or clears the primary-client transient success notice overlay.
+    ///
+    /// Notice overlays share the status-bar dismissal lifecycle with
+    /// recoverable errors while keeping successful command acknowledgements out
+    /// of pane transcripts.
+    pub fn show_primary_notice_overlay(&mut self, lines: Vec<String>) -> Result<()> {
+        self.require_live()?;
+        self.primary_error_status_overlay = lines
+            .into_iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| runtime_primary_notice_status_text(&line));
+        Ok(())
+    }
+
     /// Runs the show primary display overlay inner operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -386,6 +400,25 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Presents terminal command display content according to its feedback policy.
+    fn present_runtime_command_display_content(
+        &mut self,
+        content: RuntimeCommandDisplayOverlayContent,
+    ) -> Result<()> {
+        if runtime_command_display_should_open_overlay(&content) {
+            return self.show_primary_display_overlay_inner(
+                content.lines,
+                content.line_style_spans,
+                content.selections,
+                false,
+            );
+        }
+        if let Some(line) = runtime_command_display_transient_status_line(&content) {
+            return self.show_primary_notice_overlay(vec![line]);
+        }
+        self.append_runtime_command_display_lines_to_active_pane(&content.lines)
+    }
+
     /// Opens an actor-owned command prompt on the primary client.
     ///
     /// The prompt is rendered as part of the next primary client view. Input is
@@ -445,10 +478,15 @@ impl RuntimeSessionService {
             full_redraw_required: false,
         };
 
-        if !step.actions.is_empty() && self.primary_error_status_overlay.take().is_some() {
+        if !step.actions.is_empty()
+            && let Some(message) = self.primary_error_status_overlay.take()
+        {
+            let consume_action = message.starts_with("mez error:") || message.starts_with("error:");
             report.view_refresh_required = true;
-            report.full_redraw_required = true;
-            return Ok((report, deferred_pane_inputs));
+            if consume_action {
+                report.full_redraw_required = true;
+                return Ok((report, deferred_pane_inputs));
+            }
         }
 
         for action in &step.actions {
@@ -1108,14 +1146,7 @@ impl RuntimeSessionService {
         let content = self
             .execute_terminal_command(primary_client_id, command)
             .and_then(|body| runtime_command_display_overlay_content(&body, &self.ui_theme))?;
-        if runtime_command_display_should_open_overlay(&content) {
-            self.show_primary_display_overlay_inner(
-                content.lines,
-                content.line_style_spans,
-                content.selections,
-                false,
-            )?;
-        }
+        self.present_runtime_command_display_content(content)?;
         Ok(true)
     }
 
@@ -1466,20 +1497,8 @@ impl RuntimeSessionService {
                             .and_then(|body| {
                                 runtime_command_display_overlay_content(&body, &self.ui_theme)
                             }) {
-                            Ok(content)
-                                if runtime_command_display_should_open_overlay(&content) =>
-                            {
-                                self.show_primary_display_overlay_inner(
-                                    content.lines,
-                                    content.line_style_spans,
-                                    content.selections,
-                                    false,
-                                )?;
-                            }
                             Ok(content) => {
-                                self.append_runtime_command_display_lines_to_active_pane(
-                                    &content.lines,
-                                )?;
+                                self.present_runtime_command_display_content(content)?;
                             }
                             Err(error) => {
                                 self.show_primary_display_overlay(vec![format!(
@@ -1947,6 +1966,21 @@ impl RuntimeSessionService {
         display_output: RuntimeAgentShellDisplayOutput,
     ) -> Result<()> {
         match display_output {
+            RuntimeAgentShellDisplayOutput::Suppressed => {
+                let state = self
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
+            }
+            RuntimeAgentShellDisplayOutput::TransientStatus(display_lines) => {
+                self.show_primary_notice_overlay(display_lines)?;
+                let state = self
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
+            }
             RuntimeAgentShellDisplayOutput::Lines(display_lines) => {
                 self.set_agent_prompt_display_lines(pane_id, display_lines)?;
             }
@@ -4306,16 +4340,7 @@ impl RuntimeSessionService {
             ),
         )?;
         let content = runtime_command_display_overlay_content(&output, &self.ui_theme)?;
-        if runtime_command_display_should_open_overlay(&content) {
-            self.show_primary_display_overlay_inner(
-                content.lines,
-                content.line_style_spans,
-                content.selections,
-                false,
-            )
-        } else {
-            self.append_runtime_command_display_lines_to_active_pane(&content.lines)
-        }
+        self.present_runtime_command_display_content(content)
     }
 
     /// Runs the swap active pane with neighbor operation for this subsystem.
