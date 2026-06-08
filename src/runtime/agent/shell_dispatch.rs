@@ -482,6 +482,12 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running shell result does not match an action")
                 })?;
+            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && let Some(loop_turn) = self.agent_loop_turns.get(&turn.turn_id)
+                && let Some(state) = self.agent_loops_by_pane.get_mut(&loop_turn.pane_id)
+            {
+                state.emitted_apply_patch = true;
+            }
             let plan = match local_action_plan(action) {
                 Ok(Some(plan)) => plan,
                 Ok(None) => continue,

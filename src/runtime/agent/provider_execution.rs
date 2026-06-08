@@ -15,9 +15,18 @@ use super::*;
 /// mutate files before the controller may accept completion.
 fn runtime_execution_is_patch_free(execution: &AgentTurnExecution) -> bool {
     !execution
-        .action_results
-        .iter()
-        .any(|result| result.action_type == "apply_patch")
+        .response
+        .action_batch
+        .as_ref()
+        .map(|batch| {
+            batch.actions.iter().any(|action| {
+                matches!(
+                    action.payload,
+                    crate::agent::AgentActionPayload::ApplyPatch { .. }
+                )
+            })
+        })
+        .unwrap_or(false)
 }
 
 impl RuntimeSessionService {
@@ -922,7 +931,7 @@ impl RuntimeSessionService {
     }
 
     /// Continues or stops an active `/loop` controller after one owned turn settles.
-    fn follow_up_agent_loop_after_terminal_execution(
+    pub(in crate::runtime) fn follow_up_agent_loop_after_terminal_execution(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -936,7 +945,12 @@ impl RuntimeSessionService {
         }
         match loop_turn.kind {
             RuntimeAgentLoopTurnKind::Work => {
-                if runtime_execution_is_patch_free(execution) {
+                let iteration_emitted_apply_patch = self
+                    .agent_loops_by_pane
+                    .get(&loop_turn.pane_id)
+                    .map(|state| state.emitted_apply_patch)
+                    .unwrap_or_else(|| !runtime_execution_is_patch_free(execution));
+                if !iteration_emitted_apply_patch {
                     self.agent_loops_by_pane.remove(&loop_turn.pane_id);
                     self.append_agent_status_text_to_terminal_buffer(
                         &loop_turn.pane_id,
@@ -964,6 +978,7 @@ impl RuntimeSessionService {
                     return Ok(());
                 }
                 state.iteration = state.iteration.saturating_add(1);
+                state.emitted_apply_patch = false;
                 self.agent_loops_by_pane
                     .insert(loop_turn.pane_id.clone(), state.clone());
                 let _ = self.start_agent_loop_work_turn(&loop_turn.pane_id)?;

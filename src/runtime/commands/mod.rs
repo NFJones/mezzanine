@@ -4053,6 +4053,7 @@ impl RuntimeSessionService {
                 parent_conversation_id: parent_conversation_id.clone(),
                 parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
                 iteration: 1,
+                emitted_apply_patch: false,
                 max_iterations: self.agent_loop_limit.max(1),
             },
         );
@@ -4092,11 +4093,36 @@ impl RuntimeSessionService {
             .agent_transcript_store
             .clone()
             .ok_or_else(|| MezError::invalid_state("agent transcript store is unavailable"))?;
-        let summary = store.fork(
+        let target_conversation_id = Self::runtime_new_agent_conversation_id();
+        let summary = match store.fork(
             &state.parent_conversation_id,
-            &Self::runtime_new_agent_conversation_id(),
+            &target_conversation_id,
             current_unix_seconds().max(1),
-        )?;
+        ) {
+            Ok(summary) => summary,
+            Err(error)
+                if (error.kind() == crate::error::MezErrorKind::InvalidState
+                    && error.message() == "source conversation has no entries")
+                    || (error.kind() == crate::error::MezErrorKind::NotFound
+                        && error.message() == "conversation transcript not found") =>
+            {
+                crate::transcript::ConversationSummary {
+                    conversation_id: target_conversation_id,
+                    entries: 0,
+                    first_created_at_unix_seconds: 0,
+                    last_created_at_unix_seconds: 0,
+                    last_turn_id: String::new(),
+                    agent_id: String::new(),
+                    pane_id: pane_id.to_string(),
+                    directory: self
+                        .pane_current_working_directory(pane_id)
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    initial_prompt: None,
+                    latest_user_prompt: None,
+                }
+            }
+            Err(error) => return Err(error),
+        };
         let (session_id, transcript_entries) = {
             let session = self.agent_shell_store.bind_conversation_with_lineage(
                 pane_id,
@@ -5267,6 +5293,7 @@ mod tests {
             parent_conversation_id: "parent-conversation".to_string(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
+            emitted_apply_patch: false,
             max_iterations: 8,
         });
         let later = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
@@ -5275,6 +5302,7 @@ mod tests {
             parent_conversation_id: "parent-conversation".to_string(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
+            emitted_apply_patch: false,
             max_iterations: 8,
         });
 

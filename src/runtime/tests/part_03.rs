@@ -3433,6 +3433,174 @@ fn runtime_agent_loop_starts_first_iteration_in_fresh_forked_conversation() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies `/loop` can start from a pane conversation that has no persisted
+/// transcript entries yet.
+///
+/// The loop controller forks each iteration from the parent pane conversation.
+/// A brand-new pane may not have any saved transcript rows, so the first loop
+/// iteration still needs a fresh conversation id instead of failing the fork.
+#[test]
+fn runtime_agent_loop_starts_when_parent_conversation_has_no_saved_entries() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-empty-parent"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service
+        .pane_screens
+        .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    let old_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let outcome = service
+        .execute_agent_shell_loop_command("%1", "/loop review this document")
+        .unwrap();
+
+    assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert_ne!(session.session_id, old_session);
+    assert_eq!(session.transcript_entries, 0);
+    assert_eq!(session.visibility, AgentShellVisibility::Visible);
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies `/loop` schedules another work iteration after a completed turn
+/// that emitted an `apply_patch` action.
+///
+/// The spec keys loop continuation to emitted patch actions, not to the final
+/// settled action-result type. Multi-phase `apply_patch` work leaves the turn
+/// running until shell settlement, so this regression confirms the controller
+/// still observes the original semantic patch action and queues iteration two.
+#[test]
+fn runtime_agent_loop_continues_after_apply_patch_iteration() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-apply-patch"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+    let old_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: old_session.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "create a note".to_string(),
+        })
+        .unwrap();
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let target_rel = format!(
+        "target/mez-loop-apply-patch-{}-{unique}/note.txt",
+        std::process::id()
+    );
+    let target = PathBuf::from(&target_rel);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-loop","method":"agent/shell/command","params":{"idempotency_key":"agent-loop","input":"/loop create a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""kind":"mutated""#), "{start}");
+    assert!(start.contains("state=running"), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "maap semantic response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "patch-1".to_string(),
+                    rationale: "create a file".to_string(),
+                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                        patch: format!(
+                            "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n*** End Patch"
+                        ),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.pending_agent_provider_tasks.remove("turn-1");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    for _ in 0..100 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.running_shell_transactions.is_empty() {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(service.running_shell_transactions.is_empty());
+    let completion_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(runtime_complete_batch("turn-1")),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let completions = service
+        .poll_agent_provider_tasks_with_provider(&completion_provider, 1)
+        .unwrap();
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].terminal_state, AgentTurnState::Completed);
+    assert_eq!(service.agent_loops_by_pane.get("%1").unwrap().iteration, 2);
+    assert_eq!(service.agent_loop_turns.get("turn-2").unwrap().iteration, 2);
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-2")
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    fs::remove_dir_all(target.parent().unwrap()).unwrap();
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.

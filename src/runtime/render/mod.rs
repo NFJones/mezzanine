@@ -1918,7 +1918,11 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let history = match self.agent_transcript_store.as_ref() {
-            Some(store) => store.prompt_history(&session_id)?,
+            Some(store) => match store.prompt_history(&session_id) {
+                Ok(history) => history,
+                Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error),
+            },
             None => Vec::new(),
         };
         self.agent_prompt_inputs

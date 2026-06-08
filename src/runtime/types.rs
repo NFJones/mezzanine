@@ -3478,6 +3478,9 @@ pub struct RuntimeAgentLoopState {
     pub parent_prompt_cache_lineage_id: Option<String>,
     /// One-based work iteration currently being evaluated or executed.
     pub iteration: usize,
+    /// Whether the current work iteration has emitted any semantic
+    /// `apply_patch` action before settling.
+    pub emitted_apply_patch: bool,
     /// Maximum number of work iterations allowed before the loop stops.
     pub max_iterations: usize,
 }
