@@ -210,11 +210,6 @@ impl ProviderSseTerminalDetector {
     }
 }
 
-/// Reports whether buffered SSE text already contains a terminal provider event.
-fn provider_http_body_has_terminal_sse_event(body: &[u8]) -> bool {
-    ProviderSseTerminalDetector::default().has_terminal_event(body)
-}
-
 /// Locates the next complete SSE block separator without allocating a
 /// normalized copy of the buffered provider body.
 fn provider_http_find_sse_block_separator(body: &[u8]) -> Option<(usize, usize)> {
@@ -425,6 +420,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 .min(DEFAULT_PROVIDER_MAX_RESPONSE_BYTES);
             let mut body_truncated = false;
             let mut body = Vec::new();
+            let mut terminal_detector = ProviderSseTerminalDetector::default();
             loop {
                 let chunk =
                     match provider_http_read_chunk_with_timeout(&mut response, request.timeout_ms)
@@ -433,9 +429,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                         Ok(Some(chunk)) => chunk,
                         Ok(None) => break,
                         Err(error) => {
-                            if expects_event_stream
-                                && provider_http_body_has_terminal_sse_event(&body)
-                            {
+                            if expects_event_stream && terminal_detector.has_terminal_event(&body) {
                                 break;
                             }
                             if error.is_timeout() {
@@ -464,7 +458,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     break;
                 }
                 body.extend_from_slice(&chunk);
-                if expects_event_stream && provider_http_body_has_terminal_sse_event(&body) {
+                if expects_event_stream && terminal_detector.has_terminal_event(&body) {
                     break;
                 }
             }
@@ -740,8 +734,9 @@ mod provider_transport_tests {
                 "response": {"error": {"message": "bad token"}}
             })
         );
+        let mut detector = ProviderSseTerminalDetector::default();
 
-        assert!(provider_http_body_has_terminal_sse_event(body.as_bytes()));
+        assert!(detector.has_terminal_event(body.as_bytes()));
     }
 
     /// Verifies terminal SSE detection does not stop on a partial JSON event.
@@ -761,10 +756,11 @@ mod provider_transport_tests {
             "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"unterminated\n\n"
         );
 
-        assert!(!provider_http_body_has_terminal_sse_event(body.as_bytes()));
-        assert!(!provider_http_body_has_terminal_sse_event(
-            delimited_but_invalid.as_bytes()
-        ));
+        let mut detector = ProviderSseTerminalDetector::default();
+        assert!(!detector.has_terminal_event(body.as_bytes()));
+
+        let mut detector = ProviderSseTerminalDetector::default();
+        assert!(!detector.has_terminal_event(delimited_but_invalid.as_bytes()));
     }
 
     /// Verifies terminal SSE detection keeps incremental progress across
@@ -809,7 +805,8 @@ mod provider_transport_tests {
                 "response": {"error": {"message": "bad token"}}
             })
         );
+        let mut detector = ProviderSseTerminalDetector::default();
 
-        assert!(provider_http_body_has_terminal_sse_event(body.as_bytes()));
+        assert!(detector.has_terminal_event(body.as_bytes()));
     }
 }
