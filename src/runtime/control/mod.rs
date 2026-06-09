@@ -5,6 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 mod configuration;
 mod context;
+mod ingress;
 mod protocol;
 mod snapshot;
 mod subagents;
@@ -20,8 +21,6 @@ use super::{
     PaneReadinessOverrideStore, PaneReadinessState, PaneResizeUpdate, Path, PathBuf,
     ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
     RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
     RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
     SenderIdentity, SessionRecord, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
     SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
@@ -31,8 +30,8 @@ use super::{
     TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
     append_memory_context, append_permission_policy_context, append_scheduler_context,
     approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
-    decode_control_frame, decode_mmp_frame, default_trust_database_path,
-    destination_target_checked_resolved, discover_project_root, dispatch_control_request_cached,
+    decode_mmp_frame, default_trust_database_path, destination_target_checked_resolved,
+    discover_project_root, dispatch_control_request_cached,
     dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
@@ -41,18 +40,17 @@ use super::{
     dispatch_control_request_for_connection, dispatch_control_request_with_approvals,
     dispatch_control_request_with_approvals_and_audit, dispatch_control_request_with_captures,
     dispatch_control_request_with_mcp, dispatch_event_list_request,
-    dispatch_snapshot_request_with_context_async, encode_control_body,
-    frame_read_json_with_context, fs, handle_mmp_frame, json_escape, layout_state_json,
-    normalize_exact_command_text, observer_json, observers_json, pane_target_checked_resolved,
-    parse_json_rpc_request, plan_config_mutation, project_trust_state_filter_from_params,
-    rendered_client_view_json, route_client_input_actions, runtime_agent_turn_state_json,
-    runtime_append_observer_decision_audit, runtime_approval_decision_name_to_kind,
-    runtime_approval_policy_name, runtime_config_apply_event_payload,
-    runtime_config_method_applies_to_live_service, runtime_cooperation_mode_name,
-    runtime_hook_event_for_lifecycle, runtime_initialize_requested_observer,
-    runtime_initialize_requested_primary, runtime_initialize_terminal_size,
-    runtime_json_bool_field, runtime_json_creation_command, runtime_json_input_bytes,
-    runtime_json_optional_client_size, runtime_json_optional_size_field,
+    dispatch_snapshot_request_with_context_async, frame_read_json_with_context, fs,
+    handle_mmp_frame, json_escape, layout_state_json, normalize_exact_command_text, observer_json,
+    observers_json, pane_target_checked_resolved, parse_json_rpc_request, plan_config_mutation,
+    project_trust_state_filter_from_params, rendered_client_view_json, route_client_input_actions,
+    runtime_agent_turn_state_json, runtime_append_observer_decision_audit,
+    runtime_approval_decision_name_to_kind, runtime_approval_policy_name,
+    runtime_config_apply_event_payload, runtime_config_method_applies_to_live_service,
+    runtime_cooperation_mode_name, runtime_hook_event_for_lifecycle,
+    runtime_initialize_requested_observer, runtime_initialize_requested_primary,
+    runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,
+    runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
     runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
     runtime_json_start_directory, runtime_json_string_field, runtime_mcp_retry_event_payload,
     runtime_mutating_method, runtime_pane_by_id, runtime_pane_readiness_state_name,
@@ -75,7 +73,7 @@ use protocol::{
     runtime_client_role_name, runtime_client_state_name, runtime_client_terminal_descriptor_json,
     runtime_mmp_message_type, runtime_mmp_response_succeeded, runtime_optional_string,
     runtime_optional_timestamp_json, runtime_project_trust_read_method, runtime_size_object_json,
-    runtime_snapshot_id_from_request, runtime_snapshot_resume_plan_json, runtime_timestamp_json,
+    runtime_snapshot_resume_plan_json, runtime_timestamp_json,
     runtime_validate_state_request_params,
 };
 use snapshot::{
@@ -105,249 +103,6 @@ use crate::skills::{
 /// boundary and avoids relying on call-site inference.
 const RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER: &str = "runtime-control-live-override";
 impl RuntimeSessionService {
-    /// Runs the handle control input operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn handle_control_input(
-        &mut self,
-        input: &[u8],
-        max_content_length: usize,
-    ) -> Result<(Vec<u8>, usize)> {
-        self.require_live()?;
-        let primary_client_id = self.session.primary_client_id().cloned().ok_or_else(|| {
-            MezError::invalid_state("control service requires an attached primary")
-        })?;
-        let mut offset = 0usize;
-        let mut output = Vec::new();
-        while offset < input.len() {
-            let (body, consumed) = decode_control_frame(&input[offset..], max_content_length)?;
-            let response = self.dispatch_runtime_control_body(&body, &primary_client_id);
-            output.extend_from_slice(&encode_control_body(&response));
-            offset += consumed;
-        }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        self.persist_or_defer_registry_update()?;
-        Ok((output, offset))
-    }
-
-    /// Runs the handle control input for connection operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn handle_control_input_for_connection(
-        &mut self,
-        input: &[u8],
-        max_content_length: usize,
-        connection: &mut ControlConnectionState,
-    ) -> Result<(Vec<u8>, usize)> {
-        self.require_live()?;
-        let mut offset = 0usize;
-        let mut output = Vec::new();
-        while offset < input.len() {
-            let (body, consumed) = decode_control_frame(&input[offset..], max_content_length)?;
-            let response = self.dispatch_runtime_control_body_for_connection(&body, connection);
-            output.extend_from_slice(&encode_control_body(&response));
-            offset += consumed;
-        }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        self.persist_or_defer_registry_update()?;
-        Ok((output, offset))
-    }
-
-    /// Runs the handle control input for connection with snapshots operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn handle_control_input_for_connection_with_snapshots(
-        &mut self,
-        input: &[u8],
-        max_content_length: usize,
-        connection: &mut ControlConnectionState,
-        snapshots: &SnapshotRepository,
-    ) -> Result<(Vec<u8>, usize)> {
-        self.require_live()?;
-        let mut offset = 0usize;
-        let mut output = Vec::new();
-        while offset < input.len() {
-            let (body, consumed) = decode_control_frame(&input[offset..], max_content_length)?;
-            let response = self.dispatch_runtime_control_body_for_connection_with_snapshots(
-                &body, connection, snapshots,
-            );
-            output.extend_from_slice(&encode_control_body(&response));
-            offset += consumed;
-        }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        self.persist_or_defer_registry_update()?;
-        Ok((output, offset))
-    }
-
-    /// Runs the handle control input for connection with snapshots async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub async fn handle_control_input_for_connection_with_snapshots_async(
-        &mut self,
-        input: &[u8],
-        max_content_length: usize,
-        connection: &mut ControlConnectionState,
-        snapshots: &SnapshotRepository,
-    ) -> Result<(Vec<u8>, usize)> {
-        self.require_live()?;
-        let mut offset = 0usize;
-        let mut output = Vec::new();
-        while offset < input.len() {
-            let (body, consumed) = decode_control_frame(&input[offset..], max_content_length)?;
-            let response = self
-                .dispatch_runtime_control_body_for_connection_with_snapshots_async(
-                    &body, connection, snapshots,
-                )
-                .await;
-            output.extend_from_slice(&encode_control_body(&response));
-            offset += consumed;
-        }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        self.persist_or_defer_registry_update()?;
-        Ok((output, offset))
-    }
-
-    /// Prepares a single snapshot control request for repository I/O outside
-    /// the actor turn.
-    ///
-    /// Non-snapshot requests, initialization requests, and unauthenticated
-    /// connections return `None` so the caller can use the ordinary control
-    /// dispatch path. Snapshot request validation errors are converted to a
-    /// JSON-RPC response body because they are successful protocol handling,
-    /// not actor transport failures.
-    pub(crate) fn prepare_runtime_snapshot_control_async_work(
-        &self,
-        body: &str,
-        connection: &ControlConnectionState,
-    ) -> Option<std::result::Result<RuntimeSnapshotControlAsyncWork, String>> {
-        let request = match parse_json_rpc_request(body) {
-            Ok(request) => request,
-            Err(error) => {
-                return Some(Err(runtime_json_rpc_error(
-                    "null",
-                    error.kind(),
-                    error.message(),
-                )));
-            }
-        };
-        if !connection.initialized()
-            || request.method == "control/initialize"
-            || !request.method.starts_with("snapshot/")
-        {
-            return None;
-        }
-        let Some(caller_client_id) = connection.caller_client_id().cloned() else {
-            return Some(Err(runtime_json_rpc_error(
-                &request.id,
-                crate::error::MezErrorKind::Forbidden,
-                "control connection has no authenticated session client",
-            )));
-        };
-        if let Err(error) = authorize_control_request(&self.session, &caller_client_id, &request) {
-            return Some(Err(runtime_json_rpc_error(
-                &request.id,
-                error.kind(),
-                error.message(),
-            )));
-        }
-        if let Err(error) = validate_control_method_params_schema(&request) {
-            return Some(Err(runtime_json_rpc_error(
-                &request.id,
-                error.kind(),
-                error.message(),
-            )));
-        }
-        let kind = if request.method == "snapshot/resume" {
-            RuntimeSnapshotControlAsyncWorkKind::Resume {
-                shell: self.session.shell.clone(),
-            }
-        } else {
-            RuntimeSnapshotControlAsyncWorkKind::Dispatch {
-                session: Box::new(self.session.clone()),
-                context: Box::new(RuntimeSnapshotOwnedCreationContext {
-                    pane_captures: self.live_snapshot_pane_captures(),
-                    active_config_layers: self.live_snapshot_config_layers(),
-                    frame_state: self.live_snapshot_frame_state(),
-                    agent_sessions: self.live_snapshot_agent_sessions(),
-                    approval_grants: self.live_snapshot_approval_grants(),
-                    approval_requests: self.live_snapshot_approval_requests(),
-                    message_state: self.live_snapshot_message_state(),
-                    mcp_servers: self.live_snapshot_mcp_servers(),
-                }),
-            }
-        };
-        Some(Ok(RuntimeSnapshotControlAsyncWork {
-            request,
-            caller_client_id,
-            kind,
-        }))
-    }
-
-    /// Completes a snapshot control request after repository I/O finished
-    /// outside the actor turn.
-    pub(crate) fn complete_runtime_snapshot_control_async_work(
-        &mut self,
-        work: RuntimeSnapshotControlAsyncWork,
-        outcome: RuntimeSnapshotControlAsyncOutcome,
-        connection: &mut ControlConnectionState,
-    ) -> String {
-        let _ = connection;
-        let result = match outcome {
-            RuntimeSnapshotControlAsyncOutcome::Dispatch(result) => result,
-            RuntimeSnapshotControlAsyncOutcome::Resume(result) => {
-                result.and_then(|(payload, _restored)| {
-                    self.require_snapshot_resume_hooks_allow(&payload)?;
-                    let snapshot_id = runtime_snapshot_id_from_request(&work.request);
-                    let resume_plan = payload.resume_plan();
-                    self.apply_runtime_snapshot_resume_for_connection(
-                        snapshot_id.as_str(),
-                        payload,
-                        resume_plan,
-                        &work.caller_client_id,
-                    )
-                })
-            }
-        };
-        let response_succeeded = result.is_ok();
-        if let Err(error) = self.append_runtime_snapshot_audit(
-            &work.request,
-            &work.caller_client_id,
-            if response_succeeded {
-                "applied"
-            } else {
-                "failed"
-            },
-        ) {
-            return runtime_json_rpc_error(&work.request.id, error.kind(), error.message());
-        }
-        if response_succeeded && work.request.method == "snapshot/create" {
-            let _ = self.append_lifecycle_event(
-                EventKind::SnapshotChanged,
-                format!(
-                    r#"{{"method":"{}","live_capture":true}}"#,
-                    work.request.method
-                ),
-            );
-        }
-        let body = match result {
-            Ok(result) => format!(
-                r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
-                work.request.id
-            ),
-            Err(error) => runtime_json_rpc_error(&work.request.id, error.kind(), error.message()),
-        };
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        body
-    }
-
     /// Runs the live snapshot pane captures operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
