@@ -181,6 +181,11 @@ use crate::transcript::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
+/// Exposes runtime agent provider dispatch and loop state records.
+///
+/// The nested module keeps provider-backed agent worker records out of the
+/// central runtime service state.
+mod agent_state;
 /// Exposes the auto sizing module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -256,6 +261,11 @@ mod pane_io;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod processes;
+/// Exposes runtime provider registry and model preset records.
+///
+/// The nested module keeps provider configuration records out of the central
+/// runtime service state.
+mod provider_registry;
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -277,6 +287,13 @@ mod sockets;
 /// declaration makes the boundary available to the crate.
 mod types;
 
+pub use agent_state::{
+    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
+    RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
+    RuntimeAgentRememberTask, RuntimeAutoSizingConfig, RuntimeAutoSizingDecision,
+    RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
+};
 pub use deferred::{
     AttachedClientStepApplication, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
     DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
@@ -297,6 +314,9 @@ pub use fanout::{
 use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};
 pub use pane_io::{
     PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate,
+};
+pub use provider_registry::{
+    RuntimeModelPreset, RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
 };
 #[cfg(test)]
 pub use sockets::{
@@ -320,14 +340,8 @@ pub use types::{
     DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
     DEFAULT_AUTO_SIZING_SMALL_PROFILE, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
-    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentCompactionDispatch,
-    RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
-    RuntimeAgentLoopTurnKind, RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeAgentRememberTask, RuntimeAgentTurnStop, RuntimeAutoSizingConfig,
-    RuntimeAutoSizingDecision, RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy,
-    RuntimeAutoSizingTargetProfile, RuntimeConfigApplyReport, RuntimeLifecycleState,
-    RuntimeModelPreset, RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
+    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentPromptTurnStart,
+    RuntimeAgentTurnStop, RuntimeConfigApplyReport, RuntimeLifecycleState,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeShellTransactionTimerKind,
     RuntimeShellTransactionTimerRef, SubagentWaitPolicy,
 };

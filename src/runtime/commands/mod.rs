@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::types::{
+use super::agent_state::{
     RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
 };

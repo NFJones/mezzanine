@@ -1,0 +1,392 @@
+//! Runtime agent provider dispatch and loop state records.
+//!
+//! This module owns data-only records used by provider-backed agent workers,
+//! automatic sizing decisions, loop bookkeeping, compaction, and memory
+//! generation. The runtime actor still owns behavior; these records simply
+//! describe queued or claimed work across async boundaries.
+
+use super::{
+    AgentContext, AgentTurnRecord, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
+    DEFAULT_AUTO_SIZING_LARGE_PROFILE, DEFAULT_AUTO_SIZING_MEDIUM_PROFILE,
+    DEFAULT_AUTO_SIZING_ROUTER_PROFILE, DEFAULT_AUTO_SIZING_SMALL_PROFILE,
+    DeepSeekChatCompletionsProvider, MemoryScope, ModelProfile, ModelRequest,
+    OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, PathScopes, PermissionPolicy,
+    ReqwestProviderHttpTransport, SessionApprovalStore, SubagentScopeDeclaration,
+};
+use crate::mcp::McpPromptTool;
+
+/// Carries Runtime Agent Provider Task state for this subsystem.
+///
+/// The type keeps related data explicit so callers can inspect and move
+/// structured runtime state without parsing display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentProviderTask {
+    /// Stores the turn id value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub turn_id: String,
+    /// Stores the agent id value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub agent_id: String,
+    /// Stores the pane id value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub pane_id: String,
+    /// Stores the model profile value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub model_profile: ModelProfile,
+}
+
+/// Runtime fallback behavior for automatic turn model sizing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeAutoSizingFallbackPolicy {
+    /// Continue with the ordinary active profile when the router cannot produce
+    /// a valid decision.
+    UseDefaultProfile,
+}
+
+impl RuntimeAutoSizingFallbackPolicy {
+    /// Returns the stable configuration name for this fallback policy.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UseDefaultProfile => DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
+        }
+    }
+}
+
+/// Configured profile names used by automatic turn model sizing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAutoSizingConfig {
+    /// Model profile used for the internal routing decision.
+    pub router_model_profile: String,
+    /// Model profile used when the router chooses the small bucket.
+    pub small_model_profile: String,
+    /// Model profile used when the router chooses the medium bucket.
+    pub medium_model_profile: String,
+    /// Model profile used when the router chooses the large bucket.
+    pub large_model_profile: String,
+    /// Reasoning efforts the router may select.
+    pub allowed_reasoning_efforts: Vec<String>,
+    /// Fallback behavior used when routing fails.
+    pub fallback_policy: RuntimeAutoSizingFallbackPolicy,
+}
+
+impl Default for RuntimeAutoSizingConfig {
+    /// Returns the generated automatic sizing defaults.
+    fn default() -> Self {
+        Self {
+            router_model_profile: DEFAULT_AUTO_SIZING_ROUTER_PROFILE.to_string(),
+            small_model_profile: DEFAULT_AUTO_SIZING_SMALL_PROFILE.to_string(),
+            medium_model_profile: DEFAULT_AUTO_SIZING_MEDIUM_PROFILE.to_string(),
+            large_model_profile: DEFAULT_AUTO_SIZING_LARGE_PROFILE.to_string(),
+            allowed_reasoning_efforts: vec![
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string(),
+            ],
+            fallback_policy: RuntimeAutoSizingFallbackPolicy::UseDefaultProfile,
+        }
+    }
+}
+
+/// Resolved target profile metadata included in an automatic sizing dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAutoSizingTargetProfile {
+    /// Size bucket name visible to the router.
+    pub size: String,
+    /// Configured model profile identity for this bucket.
+    pub profile_name: String,
+    /// Resolved model profile copied when the bucket is chosen.
+    pub profile: ModelProfile,
+    /// Reasoning efforts known to be valid for this model, when configured.
+    pub supported_reasoning_efforts: Vec<String>,
+}
+
+/// Bounded internal routing context carried to the provider worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAutoSizingDispatch {
+    /// Router profile identity.
+    pub router_profile_name: String,
+    /// Router model profile used for the internal decision request.
+    pub router_profile: ModelProfile,
+    /// Ordinary active profile identity to use when routing is disabled or
+    /// falls back.
+    pub default_profile_name: String,
+    /// Ordinary active model profile to use when routing is disabled or
+    /// falls back.
+    pub default_profile: ModelProfile,
+    /// Small target profile.
+    pub small: RuntimeAutoSizingTargetProfile,
+    /// Medium target profile.
+    pub medium: RuntimeAutoSizingTargetProfile,
+    /// Large target profile.
+    pub large: RuntimeAutoSizingTargetProfile,
+    /// Optional bounded turn metadata, such as subagent scope and lineage.
+    pub turn_metadata: Option<String>,
+    /// Reasoning efforts the router may select.
+    pub allowed_reasoning_efforts: Vec<String>,
+    /// Fallback behavior used when routing fails.
+    pub fallback_policy: RuntimeAutoSizingFallbackPolicy,
+}
+
+/// Parsed automatic sizing decision returned by the router model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeAutoSizingDecision {
+    /// Chosen size bucket.
+    pub size: String,
+    /// Chosen reasoning effort.
+    pub reasoning_effort: String,
+    /// Router confidence in the decision.
+    pub confidence: f64,
+    /// Short non-secret explanation suitable for logs.
+    pub rationale: String,
+}
+
+/// Tracks a provider task after the async actor has claimed it from the queue.
+///
+/// Provider workers run outside the serialized runtime actor. This record gives
+/// the actor a finite lease it can enforce if the worker never submits a
+/// completion or failure event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RuntimeAgentProviderClaim {
+    /// Runtime turn owned by the claimed provider worker.
+    pub turn_id: String,
+    /// Agent identity that owns the turn.
+    pub agent_id: String,
+    /// Timer generation associated with the current claim lease.
+    pub generation: u64,
+    /// Unix timestamp, in milliseconds, when the provider task was claimed.
+    pub claimed_at_unix_ms: u64,
+    /// Maximum lease duration before the runtime fails the turn.
+    pub timeout_ms: u64,
+}
+
+/// Carries Runtime Agent Provider Dispatch Provider state for this subsystem.
+///
+/// The type keeps related data explicit so callers can inspect and move
+/// structured runtime state without parsing display text.
+#[derive(Debug, Clone)]
+pub enum RuntimeAgentProviderDispatchProvider {
+    /// Represents the Open Ai case for this enumeration.
+    ///
+    /// Callers use this variant to describe one explicit state or command path
+    /// without relying on stringly typed status values.
+    OpenAi(OpenAiResponsesProvider<ReqwestProviderHttpTransport>),
+    /// Represents the Deep Seek case for this enumeration.
+    ///
+    /// Callers use this variant to describe one explicit state or command path
+    /// without relying on stringly typed status values.
+    DeepSeek(DeepSeekChatCompletionsProvider<ReqwestProviderHttpTransport>),
+    /// Represents a named OpenAI-compatible Chat Completions provider.
+    ///
+    /// Callers use this variant for configured provider instances that share
+    /// the Chat Completions wire contract without inheriting native OpenAI
+    /// Responses semantics.
+    OpenAiCompatible(OpenAiCompatibleChatCompletionsProvider<ReqwestProviderHttpTransport>),
+}
+
+impl RuntimeAgentProviderDispatchProvider {
+    /// Runs the provider id operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn provider_id(&self) -> &str {
+        match self {
+            Self::OpenAi(provider) => provider.provider_id(),
+            Self::DeepSeek(provider) => provider.provider_id(),
+            Self::OpenAiCompatible(provider) => provider.provider_id(),
+        }
+    }
+}
+
+/// Carries Runtime Agent Provider Dispatch state for this subsystem.
+///
+/// The type keeps related data explicit so callers can inspect and move
+/// structured runtime state without parsing display text.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentProviderDispatch {
+    /// Stores the turn value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub turn: AgentTurnRecord,
+    /// Stores the context value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub context: AgentContext,
+    /// Stores the model profile value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub model_profile: ModelProfile,
+    /// Optional automatic sizing context for the worker's first provider step.
+    pub auto_sizing: Option<RuntimeAutoSizingDispatch>,
+    /// Optional router provider for auto-sizing when different from the main
+    /// turn provider. When set, auto-sizing requests use this provider.
+    pub auto_sizing_provider: Option<RuntimeAgentProviderDispatchProvider>,
+    /// Providers that may be selected by automatic sizing target profiles.
+    ///
+    /// The async provider worker runs outside the runtime actor after the
+    /// router decision is known. Carrying target providers with the dispatch
+    /// lets cross-provider routing use the selected profile instead of falling
+    /// back to the originally active provider.
+    pub auto_sizing_target_providers:
+        std::collections::BTreeMap<String, RuntimeAgentProviderDispatchProvider>,
+    /// Stores the provider value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub provider: RuntimeAgentProviderDispatchProvider,
+    /// Stores the permission policy value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub permission_policy: PermissionPolicy,
+    /// Stores the session approvals value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub session_approvals: SessionApprovalStore,
+    /// Stores the path scopes value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub path_scopes: Option<PathScopes>,
+    /// Stores the subagent scope value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub subagent_scope: Option<SubagentScopeDeclaration>,
+    /// Stores the available mcp servers value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub available_mcp_servers: Vec<String>,
+    /// Stores the available mcp tools value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub available_mcp_tools: Vec<McpPromptTool>,
+    /// Whether persistent memory actions are enabled for this provider turn.
+    ///
+    /// Async provider workers execute outside the runtime actor, so the live
+    /// memory gate must be carried with the dispatch instead of recomputed from
+    /// unavailable actor-owned state.
+    pub memory_actions_enabled: bool,
+    /// Optional `/loop` controller metadata for this provider turn.
+    pub loop_turn: Option<RuntimeAgentLoopTurn>,
+}
+
+/// Identifies the role of one runtime turn owned by a `/loop` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeAgentLoopTurnKind {
+    /// A normal work iteration that should attempt to satisfy the original prompt.
+    Work,
+}
+
+/// Runtime-owned state for one active `/loop` command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentLoopState {
+    /// Pane whose visible agent shell owns the loop.
+    pub pane_id: String,
+    /// Original user prompt supplied after `/loop`.
+    pub original_prompt: String,
+    /// Parent conversation id that each fresh loop iteration must fork from.
+    pub parent_conversation_id: String,
+    /// Prompt-cache lineage to retain while rebinding the pane onto each fresh
+    /// loop iteration fork.
+    pub parent_prompt_cache_lineage_id: Option<String>,
+    /// One-based work iteration currently being evaluated or executed.
+    pub iteration: usize,
+    /// Whether the current work iteration has emitted any semantic
+    /// `apply_patch` action before settling.
+    pub emitted_apply_patch: bool,
+    /// Maximum number of work iterations allowed before the loop stops.
+    pub max_iterations: usize,
+}
+
+/// Metadata attached to a loop-owned agent turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentLoopTurn {
+    /// Pane whose active loop owns the turn.
+    pub pane_id: String,
+    /// Role this turn plays in the loop controller.
+    pub kind: RuntimeAgentLoopTurnKind,
+    /// One-based work iteration associated with this turn.
+    pub iteration: usize,
+}
+
+/// Provider-backed conversation compaction queued outside the actor.
+///
+/// The actor keeps pane state serialized while provider I/O runs in a worker.
+/// This task carries the deterministic request and transcript-retention
+/// metadata needed to finish compaction once a model response returns.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentCompactionTask {
+    /// Pane whose visible status should remain `compacting`.
+    pub pane_id: String,
+    /// Conversation being summarized.
+    pub conversation_id: String,
+    /// User-visible source such as `manual` or `auto`.
+    pub source: String,
+    /// Transcript entry count before compaction.
+    pub transcript_entries: u64,
+    /// Raw recent transcript entries to retain after summary insertion.
+    pub retained_transcript_entries: u64,
+    /// Durable entries supplied to the model compactor.
+    pub summarized_entries: usize,
+    /// Active model profile name used for the compactor request.
+    pub model_profile_name: String,
+    /// Active model profile copied for completion metadata.
+    pub model_profile: ModelProfile,
+    /// Provider request submitted by the async compaction worker.
+    pub request: ModelRequest,
+    /// Running turn to requeue after this compaction completes.
+    pub resume_turn_id: Option<String>,
+}
+
+/// Claimed model compaction dispatch owned by an async provider worker.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentCompactionDispatch {
+    /// Compaction task metadata and provider request.
+    pub task: RuntimeAgentCompactionTask,
+    /// Provider used to execute the compaction request.
+    pub provider: RuntimeAgentProviderDispatchProvider,
+}
+
+/// Provider-backed durable memory generation queued outside the actor.
+///
+/// The actor owns command validation and state mutation while provider I/O runs
+/// in a worker. This task carries the deterministic request and memory metadata
+/// needed to persist generated records once a model response returns.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentRememberTask {
+    /// Pane whose visible status should remain `memorizing`.
+    pub pane_id: String,
+    /// Active model profile name used for the memory request.
+    pub model_profile_name: String,
+    /// Active model profile copied for completion metadata.
+    pub model_profile: ModelProfile,
+    /// Durable scope selected when the command was queued.
+    pub scope: MemoryScope,
+    /// Provider request submitted by the async memory worker.
+    pub request: ModelRequest,
+}
+
+/// Claimed model memory dispatch owned by an async provider worker.
+#[derive(Debug, Clone)]
+pub struct RuntimeAgentRememberDispatch {
+    /// Remember task metadata and provider request.
+    pub task: RuntimeAgentRememberTask,
+    /// Provider used to execute the memory-generation request.
+    pub provider: RuntimeAgentProviderDispatchProvider,
+}

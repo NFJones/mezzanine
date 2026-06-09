@@ -4,9 +4,10 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::agent_state::RuntimeAgentProviderClaim;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
-use super::types::{RuntimeAgentPatchRecord, RuntimeAgentProviderClaim, RuntimeAgentTurnSteering};
+use super::types::{RuntimeAgentPatchRecord, RuntimeAgentTurnSteering};
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
     AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
