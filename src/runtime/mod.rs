@@ -216,6 +216,11 @@ mod deferred;
 /// The nested module keeps socket-directory and pane-environment contracts out
 /// of the central runtime service state.
 mod env;
+/// Exposes runtime message and event fanout connection tables.
+///
+/// The nested module keeps socket delivery bookkeeping out of the central
+/// runtime service state.
+mod fanout;
 /// Exposes the hook pipeline module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -282,6 +287,13 @@ pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,
     SocketDirectory, SocketDirectorySource,
 };
+pub use fanout::{
+    RuntimeEventConnection, RuntimeEventConnectionTable, RuntimeEventFanoutSink,
+    RuntimeEventWakeup, RuntimeFocusedShellHookRun, RuntimeMessageConnection,
+    RuntimeMessageConnectionTable, RuntimeMessageFanoutSink, RuntimeMessageWakeup,
+    flush_runtime_event_wakeup, flush_runtime_event_wakeups, flush_runtime_message_wakeup,
+    flush_runtime_message_wakeups,
+};
 use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};
 pub use pane_io::{
     PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate,
@@ -314,14 +326,10 @@ pub use types::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeAgentRememberTask, RuntimeAgentTurnStop, RuntimeAutoSizingConfig,
     RuntimeAutoSizingDecision, RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy,
-    RuntimeAutoSizingTargetProfile, RuntimeConfigApplyReport, RuntimeEventConnection,
-    RuntimeEventConnectionTable, RuntimeEventFanoutSink, RuntimeEventWakeup,
-    RuntimeFocusedShellHookRun, RuntimeLifecycleState, RuntimeMessageConnection,
-    RuntimeMessageConnectionTable, RuntimeMessageFanoutSink, RuntimeMessageWakeup,
+    RuntimeAutoSizingTargetProfile, RuntimeConfigApplyReport, RuntimeLifecycleState,
     RuntimeModelPreset, RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SubagentWaitPolicy, flush_runtime_event_wakeup,
-    flush_runtime_event_wakeups, flush_runtime_message_wakeup, flush_runtime_message_wakeups,
+    RuntimeShellTransactionTimerRef, SubagentWaitPolicy,
 };
 use types::{
     JoinedSubagentDependency, RuntimeAgentCopyOutput, RuntimeAgentModifiedFileSummary,
