@@ -113,7 +113,7 @@ Common slash commands:
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
-| `/loop` | Re-run a prompt from a fresh fork of the parent conversation until an iteration completes without `apply_patch` actions or the loop limit is reached. |
+| `/loop` | Re-run a prompt in the current conversation until an iteration completes without `apply_patch` actions or the loop limit is reached; pass `--fork` to use fresh parent-conversation forks. |
 | `/new` | Start a fresh pane conversation. |
 | `/resume` | Resume a saved pane conversation. |
 | `/stop` | Interrupt the active turn. |

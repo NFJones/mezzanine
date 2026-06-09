@@ -713,7 +713,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "directive" => "inspect or set a session-scoped developer-instruction addendum.",
         "personality" => "inspect or change response personality.",
         "loop" => {
-            "iterate on a prompt from a fresh parent-conversation fork until an iteration completes without apply_patch actions or the loop limit is reached."
+            "iterate on a prompt in the current conversation until an iteration completes without apply_patch actions or the loop limit is reached; pass --fork to use fresh parent-conversation forks."
         }
         "resume" => "resume a saved conversation.",
         "fork" => "fork the current conversation into a new thread.",

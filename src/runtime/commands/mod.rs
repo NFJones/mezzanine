@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::agent_state::{
-    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
+    RuntimeAgentLoopMode, RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
 };
 use super::{
@@ -92,6 +92,25 @@ fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
         "{}\n\n[loop controller]\nInspect the problem again carefully and fulfill the original user prompt normally. Start from this prompt alone without assuming knowledge of any previous attempt.",
         state.original_prompt
     )
+}
+
+/// Parses `/loop` arguments into conversation mode and original prompt text.
+fn parse_agent_loop_args(args: &str) -> Result<(RuntimeAgentLoopMode, &str)> {
+    let trimmed = args.trim();
+    if let Some(rest) = trimmed.strip_prefix("--fork")
+        && rest.chars().next().is_none_or(char::is_whitespace)
+    {
+        return Ok((RuntimeAgentLoopMode::ForkEachIteration, rest.trim_start()));
+    }
+    Ok((RuntimeAgentLoopMode::ReuseCurrentConversation, trimmed))
+}
+
+/// Returns the trace and status label for a `/loop` conversation mode.
+fn runtime_agent_loop_mode_name(mode: RuntimeAgentLoopMode) -> &'static str {
+    match mode {
+        RuntimeAgentLoopMode::ReuseCurrentConversation => "reuse_current_conversation",
+        RuntimeAgentLoopMode::ForkEachIteration => "fork_each_iteration",
+    }
 }
 
 impl RuntimeSessionService {
@@ -551,7 +570,7 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("loop command must be submitted as an agent slash command")
         })?;
-        let original_prompt = invocation.args.trim();
+        let (mode, original_prompt) = parse_agent_loop_args(invocation.args.trim())?;
         if original_prompt.is_empty() {
             return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
         }
@@ -574,6 +593,7 @@ impl RuntimeSessionService {
             RuntimeAgentLoopState {
                 pane_id: pane_id.to_string(),
                 original_prompt: original_prompt.to_string(),
+                mode,
                 parent_conversation_id: parent_conversation_id.clone(),
                 parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
                 iteration: 1,
@@ -592,10 +612,11 @@ impl RuntimeSessionService {
         Ok(AgentShellCommandOutcome::Mutated {
             command: "loop".to_string(),
             body: format!(
-                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} parent_conversation={} state={}",
+                "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} mode={} parent_conversation={} state={}",
                 pane_id,
                 started.turn_id,
                 self.agent_loop_limit.max(1),
+                runtime_agent_loop_mode_name(mode),
                 parent_conversation_id,
                 runtime_agent_turn_state_name(started.state)
             ),
@@ -613,49 +634,8 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent loop state is unavailable"))?;
-        let store = self
-            .agent_transcript_store
-            .clone()
-            .ok_or_else(|| MezError::invalid_state("agent transcript store is unavailable"))?;
-        let target_conversation_id = Self::runtime_new_agent_conversation_id();
-        let summary = match store.fork(
-            &state.parent_conversation_id,
-            &target_conversation_id,
-            current_unix_seconds().max(1),
-        ) {
-            Ok(summary) => summary,
-            Err(error)
-                if (error.kind() == crate::error::MezErrorKind::InvalidState
-                    && error.message() == "source conversation has no entries")
-                    || (error.kind() == crate::error::MezErrorKind::NotFound
-                        && error.message() == "conversation transcript not found") =>
-            {
-                crate::transcript::ConversationSummary {
-                    conversation_id: target_conversation_id,
-                    entries: 0,
-                    first_created_at_unix_seconds: 0,
-                    last_created_at_unix_seconds: 0,
-                    last_turn_id: String::new(),
-                    agent_id: String::new(),
-                    pane_id: pane_id.to_string(),
-                    directory: self
-                        .pane_current_working_directory(pane_id)
-                        .map(|path| path.to_string_lossy().into_owned()),
-                    initial_prompt: None,
-                    latest_user_prompt: None,
-                }
-            }
-            Err(error) => return Err(error),
-        };
-        let (session_id, transcript_entries) = {
-            let session = self.agent_shell_store.bind_conversation_with_lineage(
-                pane_id,
-                &summary.conversation_id,
-                summary.entries as u64,
-                state.parent_prompt_cache_lineage_id.clone(),
-            )?;
-            (session.session_id.clone(), session.transcript_entries)
-        };
+        let (session_id, transcript_entries) =
+            self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
         let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None)?;
         self.agent_loop_turns.insert(
@@ -670,15 +650,77 @@ impl RuntimeSessionService {
             pane_id,
             &started.turn_id,
             &format!(
-                "loop work queued iteration={} limit={} parent_conversation={} conversation_id={} entries={}",
+                "loop work queued iteration={} limit={} mode={} parent_conversation={} conversation_id={} entries={}",
                 state.iteration,
                 state.max_iterations,
+                runtime_agent_loop_mode_name(state.mode),
                 state.parent_conversation_id,
                 session_id,
                 transcript_entries
             ),
         )?;
         Ok(started)
+    }
+
+    /// Prepares the pane conversation binding for one loop-owned work turn.
+    fn prepare_agent_loop_work_conversation(
+        &mut self,
+        pane_id: &str,
+        state: &RuntimeAgentLoopState,
+    ) -> Result<(String, u64)> {
+        match state.mode {
+            RuntimeAgentLoopMode::ReuseCurrentConversation => {
+                let session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
+                    MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "agent shell session not found for pane",
+                    )
+                })?;
+                Ok((session.session_id.clone(), session.transcript_entries))
+            }
+            RuntimeAgentLoopMode::ForkEachIteration => {
+                let store = self.agent_transcript_store.clone().ok_or_else(|| {
+                    MezError::invalid_state("agent transcript store is unavailable")
+                })?;
+                let target_conversation_id = Self::runtime_new_agent_conversation_id();
+                let summary = match store.fork(
+                    &state.parent_conversation_id,
+                    &target_conversation_id,
+                    current_unix_seconds().max(1),
+                ) {
+                    Ok(summary) => summary,
+                    Err(error)
+                        if (error.kind() == crate::error::MezErrorKind::InvalidState
+                            && error.message() == "source conversation has no entries")
+                            || (error.kind() == crate::error::MezErrorKind::NotFound
+                                && error.message() == "conversation transcript not found") =>
+                    {
+                        crate::transcript::ConversationSummary {
+                            conversation_id: target_conversation_id,
+                            entries: 0,
+                            first_created_at_unix_seconds: 0,
+                            last_created_at_unix_seconds: 0,
+                            last_turn_id: String::new(),
+                            agent_id: String::new(),
+                            pane_id: pane_id.to_string(),
+                            directory: self
+                                .pane_current_working_directory(pane_id)
+                                .map(|path| path.to_string_lossy().into_owned()),
+                            initial_prompt: None,
+                            latest_user_prompt: None,
+                        }
+                    }
+                    Err(error) => return Err(error),
+                };
+                let session = self.agent_shell_store.bind_conversation_with_lineage(
+                    pane_id,
+                    &summary.conversation_id,
+                    summary.entries as u64,
+                    state.parent_prompt_cache_lineage_id.clone(),
+                )?;
+                Ok((session.session_id.clone(), session.transcript_entries))
+            }
+        }
     }
 
     /// Injects user steering input into the currently running pane turn.
@@ -1172,6 +1214,7 @@ mod tests {
         let first = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
+            mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
@@ -1181,6 +1224,7 @@ mod tests {
         let later = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
+            mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,

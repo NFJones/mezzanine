@@ -2497,14 +2497,16 @@ Mezzanine stops automatic continuation and reports that the iteration limit was
 reached.
 
 The `/loop` slash command MUST describe itself in help output as an iterative
-work command rather than a generic slash-command placeholder. `/loop` MUST
-start every work iteration from a fresh context forked from the parent pane
-conversation that invoked the loop. Each fork MUST use the same parent
-conversation, so later work turns cannot see prior `/loop` attempts or loop
-controller assessments. Mezzanine MUST continue running fresh work iterations
-after any completed iteration that emitted an `apply_patch` action, and MUST
-terminate the loop after the first completed work iteration that emitted no
-`apply_patch` actions or when the configured loop limit is reached.
+work command rather than a generic slash-command placeholder. By default,
+`/loop` MUST start each work iteration in the current pane conversation. When
+the command is invoked with `--fork`, `/loop` MUST start every work iteration
+from a fresh context forked from the parent pane conversation that invoked the
+loop. Each fork MUST use the same parent conversation, so later fork-mode work
+turns cannot see prior `/loop` attempts or loop controller assessments.
+Mezzanine MUST continue running work iterations after any completed iteration
+that emitted an `apply_patch` action, and MUST terminate the loop after the
+first completed work iteration that emitted no `apply_patch` actions or when
+the configured loop limit is reached.
 
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,

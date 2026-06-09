@@ -293,6 +293,15 @@ pub enum RuntimeAgentLoopTurnKind {
     Work,
 }
 
+/// Identifies how `/loop` prepares the pane conversation for each work turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeAgentLoopMode {
+    /// Run each iteration in the pane's current conversation.
+    ReuseCurrentConversation,
+    /// Run each iteration in a fresh transcript fork of the parent conversation.
+    ForkEachIteration,
+}
+
 /// Runtime-owned state for one active `/loop` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentLoopState {
@@ -300,10 +309,11 @@ pub struct RuntimeAgentLoopState {
     pub pane_id: String,
     /// Original user prompt supplied after `/loop`.
     pub original_prompt: String,
-    /// Parent conversation id that each fresh loop iteration must fork from.
+    /// Conversation preparation mode for loop-owned work turns.
+    pub mode: RuntimeAgentLoopMode,
+    /// Parent conversation id used when fresh loop iterations fork.
     pub parent_conversation_id: String,
-    /// Prompt-cache lineage to retain while rebinding the pane onto each fresh
-    /// loop iteration fork.
+    /// Prompt-cache lineage to retain while rebinding forked loop iterations.
     pub parent_prompt_cache_lineage_id: Option<String>,
     /// One-based work iteration currently being evaluated or executed.
     pub iteration: usize,

@@ -3385,15 +3385,15 @@ fn runtime_agent_shell_new_command_starts_fresh_conversation() {
     assert_eq!(session.visibility, AgentShellVisibility::Visible);
 }
 
-/// Verifies `/loop` rotates the pane to a fresh forked conversation before the
-/// first work iteration starts.
+/// Verifies default `/loop` reuses the current pane conversation for the first
+/// work iteration.
 ///
-/// This regression keeps the first loop turn from reusing the active pane
-/// conversation, so each loop attempt starts from a fresh branch instead of a
-/// previously mutated loop transcript.
+/// In-place iteration is the default mode, so the first loop work turn should
+/// prompt the model in the already-active session instead of rebinding to a
+/// forked transcript.
 #[test]
-fn runtime_agent_loop_starts_first_iteration_in_fresh_forked_conversation() {
-    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-fork"));
+fn runtime_agent_loop_reuses_current_conversation_by_default() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-reuse"));
     let mut service = test_runtime_service();
     service.set_agent_transcript_store(transcript_store.clone());
     service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
@@ -3426,21 +3426,68 @@ fn runtime_agent_loop_starts_first_iteration_in_fresh_forked_conversation() {
 
     assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
     let session = service.agent_shell_store().get("%1").unwrap();
-    assert_ne!(session.session_id, old_session);
+    assert_eq!(session.session_id, old_session);
     assert_eq!(session.visibility, AgentShellVisibility::Visible);
     let pane_text = service.pane_screen("%1").unwrap().visible_lines().join("\n");
     assert!(pane_text.contains("user> /loop review this document"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
-/// Verifies `/loop` can start from a pane conversation that has no persisted
-/// transcript entries yet.
+/// Verifies `/loop --fork` rotates the pane to a fresh forked conversation
+/// before the first work iteration starts.
 ///
-/// The loop controller forks each iteration from the parent pane conversation.
+/// The explicit fork mode preserves the old behavior for callers that need
+/// each loop attempt to start from a fresh branch of the parent transcript.
+#[test]
+fn runtime_agent_loop_fork_option_starts_first_iteration_in_fresh_forked_conversation() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-fork"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service
+        .pane_screens
+        .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    let old_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: old_session.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "review this document".to_string(),
+        })
+        .unwrap();
+
+    let outcome = service
+        .execute_agent_shell_loop_command("%1", "/loop --fork review this document")
+        .unwrap();
+
+    assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert_ne!(session.session_id, old_session);
+    assert_eq!(session.visibility, AgentShellVisibility::Visible);
+    let pane_text = service.pane_screen("%1").unwrap().visible_lines().join("\n");
+    assert!(pane_text.contains("user> /loop --fork review this document"), "{pane_text}");
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies `/loop --fork` can start from a pane conversation that has no
+/// persisted transcript entries yet.
+///
+/// The fork-mode loop controller forks each iteration from the parent pane conversation.
 /// A brand-new pane may not have any saved transcript rows, so the first loop
 /// iteration still needs a fresh conversation id instead of failing the fork.
 #[test]
-fn runtime_agent_loop_starts_when_parent_conversation_has_no_saved_entries() {
+fn runtime_agent_loop_fork_option_starts_when_parent_conversation_has_no_saved_entries() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-empty-parent"));
     let mut service = test_runtime_service();
     service.set_agent_transcript_store(transcript_store);
@@ -3457,7 +3504,7 @@ fn runtime_agent_loop_starts_when_parent_conversation_has_no_saved_entries() {
         .clone();
 
     let outcome = service
-        .execute_agent_shell_loop_command("%1", "/loop review this document")
+        .execute_agent_shell_loop_command("%1", "/loop --fork review this document")
         .unwrap();
 
     assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
