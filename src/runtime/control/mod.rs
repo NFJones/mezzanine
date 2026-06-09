@@ -7,6 +7,7 @@ mod configuration;
 mod context;
 mod ingress;
 mod live_snapshot;
+mod message;
 mod protocol;
 mod snapshot;
 mod state;
@@ -18,17 +19,16 @@ use super::{
     CommandRuleScope, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
     DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeferredConfigFileWrite, DeferredProjectConfigWrite,
-    Envelope, EventKind, EventVisibility, HookEvent, MemoryRecord, MessageConnection, MezError,
-    PaneCaptureSource, PaneId, PaneProcessStart, PaneReadinessOverrideStore, PaneReadinessState,
-    Path, PathBuf, ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch,
-    RuntimeAutoSizingConfig, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
-    RuntimeSessionService, RuntimeSubagentLineage, RuntimeSubagentPlacement,
-    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotCreationContext,
-    SnapshotRepository, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
-    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision,
-    agent_state_control_method, append_memory_context, append_permission_policy_context,
-    append_scheduler_context, approval_decide_scope_persistence,
-    compare_permission_preset_authority, current_unix_seconds, decode_mmp_frame,
+    Envelope, EventKind, EventVisibility, HookEvent, MemoryRecord, MezError, PaneCaptureSource,
+    PaneId, PaneProcessStart, PaneReadinessOverrideStore, PaneReadinessState, Path, PathBuf,
+    ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
+    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
+    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
+    SenderIdentity, SessionRecord, SnapshotCreationContext, SnapshotRepository, SplitDirection,
+    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
+    append_memory_context, append_permission_policy_context, append_scheduler_context,
+    approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
     default_trust_database_path, destination_target_checked_resolved, discover_project_root,
     dispatch_control_request_cached, dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
@@ -38,7 +38,7 @@ use super::{
     dispatch_control_request_for_connection, dispatch_control_request_with_approvals,
     dispatch_control_request_with_approvals_and_audit, dispatch_control_request_with_captures,
     dispatch_control_request_with_mcp, dispatch_snapshot_request_with_context_async, fs,
-    handle_mmp_frame, json_escape, layout_state_json, normalize_exact_command_text, observer_json,
+    json_escape, layout_state_json, normalize_exact_command_text, observer_json,
     pane_target_checked_resolved, parse_json_rpc_request, plan_config_mutation,
     project_trust_state_filter_from_params, rendered_client_view_json, route_client_input_actions,
     runtime_agent_turn_state_json, runtime_append_observer_decision_audit,
@@ -76,8 +76,7 @@ use context::{
     runtime_transcript_context_entry_limit,
 };
 use protocol::{
-    pane_id_from_runtime_agent_id, paths_equivalent, runtime_mmp_message_type,
-    runtime_mmp_response_succeeded, runtime_project_trust_read_method,
+    pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
     runtime_snapshot_resume_plan_json,
 };
 
@@ -486,88 +485,6 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(true)
-    }
-
-    /// Runs the handle message input operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn handle_message_input(
-        &mut self,
-        input: &[u8],
-        max_content_length: usize,
-        connection: &mut MessageConnection,
-        now_ms: u64,
-    ) -> Result<(Vec<u8>, usize)> {
-        self.require_live()?;
-        let decoded_body = decode_mmp_frame(input, max_content_length)
-            .ok()
-            .map(|(body, _)| body);
-        let previous_agent_id = connection.agent_id.clone();
-        let (output, consumed) = handle_mmp_frame(
-            input,
-            max_content_length,
-            &mut self.message_service,
-            connection,
-            now_ms,
-        )?;
-        if runtime_mmp_response_succeeded(&output, max_content_length)
-            && let Some(body) = decoded_body.as_deref()
-        {
-            self.append_runtime_message_protocol_audit(
-                body,
-                previous_agent_id.as_ref(),
-                connection.agent_id.as_ref(),
-            )?;
-        }
-        Ok((output, consumed))
-    }
-
-    /// Runs the append runtime message protocol audit operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn append_runtime_message_protocol_audit(
-        &mut self,
-        body: &str,
-        previous_agent_id: Option<&AgentId>,
-        current_agent_id: Option<&AgentId>,
-    ) -> Result<()> {
-        let Some(message_type) = runtime_mmp_message_type(body) else {
-            return Ok(());
-        };
-        let (change, bridge_id) = match message_type.as_str() {
-            "hello" => ("register", current_agent_id),
-            "presence" => ("presence", previous_agent_id.or(current_agent_id)),
-            _ => return Ok(()),
-        };
-        let Some(bridge_id) = bridge_id else {
-            return Ok(());
-        };
-        let Some(audit_log) = self.audit_log.as_mut() else {
-            return Ok(());
-        };
-        let mut record = AuditRecord::local_protocol_bridge_change(
-            self.session.id.to_string(),
-            AuditActor {
-                kind: "agent".to_string(),
-                id: bridge_id.to_string(),
-            },
-            "mmp/1",
-            bridge_id.to_string(),
-            change,
-            "applied",
-        );
-        if let Some(role) = runtime_json_string_field(body, "role") {
-            record = record.with_metadata("role", role);
-        }
-        if let Some(status) = runtime_json_string_field(body, "status") {
-            record = record.with_metadata("status", status);
-        }
-        let _ = audit_log.append(record.sanitized())?;
-        Ok(())
     }
 
     /// Runs the registry update plan operation for this subsystem.
