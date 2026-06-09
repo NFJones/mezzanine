@@ -6,8 +6,8 @@
 //! execution orchestration out of the runtime agent facade while the low-level
 //! pane transaction writer remains in the facade for now.
 
+use super::super::service_state::RuntimeAgentShellDispatchHistory;
 use super::*;
-use crate::runtime::types::RuntimeAgentShellDispatchHistory;
 
 /// Label for the turn-volatile context block that nudges concrete action after
 /// repeated shell dispatch or successful mutation.

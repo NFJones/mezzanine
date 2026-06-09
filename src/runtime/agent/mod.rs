@@ -7,7 +7,7 @@
 use super::agent_state::RuntimeAgentProviderClaim;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
-use super::types::{RuntimeAgentPatchRecord, RuntimeAgentTurnSteering};
+use super::service_state::{RuntimeAgentPatchRecord, RuntimeAgentTurnSteering};
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
     AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,

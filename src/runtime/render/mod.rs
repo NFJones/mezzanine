@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::types::{
+use super::service_state::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch,
     RuntimeDisplayOverlaySelection, RuntimeDisplayOverlaySelectionKind, RuntimeMouseClickState,
     RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
@@ -4665,6 +4665,10 @@ fn copy_selection_rendition(
 
 #[cfg(test)]
 mod tests {
+    use super::super::service_state::{
+        RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch, RuntimeDisplayOverlaySelection,
+        RuntimeDisplayOverlaySelectionKind,
+    };
     use super::{
         AgentRenderedLine, AgentRenderedLineKind, agent_action_result_uses_diff_preview,
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
@@ -4679,10 +4683,6 @@ mod tests {
     };
     use crate::agent::{AgentAction, AgentActionPayload};
     use crate::layout::Size;
-    use crate::runtime::types::{
-        RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch, RuntimeDisplayOverlaySelection,
-        RuntimeDisplayOverlaySelectionKind,
-    };
     use crate::terminal::{GraphicRendition, TerminalStyleSpan, default_ui_theme};
 
     /// Verifies normal-mode mutation result rendering treats patches as the

@@ -490,7 +490,7 @@ impl RuntimeSessionService {
     /// - `ancestor_agent_id`: Candidate ancestor agent id.
     fn subagent_lineage_has_ancestor(
         &self,
-        lineage: &super::super::types::RuntimeSubagentLineage,
+        lineage: &super::super::service_state::RuntimeSubagentLineage,
         ancestor_agent_id: &str,
     ) -> bool {
         let mut current_parent = lineage.parent_agent_id.as_str();

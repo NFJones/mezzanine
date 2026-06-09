@@ -502,7 +502,7 @@ impl RuntimeSessionService {
         self.async_runtime_metrics.as_ref()
     }
     /// Returns runtime-owned agent, provider, prompt-cache, and shell metrics.
-    pub(super) fn runtime_metrics(&self) -> &super::types::RuntimeMetricsSnapshot {
+    pub(super) fn runtime_metrics(&self) -> &super::service_state::RuntimeMetricsSnapshot {
         &self.runtime_metrics
     }
 

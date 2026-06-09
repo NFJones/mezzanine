@@ -6,7 +6,7 @@
 mod keybindings;
 mod mcp;
 
-use super::types::RuntimeAgentPatchRecord;
+use super::service_state::RuntimeAgentPatchRecord;
 use super::{
     AgentTurnRecord, AgentTurnState, AgentTurnTrigger, ApprovalPolicy, ArgumentPolicy, AuditActor,
     AuditRecord, CommandInvocation, CommandOutcome, CommandRule, CommandRuleScope, ConfigFormat,

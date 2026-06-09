@@ -276,16 +276,16 @@ mod render;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod service;
+/// Exposes the types module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod service_state;
 /// Exposes the sockets module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod sockets;
-/// Exposes the types module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod types;
 
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
@@ -318,6 +318,23 @@ pub use pane_io::{
 pub use provider_registry::{
     RuntimeModelPreset, RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
 };
+pub use service_state::{
+    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
+    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
+    DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
+    DEFAULT_AUTO_SIZING_SMALL_PROFILE, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
+    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
+    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentPromptTurnStart,
+    RuntimeAgentTurnStop, RuntimeConfigApplyReport, RuntimeLifecycleState,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeShellTransactionTimerKind,
+    RuntimeShellTransactionTimerRef, SubagentWaitPolicy,
+};
+use service_state::{
+    JoinedSubagentDependency, RuntimeAgentCopyOutput, RuntimeAgentModifiedFileSummary,
+    RuntimeAgentPromptInput, RuntimeAgentTurnSteering, RuntimeCommandBinding,
+    RuntimeSubagentLineage,
+};
 #[cfg(test)]
 pub use sockets::{
     accept_one_control_connection, accept_one_message_connection,
@@ -332,23 +349,6 @@ pub use sockets::{
     ensure_private_socket_directory, pane_environment, pane_environment_with_term,
     prune_stale_socket_files_in_directory, remove_stale_socket_file_if_unserved,
     socket_path_for_name,
-};
-pub use types::{
-    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
-    DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
-    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
-    DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
-    DEFAULT_AUTO_SIZING_SMALL_PROFILE, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
-    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
-    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentPromptTurnStart,
-    RuntimeAgentTurnStop, RuntimeConfigApplyReport, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SubagentWaitPolicy,
-};
-use types::{
-    JoinedSubagentDependency, RuntimeAgentCopyOutput, RuntimeAgentModifiedFileSummary,
-    RuntimeAgentPromptInput, RuntimeAgentTurnSteering, RuntimeCommandBinding,
-    RuntimeSubagentLineage,
 };
 
 #[cfg(test)]
@@ -441,10 +441,7 @@ use json::{
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_subagent_placement_mode,
     runtime_subagent_spawn_request, runtime_subagent_state_json, runtime_terminal_step_result_json,
 };
-#[cfg(test)]
-use sockets::effective_uid;
-use sockets::{ensure_absolute, ensure_no_mez_separator, validate_pane_size_for_resize};
-use types::{
+use service_state::{
     BlockedAgentApprovalRef, MouseResizeDragState, MouseSelectionDragState, PaneDescriptor,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
@@ -453,8 +450,11 @@ use types::{
     RuntimeModelProfileOverrideScope, RuntimeModelProfileOverrideStore,
     RuntimeShellTransactionActionFailure, RuntimeSubagentPlacement,
 };
+#[cfg(test)]
+use sockets::effective_uid;
+use sockets::{ensure_absolute, ensure_no_mez_separator, validate_pane_size_for_resize};
 
-pub(crate) use types::{
+pub(crate) use service_state::{
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
 };

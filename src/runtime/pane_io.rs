@@ -6,7 +6,7 @@
 //! runtime service can coordinate those records without also owning the pipe
 //! implementation details.
 
-use super::types::RuntimeRegistryUpdatePlan;
+use super::service_state::RuntimeRegistryUpdatePlan;
 use super::{
     File, MezError, OpenOptions, PaneExitStatus, Path, PathBuf, Result, Size, Stdio, Write,
 };
