@@ -699,7 +699,7 @@ fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
             ]));
             candidates.extend(value_candidates(&["horizontal", "vertical"]));
         }
-        "select-window" | "select-group" | "attach-session" | "kill-session" | "rename-session" => {
+        "select-window" | "select-group" | "attach-session" | "kill-session" => {
             candidates.extend(value_candidates(&["next", "previous", "last"]));
         }
         "select-pane" | "swap-pane" => {
@@ -793,7 +793,7 @@ fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
         "load-layout" => {
             candidates.extend(flag_candidates(&["--name"]));
         }
-        "list-themes" | "set-theme" => {
+        "set-theme" => {
             candidates.extend(value_candidates(crate::terminal::BUILTIN_UI_THEME_NAMES));
         }
         "agent-shell" => {
@@ -928,8 +928,9 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         }
         "approval" => Some(" <ask|auto-allow|full-access>"),
         "approve" => Some(" <approval-id|latest> [once|session|project|global]"),
-        "trust" => Some(" <project-root|latest|list>"),
+        "trust" => Some(" <project-root|latest|list|pending>"),
         "model" => Some(" [--routing] <list|model> [reasoning]"),
+        "latency" => Some(" <slow|default|fast>"),
         "routing" => Some(" <on|off|toggle|status>"),
         "thinking" => Some(" <on|off|toggle|status>"),
         "statusline" => Some(" <on|off|toggle>"),
@@ -938,7 +939,7 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "copy-context" => Some(" <pane|buffer [name]|clipboard>"),
         "copy-trace-log" => Some(" <pane|buffer [name]|clipboard>"),
         "copy-patches" => Some(" <pane|buffer [name]|clipboard>"),
-        "personality" => Some(" <profile|style|list|clear>"),
+        "personality" => Some(" <profile|style|list|status|show|clear|default>"),
         "resume" => Some(" <session-uuid|--latest>"),
         "list-mcp" => Some(" [server-name]"),
         "title" => Some(" <title|default|off>"),
@@ -1801,6 +1802,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(theme_placeholder.text, " <theme>");
+
+        let rename_session_placeholder = shadow_hint(
+            SelectorSurface::MezzanineCommand,
+            "rename-session ",
+            "rename-session ".len(),
+        )
+        .unwrap();
+        assert_eq!(rename_session_placeholder.text, " <name>");
     }
 
     /// Verifies that agent slash commands expose the same prefix-completion
@@ -1837,6 +1846,63 @@ mod tests {
 
         assert_eq!(hint.insert_at, "/resume 018f".len());
         assert_eq!(hint.text, "6b3a-1b2c-7000-9000-cafebabefeed");
+    }
+
+    /// Verifies agent slash-command placeholders enumerate the documented
+    /// first-slot options for commands with static selector candidates.
+    ///
+    /// These hints are maintained separately from candidate lists, so this
+    /// regression coverage keeps shadow text aligned with the first argument
+    /// values users can discover through completion.
+    #[test]
+    fn selector_shadow_hint_covers_static_agent_first_slot_options() {
+        let latency_hint = shadow_hint(
+            SelectorSurface::AgentCommand,
+            "/latency ",
+            "/latency ".len(),
+        )
+        .unwrap();
+        let trust_hint =
+            shadow_hint(SelectorSurface::AgentCommand, "/trust ", "/trust ".len()).unwrap();
+        let personality_hint = shadow_hint(
+            SelectorSurface::AgentCommand,
+            "/personality ",
+            "/personality ".len(),
+        )
+        .unwrap();
+
+        assert_eq!(latency_hint.text, " <slow|default|fast>");
+        assert_eq!(trust_hint.text, " <project-root|latest|list|pending>");
+        assert_eq!(
+            personality_hint.text,
+            " <profile|style|list|status|show|clear|default>"
+        );
+    }
+
+    /// Verifies commands without first-slot enumerated arguments do not expose
+    /// stale selector candidates from neighboring command metadata.
+    ///
+    /// `rename-session` accepts a free-form name and `list-themes` takes no
+    /// argument, so neither prompt should inherit static value completions that
+    /// imply a constrained first-slot value set.
+    #[test]
+    fn selector_omits_stale_first_slot_candidates_for_free_form_or_argless_commands() {
+        assert!(
+            plan_selector(
+                SelectorSurface::MezzanineCommand,
+                "rename-session ne",
+                "rename-session ne".len(),
+            )
+            .is_none()
+        );
+        assert!(
+            plan_selector(
+                SelectorSurface::MezzanineCommand,
+                "list-themes to",
+                "list-themes to".len(),
+            )
+            .is_none()
+        );
     }
 
     /// Verifies skill-name shadow hints do not insert completion text in the
