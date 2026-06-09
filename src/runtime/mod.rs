@@ -241,6 +241,11 @@ mod json;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod lifecycle;
+/// Exposes the pane_io module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod pane_io;
 /// Exposes the processes module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -277,6 +282,10 @@ pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,
     SocketDirectory, SocketDirectorySource,
 };
+use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};
+pub use pane_io::{
+    PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate,
+};
 #[cfg(test)]
 pub use sockets::{
     accept_one_control_connection, accept_one_message_connection,
@@ -299,8 +308,7 @@ pub use types::{
     DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
     DEFAULT_AUTO_SIZING_SMALL_PROFILE, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
-    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, PaneExitUpdate, PaneInputDispatch,
-    PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate, RuntimeAgentCompactionDispatch,
+    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentCompactionDispatch,
     RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
     RuntimeAgentLoopTurnKind, RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
@@ -415,13 +423,13 @@ use json::{
 use sockets::effective_uid;
 use sockets::{ensure_absolute, ensure_no_mez_separator, validate_pane_size_for_resize};
 use types::{
-    ActivePanePipe, BlockedAgentApprovalRef, MouseResizeDragState, MouseSelectionDragState,
-    PaneDescriptor, PaneExitRecord, PendingFocusedShellHookContinuation,
-    PendingFocusedShellHookTransaction, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeAgentPersonalityProfile, RuntimeAgentPreShellHookCompletion, RuntimeHookPipelineBlock,
-    RuntimeHookPipelineDecision, RuntimeHttpMcpTransportState, RuntimeMcpRetryReport,
-    RuntimeMcpTransportSet, RuntimeModelProfileOverrideScope, RuntimeModelProfileOverrideStore,
-    RuntimeShellTransactionActionFailure, RuntimeSubagentPlacement, StoppedPanePipe,
+    BlockedAgentApprovalRef, MouseResizeDragState, MouseSelectionDragState, PaneDescriptor,
+    PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
+    RuntimeAgentPreShellHookCompletion, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
+    RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
+    RuntimeModelProfileOverrideScope, RuntimeModelProfileOverrideStore,
+    RuntimeShellTransactionActionFailure, RuntimeSubagentPlacement,
 };
 
 pub(crate) use types::{
