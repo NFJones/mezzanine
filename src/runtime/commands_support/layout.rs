@@ -6,9 +6,10 @@
 //! pure session command executor.
 
 use super::super::{
-    CommandInvocation, CommandOutcome, MezError, Result, RuntimeSessionService,
-    current_unix_seconds, json_escape, new_window_name, new_window_shell_command,
-    resize_spec_from_invocation, split_window_selects_new_pane, split_window_shell_command,
+    CommandInvocation, CommandOutcome, MezError, Result, RuntimeLifecycleState,
+    RuntimeSessionService, current_unix_seconds, json_escape, new_window_name,
+    new_window_shell_command, resize_spec_from_invocation, split_window_selects_new_pane,
+    split_window_shell_command,
 };
 use super::runtime_expand_user_path;
 use crate::command::LayoutLoadSelector;
@@ -284,6 +285,240 @@ pub(super) fn execute_runtime_layout_terminal_command(
             }))
         }
         _ => Ok(None),
+    }
+}
+
+/// Closes a live pane and terminates the runtime pane process it owns.
+pub(super) fn runtime_kill_pane_command(
+    service: &mut RuntimeSessionService,
+    primary_client_id: &crate::ids::ClientId,
+    invocation: &CommandInvocation,
+) -> Result<CommandOutcome> {
+    let force = invocation.has_flag("-f", "--force");
+    let target = invocation.target_arg();
+    let descriptor = service.active_window_pane_descriptor(target)?;
+    let pane_live = service
+        .session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .find(|pane| pane.id == descriptor.pane_id)
+        .map(|pane| pane.live)
+        .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "pane not found"))?;
+    if force || !pane_live {
+        service
+            .fail_agent_turns_for_pane_shutdown(&[descriptor.pane_id.to_string()], "pane closed")?;
+    }
+    let removed = service
+        .session
+        .kill_pane(primary_client_id, target, force)?;
+    let terminated = if let Some(pane) = removed {
+        let pane_id = pane.id.to_string();
+        service.pane_closing.insert(pane_id.clone());
+        let _ = service.stop_active_pane_pipe(pane.id.as_str());
+        let terminated = usize::from(service.terminate_runtime_pane_process(&pane_id, force)?);
+        service.cleanup_removed_pane_runtime_state(&pane_id);
+        terminated
+    } else {
+        0
+    };
+    let synced = if service.session.windows().is_empty() {
+        0
+    } else {
+        service.sync_tracked_pty_sizes()?.len()
+    };
+    service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
+    service.append_pane_close_event(
+        descriptor.pane_id.as_str(),
+        descriptor.window_id.as_str(),
+        terminated,
+        service.session.windows().is_empty(),
+    )?;
+    Ok(CommandOutcome::Display {
+        command: invocation.name.clone(),
+        body: format!(
+            "closed=true:terminated_panes={}:session_empty={}:synced_panes={synced}",
+            terminated,
+            service.session.windows().is_empty()
+        ),
+    })
+}
+
+/// Closes a live window and terminates all runtime pane processes it owns.
+pub(super) fn runtime_kill_window_command(
+    service: &mut RuntimeSessionService,
+    primary_client_id: &crate::ids::ClientId,
+    invocation: &CommandInvocation,
+) -> Result<CommandOutcome> {
+    let force = invocation.has_flag("-f", "--force");
+    let target = invocation.target_arg();
+    let window = runtime_command_target_window(service, target)?;
+    let window_id = window.id.to_string();
+    let pane_ids = window
+        .panes()
+        .iter()
+        .map(|pane| pane.id.to_string())
+        .collect::<Vec<_>>();
+    let panes_have_live_process = window.panes().iter().any(|pane| pane.live);
+    if force || !panes_have_live_process {
+        service.fail_agent_turns_for_pane_shutdown(&pane_ids, "window closed")?;
+    }
+    let removed = service
+        .session
+        .kill_window(primary_client_id, target, force)?;
+    let removed_pane_ids = removed
+        .panes()
+        .iter()
+        .map(|pane| pane.id.to_string())
+        .collect::<Vec<_>>();
+    let removed_pane_id_refs = removed_pane_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    service.stop_active_pane_pipes_for(removed_pane_id_refs.as_slice());
+    let terminated = service.terminate_runtime_pane_processes(removed_pane_id_refs, force)?;
+    for pane_id in &removed_pane_ids {
+        service.cleanup_removed_pane_runtime_state(pane_id);
+    }
+    let synced = if service.session.windows().is_empty() {
+        0
+    } else {
+        service.sync_tracked_pty_sizes()?.len()
+    };
+    service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
+    service.append_window_close_event(
+        window_id.as_str(),
+        terminated,
+        service.session.windows().is_empty(),
+    )?;
+    Ok(CommandOutcome::Display {
+        command: invocation.name.clone(),
+        body: format!(
+            "closed=true:terminated_panes={}:session_empty={}:synced_panes={synced}",
+            terminated,
+            service.session.windows().is_empty()
+        ),
+    })
+}
+
+/// Closes a live window group and terminates all runtime pane processes it owns.
+pub(super) fn runtime_kill_group_command(
+    service: &mut RuntimeSessionService,
+    primary_client_id: &crate::ids::ClientId,
+    invocation: &CommandInvocation,
+) -> Result<CommandOutcome> {
+    let force = invocation.has_flag("-f", "--force");
+    let target = invocation.target_arg();
+    let group = runtime_command_target_group(service, target)?;
+    let group_id = group.id.to_string();
+    let window_ids = group.window_ids.clone();
+    let pane_ids = service
+        .session
+        .windows()
+        .iter()
+        .filter(|window| window_ids.iter().any(|id| id == &window.id))
+        .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+        .collect::<Vec<_>>();
+    let panes_have_live_process = service
+        .session
+        .windows()
+        .iter()
+        .filter(|window| window_ids.iter().any(|id| id == &window.id))
+        .flat_map(|window| window.panes())
+        .any(|pane| pane.live);
+    if force || !panes_have_live_process {
+        service.fail_agent_turns_for_pane_shutdown(&pane_ids, "window group closed")?;
+    }
+    let removed = service
+        .session
+        .kill_group(primary_client_id, target, force)?;
+    let removed_pane_ids = removed
+        .iter()
+        .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+        .collect::<Vec<_>>();
+    let removed_pane_id_refs = removed_pane_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    service.stop_active_pane_pipes_for(removed_pane_id_refs.as_slice());
+    let terminated = service.terminate_runtime_pane_processes(removed_pane_id_refs, force)?;
+    for pane_id in &removed_pane_ids {
+        service.cleanup_removed_pane_runtime_state(pane_id);
+    }
+    let synced = if service.session.windows().is_empty() {
+        0
+    } else {
+        service.sync_tracked_pty_sizes()?.len()
+    };
+    service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
+    service.append_lifecycle_event(
+        super::super::EventKind::WindowChanged,
+        format!(
+            r#"{{"group_id":"{}","state":"closed","terminated_panes":{}}}"#,
+            json_escape(&group_id),
+            terminated
+        ),
+    )?;
+    Ok(CommandOutcome::Display {
+        command: invocation.name.clone(),
+        body: format!(
+            "closed=true:group={}:windows={}:terminated_panes={}:session_empty={}:synced_panes={synced}",
+            group_id,
+            removed.len(),
+            terminated,
+            service.session.windows().is_empty()
+        ),
+    })
+}
+
+/// Resolves a runtime window group target for command diagnostics.
+fn runtime_command_target_group<'a>(
+    service: &'a RuntimeSessionService,
+    target: Option<&str>,
+) -> Result<&'a crate::session::WindowGroup> {
+    match target {
+        None => service
+            .session
+            .active_group()
+            .ok_or_else(|| MezError::invalid_state("session has no active window group")),
+        Some(target) => service
+            .session
+            .window_groups()
+            .iter()
+            .find(|group| {
+                group.id.as_str() == target
+                    || group.index.to_string() == target
+                    || group.name == target
+            })
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "window group not found",
+                )
+            }),
+    }
+}
+
+/// Resolves a runtime window target for command diagnostics.
+fn runtime_command_target_window<'a>(
+    service: &'a RuntimeSessionService,
+    target: Option<&str>,
+) -> Result<&'a crate::layout::Window> {
+    match target {
+        None => service
+            .session
+            .active_window()
+            .ok_or_else(|| MezError::invalid_state("session has no active window")),
+        Some(target) => service
+            .session
+            .windows()
+            .iter()
+            .find(|window| {
+                window.id.as_str() == target
+                    || window.index.to_string() == target
+                    || window.name == target
+            })
+            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "window not found")),
     }
 }
 
