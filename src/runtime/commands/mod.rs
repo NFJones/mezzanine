@@ -66,6 +66,7 @@ mod artifacts;
 mod compaction;
 mod lists;
 mod model;
+mod model_catalog;
 mod preferences;
 mod remember;
 mod resume;
@@ -76,8 +77,8 @@ mod status;
 use approval::*;
 #[cfg(test)]
 use compaction::*;
-pub(super) use model::RuntimeModelCatalog;
-use model::*;
+pub(super) use model_catalog::RuntimeModelCatalog;
+use model_catalog::*;
 use remember::*;
 use slash::*;
 
