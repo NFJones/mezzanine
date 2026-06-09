@@ -70,7 +70,7 @@ use crate::control::{
     validate_control_method_params_schema,
 };
 use crate::skills::{
-    BUILTIN_MEZ_CONFIG_SKILL_NAME, SkillDocument, is_valid_skill_name, load_skill_document,
+    BUILTIN_MEZ_REFERENCE_SKILL_NAME, SkillDocument, is_valid_skill_name, load_skill_document,
     parse_skill_prompt_invocation, skill_context_text,
 };
 use context::{
@@ -319,7 +319,7 @@ impl RuntimeSessionService {
         mut document: SkillDocument,
         additional_context: Option<&str>,
     ) -> Result<String> {
-        if document.summary.name == BUILTIN_MEZ_CONFIG_SKILL_NAME {
+        if document.summary.name == BUILTIN_MEZ_REFERENCE_SKILL_NAME {
             document.text = format!(
                 "{}\n\n## Current effective Mezzanine config\n\n```text\n{}\n```",
                 document.text.trim_end(),
@@ -329,7 +329,7 @@ impl RuntimeSessionService {
         Ok(skill_context_text(&document, additional_context))
     }
 
-    /// Builds the current-config snapshot appended to `$mez-config`.
+    /// Builds the current-config snapshot appended to `$mez-reference`.
     fn runtime_mez_config_skill_current_config(&self) -> Result<String> {
         let effective = compose_effective_config(&self.config_layers)?;
         let mut lines = vec![format!(

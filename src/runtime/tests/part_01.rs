@@ -3465,11 +3465,11 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
 /// Verifies broad theme color changes from an agent turn are applied in one
 /// runtime config batch.
 ///
-/// A user-level `$mez-config` skill can legitimately emit aliases plus every
-/// `theme.colors.*` slot when the user asks for a complete palette. Applying
-/// those changes as independent config-control requests reloads and redraws
-/// the runtime dozens of times in one turn; batching preserves the same final
-/// config while keeping live mutation to one validated reload.
+/// The built-in `$mez-reference` skill can legitimately emit aliases plus
+/// every `theme.colors.*` slot when the user asks for a complete palette.
+/// Applying those changes as independent config-control requests reloads and
+/// redraws the runtime dozens of times in one turn; batching preserves the
+/// same final config while keeping live mutation to one validated reload.
 #[test]
 fn runtime_agent_config_change_batches_broad_theme_palette() {
     let mut service = test_runtime_service();
@@ -3486,7 +3486,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
     mark_test_pane_ready(&mut service, "%1");
     service.permission_policy_mut().set_approval_bypass(true);
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-config-theme-batch","input":"$mez-config make my terminal look like a mcdonalds. Don't leave any colors unset"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-config-theme-batch","input":"$mez-reference make my terminal look like a mcdonalds. Don't leave any colors unset"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");

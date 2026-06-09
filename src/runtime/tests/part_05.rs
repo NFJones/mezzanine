@@ -2313,14 +2313,16 @@ fn runtime_agent_context_builtin_create_skill_prompt_loads_builtin_context() {
     );
 }
 
-/// Verifies `$mez-config` includes live schema guidance and current config.
+/// Verifies `$mez-reference` includes live schema guidance, command indexes,
+/// and current config.
 ///
-/// The config skill should not force the model to rediscover basic setting
-/// names before making a config mutation. Its invocation context therefore
-/// includes the annotated schema, concrete theme color slots, reset operation,
-/// and the pane's current effective config snapshot.
+/// The reference skill should not force the model to rediscover basic command
+/// names or config setting names before operating Mezzanine. Its invocation
+/// context therefore includes command indexes, the annotated schema, concrete
+/// theme color slots, reset operation, and the pane's current effective config
+/// snapshot.
 #[test]
-fn runtime_agent_context_builtin_mez_config_prompt_includes_current_config() {
+fn runtime_agent_context_builtin_mez_reference_prompt_includes_current_config() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -2334,14 +2336,16 @@ fn runtime_agent_context_builtin_mez_config_prompt_includes_current_config() {
         .unwrap();
 
     let context = service
-        .agent_context_for_pane_prompt("%1", "$mez-config set the prompt color", 0)
+        .agent_context_for_pane_prompt("%1", "$mez-reference set the prompt color", 0)
         .unwrap();
     let skill_block = context
         .blocks
         .iter()
-        .find(|block| block.label == "explicit skill mez-config")
-        .expect("missing explicit mez-config skill context block");
+        .find(|block| block.label == "explicit skill mez-reference")
+        .expect("missing explicit mez-reference skill context block");
 
+    assert!(skill_block.content.contains("Terminal command index"));
+    assert!(skill_block.content.contains("Agent shell slash command index"));
     assert!(
         skill_block
             .content

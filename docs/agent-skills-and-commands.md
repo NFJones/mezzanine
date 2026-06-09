@@ -133,8 +133,8 @@ $<skill-name> [additional context]
 Examples:
 
 ```text
-$mez-manual show me the commands I need to inspect sessions and panes
-$mez-config switch to the nord theme and show the exact setting path
+$mez-reference show me the commands I need to inspect sessions and panes
+$mez-reference switch to the nord theme and show the exact setting path
 ```
 
 Use `/list-skills` to inspect the effective catalog before invoking a skill.
@@ -143,9 +143,8 @@ Use `/list-skills` to inspect the effective catalog before invoking a skill.
 
 The repository currently ships built-in skills including:
 
-- `mez-manual`: Mezzanine terminal commands, slash commands, skill invocation,
-  and common workflows.
-- `mez-config`: supported live configuration changes and setting-path usage.
+- `mez-reference`: Mezzanine terminal commands, slash commands, skill
+  invocation, common workflows, and supported live configuration changes.
 - `create-skill`: guidance for creating or updating OpenAI-structured skills.
 
 ## Where skills live

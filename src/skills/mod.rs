@@ -27,19 +27,15 @@ pub const SKILL_FILE_NAME: &str = "SKILL.md";
 pub const SKILL_ADDITIONAL_CONTEXT_HEADING: &str = "## Additional context";
 /// Stable name for the built-in skill-authoring workflow.
 pub const BUILTIN_CREATE_SKILL_NAME: &str = "create-skill";
-/// Stable name for the built-in config-change workflow reference.
-pub const BUILTIN_MEZ_CONFIG_SKILL_NAME: &str = "mez-config";
-/// Stable name for the built-in Mezzanine manual reference.
-pub const BUILTIN_MEZ_MANUAL_SKILL_NAME: &str = "mez-manual";
+/// Stable name for the built-in Mezzanine reference workflow.
+pub const BUILTIN_MEZ_REFERENCE_SKILL_NAME: &str = "mez-reference";
 /// Virtual path prefix used for built-in skills that do not live on disk.
 pub const BUILTIN_SKILL_PATH_PREFIX: &str = "<builtin>";
 
 const BUILTIN_CREATE_SKILL_DESCRIPTION: &str = "Create or modify concise Mezzanine skills in user or project scope. Use when the user asks to add, update, refactor, or repair a skill, SKILL.md, or skill resources.";
 const BUILTIN_CREATE_SKILL_TEXT: &str = include_str!("builtin/create-skill/SKILL.md");
-const BUILTIN_MEZ_CONFIG_SKILL_DESCRIPTION: &str = "Use config_change correctly by choosing supported scalar Mezzanine setting paths, operations, and value shapes from the live annotated schema.";
-const BUILTIN_MEZ_CONFIG_SKILL_TEXT: &str = include_str!("builtin/mez-config/SKILL.md");
-const BUILTIN_MEZ_MANUAL_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, and common workflows without rediscovering the command surface.";
-const BUILTIN_MEZ_MANUAL_SKILL_TEXT: &str = include_str!("builtin/mez-manual/SKILL.md");
+const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
+const BUILTIN_MEZ_REFERENCE_SKILL_TEXT: &str = include_str!("builtin/mez-reference/SKILL.md");
 
 /// Source scope for one effective skill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,12 +277,8 @@ fn builtin_skill_summaries() -> Vec<SkillSummary> {
     [
         (BUILTIN_CREATE_SKILL_NAME, BUILTIN_CREATE_SKILL_DESCRIPTION),
         (
-            BUILTIN_MEZ_CONFIG_SKILL_NAME,
-            BUILTIN_MEZ_CONFIG_SKILL_DESCRIPTION,
-        ),
-        (
-            BUILTIN_MEZ_MANUAL_SKILL_NAME,
-            BUILTIN_MEZ_MANUAL_SKILL_DESCRIPTION,
+            BUILTIN_MEZ_REFERENCE_SKILL_NAME,
+            BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION,
         ),
     ]
     .into_iter()
@@ -316,32 +308,18 @@ fn builtin_skill_path(name: &str) -> PathBuf {
 fn builtin_skill_text(name: &str) -> Option<String> {
     match name {
         BUILTIN_CREATE_SKILL_NAME => Some(BUILTIN_CREATE_SKILL_TEXT.to_string()),
-        BUILTIN_MEZ_CONFIG_SKILL_NAME => Some(format_builtin_mez_config_skill()),
-        BUILTIN_MEZ_MANUAL_SKILL_NAME => Some(format_builtin_mez_manual_skill()),
+        BUILTIN_MEZ_REFERENCE_SKILL_NAME => Some(format_builtin_mez_reference_skill()),
         _ => None,
     }
 }
 
-/// Formats the built-in configuration skill with the live mutation schema.
-fn format_builtin_mez_config_skill() -> String {
+/// Formats the built-in reference skill with the live command and config schema.
+fn format_builtin_mez_reference_skill() -> String {
     let theme_slots = UI_COLOR_SLOT_NAMES
         .iter()
         .map(|slot| format!("- `theme.colors.{slot}`"))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "{}\n\n## Live config_change reference\n\nAllowed operations: `{}`.\n\nValue shape: {}\n\nSupported setting paths:\n{}\n\nTheme color slots:\n{}\n\nAnnotated setting paths:\n\n{}",
-        BUILTIN_MEZ_CONFIG_SKILL_TEXT.trim_end(),
-        CONFIG_CHANGE_OPERATION_NAMES.join("`, `"),
-        CONFIG_CHANGE_VALUE_DESCRIPTION,
-        config_change_setting_path_description(),
-        theme_slots,
-        config_change_setting_path_annotations_markdown(),
-    )
-}
-
-/// Formats the built-in manual skill with the live command registries.
-fn format_builtin_mez_manual_skill() -> String {
     let terminal_commands = baseline_commands()
         .into_iter()
         .map(|command| format!("- `:{}`", command.name))
@@ -365,10 +343,15 @@ fn format_builtin_mez_manual_skill() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{}\n\n## Terminal command index\n\n{}\n\n## Agent shell slash command index\n\n{}",
-        BUILTIN_MEZ_MANUAL_SKILL_TEXT.trim_end(),
+        "{}\n\n## Terminal command index\n\n{}\n\n## Agent shell slash command index\n\n{}\n\n## Live config_change reference\n\nAllowed operations: `{}`.\n\nValue shape: {}\n\nSupported setting paths:\n{}\n\nTheme color slots:\n{}\n\nAnnotated setting paths:\n\n{}",
+        BUILTIN_MEZ_REFERENCE_SKILL_TEXT.trim_end(),
         terminal_commands,
         agent_commands,
+        CONFIG_CHANGE_OPERATION_NAMES.join("`, `"),
+        CONFIG_CHANGE_VALUE_DESCRIPTION,
+        config_change_setting_path_description(),
+        theme_slots,
+        config_change_setting_path_annotations_markdown(),
     )
 }
 
@@ -540,10 +523,9 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILTIN_CREATE_SKILL_NAME, BUILTIN_MEZ_CONFIG_SKILL_NAME, BUILTIN_MEZ_MANUAL_SKILL_NAME,
-        BUILTIN_SKILL_PATH_PREFIX, SkillSource, discover_skill_catalog, is_valid_skill_name,
-        load_skill_document, parse_skill_prompt_invocation, skill_context_text,
-        split_skill_front_matter,
+        BUILTIN_CREATE_SKILL_NAME, BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX,
+        SkillSource, discover_skill_catalog, is_valid_skill_name, load_skill_document,
+        parse_skill_prompt_invocation, skill_context_text, split_skill_front_matter,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -613,13 +595,7 @@ mod tests {
 
         assert_eq!(
             catalog.names(),
-            vec![
-                "audit",
-                "create-skill",
-                "mez-config",
-                "mez-manual",
-                "ship-it"
-            ]
+            vec!["audit", "create-skill", "mez-reference", "ship-it"]
         );
         let overridden = catalog.get("ship-it").unwrap();
         assert_eq!(overridden.description, "Project workflow");
@@ -684,49 +660,45 @@ mod tests {
                 .contains("Create or modify concise Mezzanine skills")
         );
 
-        let config_document =
-            load_skill_document(catalog.get(BUILTIN_MEZ_CONFIG_SKILL_NAME).unwrap()).unwrap();
-        assert!(config_document.text.contains("name: mez-config"));
+        let reference_document =
+            load_skill_document(catalog.get(BUILTIN_MEZ_REFERENCE_SKILL_NAME).unwrap()).unwrap();
+        assert!(reference_document.text.contains("name: mez-reference"));
+        assert!(reference_document.text.contains("Terminal command index"));
         assert!(
-            config_document
+            reference_document
+                .text
+                .contains("Agent shell slash command index")
+        );
+        assert!(
+            reference_document
                 .text
                 .contains("Allowed operations: `set`, `unset`, `reset`")
         );
-        assert!(config_document.text.contains("Supported setting paths:"));
-        assert!(config_document.text.contains("Theme color slots:"));
+        assert!(reference_document.text.contains("Supported setting paths:"));
+        assert!(reference_document.text.contains("Theme color slots:"));
         assert!(
-            config_document
+            reference_document
                 .text
                 .contains("- `theme.colors.agent_prompt_bg`")
         );
-        assert!(config_document.text.contains("Annotated setting paths:"));
+        assert!(reference_document.text.contains("Annotated setting paths:"));
         assert!(
-            config_document
+            reference_document
                 .text
                 .contains("| `theme.active` | Switch the active")
         );
         assert!(
-            config_document
+            reference_document
                 .text
                 .contains("| `theme.aliases.<alias>` | Override")
         );
         assert!(
-            config_document
+            reference_document
                 .text
                 .contains("| `model_profiles.<name>.<key>` | Create or adjust")
         );
-        assert!(config_document.text.contains("Value/type"));
-        assert!(config_document.text.contains("Format requirements"));
-
-        let manual_document =
-            load_skill_document(catalog.get(BUILTIN_MEZ_MANUAL_SKILL_NAME).unwrap()).unwrap();
-        assert!(manual_document.text.contains("name: mez-manual"));
-        assert!(manual_document.text.contains("Terminal command index"));
-        assert!(
-            manual_document
-                .text
-                .contains("Agent shell slash command index")
-        );
+        assert!(reference_document.text.contains("Value/type"));
+        assert!(reference_document.text.contains("Format requirements"));
     }
 
     /// Verifies filesystem skills can intentionally override the built-in

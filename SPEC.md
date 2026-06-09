@@ -4718,23 +4718,22 @@ requested workflow actually needs them. It MUST default new skills to user
 scope unless the user explicitly requests a repo/project-scoped skill or says
 the skill must live with the current repository.
 
-Mezzanine MUST provide a built-in `mez-config` skill. It MUST summarize how to
-use `config_change`, include the supported operation names, include the value
-shape contract, and include the implementation's annotated setting-path schema
-so agents can make supported live configuration changes without rediscovering
-the schema from source. It MUST include supported theme color slot names and a
-current effective configuration summary when explicitly loaded for a user
-prompt so the agent can choose precise paths and values before proposing
-configuration changes. For broad theme requests, it MUST bias agents toward
-`theme.active` or compact `theme.aliases.*` palette changes before enumerating
-individual `theme.colors.*` slots, and it MUST remind agents to preserve
-readable diagnostic foreground/background pairs.
-
-Mezzanine MUST provide a built-in `mez-manual` skill. It MUST summarize
+Mezzanine MUST provide a built-in `mez-reference` skill. It MUST summarize
 Mezzanine terminal commands, pane-local agent slash commands, explicit
-`$<skill-name>` invocation, and common operational workflows. The built-in
-manual SHOULD derive its command lists from the same registries that implement
-the commands so the skill does not drift from the runtime command surface.
+`$<skill-name>` invocation, common operational workflows, and how to use
+`config_change`. It MUST include the supported operation names, include the
+value shape contract, and include the implementation's annotated
+setting-path schema so agents can make supported live configuration changes
+without rediscovering the schema from source. It MUST include supported theme
+color slot names and a current effective configuration summary when explicitly
+loaded for a user prompt so the agent can choose precise paths and values
+before proposing configuration changes. For broad theme requests, it MUST bias
+agents toward `theme.active` or compact `theme.aliases.*` palette changes
+before enumerating individual `theme.colors.*` slots, and it MUST remind
+agents to preserve readable diagnostic foreground/background pairs. The built-in
+reference SHOULD derive its command lists from the same registries that
+implement the commands so the skill does not drift from the runtime command
+surface.
 
 Mezzanine MUST keep model-selected skill discovery and skill invocation disabled
 by default. While disabled, `request_skills` and `call_skill` MUST NOT appear in
