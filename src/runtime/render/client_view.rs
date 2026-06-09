@@ -7,6 +7,101 @@
 
 use super::*;
 
+/// Runs the apply copy mode selection spans operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn apply_copy_mode_selection_spans(
+    copy_mode: &CopyMode,
+    lines: &mut [TerminalStyledLine],
+    ui_theme: &crate::terminal::UiTheme,
+) {
+    let Some((start, end)) = copy_mode.selection() else {
+        return;
+    };
+    let (start, end) = ordered_copy_positions(start, end);
+    let scroll_top = copy_mode.scroll_top();
+    for (row_offset, line) in lines.iter_mut().enumerate() {
+        let line_index = scroll_top.saturating_add(row_offset);
+        if line_index < start.line || line_index > end.line {
+            continue;
+        }
+        let selection_start = if line_index == start.line {
+            start.column
+        } else {
+            0
+        };
+        let selection_end = if line_index == end.line {
+            end.column
+        } else {
+            terminal_text_width(&line.text)
+        };
+        if selection_end <= selection_start {
+            continue;
+        }
+        line.style_spans.push(TerminalStyleSpan {
+            start: selection_start,
+            length: selection_end.saturating_sub(selection_start),
+            rendition: copy_selection_rendition(ui_theme),
+        });
+    }
+}
+
+/// Positions the attached terminal cursor at the active copy-mode cursor.
+pub(super) fn apply_copy_mode_terminal_cursor(
+    copy_mode: &CopyMode,
+    view: &mut RenderedClientView,
+    row: usize,
+    column: usize,
+    size: Size,
+) {
+    let cursor = copy_mode.cursor();
+    let Some(row_offset) = cursor.line.checked_sub(copy_mode.scroll_top()) else {
+        return;
+    };
+    if row_offset >= usize::from(size.rows) {
+        return;
+    }
+    view.cursor_row = row.saturating_add(row_offset);
+    view.cursor_column = column.saturating_add(
+        cursor
+            .column
+            .min(usize::from(size.columns).saturating_sub(1)),
+    );
+    view.cursor_visible = view.cursor_row < usize::from(view.authoritative_size.rows)
+        && view.cursor_column < usize::from(view.authoritative_size.columns);
+}
+
+/// Runs the ordered copy positions operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn ordered_copy_positions(
+    first: CopyPosition,
+    second: CopyPosition,
+) -> (CopyPosition, CopyPosition) {
+    if (first.line, first.column) <= (second.line, second.column) {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+/// Runs the copy selection rendition operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn copy_selection_rendition(
+    ui_theme: &crate::terminal::UiTheme,
+) -> crate::terminal::GraphicRendition {
+    let mut rendition = ui_theme.colors.copy_selection.rendition();
+    rendition.inverse = true;
+    rendition
+}
+
 impl RuntimeSessionService {
     pub fn render_client_view(
         &self,
