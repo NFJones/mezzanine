@@ -37,6 +37,89 @@ pub(super) const RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS: usize = 32;
 pub(super) const RUNTIME_MEZ_OSC_PREFIX: &[u8] = b"\x1b]133;";
 /// Maximum OSC payload bytes scanned for a Mezzanine-owned transaction marker.
 pub(super) const RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES: usize = 4096;
+/// Maximum time a transaction may wait for its payload receiver start marker.
+///
+/// Non-stateful agent actions stream the command body only after the shell
+/// wrapper emits an OSC start marker. If that marker is lost or the wrapper is
+/// stranded before the receiver loop, waiting for the full command timeout makes
+/// the pane look hung even though no user command has actually started.
+const RUNTIME_SHELL_TRANSACTION_START_TIMEOUT_MS: u64 = 30_000;
+/// Runs the runtime running shell transaction kind name operation for this subsystem.
+///
+/// The function keeps parsing, state changes, and error propagation in
+/// the owning module so callers receive typed results instead of relying
+/// on duplicated control-flow logic.
+pub(super) fn runtime_running_shell_transaction_kind_name(
+    kind: &RunningShellTransactionKind,
+) -> &'static str {
+    match kind {
+        RunningShellTransactionKind::AgentAction { .. } => "agent_action",
+        RunningShellTransactionKind::ReadinessProbe => "readiness_probe",
+        RunningShellTransactionKind::Bootstrap => "bootstrap",
+    }
+}
+
+/// Returns the next runtime timeout deadline for one shell transaction.
+///
+/// Transactions with deferred payloads have an additional short start deadline:
+/// the shell must reach the receiver loop and emit its start marker before the
+/// command body is sent. Once that happens the pending payload is cleared and
+/// the ordinary command timeout applies.
+fn runtime_shell_transaction_effective_timeout_ms(
+    transaction: &RunningShellTransactionRef,
+) -> Option<u64> {
+    let timeout_ms = transaction.timeout_ms?;
+    if transaction.pending_input_payload.is_some() {
+        Some(timeout_ms.min(RUNTIME_SHELL_TRANSACTION_START_TIMEOUT_MS))
+    } else {
+        Some(timeout_ms)
+    }
+}
+
+/// Builds structured terminal observation data for a shell protocol violation.
+fn shell_transaction_protocol_violation_observation(
+    marker: &str,
+    transaction: &RunningShellTransactionRef,
+    boundary_state: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "source": "pty",
+        "stream": "pty_combined",
+        "marker": marker,
+        "exit_code": null,
+        "signal": null,
+        "timed_out": false,
+        "combined_output_bytes": transaction.observed_output_bytes,
+        "combined_output_preview": transaction.observed_output_preview,
+        "boundary_state": boundary_state,
+        "output_truncated": transaction.observed_output_truncated,
+        "protocol_violation": true,
+        "protocol_violation_message": message
+    })
+}
+
+/// Builds model-facing terminal evidence for a pane input write failure.
+fn pane_write_failure_terminal_observation(
+    marker: &str,
+    transaction: &RunningShellTransactionRef,
+    boundary_state: &str,
+    error: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "source": "pty",
+        "stream": "pty_input",
+        "marker": marker,
+        "exit_code": null,
+        "signal": null,
+        "timed_out": false,
+        "error": error,
+        "combined_output_bytes": transaction.observed_output_bytes,
+        "combined_output_preview": transaction.observed_output_preview,
+        "boundary_state": boundary_state,
+        "output_truncated": transaction.observed_output_truncated
+    })
+}
 /// Returns the retained output bound for one running transaction.
 ///
 /// # Parameters
