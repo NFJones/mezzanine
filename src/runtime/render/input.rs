@@ -4,6 +4,8 @@
 //! selectors. It intentionally has no render-state dependencies, keeping
 //! navigation semantics reusable across overlay surfaces.
 
+use super::*;
+
 /// Display-overlay navigation action decoded from terminal input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuntimeDisplayOverlayInputAction {
@@ -107,5 +109,618 @@ pub(super) fn runtime_selector_step_index(active: usize, len: usize, delta: isiz
         active
             .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX))
             .min(len.saturating_sub(1))
+    }
+}
+
+impl RuntimeSessionService {
+    /// Runs the apply primary prompt terminal action operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn apply_primary_prompt_terminal_action(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        action: &TerminalClientLoopAction,
+    ) -> Result<bool> {
+        match action {
+            TerminalClientLoopAction::ForwardToPane(input) => {
+                self.apply_primary_prompt_input(primary_client_id, input)
+            }
+            TerminalClientLoopAction::ForwardMouseToPane { .. }
+            | TerminalClientLoopAction::ExecuteMux(_)
+            | TerminalClientLoopAction::ExecuteCommand(_)
+            | TerminalClientLoopAction::HandleMouse(_)
+            | TerminalClientLoopAction::HandleCopyMode(_)
+            | TerminalClientLoopAction::EnterPrefixKeyMode
+            | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok(false),
+        }
+    }
+
+    /// Runs the apply primary prompt input operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn apply_primary_prompt_input(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        input: &[u8],
+    ) -> Result<bool> {
+        if input == b"\x1b" {
+            if self
+                .primary_prompt_input
+                .as_ref()
+                .is_some_and(|prompt_input| prompt_input.prompt.reverse_search_active())
+            {
+                // Let the prompt consume Escape to cancel incremental search.
+            } else {
+                if self.primary_prompt_input.take().is_some() {
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+        }
+        if input == b"\x0c" {
+            if self.primary_prompt_input.is_some() {
+                let pane_id = self.active_pane_id()?;
+                self.clear_agent_shell_terminal_view(&pane_id)?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        let selector_extra_candidates = self.runtime_command_selector_extra_candidates();
+        let selector_working_directory = self
+            .active_pane_id()
+            .ok()
+            .and_then(|pane_id| self.pane_current_working_directory(&pane_id));
+        let Some(prompt_input) = self.primary_prompt_input.as_mut() else {
+            return Ok(false);
+        };
+        if prompt_input.prompt.kind == ReadlinePromptKind::Command {
+            prompt_input
+                .prompt
+                .set_selector_extra_candidates(selector_extra_candidates);
+            prompt_input
+                .prompt
+                .set_selector_working_directory(selector_working_directory);
+        }
+        let outcomes = if input == b"\x1b" && prompt_input.prompt.reverse_search_active() {
+            vec![prompt_input.prompt.apply_terminal_input(input)?]
+        } else {
+            prompt_input
+                .decoder
+                .apply_to_prompt(&mut prompt_input.prompt, input)?
+        };
+        let mut changed = false;
+        for outcome in outcomes {
+            match outcome {
+                ReadlineOutcome::Submitted(command)
+                | ReadlineOutcome::SubmittedWithDisplay { text: command, .. } => {
+                    let prompt_kind = prompt_input.prompt.kind;
+                    self.primary_prompt_input = None;
+                    changed = true;
+                    if !command.trim().is_empty() {
+                        if prompt_kind == ReadlinePromptKind::Command {
+                            self.remember_primary_command_prompt_submission(&command)?;
+                        }
+                        match self
+                            .execute_terminal_command(primary_client_id, &command)
+                            .and_then(|body| {
+                                runtime_command_display_overlay_content(&body, &self.ui_theme)
+                            }) {
+                            Ok(content) => {
+                                self.present_runtime_command_display_content(content)?;
+                            }
+                            Err(error) => {
+                                self.show_primary_display_overlay(vec![format!(
+                                    "error: {error} - press Esc to return"
+                                )])?;
+                            }
+                        }
+                    }
+                    return Ok(changed);
+                }
+                ReadlineOutcome::Cancelled | ReadlineOutcome::Eof => {
+                    self.primary_prompt_input = None;
+                    return Ok(true);
+                }
+                ReadlineOutcome::Edited => changed = true,
+                ReadlineOutcome::Noop => {}
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Retains one submitted `Ctrl+A :` command for future readline history
+    /// navigation and reverse search.
+    fn remember_primary_command_prompt_submission(&mut self, command: &str) -> Result<()> {
+        if command.trim().is_empty() {
+            return Ok(());
+        }
+        self.primary_command_prompt_history
+            .push(command.to_string());
+        while self.primary_command_prompt_history.len() > DEFAULT_READLINE_HISTORY_LIMIT {
+            self.primary_command_prompt_history.remove(0);
+        }
+        let Some(store) = self.agent_transcript_store.clone() else {
+            return Ok(());
+        };
+        if self.defer_agent_transcript_writes {
+            self.deferred_command_prompt_history_writes
+                .push(DeferredCommandPromptHistoryWrite {
+                    path: store.command_prompt_history_file(),
+                    store,
+                    command: command.to_string(),
+                });
+            return Ok(());
+        }
+        let _ = store.append_command_prompt_history(command)?;
+        Ok(())
+    }
+
+    /// Reloads persisted primary command prompt history into the live prompt
+    /// cache.
+    pub(super) fn reload_primary_command_prompt_history(&mut self) -> Result<()> {
+        let Some(store) = self.agent_transcript_store.as_ref() else {
+            return Ok(());
+        };
+        self.primary_command_prompt_history = store.command_prompt_history()?;
+        Ok(())
+    }
+
+    /// Runs the apply attached agent prompt input operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn apply_attached_agent_prompt_input(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        input: &[u8],
+    ) -> Result<bool> {
+        if input.is_empty() {
+            return Ok(false);
+        }
+        let pane_id = self.active_pane_id()?;
+        self.apply_attached_agent_prompt_input_for_pane(primary_client_id, &pane_id, input)
+    }
+
+    /// Applies attached agent prompt input to an explicit pane.
+    ///
+    /// This is used by the ordinary focused-pane input path and by mouse
+    /// paste routing, where the click can intentionally target a different
+    /// pane-local prompt before bytes are decoded by readline.
+    pub(in crate::runtime) fn apply_attached_agent_prompt_input_for_pane(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        pane_id: &str,
+        input: &[u8],
+    ) -> Result<bool> {
+        if input.is_empty() {
+            return Ok(false);
+        }
+        if input == b"\x1b" {
+            self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
+        }
+        if input == b"\x0c" {
+            self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
+            self.clear_agent_shell_terminal_view(pane_id)?;
+            return Ok(true);
+        }
+        if input != b"\x03" {
+            self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
+        }
+        let selector_extra_candidates = self.runtime_agent_selector_extra_candidates();
+        let selector_working_directory = self.pane_current_working_directory(pane_id);
+        let prompt_body_columns = self
+            .agent_prompt_editable_body_width(pane_id)
+            .unwrap_or(1)
+            .max(1);
+
+        let outcomes = {
+            let state = self
+                .agent_prompt_inputs
+                .entry(pane_id.to_string())
+                .or_insert_with(default_runtime_agent_prompt_input);
+            state.prompt.set_prompt_body_columns(prompt_body_columns);
+            state
+                .prompt
+                .set_selector_extra_candidates(selector_extra_candidates);
+            state
+                .prompt
+                .set_selector_working_directory(selector_working_directory);
+            if input == b"\x1b" {
+                vec![state.prompt.apply_terminal_input(input)?]
+            } else {
+                state.decoder.apply_to_prompt(&mut state.prompt, input)?
+            }
+        };
+
+        let mut changed = false;
+        for outcome in outcomes {
+            match outcome {
+                ReadlineOutcome::Submitted(command) => {
+                    changed = true;
+                    if command.trim().is_empty() {
+                        continue;
+                    }
+                    let body = match self.execute_agent_shell_command(primary_client_id, &command) {
+                        Ok(body) => body,
+                        Err(error) => {
+                            self.set_agent_prompt_display_lines(
+                                pane_id,
+                                agent_prompt_error_display_lines(&error),
+                            )?;
+                            continue;
+                        }
+                    };
+                    match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+                        Ok(display_output) => {
+                            self.set_agent_prompt_display_output(pane_id, display_output)?;
+                        }
+                        Err(error) => {
+                            self.set_agent_prompt_display_lines(
+                                pane_id,
+                                agent_prompt_error_display_lines(&error),
+                            )?;
+                        }
+                    }
+                    if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
+                        self.agent_prompt_inputs.remove(pane_id);
+                    }
+                }
+                ReadlineOutcome::SubmittedWithDisplay { text, display } => {
+                    changed = true;
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let body = match self.execute_agent_shell_command_with_display(
+                        primary_client_id,
+                        &text,
+                        &display,
+                    ) {
+                        Ok(body) => body,
+                        Err(error) => {
+                            self.set_agent_prompt_display_lines(
+                                pane_id,
+                                agent_prompt_error_display_lines(&error),
+                            )?;
+                            continue;
+                        }
+                    };
+                    match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+                        Ok(display_output) => {
+                            self.set_agent_prompt_display_output(pane_id, display_output)?;
+                        }
+                        Err(error) => {
+                            self.set_agent_prompt_display_lines(
+                                pane_id,
+                                agent_prompt_error_display_lines(&error),
+                            )?;
+                        }
+                    }
+                    if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
+                        self.agent_prompt_inputs.remove(pane_id);
+                    }
+                }
+                ReadlineOutcome::Cancelled => {
+                    changed = self.apply_agent_prompt_ctrl_c_interrupt_or_confirm_exit(
+                        primary_client_id,
+                        pane_id,
+                    )?;
+                }
+                ReadlineOutcome::Eof => {
+                    changed = true;
+                    let _ = self.execute_agent_shell_command(primary_client_id, "/exit")?;
+                    self.agent_prompt_inputs.remove(pane_id);
+                }
+                ReadlineOutcome::Edited => changed = true,
+                ReadlineOutcome::Noop => {}
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Clears any pending idle Ctrl+C exit confirmation for one agent prompt.
+    fn clear_agent_prompt_pending_ctrl_c_exit(&mut self, pane_id: &str) {
+        if let Some(state) = self.agent_prompt_inputs.get_mut(pane_id) {
+            state.pending_ctrl_c_exit_at_unix_ms = None;
+        }
+    }
+
+    /// Applies the interrupt/exit contract for pane-local agent prompts.
+    ///
+    /// Ctrl+C confirmation and EOF exits share this helper so active work is
+    /// stopped consistently before the pane-local prompt is hidden.
+    fn apply_agent_prompt_interrupt_or_exit(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        pane_id: &str,
+    ) -> Result<bool> {
+        let command = if self.agent_shell_pane_has_active_turn(pane_id) {
+            "/stop"
+        } else {
+            "/exit"
+        };
+        let body = self.execute_agent_shell_command(primary_client_id, command)?;
+        match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+            Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
+            Err(error) => self.set_agent_prompt_display_lines(
+                pane_id,
+                agent_prompt_error_display_lines(&error),
+            )?,
+        }
+        if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
+            self.agent_prompt_inputs.remove(pane_id);
+        }
+        Ok(true)
+    }
+
+    /// Applies the Ctrl+C interrupt or double-confirm idle exit contract.
+    fn apply_agent_prompt_ctrl_c_interrupt_or_confirm_exit(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        pane_id: &str,
+    ) -> Result<bool> {
+        const CTRL_C_EXIT_CONFIRM_WINDOW_MS: u64 = 3_000;
+        if self.agent_shell_pane_has_active_turn(pane_id) {
+            self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
+            return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
+        }
+
+        if let Some(state) = self.agent_prompt_inputs.get_mut(pane_id)
+            && !state.prompt.buffer.line().is_empty()
+        {
+            state.prompt.buffer.set_line("");
+            state.pending_ctrl_c_exit_at_unix_ms = None;
+            state.display_lines.clear();
+            return Ok(true);
+        }
+
+        let now = current_unix_millis();
+        let confirmed = {
+            let state = self
+                .agent_prompt_inputs
+                .entry(pane_id.to_string())
+                .or_insert_with(default_runtime_agent_prompt_input);
+            state
+                .pending_ctrl_c_exit_at_unix_ms
+                .is_some_and(|started| now.saturating_sub(started) <= CTRL_C_EXIT_CONFIRM_WINDOW_MS)
+        };
+        if confirmed {
+            self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
+            return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
+        }
+
+        if let Some(state) = self.agent_prompt_inputs.get_mut(pane_id) {
+            state.pending_ctrl_c_exit_at_unix_ms = Some(now);
+        }
+        self.set_agent_prompt_display_lines(
+            pane_id,
+            vec!["press ctrl-c again within 3s to exit agent mode".to_string()],
+        )?;
+        Ok(true)
+    }
+
+    /// Reports whether a pane-local agent shell currently owns interruptible work.
+    fn agent_shell_pane_has_active_turn(&self, pane_id: &str) -> bool {
+        self.agent_shell_store
+            .get(pane_id)
+            .and_then(|session| session.running_turn_id.as_deref())
+            .is_some()
+            || self.agent_turn_ledger.turns().iter().any(|turn| {
+                turn.pane_id == pane_id
+                    && matches!(
+                        turn.state,
+                        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                    )
+            })
+    }
+
+    /// Builds dynamic primary command prompt selector candidates.
+    pub(super) fn runtime_command_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
+        self.mcp_registry
+            .list_servers()
+            .into_iter()
+            .flat_map(|server| {
+                let candidate = SelectorCandidate::new(
+                    server.configured.id.clone(),
+                    SelectorCandidateKind::Value,
+                    true,
+                )
+                .with_detail(agent_shell_mcp_display_state_name(
+                    server.configured.enabled,
+                    server.status,
+                ));
+                [SelectorExtraCandidate::new(
+                    SelectorSurface::MezzanineCommand,
+                    "mcp-status",
+                    candidate,
+                )]
+            })
+            .collect()
+    }
+
+    /// Builds dynamic agent prompt selector candidates from saved transcripts.
+    fn runtime_agent_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
+        let mut candidates = self
+            .agent_personality_profiles
+            .iter()
+            .map(|(profile_id, profile)| {
+                SelectorExtraCandidate::new(
+                    SelectorSurface::AgentCommand,
+                    "personality",
+                    SelectorCandidate::new(profile_id.clone(), SelectorCandidateKind::Value, true)
+                        .with_detail(
+                            profile
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| "personality profile".to_string()),
+                        ),
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.extend(self.mcp_registry.list_servers().into_iter().map(|server| {
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "list-mcp",
+                SelectorCandidate::new(
+                    server.configured.id.clone(),
+                    SelectorCandidateKind::Value,
+                    true,
+                )
+                .with_detail(agent_shell_mcp_display_state_name(
+                    server.configured.enabled,
+                    server.status,
+                )),
+            )
+        }));
+        if let Ok(pane_id) = self.active_pane_id() {
+            let catalog = self.effective_skill_catalog_for_pane(&pane_id);
+            candidates.extend(catalog.skills.into_iter().map(|skill| {
+                SelectorExtraCandidate::new(
+                    SelectorSurface::AgentCommand,
+                    "$",
+                    SelectorCandidate::new(
+                        format!("${}", skill.name),
+                        SelectorCandidateKind::Value,
+                        true,
+                    )
+                    .with_detail(format!(
+                        "{} ({})",
+                        skill.description,
+                        skill.source.as_str()
+                    )),
+                )
+            }));
+        }
+        let Some(store) = self.agent_transcript_store.as_ref() else {
+            return candidates;
+        };
+        candidates.extend(store.list().unwrap_or_default().into_iter().map(|summary| {
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "resume",
+                SelectorCandidate::new(
+                    summary.conversation_id.clone(),
+                    SelectorCandidateKind::Value,
+                    true,
+                )
+                .with_detail(format!(
+                    "{} entries, pane {}, agent {}",
+                    summary.entries, summary.pane_id, summary.agent_id
+                )),
+            )
+        }));
+        candidates
+    }
+
+    /// Runs the reload agent prompt history for pane operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn reload_agent_prompt_history_for_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<()> {
+        let Some(session_id) = self
+            .agent_shell_store
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+        else {
+            return Ok(());
+        };
+        let history = match self.agent_transcript_store.as_ref() {
+            Some(store) => match store.prompt_history(&session_id) {
+                Ok(history) => history,
+                Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error),
+            },
+            None => Vec::new(),
+        };
+        self.agent_prompt_inputs
+            .entry(pane_id.to_string())
+            .or_insert_with(default_runtime_agent_prompt_input)
+            .prompt
+            .buffer
+            .set_history(history);
+        Ok(())
+    }
+
+    /// Runs the set agent prompt display lines operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(in crate::runtime) fn set_agent_prompt_display_lines(
+        &mut self,
+        pane_id: &str,
+        display_lines: Vec<String>,
+    ) -> Result<()> {
+        let style = if agent_display_lines_are_error(&display_lines) {
+            AgentTerminalPresentationStyle::Error
+        } else {
+            AgentTerminalPresentationStyle::Assistant
+        };
+        if style == AgentTerminalPresentationStyle::Error
+            || self.agent_verbose_enabled(pane_id)
+            || !agent_display_lines_are_low_level_status(&display_lines)
+        {
+            self.append_agent_terminal_lines_to_buffer(pane_id, &display_lines, style)?;
+        }
+        let state = self
+            .agent_prompt_inputs
+            .entry(pane_id.to_string())
+            .or_insert_with(default_runtime_agent_prompt_input);
+        state.display_lines.clear();
+        Ok(())
+    }
+
+    /// Appends agent shell display output using the declared content renderer.
+    pub(super) fn set_agent_prompt_display_output(
+        &mut self,
+        pane_id: &str,
+        display_output: RuntimeAgentShellDisplayOutput,
+    ) -> Result<()> {
+        match display_output {
+            RuntimeAgentShellDisplayOutput::Suppressed => {
+                let state = self
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
+            }
+            RuntimeAgentShellDisplayOutput::TransientStatus(display_lines) => {
+                self.show_primary_notice_overlay(display_lines)?;
+                let state = self
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
+            }
+            RuntimeAgentShellDisplayOutput::Lines(display_lines) => {
+                self.set_agent_prompt_display_lines(pane_id, display_lines)?;
+            }
+            RuntimeAgentShellDisplayOutput::Overlay(content) => {
+                if runtime_command_display_should_open_overlay(&content) {
+                    self.show_primary_display_overlay_inner(
+                        content.lines,
+                        content.line_style_spans,
+                        content.selections,
+                        false,
+                    )?;
+                } else {
+                    self.set_agent_prompt_display_lines(pane_id, content.lines)?;
+                }
+                let state = self
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
+            }
+        }
+        Ok(())
     }
 }
