@@ -5,6 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 mod configuration;
 mod context;
+mod protocol;
 mod snapshot;
 mod subagents;
 use super::{
@@ -62,13 +63,20 @@ use super::{
     runtime_trust_decision_name, runtime_trust_decision_param, session_state_name,
     set_project_guidance_context, snapshot_id_for_idempotency_key,
     source_pane_target_checked_resolved, state_request_pane_list_window_ids,
-    state_request_session_target_matches, unix_seconds_to_rfc3339, validate_config_text,
-    window_target_checked_resolved,
+    state_request_session_target_matches, validate_config_text, window_target_checked_resolved,
 };
 use context::{
     AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
     runtime_transcript_context_entry_limit,
+};
+use protocol::{
+    pane_id_from_runtime_agent_id, paths_equivalent, runtime_client_requested_role_name,
+    runtime_client_role_name, runtime_client_state_name, runtime_client_terminal_descriptor_json,
+    runtime_mmp_message_type, runtime_mmp_response_succeeded, runtime_optional_string,
+    runtime_optional_timestamp_json, runtime_project_trust_read_method, runtime_size_object_json,
+    runtime_snapshot_id_from_request, runtime_snapshot_resume_plan_json, runtime_timestamp_json,
+    runtime_validate_state_request_params,
 };
 use snapshot::{
     runtime_snapshot_agent_visibility_name, runtime_snapshot_approval_grant,
@@ -96,222 +104,6 @@ use crate::skills::{
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER: &str = "runtime-control-live-override";
-/// Runs the runtime project trust read method operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_project_trust_read_method(method: &str) -> bool {
-    matches!(method, "project/trust/list" | "project/trust/inspect")
-}
-
-/// Runs the runtime validate state request params operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_validate_state_request_params(
-    params: Option<&str>,
-    method: &str,
-    allowed: &[&str],
-) -> Result<()> {
-    let Some(params) = params else {
-        return Ok(());
-    };
-    let value = serde_json::from_str::<serde_json::Value>(params)
-        .map_err(|_| MezError::invalid_args(format!("{method} params must be a JSON object")))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| MezError::invalid_args(format!("{method} params must be a JSON object")))?;
-    if let Some(key) = object
-        .keys()
-        .find(|key| !allowed.iter().any(|allowed| allowed == &key.as_str()))
-    {
-        return Err(MezError::invalid_args(format!(
-            "{method} params contains unknown field `{key}`"
-        )));
-    }
-    Ok(())
-}
-
-/// Runs the runtime optional string operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_optional_string(value: Option<&str>) -> String {
-    value
-        .map(|value| format!(r#""{}""#, json_escape(value)))
-        .unwrap_or_else(|| "null".to_string())
-}
-
-/// Runs the runtime mmp message type operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mmp_message_type(body: &str) -> Option<String> {
-    runtime_json_string_field(body, "type")
-        .or_else(|| runtime_json_string_field(body, "message_type"))
-}
-
-/// Runs the runtime mmp response succeeded operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_mmp_response_succeeded(output: &[u8], max_content_length: usize) -> bool {
-    decode_mmp_frame(output, max_content_length)
-        .map(|(body, _)| !body.contains(r#""type":"error""#))
-        .unwrap_or(false)
-}
-
-/// Runs the paths equivalent operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn paths_equivalent(left: &Path, right: &Path) -> bool {
-    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
-    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
-    left == right
-}
-
-/// Derives the pane identity encoded by runtime-created agent ids.
-///
-/// Runtime subagents use `agent-%pane` identifiers so MMP discovery can connect
-/// an agent identity back to its terminal pane without adding another mapping
-/// store. Agent ids outside that convention remain valid opaque identities.
-fn pane_id_from_runtime_agent_id(agent_id: &str) -> Option<PaneId> {
-    agent_id
-        .strip_prefix("agent-")
-        .and_then(|pane_id| PaneId::parse('%', pane_id.to_string()))
-}
-
-/// Runs the runtime snapshot resume plan json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_resume_plan_json(plan: &crate::snapshot::LayoutLoadPlan) -> String {
-    format!(
-        r#"{{"session_id":"{}","window_count":{},"pane_count":{},"restart_required_panes":{},"limitations":{}}}"#,
-        json_escape(&plan.session_id),
-        plan.window_count,
-        plan.pane_count,
-        runtime_string_array_json(&plan.restart_required_panes),
-        runtime_string_array_json(&plan.limitations)
-    )
-}
-
-/// Runs the runtime snapshot id from request operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_id_from_request(request: &crate::control::JsonRpcRequest) -> String {
-    request
-        .params
-        .as_deref()
-        .and_then(|params| runtime_json_string_field(params, "snapshot_id"))
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Runs the runtime timestamp json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_timestamp_json(value: u64) -> String {
-    format!(r#""{}""#, unix_seconds_to_rfc3339(value))
-}
-
-/// Runs the runtime optional timestamp json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_optional_timestamp_json(value: Option<u64>) -> String {
-    value
-        .map(runtime_timestamp_json)
-        .unwrap_or_else(|| "null".to_string())
-}
-
-/// Runs the runtime client role name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_client_role_name(role: ClientRole) -> &'static str {
-    match role {
-        ClientRole::Primary => "primary",
-        ClientRole::PendingObserver => "pending_observer",
-        ClientRole::Observer => "observer",
-        ClientRole::Agent => "agent",
-        ClientRole::Automation => "automation",
-    }
-}
-
-/// Runs the runtime client requested role name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_client_requested_role_name(role: ClientRole) -> &'static str {
-    match role {
-        ClientRole::PendingObserver => "observer",
-        ClientRole::Primary => "primary",
-        ClientRole::Observer => "observer",
-        ClientRole::Agent => "agent",
-        ClientRole::Automation => "automation",
-    }
-}
-
-/// Runs the runtime client state name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_client_state_name(state: ClientState) -> &'static str {
-    match state {
-        ClientState::Attached => "attached",
-        ClientState::Pending => "pending",
-        ClientState::Detached => "detached",
-        ClientState::Revoked => "revoked",
-        ClientState::Failed => "failed",
-    }
-}
-
-/// Runs the runtime size object json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_size_object_json(size: Option<crate::layout::Size>) -> String {
-    size.map(|size| format!(r#"{{"columns":{},"rows":{}}}"#, size.columns, size.rows))
-        .unwrap_or_else(|| "null".to_string())
-}
-
-/// Runs the runtime client terminal descriptor json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_client_terminal_descriptor_json(
-    size: Option<crate::layout::Size>,
-    term: &str,
-) -> String {
-    size.map(|size| {
-        format!(
-            r#"{{"columns":{},"rows":{},"term":"{}"}}"#,
-            size.columns,
-            size.rows,
-            json_escape(term)
-        )
-    })
-    .unwrap_or_else(|| "null".to_string())
-}
-
 impl RuntimeSessionService {
     /// Runs the handle control input operation for this subsystem.
     ///
