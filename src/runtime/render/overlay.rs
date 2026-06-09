@@ -1654,6 +1654,176 @@ pub(super) fn runtime_selector_line(marker: &str, value: &str, width: usize) -> 
     line
 }
 
+/// Copies the currently selected primary display-overlay text.
+pub(super) fn primary_display_overlay_copy_selection(
+    overlay: &RuntimeDisplayOverlay,
+) -> Option<String> {
+    let (start, end) = overlay.mouse_selection?;
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    if start.line == end.line {
+        return overlay
+            .lines
+            .get(start.line)
+            .map(|line| primary_display_overlay_line_slice(line, start.column, end.column));
+    }
+    let mut copied = Vec::new();
+    let first = overlay.lines.get(start.line)?;
+    copied.push(primary_display_overlay_line_slice(
+        first,
+        start.column,
+        terminal_text_width(first),
+    ));
+    for line_index in start.line.saturating_add(1)..end.line {
+        copied.push(overlay.lines.get(line_index)?.clone());
+    }
+    let last = overlay.lines.get(end.line)?;
+    copied.push(primary_display_overlay_line_slice(last, 0, end.column));
+    Some(copied.join("\n"))
+}
+
+/// Applies a signed scroll delta to a display overlay and clamps the viewport.
+pub(super) fn apply_display_overlay_scroll_delta(
+    overlay: &mut RuntimeDisplayOverlay,
+    delta: isize,
+    size: Size,
+) -> bool {
+    let previous = overlay.scroll_offset;
+    if delta.is_negative() {
+        overlay.scroll_offset = overlay.scroll_offset.saturating_sub(delta.unsigned_abs());
+    } else {
+        overlay.scroll_offset = overlay
+            .scroll_offset
+            .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
+    }
+    runtime_clamp_display_overlay_scroll(overlay, size);
+    runtime_display_overlay_update_active_selection_for_viewport(overlay, size);
+    previous != overlay.scroll_offset
+}
+
+/// Returns whether one overlay selection is currently visible in the viewport.
+pub(super) fn runtime_display_overlay_selection_index_is_visible(
+    overlay: &RuntimeDisplayOverlay,
+    selection_index: usize,
+    size: Size,
+) -> bool {
+    let Some(selection) = overlay.selections.get(selection_index) else {
+        return false;
+    };
+    let page_rows = modal_display_overlay_page_rows(size).max(1);
+    let visible_start = overlay.scroll_offset;
+    let visible_end = visible_start.saturating_add(page_rows);
+    selection.line_index >= visible_start && selection.line_index < visible_end
+}
+
+/// Keeps the active overlay selection executable only when it is visible.
+pub(super) fn runtime_display_overlay_update_active_selection_for_viewport(
+    overlay: &mut RuntimeDisplayOverlay,
+    size: Size,
+) {
+    if overlay.selections.is_empty() {
+        overlay.active_selection_index = None;
+        return;
+    }
+    if overlay
+        .active_selection_index
+        .is_some_and(|selection_index| {
+            runtime_display_overlay_selection_index_is_visible(overlay, selection_index, size)
+        })
+    {
+        return;
+    }
+    let page_rows = modal_display_overlay_page_rows(size).max(1);
+    let visible_start = overlay.scroll_offset;
+    let visible_end = visible_start.saturating_add(page_rows);
+    overlay.active_selection_index = overlay.selections.iter().position(|selection| {
+        selection.line_index >= visible_start && selection.line_index < visible_end
+    });
+}
+
+/// Returns one display-column slice from a primary display-overlay line.
+pub(super) fn primary_display_overlay_line_slice(line: &str, start: usize, end: usize) -> String {
+    let mut output = String::new();
+    let mut column = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let width = terminal_grapheme_width(grapheme);
+        let next = column.saturating_add(width);
+        if next <= start {
+            column = next;
+            continue;
+        }
+        if column >= end || next > end {
+            break;
+        }
+        output.push_str(grapheme);
+        column = next;
+    }
+    output
+}
+
+/// Returns the overlay selection index under a mouse position.
+pub(super) fn runtime_display_overlay_selection_index_at_position(
+    overlay: &RuntimeDisplayOverlay,
+    line_index: usize,
+    column: usize,
+) -> Option<usize> {
+    overlay
+        .selections
+        .iter()
+        .enumerate()
+        .filter(|(_, selection)| selection.line_index == line_index)
+        .find(|(_, selection)| {
+            let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
+            let end = start.saturating_add(selection.width);
+            column >= start && column < end
+        })
+        .map(|(index, _)| index)
+}
+
+/// Returns the next forward pager-search match, wrapping once to the start.
+pub(super) fn runtime_display_overlay_next_search_match(
+    overlay: &RuntimeDisplayOverlay,
+    query: &str,
+    current_line: usize,
+) -> Option<RuntimeDisplayOverlaySearchMatch> {
+    if query.is_empty() || overlay.lines.is_empty() {
+        return None;
+    }
+    let start = current_line.saturating_add(1).min(overlay.lines.len());
+    overlay.lines[start..]
+        .iter()
+        .enumerate()
+        .find_map(|(index, line)| {
+            runtime_display_overlay_search_match_on_line(line, query, start.saturating_add(index))
+        })
+        .or_else(|| {
+            overlay.lines[..start]
+                .iter()
+                .enumerate()
+                .find_map(|(index, line)| {
+                    runtime_display_overlay_search_match_on_line(line, query, index)
+                })
+        })
+}
+
+/// Returns the render-cell range for a query match on one pager line.
+pub(super) fn runtime_display_overlay_search_match_on_line(
+    line: &str,
+    query: &str,
+    line_index: usize,
+) -> Option<RuntimeDisplayOverlaySearchMatch> {
+    let byte_start = line.find(query)?;
+    let byte_end = byte_start.saturating_add(query.len());
+    Some(RuntimeDisplayOverlaySearchMatch {
+        line_index,
+        start_column: UnicodeWidthStr::width(&line[..byte_start]),
+        width: UnicodeWidthStr::width(&line[byte_start..byte_end]),
+    })
+}
+
 /// Replaces a fixed-width region of a rendered line with overlay text.
 pub(super) fn runtime_overlay_text_at(line: &mut String, column: usize, width: usize, text: &str) {
     let mut cells = line.chars().collect::<Vec<_>>();
