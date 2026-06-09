@@ -8,24 +8,26 @@ use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentId, AgentScheduler,
     AgentShellStore, AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution,
     AgentTurnLedger, AgentTurnRecord, AgentTurnState, AuditDeferredWrite, AuditLog, AuthStore,
-    BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer, ConfigScope, ControlIdempotencyCache,
-    CopyMode, DeepSeekChatCompletionsProvider, DiscoveredInstructionFile, Duration,
-    EnvironmentSignature, EventAudience, EventLog, File, FocusedShellHookDispatch,
+    BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer, ControlIdempotencyCache, CopyMode,
+    DeepSeekChatCompletionsProvider, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
+    DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
+    DeferredProjectConfigWrite, DeferredProjectInstructionWrite, DiscoveredInstructionFile,
+    Duration, EnvironmentSignature, EventAudience, EventLog, File, FocusedShellHookDispatch,
     FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
     HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
     McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MemoryScope,
     MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
     ModelTokenUsageKey, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
-    OpenOptions, OsString, PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager,
+    OpenOptions, PaneExitStatus, PaneGeometry, PaneId, PaneProcessManager,
     PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, Path, PathBuf, PathScopes,
     PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result,
     ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore, SessionRecord,
     SessionRegistry, Size, SnapshotRepository, SplitDirection, Stdio, SubagentProfile,
     SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
-    TerminalScreen, ToolDiscoveryCache, TranscriptEntry, UiTheme, VisibleEvent, WindowFrameAction,
-    WindowId, Write, delivery_batch_json, effective_uid, encode_control_body,
-    encode_event_notification, encode_mmp_body, execute_streamable_http_exchange,
-    mcp_tools_call_operation,
+    TerminalScreen, ToolDiscoveryCache, UiTheme, VisibleEvent, WindowFrameAction, WindowId, Write,
+    delivery_batch_json, encode_control_body, encode_event_notification, encode_mmp_body,
+    execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::mcp::McpPromptTool;
@@ -36,16 +38,6 @@ use tokio::io::AsyncWriteExt;
 
 // Runtime data types, connection tables, and provider/MCP registries.
 
-/// Defines the MEZ ENV FIELD SEPARATOR const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const MEZ_ENV_FIELD_SEPARATOR: char = '\x1f';
-/// Defines the DEFAULT SOCKET NAME const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const DEFAULT_SOCKET_NAME: &str = "default.sock";
 /// Defines the DEFAULT PTY READ LIMIT BYTES const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -438,136 +430,6 @@ pub(super) struct RuntimeAgentPatchRecord {
     pub error_message: Option<String>,
 }
 
-/// Carries Auxiliary Socket Kind state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuxiliarySocketKind {
-    /// Represents the Message case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Message,
-    /// Represents the Event case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Event,
-}
-
-/// Carries Socket Directory Source state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SocketDirectorySource {
-    /// Represents the Mez Tmpdir case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    MezTmpdir,
-    /// Represents the Xdg Runtime Dir case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    XdgRuntimeDir,
-    /// Represents the Tmp case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Tmp,
-}
-
-/// Carries Runtime Env state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RuntimeEnv {
-    /// Stores the mez tmpdir value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub mez_tmpdir: Option<OsString>,
-    /// Stores the xdg runtime dir value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub xdg_runtime_dir: Option<OsString>,
-    /// Stores the uid value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub uid: u32,
-}
-
-impl RuntimeEnv {
-    /// Runs the from process operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn from_process() -> Self {
-        Self {
-            mez_tmpdir: std::env::var_os("MEZ_TMPDIR"),
-            xdg_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
-            uid: effective_uid(),
-        }
-    }
-}
-
-/// Carries Socket Directory state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SocketDirectory {
-    /// Stores the path value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub path: PathBuf,
-    /// Stores the source value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub source: SocketDirectorySource,
-}
-
-/// Carries Pane Environment state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaneEnvironment {
-    /// Stores the mez value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub mez: String,
-    /// Stores the session value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub session: String,
-    /// Stores the window value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub window: String,
-    /// Stores the pane value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane: String,
-    /// Stores the term value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub term: String,
-}
-
 /// Carries Runtime Lifecycle State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -734,23 +596,6 @@ pub struct PaneInputDispatch {
     pub bytes_written: usize,
 }
 
-/// Carries Deferred Pane Input state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredPaneInput {
-    /// Pane whose PTY should receive the bytes.
-    pub pane_id: String,
-    /// Bytes to write to the pane PTY.
-    pub bytes: Vec<u8>,
-    /// Whether the input must overtake already queued pane input.
-    ///
-    /// Transaction payloads use this to stay directly behind the wrapper whose
-    /// receiver has just announced that it is ready to drain payload data.
-    pub priority: bool,
-}
-
 /// Owned snapshot creation context captured by the actor before repository I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeSnapshotOwnedCreationContext {
@@ -831,95 +676,6 @@ pub(crate) enum RuntimeSnapshotControlAsyncOutcome {
     ),
 }
 
-/// Pane resize operation deferred for an async pane process owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeferredPaneResize {
-    /// Latest pane PTY size requested by runtime layout state.
-    pub size: Size,
-}
-
-/// Pane termination operation deferred for an async pane process owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeferredPaneTermination {
-    /// Whether the pane termination was requested as a forceful kill.
-    pub force: bool,
-}
-
-/// File-backed pane pipe write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredPanePipeWrite {
-    /// Pane whose rendered output should be piped.
-    pub pane_id: String,
-    /// File target configured by `pipe-pane -o`.
-    pub path: PathBuf,
-    /// Output bytes to append.
-    pub bytes: Vec<u8>,
-}
-
-/// Agent transcript entries deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredAgentTranscriptWrite {
-    /// Filesystem-backed transcript store that owns encoding and permissions.
-    pub store: AgentTranscriptStore,
-    /// Transcript file path used for persistence diagnostics.
-    pub path: PathBuf,
-    /// Entries to append in sequence order.
-    pub entries: Vec<TranscriptEntry>,
-}
-
-/// Agent prompt-history append deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredAgentPromptHistoryWrite {
-    /// Filesystem-backed transcript store that owns the shared history file.
-    pub store: AgentTranscriptStore,
-    /// Destination prompt-history file used for persistence diagnostics.
-    pub path: PathBuf,
-    /// Conversation identity used for validation and future scoping.
-    pub conversation_id: String,
-    /// Prompt text to append to the bounded shared history.
-    pub prompt: String,
-}
-
-/// Primary command prompt history append deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredCommandPromptHistoryWrite {
-    /// Filesystem-backed transcript store that owns the command history file.
-    pub store: AgentTranscriptStore,
-    /// Destination command prompt history file used for persistence diagnostics.
-    pub path: PathBuf,
-    /// Command text to append to the bounded shared history.
-    pub command: String,
-}
-
-/// Project instruction scaffold write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredProjectInstructionWrite {
-    /// Destination instruction file path, normally `AGENTS.md` in the pane CWD.
-    pub path: PathBuf,
-    /// Complete scaffold bytes to create at the destination.
-    pub bytes: Vec<u8>,
-}
-
-/// Project configuration write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredProjectConfigWrite {
-    /// Destination project configuration file.
-    pub path: PathBuf,
-    /// Complete validated config text to replace at the destination.
-    pub text: String,
-}
-
-/// User or project configuration write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredConfigFileWrite {
-    /// Destination configuration file.
-    pub path: PathBuf,
-    /// Configuration scope that determines the persistence file policy.
-    pub scope: ConfigScope,
-    /// Complete validated config text to replace at the destination.
-    pub text: String,
-}
-
 /// Describes whether a parent turn waits for spawned subagents before it can
 /// continue provider execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -960,58 +716,6 @@ pub(super) struct RuntimeSubagentLineage {
     pub depth: usize,
     /// Human-readable display name assigned while the subagent is active.
     pub display_name: String,
-}
-
-/// Program hook execution deferred for an async hook worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredProgramHook {
-    /// Fully planned program hook invocation.
-    pub plan: HookExecutionPlan,
-    /// Whether this hook was triggered by a completed lifecycle event.
-    pub triggering_event_completed: bool,
-}
-
-/// Carries Attached Client Step Application state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachedClientStepApplication {
-    /// Stores the forwarded bytes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub forwarded_bytes: usize,
-    /// Stores the mux actions applied value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub mux_actions_applied: usize,
-    /// Stores the mouse actions reported value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub mouse_actions_reported: usize,
-    /// Stores the unsupported actions value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub unsupported_actions: Vec<String>,
-    /// Stores the agent prompt inputs applied value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_prompt_inputs_applied: usize,
-    /// Stores the view refresh required value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub view_refresh_required: bool,
-    /// Stores the full redraw required value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub full_redraw_required: bool,
 }
 
 /// Actor-owned full-window display overlay for command output, help text, and

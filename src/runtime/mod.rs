@@ -206,6 +206,16 @@ mod config;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
+/// Exposes deferred runtime side-effect value types.
+///
+/// The nested module keeps side-effect planning records out of the central
+/// runtime service state.
+mod deferred;
+/// Exposes runtime environment and pane environment value types.
+///
+/// The nested module keeps socket-directory and pane-environment contracts out
+/// of the central runtime service state.
+mod env;
 /// Exposes the hook pipeline module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -257,6 +267,16 @@ mod sockets;
 /// declaration makes the boundary available to the crate.
 mod types;
 
+pub use deferred::{
+    AttachedClientStepApplication, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
+    DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
+    DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
+};
+pub use env::{
+    AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,
+    SocketDirectory, SocketDirectorySource,
+};
 #[cfg(test)]
 pub use sockets::{
     accept_one_control_connection, accept_one_message_connection,
@@ -273,34 +293,27 @@ pub use sockets::{
     socket_path_for_name,
 };
 pub use types::{
-    AttachedClientStepApplication, AuxiliarySocketKind, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
-    DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
     DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
     DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
     DEFAULT_AUTO_SIZING_SMALL_PROFILE, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
-    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SOCKET_NAME, DEFAULT_SUBAGENT_WAIT_POLICY,
-    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    DeferredProjectConfigWrite, DeferredProjectInstructionWrite, MEZ_ENV_FIELD_SEPARATOR,
-    PaneEnvironment, PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart,
-    PaneResizeUpdate, RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
-    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
-    RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatch,
+    DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, PaneExitUpdate, PaneInputDispatch,
+    PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate, RuntimeAgentCompactionDispatch,
+    RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
+    RuntimeAgentLoopTurnKind, RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeAgentRememberTask, RuntimeAgentTurnStop, RuntimeAutoSizingConfig,
     RuntimeAutoSizingDecision, RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy,
-    RuntimeAutoSizingTargetProfile, RuntimeConfigApplyReport, RuntimeEnv, RuntimeEventConnection,
+    RuntimeAutoSizingTargetProfile, RuntimeConfigApplyReport, RuntimeEventConnection,
     RuntimeEventConnectionTable, RuntimeEventFanoutSink, RuntimeEventWakeup,
     RuntimeFocusedShellHookRun, RuntimeLifecycleState, RuntimeMessageConnection,
     RuntimeMessageConnectionTable, RuntimeMessageFanoutSink, RuntimeMessageWakeup,
     RuntimeModelPreset, RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SocketDirectory, SocketDirectorySource, SubagentWaitPolicy,
-    flush_runtime_event_wakeup, flush_runtime_event_wakeups, flush_runtime_message_wakeup,
-    flush_runtime_message_wakeups,
+    RuntimeShellTransactionTimerRef, SubagentWaitPolicy, flush_runtime_event_wakeup,
+    flush_runtime_event_wakeups, flush_runtime_message_wakeup, flush_runtime_message_wakeups,
 };
 use types::{
     JoinedSubagentDependency, RuntimeAgentCopyOutput, RuntimeAgentModifiedFileSummary,
@@ -398,9 +411,9 @@ use json::{
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_subagent_placement_mode,
     runtime_subagent_spawn_request, runtime_subagent_state_json, runtime_terminal_step_result_json,
 };
-use sockets::{
-    effective_uid, ensure_absolute, ensure_no_mez_separator, validate_pane_size_for_resize,
-};
+#[cfg(test)]
+use sockets::effective_uid;
+use sockets::{ensure_absolute, ensure_no_mez_separator, validate_pane_size_for_resize};
 use types::{
     ActivePanePipe, BlockedAgentApprovalRef, MouseResizeDragState, MouseSelectionDragState,
     PaneDescriptor, PaneExitRecord, PendingFocusedShellHookContinuation,
