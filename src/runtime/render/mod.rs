@@ -60,6 +60,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod client_view;
+mod copy_mode;
 mod geometry;
 mod input;
 mod mouse;
@@ -2524,138 +2525,6 @@ impl RuntimeSessionService {
         } else {
             None
         }
-    }
-
-    /// Runs the apply attached copy mode action operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn apply_attached_copy_mode_action(
-        &mut self,
-        action: CopyModeKeyAction,
-    ) -> Result<bool> {
-        let pane_id = self.active_pane_id()?;
-        if self.scrollback_copy_mode_panes.remove(pane_id.as_str()) {
-            self.active_copy_modes.remove(pane_id.as_str());
-            return Ok(true);
-        }
-        let mut should_exit = false;
-        let mut copied = None;
-        {
-            let copy_mode = self.ensure_active_copy_mode(pane_id.as_str())?;
-            match action {
-                CopyModeKeyAction::MoveUp => copy_mode.move_cursor_by(-1, 0),
-                CopyModeKeyAction::MoveUpFast => copy_mode.move_cursor_by(-5, 0),
-                CopyModeKeyAction::MoveDown => copy_mode.move_cursor_by(1, 0),
-                CopyModeKeyAction::MoveDownFast => copy_mode.move_cursor_by(5, 0),
-                CopyModeKeyAction::MoveLeft => copy_mode.move_cursor_by(0, -1),
-                CopyModeKeyAction::MoveWordLeft => copy_mode.move_cursor_word_left(),
-                CopyModeKeyAction::MoveRight => copy_mode.move_cursor_by(0, 1),
-                CopyModeKeyAction::MoveWordRight => copy_mode.move_cursor_word_right(),
-                CopyModeKeyAction::PageUp => copy_mode.page_up(),
-                CopyModeKeyAction::PageDown => copy_mode.page_down(),
-                CopyModeKeyAction::Top => copy_mode.scroll_to_top(),
-                CopyModeKeyAction::LineStart => copy_mode.move_cursor_to_line_start(),
-                CopyModeKeyAction::Bottom => copy_mode.scroll_to_bottom(),
-                CopyModeKeyAction::LineEnd => copy_mode.move_cursor_to_line_end(),
-                CopyModeKeyAction::BeginSelection => {
-                    if copy_mode.selection().is_some() {
-                        copied = Some(copy_mode.copy_selection()?);
-                        copy_mode.clear_selection();
-                    } else {
-                        copy_mode.begin_keyboard_selection();
-                    }
-                }
-                CopyModeKeyAction::Ignore => {}
-                CopyModeKeyAction::Cancel => should_exit = true,
-            }
-        }
-        if let Some(copied) = copied {
-            let buffer_name = self
-                .active_paste_buffer
-                .clone()
-                .unwrap_or_else(|| "clipboard".to_string());
-            self.copy_text_to_buffer_and_host_clipboard(
-                buffer_name.as_str(),
-                copied,
-                format!("pane:{pane_id}:copy-mode"),
-            )?;
-        }
-        if should_exit {
-            self.active_copy_modes.remove(pane_id.as_str());
-            self.scrollback_copy_mode_panes.remove(pane_id.as_str());
-        }
-        Ok(true)
-    }
-
-    /// Runs the copy text to buffer and host clipboard operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn copy_text_to_buffer_and_host_clipboard(
-        &mut self,
-        name: &str,
-        content: String,
-        origin: String,
-    ) -> Result<()> {
-        self.paste_buffers
-            .set_with_origin(name, content.as_str(), Some(origin))?;
-        let _ = self.host_clipboard.copy(content.as_str());
-        Ok(())
-    }
-
-    /// Runs the apply attached mouse action operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    /// Runs the copy mode viewport rows for pane operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn copy_mode_viewport_rows_for_pane(&self, pane_id: &str) -> usize {
-        self.session
-            .active_window()
-            .and_then(|window| {
-                window
-                    .panes()
-                    .iter()
-                    .find(|pane| pane.id.as_str() == pane_id)
-                    .and_then(|pane| self.copy_mode_overlay_region(window, pane.index))
-            })
-            .map(|(_, _, size)| usize::from(size.rows))
-            .or_else(|| {
-                self.find_pane_descriptor(pane_id)
-                    .map(|descriptor| usize::from(descriptor.size.rows))
-            })
-            .unwrap_or_else(|| usize::from(self.session.authoritative_size.rows))
-            .max(1)
-    }
-
-    /// Runs the ensure active copy mode operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn ensure_active_copy_mode(&mut self, pane_id: &str) -> Result<&mut CopyMode> {
-        if !self.active_copy_modes.contains_key(pane_id) {
-            let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
-            let screen = self.pane_screens.get(pane_id).ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "pane screen not found",
-                )
-            })?;
-            let copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
-            self.active_copy_modes
-                .insert(pane_id.to_string(), copy_mode);
-        }
-        self.active_copy_modes
-            .get_mut(pane_id)
-            .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))
     }
 
     /// Runs the apply attached mux action operation for this subsystem.
