@@ -511,4 +511,146 @@ impl RuntimeSessionService {
         preview.push('…');
         preview
     }
+
+    /// Runs the execute agent shell fork command operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn execute_agent_shell_fork_command(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("fork command must be a slash command"))?;
+        let source = self
+            .agent_shell_store
+            .get(pane_id)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "agent shell session not found for pane",
+                )
+            })?
+            .session_id
+            .clone();
+        let source_descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "source pane not found",
+            )
+        })?;
+        let source_start_directory = self.pane_current_working_directory(pane_id);
+        let Some(store) = self.agent_transcript_store.clone() else {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "fork".to_string(),
+                body: format!(
+                    "current_conversation={} forked=false reason=transcript-store-unavailable source=runtime-fork",
+                    json_escape(&source)
+                ),
+            });
+        };
+        let prompt_seed =
+            Self::runtime_agent_fork_prompt_seed(&store.prompt_history(&source)?, input);
+        let source_lineage = self
+            .agent_shell_store
+            .get(pane_id)
+            .map(|session| session.prompt_cache_lineage_id.clone());
+        let target = invocation
+            .args
+            .split_whitespace()
+            .next()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(Self::runtime_new_agent_conversation_id);
+        let summary = store.fork(&source, &target, current_unix_seconds().max(1))?;
+        let started = self.split_pane_in_window_with_process(
+            primary_client_id,
+            &source_descriptor.window_id,
+            SplitDirection::Vertical,
+            true,
+            None,
+            source_start_directory.as_deref(),
+        )?;
+        self.agent_shell_store.enter_or_resume(&started.pane_id)?;
+        let (session_id, transcript_entries, visibility) = {
+            let session = self.agent_shell_store.bind_conversation_with_lineage(
+                &started.pane_id,
+                &summary.conversation_id,
+                summary.entries as u64,
+                source_lineage,
+            )?;
+            (
+                session.session_id.clone(),
+                session.transcript_entries,
+                session.visibility,
+            )
+        };
+        self.record_pane_transcript_ref(
+            &started.pane_id,
+            format!("transcript:{}:{session_id}", started.pane_id),
+        )?;
+        self.enter_agent_mode_for_pane(&started.pane_id)?;
+        if let Some(seed) = prompt_seed
+            && let Some(prompt_input) = self.agent_prompt_inputs.get_mut(&started.pane_id)
+        {
+            prompt_input
+                .prompt
+                .buffer
+                .apply(ReadlineEdit::InsertText(seed));
+        }
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "fork".to_string(),
+            body: format!(
+                "source={} conversation_id={} entries={} source_pane={} pane={} forked=true",
+                source, session_id, transcript_entries, pane_id, started.pane_id
+            ),
+            visibility,
+        })
+    }
+
+    /// Returns the prompt text that should seed a newly forked agent pane.
+    ///
+    /// # Parameters
+    /// - `history`: Shared persisted agent prompt history for the source
+    ///   conversation.
+    /// - `current_input`: The `/fork` command currently being executed.
+    fn runtime_agent_fork_prompt_seed(history: &[String], current_input: &str) -> Option<String> {
+        let current = current_input.trim();
+        history
+            .iter()
+            .rev()
+            .find(|entry| {
+                let trimmed = entry.trim();
+                !trimmed.is_empty() && (current.is_empty() || trimmed != current)
+            })
+            .cloned()
+    }
+
+    /// Returns a version-four UUID string for a newly forked conversation.
+    pub(super) fn runtime_new_agent_conversation_id() -> String {
+        let mut bytes: [u8; 16] = rand::random();
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15]
+        )
+    }
 }
