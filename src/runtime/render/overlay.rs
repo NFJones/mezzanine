@@ -2145,3 +2145,331 @@ pub(super) fn runtime_pane_agent_selector_rendition(
     rendition.bold = active;
     rendition
 }
+
+impl RuntimeSessionService {
+    /// Shows or clears the primary-client command display overlay.
+    ///
+    /// Non-empty line sets are rendered as a modal full-window view on the next
+    /// primary render pass. An empty line set clears any active overlay. This
+    /// fails when the runtime is no longer live.
+    pub fn show_primary_display_overlay(&mut self, lines: Vec<String>) -> Result<()> {
+        let line_style_spans = vec![Vec::new(); lines.len()];
+        self.show_primary_display_overlay_inner(lines, line_style_spans, Vec::new(), false)
+    }
+
+    /// Shows or clears the primary-client recoverable error status overlay.
+    ///
+    /// Error overlays render over the window status bar and are dismissed by
+    /// the next user action without consuming that action. This keeps runtime
+    /// errors visible without turning them into modal state.
+    pub fn show_primary_error_overlay(&mut self, lines: Vec<String>) -> Result<()> {
+        self.require_live()?;
+        self.primary_error_status_overlay = lines
+            .into_iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| runtime_primary_error_status_text(&line));
+        Ok(())
+    }
+
+    /// Shows or clears the primary-client transient success notice overlay.
+    ///
+    /// Notice overlays share the status-bar dismissal lifecycle with
+    /// recoverable errors while keeping successful command acknowledgements out
+    /// of pane transcripts.
+    pub fn show_primary_notice_overlay(&mut self, lines: Vec<String>) -> Result<()> {
+        self.require_live()?;
+        self.primary_error_status_overlay = lines
+            .into_iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| runtime_primary_notice_status_text(&line));
+        Ok(())
+    }
+
+    /// Runs the show primary display overlay inner operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn show_primary_display_overlay_inner(
+        &mut self,
+        lines: Vec<String>,
+        mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        selections: Vec<RuntimeDisplayOverlaySelection>,
+        dismiss_on_any_input: bool,
+    ) -> Result<()> {
+        self.require_live()?;
+        self.primary_display_overlay = if lines.is_empty() {
+            None
+        } else {
+            line_style_spans.truncate(lines.len());
+            line_style_spans.resize(lines.len(), Vec::new());
+            let active_selection_index = (!selections.is_empty()).then_some(0);
+            Some(RuntimeDisplayOverlay {
+                lines,
+                line_style_spans,
+                scroll_offset: 0,
+                search_input: None,
+                search_query: None,
+                search_match: None,
+                search_status: None,
+                mouse_selection: None,
+                selections,
+                active_selection_index,
+                dismiss_on_any_input,
+            })
+        };
+        Ok(())
+    }
+
+    /// Clears the primary-client command display overlay.
+    ///
+    /// Returns true when an overlay was active before the call.
+    pub fn clear_primary_display_overlay(&mut self) -> bool {
+        self.primary_display_overlay.take().is_some()
+    }
+
+    /// Appends terminal-command display output to the active pane buffer.
+    ///
+    /// Short acknowledgement-style command output should remain in the pane
+    /// transcript instead of forcing a modal command-output overlay. The bytes
+    /// are fed through the same pane-screen ingestion path as process output so
+    /// rendering state, scrollback, and observers stay consistent.
+    fn append_runtime_command_display_lines_to_active_pane(
+        &mut self,
+        lines: &[String],
+    ) -> Result<()> {
+        let visible_lines = lines
+            .iter()
+            .map(|line| sanitized_agent_terminal_line(line))
+            .filter(|line| !line.trim().is_empty())
+            .take(200)
+            .collect::<Vec<_>>();
+        if visible_lines.is_empty() {
+            return Ok(());
+        }
+        let pane_id = self.active_pane_id()?.to_string();
+        let mut bytes = Vec::new();
+        for line in visible_lines {
+            bytes.extend_from_slice(b"\r\nmez: ");
+            bytes.extend_from_slice(line.as_bytes());
+        }
+        bytes.extend_from_slice(b"\r\n");
+        self.apply_pane_output_bytes(pane_id, bytes)?;
+        Ok(())
+    }
+
+    /// Presents terminal command display content according to its feedback policy.
+    pub(super) fn present_runtime_command_display_content(
+        &mut self,
+        content: RuntimeCommandDisplayOverlayContent,
+    ) -> Result<()> {
+        if runtime_command_display_should_open_overlay(&content) {
+            return self.show_primary_display_overlay_inner(
+                content.lines,
+                content.line_style_spans,
+                content.selections,
+                false,
+            );
+        }
+        if let Some(line) = runtime_command_display_transient_status_line(&content) {
+            return self.show_primary_notice_overlay(vec![line]);
+        }
+        self.append_runtime_command_display_lines_to_active_pane(&content.lines)
+    }
+
+    /// Runs the apply primary display overlay terminal action operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn apply_primary_display_overlay_terminal_action(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        action: &TerminalClientLoopAction,
+    ) -> Result<bool> {
+        match action {
+            TerminalClientLoopAction::ForwardToPane(input)
+            | TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
+                self.apply_primary_display_overlay_input(primary_client_id, input)
+            }
+            TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay {
+                position,
+            }) => self.apply_primary_display_overlay_selection(primary_client_id, *position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::BeginDisplayOverlaySelection {
+                position,
+            }) => self.begin_primary_display_overlay_mouse_selection(*position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::UpdateDisplayOverlaySelection {
+                position,
+            }) => self.update_primary_display_overlay_mouse_selection(*position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::FinishDisplayOverlaySelection {
+                position,
+            }) => self.finish_primary_display_overlay_mouse_selection(primary_client_id, *position),
+            TerminalClientLoopAction::HandleMouse(MouseAction::ScrollDisplayOverlay { lines }) => {
+                self.apply_primary_display_overlay_scroll(*lines)
+            }
+            TerminalClientLoopAction::ExecuteMux(_)
+            | TerminalClientLoopAction::ExecuteCommand(_)
+            | TerminalClientLoopAction::HandleMouse(_)
+            | TerminalClientLoopAction::HandleCopyMode(_)
+            | TerminalClientLoopAction::EnterPrefixKeyMode
+            | TerminalClientLoopAction::ReportUnboundPrefix(_) => Ok(false),
+        }
+    }
+
+    /// Reports whether one primary display overlay action should invalidate the
+    /// attached client's retained output frame.
+    ///
+    /// Keyboard and mouse-wheel navigation only move the overlay viewport or
+    /// active row, so the next rendered view can be applied through the normal
+    /// diff renderer. Exiting the modal overlay or executing a selected row can
+    /// expose a different underlying view or run a command, so those paths keep
+    /// the stronger redraw signal.
+    pub(super) fn primary_display_overlay_action_requires_full_redraw(
+        &self,
+        action: &TerminalClientLoopAction,
+    ) -> bool {
+        match action {
+            TerminalClientLoopAction::ForwardToPane(input)
+            | TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
+                if self
+                    .primary_display_overlay
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.dismiss_on_any_input && !input.is_empty())
+                {
+                    return true;
+                }
+                matches!(
+                    runtime_display_overlay_input_action(input),
+                    RuntimeDisplayOverlayInputAction::Exit
+                        | RuntimeDisplayOverlayInputAction::SelectActive
+                ) && self
+                    .primary_display_overlay
+                    .as_ref()
+                    .is_none_or(|overlay| overlay.search_input.is_none())
+            }
+            TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay { .. }) => true,
+            TerminalClientLoopAction::HandleMouse(MouseAction::ScrollDisplayOverlay { .. }) => {
+                false
+            }
+            TerminalClientLoopAction::ExecuteMux(_)
+            | TerminalClientLoopAction::ExecuteCommand(_)
+            | TerminalClientLoopAction::HandleMouse(_)
+            | TerminalClientLoopAction::HandleCopyMode(_)
+            | TerminalClientLoopAction::EnterPrefixKeyMode
+            | TerminalClientLoopAction::ReportUnboundPrefix(_) => false,
+        }
+    }
+
+    /// Executes the selectable command row under a primary display overlay
+    /// mouse click.
+    fn apply_primary_display_overlay_selection(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(overlay) = self.primary_display_overlay.as_ref() else {
+            return Ok(false);
+        };
+        if position.line == 0 {
+            return Ok(false);
+        }
+        let display_line_index = overlay
+            .scroll_offset
+            .saturating_add(position.line.saturating_sub(1));
+        let selection_index = runtime_display_overlay_selection_index_at_position(
+            overlay,
+            display_line_index,
+            position.column,
+        );
+        let Some(command) = selection_index
+            .and_then(|index| overlay.selections.get(index))
+            .map(|selection| selection.command.clone())
+        else {
+            return Ok(false);
+        };
+        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            overlay.active_selection_index = selection_index;
+        }
+        self.execute_primary_display_overlay_selection_command(primary_client_id, &command)
+    }
+
+    /// Starts a mouse text selection in the primary command-output overlay.
+    fn begin_primary_display_overlay_mouse_selection(
+        &mut self,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
+        else {
+            return Ok(false);
+        };
+        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            overlay.mouse_selection = Some((selection_position, selection_position));
+        }
+        Ok(true)
+    }
+
+    /// Extends a mouse text selection in the primary command-output overlay.
+    fn update_primary_display_overlay_mouse_selection(
+        &mut self,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
+        else {
+            return Ok(false);
+        };
+        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            let start = overlay
+                .mouse_selection
+                .map(|(start, _)| start)
+                .unwrap_or(selection_position);
+            overlay.mouse_selection = Some((start, selection_position));
+        }
+        Ok(true)
+    }
+
+    /// Finishes a mouse text selection in the primary command-output overlay and copies it.
+    fn finish_primary_display_overlay_mouse_selection(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        position: CopyPosition,
+    ) -> Result<bool> {
+        let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)
+        else {
+            return Ok(false);
+        };
+        let copied = if let Some(overlay) = self.primary_display_overlay.as_mut() {
+            let start = overlay
+                .mouse_selection
+                .map(|(start, _)| start)
+                .unwrap_or(selection_position);
+            overlay.mouse_selection = Some((start, selection_position));
+            primary_display_overlay_copy_selection(overlay)
+        } else {
+            None
+        };
+        if let Some(copied) = copied.filter(|text| !text.is_empty()) {
+            self.copy_text_to_buffer_and_host_clipboard(
+                "mouse",
+                copied,
+                "display-overlay:mouse".to_string(),
+            )?;
+            return Ok(true);
+        }
+        self.apply_primary_display_overlay_selection(primary_client_id, position)
+    }
+
+    /// Converts one terminal mouse cell to overlay-content coordinates.
+    fn primary_display_overlay_position_for_mouse(
+        &self,
+        position: CopyPosition,
+    ) -> Option<CopyPosition> {
+        let overlay = self.primary_display_overlay.as_ref()?;
+        let line = position.line.checked_sub(1)?;
+        let line = overlay.scroll_offset.saturating_add(line);
+        let text = overlay.lines.get(line)?;
+        let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line);
+        let column = position.column.saturating_sub(prefix_columns);
+        let column = column.min(terminal_text_width(text));
+        Some(CopyPosition { line, column })
+    }
+}
