@@ -5,35 +5,33 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 mod configuration;
 mod context;
+mod snapshot;
 mod subagents;
 use super::{
-    AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentShellVisibility, AgentTurnLedger,
-    AgentTurnState, ApprovalDecision, ApprovalDecisionScopePersistence, ApprovalGrant,
-    ApprovalScope, AttachedTerminalClientStepPlan, AuditActor, AuditRecord, BlockedApprovalRequest,
-    BlockedApprovalState, ClientRole, ClientState, ClientViewRole, CommandRule, CommandRuleScope,
-    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigScope, ContextBlock,
-    ContextSourceKind, ControlConnectionState, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
-    DeferredConfigFileWrite, DeferredProjectConfigWrite, Envelope, EventKind, EventVisibility,
-    HookEvent, McpApprovalSetting, McpExternalCapability, McpServerKind, McpServerStatus,
-    McpToolEffects, McpToolState, MemoryRecord, MessageConnection, MessageServiceSnapshot,
-    MezError, PaneCaptureSource, PaneId, PaneProcessStart, PaneReadinessOverrideStore,
-    PaneReadinessState, PaneResizeUpdate, Path, PathBuf, ProjectTrustStore, Recipient, Result,
-    RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    RuntimeSnapshotOwnedCreationContext, RuntimeSubagentLineage, RuntimeSubagentPlacement,
-    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotAgentSession,
-    SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
-    SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
-    SnapshotFrameState, SnapshotMcpExternalCapability, SnapshotMcpServerState,
-    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository,
-    SnapshotState, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
-    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFramePosition,
-    TerminalFrameStyle, TrustDecision, agent_state_control_method, append_memory_context,
-    append_permission_policy_context, append_scheduler_context, approval_decide_scope_persistence,
-    compare_permission_preset_authority, current_unix_seconds, decode_control_frame,
-    decode_mmp_frame, default_trust_database_path, destination_target_checked_resolved,
-    discover_project_root, dispatch_control_request_cached,
+    AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentTurnLedger, AgentTurnState,
+    ApprovalDecision, ApprovalDecisionScopePersistence, AttachedTerminalClientStepPlan, AuditActor,
+    AuditRecord, BlockedApprovalRequest, BlockedApprovalState, ClientRole, ClientState,
+    ClientViewRole, CommandRule, CommandRuleScope, ConfigFormat, ConfigLayer, ConfigMutation,
+    ConfigMutationOperation, ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeferredConfigFileWrite, DeferredProjectConfigWrite,
+    Envelope, EventKind, EventVisibility, HookEvent, MemoryRecord, MessageConnection,
+    MessageServiceSnapshot, MezError, PaneCaptureSource, PaneId, PaneProcessStart,
+    PaneReadinessOverrideStore, PaneReadinessState, PaneResizeUpdate, Path, PathBuf,
+    ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
+    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
+    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
+    SenderIdentity, SessionRecord, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
+    SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
+    SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState, SnapshotMcpServerState,
+    SnapshotPaneCapture, SnapshotRepository, SnapshotState, SplitDirection,
+    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
+    append_memory_context, append_permission_policy_context, append_scheduler_context,
+    approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
+    decode_control_frame, decode_mmp_frame, default_trust_database_path,
+    destination_target_checked_resolved, discover_project_root, dispatch_control_request_cached,
     dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
@@ -71,6 +69,12 @@ use context::{
     AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
     runtime_transcript_context_entry_limit,
+};
+use snapshot::{
+    runtime_snapshot_agent_visibility_name, runtime_snapshot_approval_grant,
+    runtime_snapshot_approval_request, runtime_snapshot_config_scope_name,
+    runtime_snapshot_frame_position_name, runtime_snapshot_frame_style_name,
+    runtime_snapshot_mcp_server_state,
 };
 
 use crate::config::compose_effective_config;
@@ -4140,113 +4144,6 @@ fn project_rule_scope_name(scope: CommandRuleScope) -> &'static str {
     }
 }
 
-/// Runs the runtime snapshot config scope name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_config_scope_name(scope: ConfigScope) -> &'static str {
-    match scope {
-        ConfigScope::Primary => "primary",
-        ConfigScope::ProjectOverlay => "project-overlay",
-        ConfigScope::LiveOverride => "live-override",
-    }
-}
-
-/// Runs the runtime snapshot frame position name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_frame_position_name(position: TerminalFramePosition) -> &'static str {
-    match position {
-        TerminalFramePosition::Top => "top",
-        TerminalFramePosition::Bottom => "bottom",
-    }
-}
-
-/// Runs the runtime snapshot frame style name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_frame_style_name(style: TerminalFrameStyle) -> &'static str {
-    match style {
-        TerminalFrameStyle::Default => "default",
-        TerminalFrameStyle::Bold => "bold",
-        TerminalFrameStyle::Underline => "underline",
-        TerminalFrameStyle::Inverse => "inverse",
-    }
-}
-
-/// Runs the runtime snapshot approval grant operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_approval_grant(grant: &ApprovalGrant) -> SnapshotApprovalGrantMetadata {
-    SnapshotApprovalGrantMetadata {
-        id: grant.id.clone(),
-        command_prefix: grant.command_prefix.clone(),
-        scope: runtime_snapshot_approval_scope_name(grant.scope).to_string(),
-        decision: runtime_snapshot_approval_decision_name(grant.decision).to_string(),
-    }
-}
-
-/// Runs the runtime snapshot approval request operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_approval_request(
-    request: &BlockedApprovalRequest,
-) -> SnapshotApprovalRequestMetadata {
-    SnapshotApprovalRequestMetadata {
-        id: request.id.clone(),
-        requesting_agent_id: request.requesting_agent_id.clone(),
-        pane_id: request.pane_id.clone(),
-        parent_agent_chain: request.parent_agent_chain.clone(),
-        action_kind: request.action_kind.clone(),
-        action_summary: request.action_summary.clone(),
-        declared_effects: request.declared_effects.clone(),
-        matched_rules: request.matched_rules.clone(),
-        read_scopes: request.read_scopes.clone(),
-        write_scopes: request.write_scopes.clone(),
-        created_at_unix_seconds: request.created_at_unix_seconds,
-        decided_at_unix_seconds: request.decided_at_unix_seconds,
-        decided_by_client_id: request.decided_by_client_id.clone(),
-        state: runtime_snapshot_blocked_approval_state_name(request.state).to_string(),
-        decision: request
-            .decision
-            .map(runtime_snapshot_approval_decision_name)
-            .map(ToOwned::to_owned),
-        redirect_instruction: request.redirect_instruction.clone(),
-    }
-}
-
-/// Runs the runtime snapshot mcp server state operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_server_state(
-    server: &crate::mcp::McpServerState,
-) -> SnapshotMcpServerState {
-    SnapshotMcpServerState {
-        id: server.configured.id.clone(),
-        name: server.configured.name.clone(),
-        kind: runtime_snapshot_mcp_kind_name(server.configured.kind).to_string(),
-        enabled: server.configured.enabled,
-        status: runtime_snapshot_mcp_status_name(server.status).to_string(),
-        last_checked_at_unix_seconds: server.last_checked_at_unix_seconds,
-        blacklist_reason: server.blacklist_reason.clone(),
-        external_capability: runtime_snapshot_mcp_external_capability(
-            &server.configured.external_capability,
-        ),
-        tools: server.tools.iter().map(runtime_snapshot_mcp_tool).collect(),
-    }
-}
-
 /// Runs the runtime mcp retry result json operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -4284,99 +4181,6 @@ fn runtime_mcp_retry_result_json(report: &super::RuntimeMcpRetryReport) -> Strin
     )
 }
 
-/// Runs the runtime snapshot mcp external capability operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_external_capability(
-    capability: &McpExternalCapability,
-) -> SnapshotMcpExternalCapability {
-    SnapshotMcpExternalCapability {
-        mutates_filesystem_outside_shell: capability.mutates_filesystem_outside_shell,
-        executes_processes_outside_shell: capability.executes_processes_outside_shell,
-        accesses_credentials_outside_shell: capability.accesses_credentials_outside_shell,
-        purpose: capability.purpose.clone(),
-    }
-}
-
-/// Runs the runtime snapshot mcp tool operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_tool(tool: &McpToolState) -> SnapshotMcpToolState {
-    SnapshotMcpToolState {
-        server_id: tool.server_id.clone(),
-        name: tool.name.clone(),
-        available: tool.available,
-        blacklisted: tool.blacklisted,
-        permission_required: tool.permission_required,
-        effects: runtime_snapshot_mcp_effects(tool.effects),
-        approval: runtime_snapshot_mcp_approval_name(tool.approval).to_string(),
-        description: tool.description.clone(),
-        input_schema_json: tool.input_schema_json.clone(),
-    }
-}
-
-/// Runs the runtime snapshot mcp effects operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_effects(effects: McpToolEffects) -> SnapshotMcpToolEffects {
-    SnapshotMcpToolEffects {
-        reads_filesystem: effects.reads_filesystem,
-        mutates_filesystem: effects.mutates_filesystem,
-        executes_processes: effects.executes_processes,
-        accesses_credentials: effects.accesses_credentials,
-        uses_network: effects.uses_network,
-        has_side_effects: effects.has_side_effects,
-    }
-}
-
-/// Runs the runtime snapshot mcp kind name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_kind_name(kind: McpServerKind) -> &'static str {
-    match kind {
-        McpServerKind::Stdio => "stdio",
-        McpServerKind::Http => "streamable_http",
-    }
-}
-
-/// Runs the runtime snapshot mcp status name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_status_name(status: McpServerStatus) -> &'static str {
-    match status {
-        McpServerStatus::Configured => "configured",
-        McpServerStatus::Starting => "starting",
-        McpServerStatus::Available => "available",
-        McpServerStatus::Unavailable => "unavailable",
-        McpServerStatus::Blacklisted => "blacklisted",
-        McpServerStatus::Failed => "failed",
-    }
-}
-
-/// Runs the runtime snapshot mcp approval name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_mcp_approval_name(approval: McpApprovalSetting) -> &'static str {
-    match approval {
-        McpApprovalSetting::Inherit => "inherit",
-        McpApprovalSetting::Prompt => "prompt",
-        McpApprovalSetting::Allow => "allow",
-        McpApprovalSetting::Deny => "deny",
-    }
-}
-
 /// Runs the runtime mutating response is cacheable operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -4384,58 +4188,6 @@ fn runtime_snapshot_mcp_approval_name(approval: McpApprovalSetting) -> &'static 
 /// on duplicated control-flow logic.
 fn runtime_mutating_response_is_cacheable(method: &str) -> bool {
     method != "terminal/step"
-}
-
-/// Runs the runtime snapshot approval scope name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_approval_scope_name(scope: ApprovalScope) -> &'static str {
-    match scope {
-        ApprovalScope::Session => "session",
-        ApprovalScope::Global => "global",
-    }
-}
-
-/// Runs the runtime snapshot approval decision name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_approval_decision_name(decision: ApprovalDecision) -> &'static str {
-    match decision {
-        ApprovalDecision::Approve => "approve",
-        ApprovalDecision::Disapprove => "disapprove",
-        ApprovalDecision::Redirect => "redirect",
-    }
-}
-
-/// Runs the runtime snapshot blocked approval state name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_blocked_approval_state_name(state: BlockedApprovalState) -> &'static str {
-    match state {
-        BlockedApprovalState::Pending => "pending",
-        BlockedApprovalState::Approved => "approved",
-        BlockedApprovalState::Disapproved => "disapproved",
-        BlockedApprovalState::Redirected => "redirected",
-    }
-}
-
-/// Runs the runtime snapshot agent visibility name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_snapshot_agent_visibility_name(visibility: AgentShellVisibility) -> &'static str {
-    match visibility {
-        AgentShellVisibility::Hidden => "hidden",
-        AgentShellVisibility::Visible => "visible",
-        AgentShellVisibility::HidePendingTaskCompletion => "hide-pending-task-completion",
-    }
 }
 
 #[cfg(test)]
