@@ -698,7 +698,12 @@ Command rule fields for each entry in a command rule array:
 | `mcp_servers.<name>.enabled` | boolean | omitted | Whether the server is enabled. |
 | `mcp_servers.<name>.approval` | string | omitted | Server-level approval policy. |
 | `mcp_servers.<name>.tool_approvals` | map | omitted | Per-tool approval policy. |
-| `mcp_servers.<name>.external_capability` | string or table | omitted | Declared external capability metadata. |
+| `mcp_servers.<name>.external_capability` | table | omitted | Model-visible external capability metadata. The `purpose` field should be a short, non-secret description of when agents should use this server. |
+
+`mcp_servers.<name>.external_capability.purpose` is routing metadata that is
+shown in agent prompt context. Use a concise use-case summary such as `GitHub
+issue and pull request operations` rather than implementation details, command
+arguments, URLs with credentials, or other secret-bearing values.
 
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser

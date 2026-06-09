@@ -9,7 +9,7 @@ use super::{AgentContext, ContextBlock, ContextSourceKind};
 use crate::agent::validate_non_empty;
 use crate::error::Result;
 use crate::instructions::DiscoveredInstructionFile;
-use crate::mcp::{McpPromptSummary, McpPromptTool};
+use crate::mcp::{McpPromptServer, McpPromptSummary, McpPromptTool};
 use crate::memory::{MemoryRecord, MemoryScope};
 use crate::permissions::PermissionPolicy;
 use crate::scheduler::{AgentScheduler, runnable_agent_ids};
@@ -66,21 +66,22 @@ pub fn append_mcp_context(
     context.blocks.retain(|block| {
         block.source != ContextSourceKind::Configuration || block.label != "mcp integrations"
     });
-    if summary.available_tools.is_empty() && summary.unavailable_servers.is_empty() {
+    if summary.available_servers.is_empty()
+        && summary.available_tools.is_empty()
+        && summary.unavailable_servers.is_empty()
+    {
         return AgentContext::new(context.blocks);
     }
-    let available_server_count = summary
-        .available_tools
-        .iter()
-        .map(|tool| tool.server_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    let mut lines = vec![format!(
+    let mut lines = vec![
+        "MCP servers are external integrations. Use them only when the user task matches a listed server purpose or an exposed tool description; otherwise prefer local shell/repo work.".to_string(),
+        format!(
         "available_servers={} available_tools={} unavailable_servers={}",
-        available_server_count,
+        summary.available_servers.len(),
         summary.available_tools.len(),
         summary.unavailable_servers.len()
     )];
+    let mut available_servers = summary.available_servers.clone();
+    available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
     let mut available_tools = summary.available_tools.clone();
     available_tools.sort_by(|left, right| {
         left.server_id
@@ -90,6 +91,9 @@ pub fn append_mcp_context(
     let mut unavailable_servers = summary.unavailable_servers.clone();
     unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
 
+    for server in &available_servers {
+        lines.push(mcp_available_server_line(server));
+    }
     if mcp_context_should_include_tool_details(&context, &available_tools) {
         for tool in &available_tools {
             lines.push(format!(
@@ -102,8 +106,11 @@ pub fn append_mcp_context(
     }
     for server in &unavailable_servers {
         lines.push(format!(
-            "unavailable_server={} retryable={} reason={}",
-            server.server_id, server.retryable, server.reason
+            "unavailable_server={} purpose={} retryable={} reason={}",
+            server.server_id,
+            mcp_context_quoted_value(&server.purpose),
+            server.retryable,
+            mcp_context_quoted_value(&server.reason)
         ));
     }
     let insert_at = context
@@ -120,6 +127,24 @@ pub fn append_mcp_context(
         },
     );
     AgentContext::new(context.blocks)
+}
+
+/// Formats one available MCP server manifest line for prompt context.
+fn mcp_available_server_line(server: &McpPromptServer) -> String {
+    format!(
+        "server={} status=available name={} purpose={} tools={} approval_required_tools={}",
+        server.server_id,
+        mcp_context_quoted_value(&server.display_name),
+        mcp_context_quoted_value(&server.purpose),
+        server.tool_count,
+        server.approval_required_tool_count
+    )
+}
+
+/// Quotes one MCP prompt-context value without exposing raw newlines.
+fn mcp_context_quoted_value(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{:?}", collapsed)
 }
 
 /// Returns whether MCP prompt context should include per-tool details.

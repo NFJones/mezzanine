@@ -77,6 +77,7 @@ impl AgentPromptProfile {
             read_scopes: Vec::new(),
             write_scopes: Vec::new(),
             mcp_summary: McpPromptSummary {
+                available_servers: Vec::new(),
                 available_tools: Vec::new(),
                 unavailable_servers: Vec::new(),
             },
@@ -281,32 +282,18 @@ pub(super) fn subagent_prompt(profile: &AgentPromptProfile) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn mcp_prompt(profile: &AgentPromptProfile) -> String {
     let mut lines = Vec::new();
-    if profile.mcp_summary.available_tools.is_empty() {
-        lines.push(
-            "MCP integrations may be available through Mezzanine's external-integration path, but no concrete MCP tools are currently available in this runtime context.".to_string(),
-        );
-    } else {
-        lines.push(
-            format!(
-                "MCP integrations exist through Mezzanine's external-integration path. Treat them as optional integration capability, not a default first move. Concrete tool inventory appears only when the task explicitly concerns MCP or the active runtime action surface exposes MCP calls. Current availability: servers={} tools={}.",
-                profile
-                    .mcp_summary
-                    .available_tools
-                    .iter()
-                    .map(|tool| tool.server_id.as_str())
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len(),
-                profile.mcp_summary.available_tools.len()
-            ),
-        );
-        lines.push(
-            "When MCP becomes relevant, the runtime context and active MAAP schema will provide the concrete server/tool names and argument schema.".to_string(),
-        );
-    }
+    lines.push(format!(
+        "MCP integrations exist through Mezzanine's external-integration path. Treat them as optional server-backed capability, not a default first move. Prefer local shell/files for local repository work. Use MCP only when the user task matches a listed MCP server purpose, an exposed MCP tool description, or a user explicitly asks for MCP-backed integration work. Current availability: servers={} tools={}.",
+        profile.mcp_summary.available_servers.len(),
+        profile.mcp_summary.available_tools.len()
+    ));
+    lines.push(
+        "Do not infer an MCP server's use case from its name alone; use the runtime MCP integrations manifest and active mcp_call schema as selection evidence. If the relevant server purpose or tool is unclear, ask for clarification or continue without MCP. After an MCP timeout, protocol error, or hang-like failure, do not loop on the same call without new evidence; fall back or report the blocker.".to_string(),
+    );
     for server in &profile.mcp_summary.unavailable_servers {
         lines.push(format!(
-            "Do not attempt MCP server {} unless the user retries or re-enables it; reason: {}.",
-            server.server_id, server.reason
+            "Do not attempt MCP server {} unless the user retries or re-enables it; purpose: {}; reason: {}.",
+            server.server_id, server.purpose, server.reason
         ));
     }
     lines.join(" ")

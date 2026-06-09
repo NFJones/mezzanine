@@ -1013,6 +1013,40 @@ pub struct McpPromptTool {
     pub input_schema_json: String,
 }
 
+/// Carries Mcp Prompt Server state for this subsystem.
+///
+/// The type keeps related data explicit so prompt builders can present a
+/// bounded, secret-safe server manifest without parsing the full runtime
+/// registry or exposing transport configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpPromptServer {
+    /// Stores the server id value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub server_id: String,
+    /// Stores the display name value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub display_name: String,
+    /// Stores the purpose value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub purpose: String,
+    /// Stores the tool count value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub tool_count: usize,
+    /// Stores the approval required tool count value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub approval_required_tool_count: usize,
+}
+
 /// Carries Mcp Prompt Unavailable Server state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -1024,6 +1058,11 @@ pub struct McpPromptUnavailableServer {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub server_id: String,
+    /// Stores the purpose value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub purpose: String,
     /// Stores the reason value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1042,6 +1081,11 @@ pub struct McpPromptUnavailableServer {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpPromptSummary {
+    /// Stores the available servers value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub available_servers: Vec<McpPromptServer>,
     /// Stores the available tools value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

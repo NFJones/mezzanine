@@ -6343,10 +6343,16 @@ through the local message passing protocol.
 The prompt MUST include the active agent's cooperation mode, read scopes, and
 write scopes when the agent is a subagent.
 
-The prompt MUST include MCP servers and tools that are available for the
-current session. MCP servers that are disabled, blacklisted for the session, or
-unavailable because of environmental failure MUST NOT be presented as available
-tools, and the prompt MUST prohibit attempts to use them.
+The prompt MUST include a secret-safe MCP integration manifest for the current
+session. Available MCP servers MUST be presented with configured server id,
+status, model-visible external-capability purpose, available-tool count, and a
+bounded approval-required summary. Available MCP tools MAY be summarized lazily,
+but when tool details are included they MUST be bounded and MUST NOT expose
+secret-bearing transport, environment, header, credential, or raw schema data.
+MCP servers that are disabled, blacklisted for the session, or unavailable
+because of environmental failure MUST NOT be presented as available tools, and
+the prompt MUST prohibit attempts to use them while preserving their
+model-visible purpose and non-secret blocker reason.
 
 The prompt MUST instruct the agent to report blockers and uncertainty rather
 than inventing unavailable state.

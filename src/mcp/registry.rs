@@ -9,10 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{MezError, Result};
 
 use super::types::{
-    McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, McpServerConfig, McpServerKind, McpServerState, McpServerStatus,
-    McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest, McpToolEffects,
-    McpToolState,
+    McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpPromptServer, McpPromptSummary,
+    McpPromptTool, McpPromptUnavailableServer, McpServerConfig, McpServerKind, McpServerState,
+    McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest,
+    McpToolEffects, McpToolState,
 };
 
 /// Carries Mcp Registry state for this subsystem.
@@ -345,6 +345,37 @@ impl McpRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn prompt_summary(&self) -> McpPromptSummary {
+        let available_servers = self
+            .servers
+            .values()
+            .filter(|server| {
+                server.status == McpServerStatus::Available && server.configured.enabled
+            })
+            .map(|server| {
+                let available_tools = server
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.available && !tool.blacklisted)
+                    .collect::<Vec<_>>();
+                let approval_required_tool_count = available_tools
+                    .iter()
+                    .filter(|tool| {
+                        server.configured.approval_for_tool(&tool.name)
+                            == McpApprovalSetting::Prompt
+                            || (server.configured.approval_for_tool(&tool.name)
+                                == McpApprovalSetting::Inherit
+                                && (tool.permission_required || tool.effects.risky()))
+                    })
+                    .count();
+                McpPromptServer {
+                    server_id: server.configured.id.clone(),
+                    display_name: server.configured.name.clone(),
+                    purpose: server.configured.external_capability.purpose.clone(),
+                    tool_count: available_tools.len(),
+                    approval_required_tool_count,
+                }
+            })
+            .collect();
         let available_tools = self
             .servers
             .values()
@@ -383,6 +414,7 @@ impl McpRegistry {
             })
             .map(|server| McpPromptUnavailableServer {
                 server_id: server.configured.id.clone(),
+                purpose: server.configured.external_capability.purpose.clone(),
                 reason: if server.configured.enabled {
                     server
                         .blacklist_reason
@@ -401,6 +433,7 @@ impl McpRegistry {
             })
             .collect();
         McpPromptSummary {
+            available_servers,
             available_tools,
             unavailable_servers,
         }

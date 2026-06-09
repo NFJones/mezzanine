@@ -2966,6 +2966,13 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     let context = append_mcp_context(
         context,
         &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "fs".to_string(),
+                display_name: "Filesystem".to_string(),
+                purpose: "Read project files through MCP".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 1,
+            }],
             available_tools: vec![crate::mcp::McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
@@ -2975,6 +2982,7 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
             }],
             unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
                 reason: "authentication failed".to_string(),
                 retryable: true,
             }],
@@ -3031,6 +3039,13 @@ fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
     let context = append_mcp_context(
         context,
         &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "fs".to_string(),
+                display_name: "Filesystem".to_string(),
+                purpose: "Read project files through MCP".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 1,
+            }],
             available_tools: vec![crate::mcp::McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
@@ -3068,6 +3083,13 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     }])
     .unwrap();
     let first = crate::mcp::McpPromptSummary {
+        available_servers: vec![crate::mcp::McpPromptServer {
+            server_id: "fs".to_string(),
+            display_name: "Filesystem".to_string(),
+            purpose: "Read project files through MCP".to_string(),
+            tool_count: 1,
+            approval_required_tool_count: 1,
+        }],
         available_tools: vec![crate::mcp::McpPromptTool {
             server_id: "fs".to_string(),
             tool_name: "read_file".to_string(),
@@ -3078,6 +3100,13 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
         unavailable_servers: Vec::new(),
     };
     let second = crate::mcp::McpPromptSummary {
+        available_servers: vec![crate::mcp::McpPromptServer {
+            server_id: "git".to_string(),
+            display_name: "Git".to_string(),
+            purpose: "Read Git state through MCP".to_string(),
+            tool_count: 1,
+            approval_required_tool_count: 0,
+        }],
         available_tools: vec![crate::mcp::McpPromptTool {
             server_id: "git".to_string(),
             tool_name: "status".to_string(),
@@ -4271,6 +4300,13 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
         read_scopes: vec!["src".to_string()],
         write_scopes: vec!["src/agent.rs".to_string()],
         mcp_summary: crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "fs".to_string(),
+                display_name: "Filesystem".to_string(),
+                purpose: "Read project files through MCP".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 1,
+            }],
             available_tools: vec![crate::mcp::McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
@@ -4281,6 +4317,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
             }],
             unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
                 reason: "authentication failed".to_string(),
                 retryable: true,
             }],
@@ -4304,8 +4341,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(!prompt.contains("Mezzanine pane agent agent-1"));
     assert!(prompt.contains("MCP integrations exist through Mezzanine's external-integration path"));
     assert!(prompt.contains("Current availability: servers=1 tools=1."));
-    assert!(prompt.contains("Concrete tool inventory appears only when the task explicitly concerns MCP"));
-    assert!(prompt.contains("When MCP becomes relevant"));
+    assert!(prompt.contains("Use MCP only when the user task matches a listed MCP server purpose"));
+    assert!(prompt.contains("Do not infer an MCP server's use case from its name alone"));
+    assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));
     assert!(!prompt.contains(r#""path""#), "{prompt}");
     assert!(prompt.contains("Do not attempt MCP server gitlab"));
