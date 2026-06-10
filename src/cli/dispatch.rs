@@ -8,7 +8,7 @@ use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, OsString, PathBuf,
     Result, RuntimeEnv, Write, cli_idempotency_key, io, json_escape,
     prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
-    run_list, run_mcp, run_memory, run_new, run_serve, run_snapshot,
+    run_list, run_mcp, run_memory, run_new, run_plugin, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -233,6 +233,9 @@ pub async fn run_with<W: Write, E: Write>(
         }
         Some(CliCommand::Mcp(args)) => {
             run_mcp(args, env, interactive, output_format, stdout).await?;
+        }
+        Some(CliCommand::Plugin(args)) => {
+            run_plugin(args, env, output_format, stdout)?;
         }
         Some(CliCommand::Memory(args)) => {
             run_memory(args, env, output_format, stdout)?;

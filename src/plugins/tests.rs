@@ -1,6 +1,4 @@
-use super::{
-    PluginManifest, load_enabled_plugins, plugin_command_display, plugin_command_from_args,
-};
+use super::{PluginManifest, install_local_plugin, load_enabled_plugins};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -46,7 +44,7 @@ fn plugin_manifest_rejects_path_traversal_payloads() {
     assert!(error.message().contains("must not escape"), "{error:?}");
 }
 
-/// Verifies local install and enablement produce runtime plugin skill roots.
+/// Verifies local CLI-owned install and enablement produce runtime plugin skill roots.
 #[test]
 fn plugin_install_and_load_exposes_enabled_skill_root() {
     let root = test_temp_root("install-load");
@@ -54,12 +52,7 @@ fn plugin_install_and_load_exposes_enabled_skill_root() {
     let package = root.join("package");
     write_skill_plugin(&package, "demo-plugin");
 
-    let install = plugin_command_display(
-        &config_root,
-        &root,
-        plugin_command_from_args("install package --enable").unwrap(),
-    )
-    .unwrap();
+    let install = install_local_plugin(&config_root, &package, true).unwrap();
     assert!(
         install.contains("installed plugin demo-plugin"),
         "{install}"

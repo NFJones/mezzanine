@@ -4830,13 +4830,14 @@ The baseline command capabilities are:
   `$<skill-name> [additional context]`. Discovery diagnostics for skipped skill
   entries SHOULD be included so invalid skill installations are visible without
   preventing valid skills from being used.
-- `/plugin`: Manage installed plugin packages. It MUST provide local
-  `list`, `inspect`, `install`, `uninstall`, `enable`, and `disable` behavior
-  for declarative plugin packages with `mez-plugin.toml` manifests; `add` MAY
-  alias `install`, and `remove` MAY alias `uninstall`. Installing a plugin MUST
-  copy or register local package files and persist installed-plugin state, but
-  it MUST NOT execute plugin content. Enabled plugin skill payloads MUST be
-  included in the effective skill catalog with source scope `plugin`.
+- `/plugin`: Show read-only installed plugin status. It MUST provide local
+  `status`, `list`, and `inspect` behavior for declarative plugin packages with
+  `mez-plugin.toml` manifests. Plugin lifecycle changes MUST be performed
+  through the process CLI `mez plugin` command family rather than slash
+  commands. Installing a plugin MUST copy or register local package files and
+  persist installed-plugin state, but it MUST NOT execute plugin content.
+  Enabled plugin skill payloads MUST be included in the effective skill catalog
+  with source scope `plugin`.
   Plugin-declared MCP servers, hooks, subagents, personalities, marketplaces,
   and network-backed install/upgrade flows MUST remain inactive unless a later
   explicit implementation and approval-gated activation path supports them.

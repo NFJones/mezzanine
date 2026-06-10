@@ -74,6 +74,8 @@ pub(super) enum CliCommand {
     Auth(super::auth::AuthCliArgs),
     /// Manages MCP server configuration.
     Mcp(super::mcp::McpCliArgs),
+    /// Manages installed plugin packages.
+    Plugin(super::plugin::PluginCliArgs),
     /// Manages persistent agent memory.
     Memory(super::memory::MemoryCliArgs),
     /// Prints version information.

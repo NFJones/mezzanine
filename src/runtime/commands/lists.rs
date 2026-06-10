@@ -8,50 +8,28 @@
 use super::*;
 
 impl RuntimeSessionService {
-    /// Executes `/plugin` against the local plugin registry and package store.
+    /// Executes read-only `/plugin` status against the local plugin registry.
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose current working directory resolves relative install paths.
     /// - `input`: Full slash-command input.
     pub(super) fn execute_agent_shell_plugin_command(
         &mut self,
-        pane_id: &str,
+        _pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let root = self.config_root.clone().ok_or_else(|| {
             MezError::invalid_state("plugin commands require a configured Mezzanine config root")
         })?;
-        let cwd = self
-            .pane_current_working_directory(pane_id)
-            .unwrap_or_else(|| root.clone());
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("plugin command must be invoked as a slash command")
         })?;
         let command = crate::plugins::plugin_command_from_args(&invocation.args)?;
-        let mutating = matches!(
-            command,
-            crate::plugins::PluginCommand::Install { .. }
-                | crate::plugins::PluginCommand::Uninstall { .. }
-                | crate::plugins::PluginCommand::Enable { .. }
-                | crate::plugins::PluginCommand::Disable { .. }
-        );
-        let body = crate::plugins::plugin_command_display(&root, &cwd, command)?;
-        if mutating {
-            Ok(AgentShellCommandOutcome::Mutated {
-                command: "plugin".to_string(),
-                body,
-                visibility: self
-                    .agent_shell_store
-                    .get(pane_id)
-                    .map(|session| session.visibility)
-                    .unwrap_or(AgentShellVisibility::Visible),
-            })
-        } else {
-            Ok(AgentShellCommandOutcome::Display {
-                command: "plugin".to_string(),
-                body,
-            })
-        }
+        let body = crate::plugins::plugin_status_display(&root, command)?;
+        Ok(AgentShellCommandOutcome::Display {
+            command: "plugin".to_string(),
+            body,
+        })
     }
 
     /// Executes `/list-skills` and returns the effective skill catalog.

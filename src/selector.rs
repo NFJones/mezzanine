@@ -823,21 +823,7 @@ fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
-        "plugin" => {
-            let mut candidates = value_candidates(&[
-                "list",
-                "inspect",
-                "install",
-                "add",
-                "uninstall",
-                "remove",
-                "enable",
-                "disable",
-                "marketplace",
-            ]);
-            candidates.extend(flag_candidates(&["--enable"]));
-            candidates
-        }
+        "plugin" => value_candidates(&["status", "list", "inspect"]),
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
@@ -954,7 +940,7 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork] <prompt>"),
         "memory" => Some(" <on|off|toggle|status|show>"),
-        "plugin" => Some(" <list|inspect|install|add|uninstall|remove|enable|disable|marketplace>"),
+        "plugin" => Some(" [status [plugin-id]|list|inspect plugin-id]"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
         }
@@ -1940,10 +1926,7 @@ mod tests {
         let cases = [
             ("/directive ", " <status|show|clear|default|none|text>"),
             ("/memory ", " <on|off|toggle|status|show>"),
-            (
-                "/plugin ",
-                " <list|inspect|install|add|uninstall|remove|enable|disable|marketplace>",
-            ),
+            ("/plugin ", " [status [plugin-id]|list|inspect plugin-id]"),
             ("/remember ", " [statement]"),
             ("/fork ", " [conversation-id]"),
             ("/debug-config ", " [filter]"),
@@ -1962,8 +1945,8 @@ mod tests {
         let cases = [
             ("/directive cl", "ear", SelectorCandidateKind::Value),
             ("/memory to", "ggle", SelectorCandidateKind::Value),
-            ("/plugin inst", "all", SelectorCandidateKind::Value),
-            ("/plugin --en", "able", SelectorCandidateKind::Flag),
+            ("/plugin sta", "tus", SelectorCandidateKind::Value),
+            ("/plugin ins", "pect", SelectorCandidateKind::Value),
             (
                 "/debug-config mc",
                 "p_servers",

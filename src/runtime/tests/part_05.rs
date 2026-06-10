@@ -2716,10 +2716,9 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
     assert!(response.contains("Start a prompt with `$`"), "{response}");
 }
 
-/// Verifies `/plugin install --enable` registers a local skill-only package and
-/// the enabled plugin skill root appears in the same effective catalog used by
-/// `/list-skills`. This protects the first plugin implementation slice: local
-/// package install, registry persistence, enablement, and skill activation.
+/// Verifies a CLI-installed local skill-only package appears in the same
+/// effective catalog used by `/list-skills`. This protects the plugin command
+/// split: lifecycle mutations are CLI-owned while slash commands stay read-only.
 #[test]
 fn runtime_plugin_install_enable_exposes_plugin_skill_in_list_skills() {
     let root = temp_root("runtime-plugin-skill");
@@ -2746,12 +2745,12 @@ fn runtime_plugin_install_enable_exposes_plugin_skill_in_list_skills() {
         .unwrap();
     service.set_config_root(config_root);
 
-    let install_response = service
-        .execute_agent_shell_command(
-            &primary,
-            &format!("/plugin install {} --enable", package_root.display()),
-        )
-        .unwrap();
+    let install_response = crate::plugins::install_local_plugin(
+        service.config_root.as_deref().unwrap(),
+        &package_root,
+        true,
+    )
+    .unwrap();
     let list_response = service
         .execute_agent_shell_command(&primary, "/list-skills")
         .unwrap();

@@ -185,6 +185,27 @@ fn with_json_output(mut args: Vec<String>) -> Vec<String> {
     args
 }
 
+/// Writes a minimal local plugin package for process CLI lifecycle tests.
+///
+/// # Parameters
+/// - `root`: Plugin package root to create.
+/// - `id`: Stable plugin id to write into the manifest.
+fn write_cli_skill_plugin(root: &std::path::Path, id: &str) {
+    fs::create_dir_all(root.join("skills/demo")).unwrap();
+    fs::write(
+        root.join("mez-plugin.toml"),
+        format!(
+            "schema_version = 1\nid = \"{id}\"\nname = \"Demo Plugin\"\ndescription = \"Adds a demo skill.\"\nversion = \"0.1.0\"\n\n[payloads]\nskills = \"skills\"\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("skills/demo/SKILL.md"),
+        "---\nname: demo\ndescription: Demo skill\n---\n\nUse demo.\n",
+    )
+    .unwrap();
+}
+
 /// Verifies help mentions mez commands.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -3679,6 +3700,100 @@ fn snapshot_resume_latest_selects_newest_matching_snapshot() {
     assert!(output.contains(r#""restored":true"#));
     assert!(output.contains(r#""session_id":"$1""#));
     assert!(output.contains(r#""pane_count":2"#));
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies plugin CLI owns local lifecycle mutations.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn plugin_cli_owns_local_lifecycle_mutations() {
+    let (env, home) = test_env("plugin-lifecycle");
+    let package = home.join("demo-plugin-package");
+    write_cli_skill_plugin(&package, "demo-plugin");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
+            "install".to_string(),
+            package.display().to_string(),
+            "--enable".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(stdout)
+            .unwrap()
+            .contains(r#""operation":"install""#)
+    );
+
+    let registry = crate::plugins::PluginRegistry::read(&home.join(".config/mezzanine")).unwrap();
+    assert!(registry.plugins.get("demo-plugin").unwrap().enabled);
+
+    stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
+            "disable".to_string(),
+            "demo-plugin".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let registry = crate::plugins::PluginRegistry::read(&home.join(".config/mezzanine")).unwrap();
+    assert!(!registry.plugins.get("demo-plugin").unwrap().enabled);
+
+    stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
+            "inspect".to_string(),
+            "demo-plugin".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(stdout)
+            .unwrap()
+            .contains(r#""id":"demo-plugin""#)
+    );
+
+    stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
+            "uninstall".to_string(),
+            "demo-plugin".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let registry = crate::plugins::PluginRegistry::read(&home.join(".config/mezzanine")).unwrap();
+    assert!(!registry.plugins.contains_key("demo-plugin"));
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);

@@ -431,7 +431,7 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     let plugin = parse_slash_command("/plugins list").unwrap().unwrap();
     assert_eq!(plugin.name, "plugin");
     assert_eq!(plugin.args, "list");
-    assert_eq!(plugin.effect, SlashCommandEffect::SessionMutation);
+    assert_eq!(plugin.effect, SlashCommandEffect::ReadOnly);
     let directive = parse_slash_command("/directive focus on regressions")
         .unwrap()
         .unwrap();
