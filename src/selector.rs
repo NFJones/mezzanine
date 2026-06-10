@@ -820,7 +820,24 @@ fn common_target_flags() -> &'static [&'static str] {
 /// on duplicated control-flow logic.
 fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
     let candidates = match command {
+        "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork"]),
+        "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
+        "plugin" => {
+            let mut candidates = value_candidates(&[
+                "list",
+                "inspect",
+                "install",
+                "add",
+                "uninstall",
+                "remove",
+                "enable",
+                "disable",
+                "marketplace",
+            ]);
+            candidates.extend(flag_candidates(&["--enable"]));
+            candidates
+        }
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
@@ -867,6 +884,15 @@ fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
         "copy-patches" => value_candidates(&["pane", "buffer", "clipboard"]),
         "statusline" => value_candidates(&["on", "off", "toggle"]),
         "title" => value_candidates(&["default", "agent", "off"]),
+        "debug-config" => value_candidates(&[
+            "providers",
+            "model_profiles",
+            "mcp_servers",
+            "hooks",
+            "subagents",
+            "permissions",
+            "memory",
+        ]),
         _ => Vec::new(),
     };
     dedupe_candidates(candidates)
@@ -925,7 +951,10 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
 /// on duplicated control-flow logic.
 fn agent_parameter_hint(command: &str) -> Option<&'static str> {
     match command {
+        "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork] <prompt>"),
+        "memory" => Some(" <on|off|toggle|status|show>"),
+        "plugin" => Some(" <list|inspect|install|add|uninstall|remove|enable|disable|marketplace>"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
         }
@@ -943,9 +972,12 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "copy-trace-log" => Some(" <pane|buffer [name]|clipboard>"),
         "copy-patches" => Some(" <pane|buffer [name]|clipboard>"),
         "personality" => Some(" <profile|style|list|status|show|clear|default>"),
+        "remember" => Some(" [statement]"),
         "resume" => Some(" <session-uuid|--latest>"),
+        "fork" => Some(" [conversation-id]"),
         "list-mcp" => Some(" [server-name]"),
         "title" => Some(" <title|default|off>"),
+        "debug-config" => Some(" [filter]"),
         _ => None,
     }
 }
@@ -1899,6 +1931,51 @@ mod tests {
         assert_eq!(hint.insert_at, "/loop --f".len());
         assert_eq!(hint.text, "ork");
         assert_eq!(hint.kind, SelectorCandidateKind::Flag);
+    }
+
+    /// Verifies argument-bearing slash commands expose parameter shadow hints
+    /// so users can discover their accepted values without opening help.
+    #[test]
+    fn selector_shadow_hint_covers_argument_bearing_agent_commands() {
+        let cases = [
+            ("/directive ", " <status|show|clear|default|none|text>"),
+            ("/memory ", " <on|off|toggle|status|show>"),
+            (
+                "/plugin ",
+                " <list|inspect|install|add|uninstall|remove|enable|disable|marketplace>",
+            ),
+            ("/remember ", " [statement]"),
+            ("/fork ", " [conversation-id]"),
+            ("/debug-config ", " [filter]"),
+        ];
+
+        for (line, expected) in cases {
+            let hint = shadow_hint(SelectorSurface::AgentCommand, line, line.len()).unwrap();
+            assert_eq!(hint.text, expected, "hint for {line}");
+        }
+    }
+
+    /// Verifies static slash-command argument completions cover commands whose
+    /// first slot is constrained by their parser or documented mode set.
+    #[test]
+    fn selector_shadow_hint_completes_additional_agent_command_values() {
+        let cases = [
+            ("/directive cl", "ear", SelectorCandidateKind::Value),
+            ("/memory to", "ggle", SelectorCandidateKind::Value),
+            ("/plugin inst", "all", SelectorCandidateKind::Value),
+            ("/plugin --en", "able", SelectorCandidateKind::Flag),
+            (
+                "/debug-config mc",
+                "p_servers",
+                SelectorCandidateKind::Value,
+            ),
+        ];
+
+        for (line, expected_text, expected_kind) in cases {
+            let hint = shadow_hint(SelectorSurface::AgentCommand, line, line.len()).unwrap();
+            assert_eq!(hint.text, expected_text, "completion for {line}");
+            assert_eq!(hint.kind, expected_kind, "candidate kind for {line}");
+        }
     }
 
     /// Verifies commands without first-slot enumerated arguments do not expose
