@@ -820,6 +820,7 @@ fn common_target_flags() -> &'static [&'static str] {
 /// on duplicated control-flow logic.
 fn agent_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
     let candidates = match command {
+        "loop" => flag_candidates(&["--fork"]),
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
@@ -924,6 +925,7 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
 /// on duplicated control-flow logic.
 fn agent_parameter_hint(command: &str) -> Option<&'static str> {
     match command {
+        "loop" => Some(" [--fork] <prompt>"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
         }
@@ -1857,6 +1859,8 @@ mod tests {
     /// values users can discover through completion.
     #[test]
     fn selector_shadow_hint_covers_static_agent_first_slot_options() {
+        let loop_hint =
+            shadow_hint(SelectorSurface::AgentCommand, "/loop ", "/loop ".len()).unwrap();
         let latency_hint = shadow_hint(
             SelectorSurface::AgentCommand,
             "/latency ",
@@ -1872,12 +1876,29 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(loop_hint.text, " [--fork] <prompt>");
         assert_eq!(latency_hint.text, " <slow|default|fast>");
         assert_eq!(trust_hint.text, " <project-root|latest|list|pending>");
         assert_eq!(
             personality_hint.text,
             " <profile|style|list|status|show|clear|default>"
         );
+    }
+
+    /// Verifies `/loop` flag completions surface the documented fork option as
+    /// transient shadow text before users accept a selector candidate.
+    #[test]
+    fn selector_shadow_hint_completes_loop_fork_flag() {
+        let hint = shadow_hint(
+            SelectorSurface::AgentCommand,
+            "/loop --f",
+            "/loop --f".len(),
+        )
+        .unwrap();
+
+        assert_eq!(hint.insert_at, "/loop --f".len());
+        assert_eq!(hint.text, "ork");
+        assert_eq!(hint.kind, SelectorCandidateKind::Flag);
     }
 
     /// Verifies commands without first-slot enumerated arguments do not expose
