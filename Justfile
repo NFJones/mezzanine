@@ -10,6 +10,10 @@ build:
 build-release:
     cargo build --all-targets --all-features --release
 
+# Install mez
+install:
+    cargo install --path .
+
 # Run (release by default)
 run *args:
     cargo run --release -- {{args}}
