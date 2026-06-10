@@ -12,6 +12,7 @@ use crate::config::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION,
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
+use crate::plugins::PluginSkillRoot;
 use crate::terminal::UI_COLOR_SLOT_NAMES;
 use crate::{MezError, MezErrorKind, Result};
 use serde::Deserialize;
@@ -44,6 +45,8 @@ pub enum SkillSource {
     Builtin,
     /// Skill from the primary user configuration directory.
     User,
+    /// Skill from an enabled installed plugin package.
+    Plugin,
     /// Skill from a trusted project configuration directory.
     Project,
 }
@@ -54,6 +57,7 @@ impl SkillSource {
         match self {
             SkillSource::Builtin => "builtin",
             SkillSource::User => "user",
+            SkillSource::Plugin => "plugin",
             SkillSource::Project => "project",
         }
     }
@@ -187,6 +191,20 @@ pub fn discover_skill_catalog(
     user_config_root: Option<&Path>,
     project_root: Option<&Path>,
 ) -> SkillCatalog {
+    discover_skill_catalog_with_plugin_roots(user_config_root, project_root, &[])
+}
+
+/// Discovers the effective skill catalog with enabled plugin skill roots.
+///
+/// # Parameters
+/// - `user_config_root`: Primary Mezzanine configuration root, when known.
+/// - `project_root`: Trusted project root for the active pane, when known.
+/// - `plugin_roots`: Enabled plugin skill roots to include between user and project skills.
+pub fn discover_skill_catalog_with_plugin_roots(
+    user_config_root: Option<&Path>,
+    project_root: Option<&Path>,
+    plugin_roots: &[PluginSkillRoot],
+) -> SkillCatalog {
     let mut skills = BTreeMap::<String, SkillSummary>::new();
     let mut diagnostics = Vec::new();
     for summary in builtin_skill_summaries() {
@@ -196,6 +214,14 @@ pub fn discover_skill_catalog(
         discover_skills_under_root(
             &root.join(SKILLS_DIRECTORY_NAME),
             SkillSource::User,
+            &mut skills,
+            &mut diagnostics,
+        );
+    }
+    for root in plugin_roots {
+        discover_skills_under_root(
+            &root.path,
+            SkillSource::Plugin,
             &mut skills,
             &mut diagnostics,
         );

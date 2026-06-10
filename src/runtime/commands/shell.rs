@@ -354,6 +354,17 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "plugin"
+                {
+                    let plugin_outcome =
+                        self.execute_agent_shell_plugin_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&plugin_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "list-modified-files"
                 {
                     let modified_outcome =

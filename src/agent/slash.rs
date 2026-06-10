@@ -222,6 +222,12 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("memory", &[], SlashCommandEffect::PolicyMutation, true),
+        slash(
+            "plugin",
+            &["plugins"],
+            SlashCommandEffect::SessionMutation,
+            true,
+        ),
         slash("remember", &[], SlashCommandEffect::SessionMutation, false),
         slash("model", &[], SlashCommandEffect::PolicyMutation, true),
         slash("thinking", &[], SlashCommandEffect::PolicyMutation, true),
@@ -437,6 +443,10 @@ fn execute_agent_shell_command_with_context_inner(
         "list-skills" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "skill listing requires live runtime skill discovery".to_string(),
+        },
+        "plugin" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "plugin management requires live runtime config and pane paths".to_string(),
         },
         "list-modified-files" => AgentShellCommandOutcome::RequiresRuntime {
             command,

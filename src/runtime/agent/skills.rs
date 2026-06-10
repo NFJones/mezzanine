@@ -6,9 +6,11 @@
 //! orchestration.
 
 use super::*;
+use crate::plugins::load_enabled_plugins;
 use crate::project::TrustDecision;
 use crate::skills::{
-    SkillCatalog, discover_skill_catalog, is_valid_skill_name, load_skill_document,
+    SkillCatalog, discover_skill_catalog_with_plugin_roots, is_valid_skill_name,
+    load_skill_document,
 };
 
 impl RuntimeSessionService {
@@ -24,7 +26,29 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> SkillCatalog {
         let project_root = self.trusted_skill_project_root_for_pane(pane_id);
-        discover_skill_catalog(self.config_root.as_deref(), project_root.as_deref())
+        let plugin_outcome = self
+            .config_root
+            .as_deref()
+            .map(load_enabled_plugins)
+            .unwrap_or_default();
+        let mut catalog = discover_skill_catalog_with_plugin_roots(
+            self.config_root.as_deref(),
+            project_root.as_deref(),
+            &plugin_outcome.skill_roots,
+        );
+        catalog
+            .diagnostics
+            .extend(plugin_outcome.diagnostics.into_iter().map(|message| {
+                crate::skills::SkillDiagnostic {
+                    path: self
+                        .config_root
+                        .as_deref()
+                        .map(crate::plugins::plugin_registry_path)
+                        .unwrap_or_default(),
+                    message,
+                }
+            }));
+        catalog
     }
 
     /// Returns the trusted project root whose skills may apply to one pane.

@@ -4761,6 +4761,11 @@ Skill content is instruction-like context, but it does not override higher
 priority policy, system instructions, developer instructions, user
 instructions, repository instructions, permission rules, or action schemas.
 Project skill content is untrusted project content for security analysis.
+Plugin skill content is untrusted plugin content for security analysis and
+MUST enter the effective skill catalog only when its installed plugin is
+enabled. Plugin skill roots MUST use the same explicit `$<skill-name>` loading
+path as user and project skills; installation alone MUST NOT inject plugin
+skill text into model context.
 Skill names and descriptions SHOULD NOT be embedded into the stable system
 prompt. While model-selected skill actions are disabled, users SHOULD discover
 available skills with `/list-skills` and explicitly select them with
@@ -4825,6 +4830,16 @@ The baseline command capabilities are:
   `$<skill-name> [additional context]`. Discovery diagnostics for skipped skill
   entries SHOULD be included so invalid skill installations are visible without
   preventing valid skills from being used.
+- `/plugin`: Manage installed plugin packages. It MUST provide local
+  `list`, `inspect`, `install`, `uninstall`, `enable`, and `disable` behavior
+  for declarative plugin packages with `mez-plugin.toml` manifests; `add` MAY
+  alias `install`, and `remove` MAY alias `uninstall`. Installing a plugin MUST
+  copy or register local package files and persist installed-plugin state, but
+  it MUST NOT execute plugin content. Enabled plugin skill payloads MUST be
+  included in the effective skill catalog with source scope `plugin`.
+  Plugin-declared MCP servers, hooks, subagents, personalities, marketplaces,
+  and network-backed install/upgrade flows MUST remain inactive unless a later
+  explicit implementation and approval-gated activation path supports them.
 - `/copy-context`: Copy the assembled model request context for the active
   pane's currently running agent turn. The command MUST accept `pane`, `buffer
   [name]`, and `clipboard` targets using the same target semantics as
