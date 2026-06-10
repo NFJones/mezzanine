@@ -29,6 +29,10 @@ use super::{
     show_messages_display, show_metrics_display, validate_config_file,
 };
 
+use crate::mcp::{
+    mcp_config_command_display, mcp_config_command_from_words, mcp_config_command_report,
+    persist_mcp_config_command,
+};
 use std::fs;
 
 // In-memory command execution entry points.
@@ -213,6 +217,15 @@ pub fn execute_config_store_command(
                     "key={notation}:config_key={config_key}:removed=true:changed={}:reload_required={}:source=config-store",
                     plan.changed, plan.reload_required
                 ),
+            })
+        }
+        "mcp" => {
+            let command = mcp_config_command_from_words(&invocation.args)?;
+            let plans = persist_mcp_config_command(paths, &command)?;
+            let report = mcp_config_command_report(&plans);
+            Ok(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: mcp_config_command_display(&command, report),
             })
         }
         "source-file" => {

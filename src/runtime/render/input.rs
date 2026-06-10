@@ -533,11 +533,18 @@ impl RuntimeSessionService {
                     server.configured.enabled,
                     server.status,
                 ));
-                [SelectorExtraCandidate::new(
-                    SelectorSurface::MezzanineCommand,
-                    "mcp-status",
-                    candidate,
-                )]
+                [
+                    SelectorExtraCandidate::new(
+                        SelectorSurface::MezzanineCommand,
+                        "mcp-status",
+                        candidate.clone(),
+                    ),
+                    SelectorExtraCandidate::new(
+                        SelectorSurface::MezzanineCommand,
+                        "mcp inspect",
+                        candidate,
+                    ),
+                ]
             })
             .collect()
     }

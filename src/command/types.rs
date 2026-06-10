@@ -272,6 +272,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "refresh-provider-info",
     "agent-shell",
     "auth-status",
+    "mcp",
     "mcp-status",
     "save-layout",
     "load-layout",
@@ -314,6 +315,7 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         | "show-metrics"
         | "refresh-provider-info"
         | "agent-shell"
+        | "mcp"
         | "approve-observer"
         | "reject-observer"
         | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,

@@ -1046,6 +1046,37 @@ fn config_store_commands_mutate_primary_config_and_apply_source_file() {
     let text = fs::read_to_string(&config_path).unwrap();
     assert!(!text.contains("key_43_2d_61 = \"split-window -h\""));
 
+    let mcp = display_body(
+        execute_config_store_command(
+            &paths,
+            &parse_command_sequence("mcp add fs --command mcp-fs --arg --root --arg . --disabled")
+                .unwrap()
+                .remove(0),
+        )
+        .unwrap(),
+    );
+    assert!(mcp.contains("server=fs:action=add"), "{mcp}");
+    assert!(mcp.contains("changed=true"), "{mcp}");
+    let text = fs::read_to_string(&config_path).unwrap();
+    assert!(text.contains("[mcp_servers.fs]"));
+    assert!(text.contains("enabled = false"));
+    assert!(text.contains("command = \"mcp-fs\""));
+    assert!(text.contains("args"));
+
+    let mcp_tools = display_body(
+        execute_config_store_command(
+            &paths,
+            &parse_command_sequence("mcp tools disable fs write_file")
+                .unwrap()
+                .remove(0),
+        )
+        .unwrap(),
+    );
+    assert!(mcp_tools.contains("action=tools-disable"), "{mcp_tools}");
+    let text = fs::read_to_string(&config_path).unwrap();
+    assert!(text.contains("disabled_tools"));
+    assert!(text.contains("write_file"));
+
     let source_path = root.join("sourced-config.toml");
     let source_text = fs::read_to_string(&config_path)
         .unwrap()

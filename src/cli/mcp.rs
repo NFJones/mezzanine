@@ -6,15 +6,18 @@
 
 use super::{
     Args, AuthPaths, AuthStore, BTreeSet, CliEnv, CliOutputFormat, ConfigFormat, ConfigLayer,
-    ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths,
-    ConfigScope, DEFAULT_CONFIG_TOML, EffectiveConfig, McpRegistry, MezError, ProjectTrustStore,
-    Result, Serialize, Subcommand, TrustDecision, Write, compose_effective_config,
-    default_trust_database_path, discover_existing_overlays, discover_project_root, fs,
-    migrate_config_file, persist_config_mutation, serialize_json, write_json_or_plain,
+    ConfigMutationPlan, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML, EffectiveConfig,
+    McpRegistry, MezError, ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
+    compose_effective_config, default_trust_database_path, discover_existing_overlays,
+    discover_project_root, fs, migrate_config_file, serialize_json, write_json_or_plain,
 };
 use crate::auth::{
     AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
     run_mcp_oauth_login_async,
+};
+use crate::mcp::{
+    McpConfigCommand, McpConfigTransport, mcp_config_command_report, mcp_config_setting_from_user,
+    persist_mcp_config_command,
 };
 use sha2::Digest;
 
@@ -149,55 +152,31 @@ pub(super) async fn run_mcp<W: Write>(
             command,
             url,
             args: arg_values,
+            disabled,
         } => {
-            validate_config_identifier(&id, "MCP server id")?;
             if command.is_some() == url.is_some() {
                 return Err(MezError::invalid_args(
                     "mcp add requires exactly one of --command or --url",
                 ));
             }
-            let mut plans = Vec::new();
-            plans.push(persist_primary_config_mutation(
+            let transport = if let Some(command) = command {
+                McpConfigTransport::Stdio {
+                    command,
+                    args: arg_values,
+                }
+            } else {
+                McpConfigTransport::StreamableHttp {
+                    url: url.expect("url is Some when command is None"),
+                }
+            };
+            let plans = persist_mcp_config_command(
                 &paths,
-                ConfigMutation::set_boolean(format!("mcp_servers.{}.enabled", id), true),
-            )?);
-            if let Some(command) = command {
-                plans.push(persist_primary_config_mutation(
-                    &paths,
-                    ConfigMutation::set_string(format!("mcp_servers.{}.command", id), command),
-                )?);
-                plans.push(persist_primary_config_mutation(
-                    &paths,
-                    ConfigMutation::set_string_array(
-                        format!("mcp_servers.{}.args", id),
-                        &arg_values,
-                    ),
-                )?);
-                plans.push(persist_primary_config_mutation(
-                    &paths,
-                    ConfigMutation {
-                        path: format!("mcp_servers.{}.url", id),
-                        operation: ConfigMutationOperation::Unset,
-                    },
-                )?);
-            }
-            if let Some(url) = url {
-                plans.push(persist_primary_config_mutation(
-                    &paths,
-                    ConfigMutation::set_string(format!("mcp_servers.{}.url", id), url),
-                )?);
-                plans.push(persist_primary_config_mutation(
-                    &paths,
-                    ConfigMutation {
-                        path: format!("mcp_servers.{}.command", id),
-                        operation: ConfigMutationOperation::Unset,
-                    },
-                )?);
-                plans.push(persist_primary_config_mutation(
-                    &paths,
-                    ConfigMutation::set_string_array(format!("mcp_servers.{}.args", id), &[]),
-                )?);
-            }
+                &McpConfigCommand::Add {
+                    id: id.clone(),
+                    transport,
+                    enabled: !disabled,
+                },
+            )?;
             let output = mcp_mutation_json(
                 &id,
                 mutation_plans_changed(&plans),
@@ -206,8 +185,8 @@ pub(super) async fn run_mcp<W: Write>(
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Remove { id } => {
-            validate_config_identifier(&id, "MCP server id")?;
-            let plans = persist_mcp_server_removal(&paths, &id)?;
+            let plans =
+                persist_mcp_config_command(&paths, &McpConfigCommand::Remove { id: id.clone() })?;
             let output = mcp_remove_json(
                 &id,
                 mutation_plans_changed(&plans),
@@ -216,23 +195,85 @@ pub(super) async fn run_mcp<W: Write>(
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Enable { id } => {
-            validate_config_identifier(&id, "MCP server id")?;
             let enabled = true;
-            let plan = persist_primary_config_mutation(
+            let plans = persist_mcp_config_command(
                 &paths,
-                ConfigMutation::set_boolean(format!("mcp_servers.{id}.enabled"), enabled),
+                &McpConfigCommand::Enable {
+                    id: id.clone(),
+                    enabled,
+                },
             )?;
-            let output = mcp_enabled_json(&id, enabled, plan.changed, plan.reload_required)?;
+            let report = mcp_config_command_report(&plans);
+            let output = mcp_enabled_json(&id, enabled, report.changed, report.reload_required)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
         McpCliCommand::Disable { id } => {
-            validate_config_identifier(&id, "MCP server id")?;
             let enabled = false;
-            let plan = persist_primary_config_mutation(
+            let plans = persist_mcp_config_command(
                 &paths,
-                ConfigMutation::set_boolean(format!("mcp_servers.{id}.enabled"), enabled),
+                &McpConfigCommand::Enable {
+                    id: id.clone(),
+                    enabled,
+                },
             )?;
-            let output = mcp_enabled_json(&id, enabled, plan.changed, plan.reload_required)?;
+            let report = mcp_config_command_report(&plans);
+            let output = mcp_enabled_json(&id, enabled, report.changed, report.reload_required)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Set { id, setting, value } => {
+            let setting = mcp_config_setting_from_user(&setting)?;
+            let plans = persist_mcp_config_command(
+                &paths,
+                &McpConfigCommand::Set {
+                    id: id.clone(),
+                    setting,
+                    value,
+                },
+            )?;
+            let report = mcp_config_command_report(&plans);
+            let output = mcp_setting_json(&id, report.changed, report.reload_required)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Unset { id, setting } => {
+            let setting = mcp_config_setting_from_user(&setting)?;
+            let plans = persist_mcp_config_command(
+                &paths,
+                &McpConfigCommand::Unset {
+                    id: id.clone(),
+                    setting,
+                },
+            )?;
+            let report = mcp_config_command_report(&plans);
+            let output = mcp_setting_json(&id, report.changed, report.reload_required)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Tools { command } => {
+            let command = match command {
+                McpCliToolsCommand::Enable { id, tools } => {
+                    McpConfigCommand::ToolsEnable { id, tools }
+                }
+                McpCliToolsCommand::Disable { id, tools } => {
+                    McpConfigCommand::ToolsDisable { id, tools }
+                }
+                McpCliToolsCommand::Reset { id } => McpConfigCommand::ToolsReset { id },
+            };
+            let id = mcp_cli_command_id(&command).to_string();
+            let plans = persist_mcp_config_command(&paths, &command)?;
+            let report = mcp_config_command_report(&plans);
+            let output = mcp_setting_json(&id, report.changed, report.reload_required)?;
+            write_json_or_plain(stdout, output_format, &output)?;
+        }
+        McpCliCommand::Approval { command } => {
+            let command = match command {
+                McpCliApprovalCommand::Set { id, approval } => {
+                    McpConfigCommand::ApprovalSet { id, approval }
+                }
+                McpCliApprovalCommand::Unset { id } => McpConfigCommand::ApprovalUnset { id },
+            };
+            let id = mcp_cli_command_id(&command).to_string();
+            let plans = persist_mcp_config_command(&paths, &command)?;
+            let report = mcp_config_command_report(&plans);
+            let output = mcp_setting_json(&id, report.changed, report.reload_required)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
     }
@@ -300,6 +341,9 @@ enum McpCliCommand {
         /// Stdio command argument. May be repeated.
         #[arg(long = "arg", allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Register the server disabled instead of enabling it immediately.
+        #[arg(long)]
+        disabled: bool,
     },
     /// Removes one configured MCP server.
     Remove {
@@ -316,45 +360,89 @@ enum McpCliCommand {
         /// MCP server id.
         id: String,
     },
+    /// Sets one safe scalar MCP server setting.
+    Set {
+        /// MCP server id.
+        id: String,
+        /// Setting name.
+        setting: String,
+        /// Setting value.
+        value: String,
+    },
+    /// Unsets one safe scalar MCP server setting.
+    Unset {
+        /// MCP server id.
+        id: String,
+        /// Setting name.
+        setting: String,
+    },
+    /// Controls persisted MCP tool allow and deny lists.
+    Tools {
+        /// Tool-list subcommand.
+        #[command(subcommand)]
+        command: McpCliToolsCommand,
+    },
+    /// Controls server-level MCP tool approval behavior.
+    Approval {
+        /// Approval subcommand.
+        #[command(subcommand)]
+        command: McpCliApprovalCommand,
+    },
 }
 
-impl ConfigMutation {
-    /// Runs the set string operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn set_string(path: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            operation: ConfigMutationOperation::Set(ConfigMutationValue::String(value.into())),
-        }
-    }
+/// Typed process CLI subcommands for MCP tool filters.
+#[derive(Debug, Clone, Subcommand)]
+enum McpCliToolsCommand {
+    /// Replaces the enabled-tools allow-list.
+    Enable {
+        /// MCP server id.
+        id: String,
+        /// Tool names to allow.
+        tools: Vec<String>,
+    },
+    /// Replaces the disabled-tools deny-list.
+    Disable {
+        /// MCP server id.
+        id: String,
+        /// Tool names to deny.
+        tools: Vec<String>,
+    },
+    /// Clears enabled and disabled tool lists.
+    Reset {
+        /// MCP server id.
+        id: String,
+    },
+}
 
-    /// Runs the set boolean operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn set_boolean(path: impl Into<String>, value: bool) -> Self {
-        Self {
-            path: path.into(),
-            operation: ConfigMutationOperation::Set(ConfigMutationValue::Boolean(value)),
-        }
-    }
+/// Typed process CLI subcommands for server-level MCP approval settings.
+#[derive(Debug, Clone, Subcommand)]
+enum McpCliApprovalCommand {
+    /// Sets server-level approval to inherit, prompt, allow, or deny.
+    Set {
+        /// MCP server id.
+        id: String,
+        /// Approval value.
+        approval: String,
+    },
+    /// Removes the server-level approval override.
+    Unset {
+        /// MCP server id.
+        id: String,
+    },
+}
 
-    /// Runs the set string array operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn set_string_array(path: impl Into<String>, values: &[String]) -> Self {
-        Self {
-            path: path.into(),
-            operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
-                values.to_vec(),
-            )),
-        }
+fn mcp_cli_command_id(command: &McpConfigCommand) -> &str {
+    match command {
+        McpConfigCommand::Add { id, .. }
+        | McpConfigCommand::Remove { id }
+        | McpConfigCommand::Enable { id, .. }
+        | McpConfigCommand::Set { id, .. }
+        | McpConfigCommand::Unset { id, .. }
+        | McpConfigCommand::ToolsEnable { id, .. }
+        | McpConfigCommand::ToolsDisable { id, .. }
+        | McpConfigCommand::ToolsReset { id }
+        | McpConfigCommand::ApprovalSet { id, .. }
+        | McpConfigCommand::ApprovalUnset { id } => id,
     }
 }
 
@@ -440,38 +528,6 @@ pub(super) fn load_primary_config_layers(paths: &ConfigPaths) -> Result<Vec<Conf
         trusted: true,
         text,
     }])
-}
-
-/// Runs the persist primary config mutation operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn persist_primary_config_mutation(
-    paths: &ConfigPaths,
-    mutation: ConfigMutation,
-) -> Result<ConfigMutationPlan> {
-    let path = paths.ensure_default_config()?;
-    persist_config_mutation(&path, ConfigScope::Primary, mutation)
-}
-
-/// Runs the persist mcp server removal operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn persist_mcp_server_removal(
-    paths: &ConfigPaths,
-    id: &str,
-) -> Result<Vec<ConfigMutationPlan>> {
-    persist_primary_config_mutation(
-        paths,
-        ConfigMutation {
-            path: format!("mcp_servers.{id}"),
-            operation: ConfigMutationOperation::Unset,
-        },
-    )
-    .map(|plan| vec![plan])
 }
 
 /// Runs the configured mcp servers operation for this subsystem.
@@ -917,6 +973,11 @@ fn mcp_enabled_json(
         changed,
         reload_required,
     })
+}
+
+/// Renders MCP setting mutation output through typed JSON serialization.
+fn mcp_setting_json(id: &str, changed: bool, reload_required: bool) -> Result<String> {
+    mcp_mutation_json(id, changed, reload_required)
 }
 
 /// Returns the stable display name for a secret-safe credential state.

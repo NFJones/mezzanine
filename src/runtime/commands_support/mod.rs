@@ -359,6 +359,10 @@ pub(super) fn execute_runtime_live_terminal_command(
                 ),
             }))
         }
+        "mcp" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_mcp_command(service, invocation)?,
+        })),
         "auth-status" | "mcp-status" => {
             let outcome = {
                 let Some(auth_store) = service.auth_store() else {

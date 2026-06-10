@@ -533,7 +533,7 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 /// Returns the help category for one terminal command.
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
-        "agent-shell" | "auth-status" | "mcp-status" | "refresh-provider-info" => {
+        "agent-shell" | "auth-status" | "mcp" | "mcp-status" | "refresh-provider-info" => {
             "agent and integrations"
         }
         "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
@@ -593,6 +593,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "list-themes" => "show built-in and configured UI themes.",
         "list-windows" => "show window identities, names, active state, and sizes.",
         "mark-pane-ready" => "temporarily mark a pane as ready after risk acknowledgement.",
+        "mcp" => "manage MCP servers, settings, tools, approvals, and retry.",
         "mcp-status" => "show non-secret MCP server auth status.",
         "new-group" => "create a window group with one landing window.",
         "new-window" => "create a window with one pane.",

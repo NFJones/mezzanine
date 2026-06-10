@@ -641,6 +641,7 @@ pub(super) fn runtime_immediate_terminal_command_name(command: &str) -> bool {
             | "set-option"
             | "source-file"
             | "pipe-pane"
+            | "mcp"
             | "mcp-status"
             | "refresh-client"
             | "refresh"

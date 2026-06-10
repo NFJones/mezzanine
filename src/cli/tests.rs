@@ -3847,6 +3847,77 @@ fn mcp_cli_adds_inspects_toggles_and_removes_configured_server() {
     assert!(list_output.contains(r#""enabled":false"#));
 
     let config_path = home.join(".config").join("mezzanine").join("config.toml");
+    let mut setting_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "mcp".to_string(),
+            "set".to_string(),
+            "fs".to_string(),
+            "startup-timeout-ms".to_string(),
+            "1500".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut setting_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let setting_output = String::from_utf8(setting_stdout).unwrap();
+    assert!(setting_output.contains(r#""server_id":"fs""#));
+    assert!(setting_output.contains(r#""changed":true"#));
+
+    let mut tools_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "mcp".to_string(),
+            "tools".to_string(),
+            "enable".to_string(),
+            "fs".to_string(),
+            "read_file".to_string(),
+            "write_file".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut tools_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(tools_stdout)
+            .unwrap()
+            .contains(r#""server_id":"fs""#)
+    );
+
+    let mut approval_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "mcp".to_string(),
+            "approval".to_string(),
+            "set".to_string(),
+            "fs".to_string(),
+            "prompt".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut approval_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(approval_stdout)
+            .unwrap()
+            .contains(r#""server_id":"fs""#)
+    );
+
+    let config_text = fs::read_to_string(&config_path).unwrap();
+    assert!(config_text.contains("startup_timeout_ms = 1500"));
+    assert!(config_text.contains("enabled_tools"));
+    assert!(config_text.contains("read_file"));
+    assert!(config_text.contains("approval = \"prompt\""));
+
     let mut config_text = fs::read_to_string(&config_path).unwrap();
     config_text.push_str("\n[mcp_servers.fs.env]\nLOG_LEVEL = \"debug\"\n");
     fs::write(&config_path, config_text).unwrap();

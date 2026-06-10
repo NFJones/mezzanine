@@ -11,6 +11,11 @@
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod audit;
+/// Exposes the config commands module boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod config_commands;
 /// Exposes the protocol module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -40,6 +45,12 @@ mod types;
 pub use audit::{
     McpToolAuditCallContext, call_stdio_mcp_tool_with_audit,
     call_streamable_http_mcp_tool_with_audit,
+};
+pub use config_commands::{
+    McpConfigCommand, McpConfigCommandReport, McpConfigSetting, McpConfigTransport,
+    mcp_config_command_display, mcp_config_command_from_words, mcp_config_command_mutations,
+    mcp_config_command_report, mcp_config_setting_from_user, persist_mcp_config_command,
+    validate_mcp_config_identifier,
 };
 pub(crate) use protocol::mcp_tools_call_operation;
 pub use protocol::{

@@ -1447,6 +1447,7 @@ The command language MUST include commands equivalent to:
 - `refresh-provider-info`
 - `agent-shell`
 - `auth-status`
+- `mcp`
 - `mcp-status`
 - `save-layout`
 - `load-layout`
@@ -1466,7 +1467,7 @@ The command language MUST include commands equivalent to:
 The terminal command language MUST remain focused on multiplexer control,
 terminal display, configuration, and primary-client operations. Agent-scoped
 operations that have an agent slash-command equivalent, including provider
-logout, MCP listing, project trust decisions, permission profile display or
+logout, project trust decisions, permission profile display or
 mutation, command-rule management, approval-bypass control, and approval-mode
 selection, MUST NOT be duplicated as terminal commands.
 
@@ -1531,6 +1532,7 @@ The baseline commands MUST have the following semantics:
 | `refresh-provider-info` | Refresh cached provider model and quota information for all configured providers. Ordinary pane creation, pane-frame rendering, and model-list displays MUST NOT trigger provider catalog network refreshes; they MUST use cached provider information or configured fallback models. |
 | `agent-shell` | Show, hide, or toggle the agent shell for the target pane. Hiding MUST request `/stop` for any in-progress pane-local agent task before the shell is hidden. |
 | `auth-status` | Show non-secret provider authentication status and selected model profile. |
+| `mcp` | List and inspect live MCP servers, retry one configured MCP server, and persist MCP server add/remove/enable/disable, safe scalar settings, tool allow/deny lists, and server-level approval settings through the primary configuration. MCP server login/logout remains in the CLI/auth flows because it may require OAuth and credential-store interaction. |
 | `mcp-status` | Show non-secret MCP server authentication status for the requested server. |
 | `save-layout` | Store the current window-group, window, and pane topology with user-assigned group, window, and pane names and each pane's current working directory when available. It MUST accept `--name <name>`; when omitted, the stored layout name MUST default to a generated UUID. The layout store MUST NOT include pane process state, terminal history, client state, agent state, approvals, messages, or MCP runtime state. |
 | `load-layout` | Clear the current group, window, and pane layout and recreate the stored layout in the current session. It MUST accept `--name <name>`; when omitted, it MUST load the newest stored layout. Each recreated pane MUST start a new shell process in the saved current working directory when that directory still exists, otherwise in `$HOME`. It MUST NOT attempt to reattach or restore previous pane processes or session runtime state. |
