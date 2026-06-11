@@ -132,7 +132,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store when the current task specifically needs durable memory lookup or storage. During non-trivial investigation, diagnosis, or planning, when memory actions are available, make an explicit early decision about whether durable prior context is likely relevant. Ask once near the start whether prior user preferences, project-specific history, earlier decisions, or recurring constraints could materially change the next action or answer; if yes, perform one focused memory search early before proceeding further. Do not skip that check merely because current local evidence exists, but do not use this surface as routine preflight when no durable context is likely relevant, and do not treat memory results as primary evidence. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store when the current task needs durable memory lookup or storage. For most non-trivial tasks, when memory actions are available, perform one focused memory search near the start of the turn. Skip that early search only when the task is clearly self-contained and durable prior context is very unlikely to help. Keep the search focused, usually limit yourself to a single early memory search, and do not treat memory results as primary evidence. When salient stable information is uncovered, strongly consider one focused memory_store action so future turns can reuse it. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -575,7 +575,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "Search persistent memory only when durable prior context is needed for the current task. Keep queries focused and avoid using this as a routine preflight.",
+                "For most non-trivial tasks, search persistent memory once near the start of the turn unless the task is clearly self-contained and durable prior context is very unlikely to help. Keep queries focused.",
             ),
             (
                 "limit",
@@ -601,7 +601,7 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": ["preference", "fact", "procedure", "episode", "warning", "scratch"],
-                    "description": "Durable memory kind. Store only stable, reusable information that helps future turns."
+                    "description": "Durable memory kind. When salient stable information would help future turns, store it as a focused reusable memory."
                 }),
             ),
             (

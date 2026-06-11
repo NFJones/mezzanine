@@ -7253,13 +7253,18 @@ instructs the agent to do so for that specific content.
 When persistent memory is enabled, the provider action surface MAY expose a
 gated `memory` capability whose concrete action subset contains
 `memory_search` and `memory_store`. These on-demand actions MUST execute
-through the runtime-owned persistent store, MUST return bounded action results
-for provider continuation, and MUST NOT be used as a routine preflight for every
-task. During non-trivial investigation, diagnosis, or planning, agents SHOULD
-consider one focused early memory search for potentially useful prior context,
-but MUST treat retrieved memory as secondary hints and MUST confirm important
-conclusions against current artifacts, repository state, tests, logs, or other
-current action results before relying on them. When persistent memory is
+through the runtime-owned persistent store and MUST return bounded action
+results for provider continuation. For most non-trivial tasks, agents SHOULD
+perform one focused early memory search for potentially useful prior context.
+Agents MAY skip that early search when the task is clearly self-contained and
+durable prior context is very unlikely to help. Agents SHOULD usually limit
+themselves to a single early memory search unless later results create a
+specific reason for another. Agents MUST treat retrieved memory as secondary
+hints and MUST confirm important conclusions against current artifacts,
+repository state, tests, logs, or other current action results before relying
+on them. When salient stable information is uncovered that is likely to help
+future turns, agents SHOULD consider storing it with `memory_store`. When
+persistent memory is
 disabled, the harness MUST deny the `memory`
 capability and MUST NOT expose `memory_search` or `memory_store`.
 

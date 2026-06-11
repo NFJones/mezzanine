@@ -4432,6 +4432,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("separate observed facts backed by current action results"));
     assert!(prompt.contains("from source-backed inference, assumptions, and unresolved uncertainty"));
     assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
+    assert!(prompt.contains("When memory actions are available for a non-trivial task, almost always perform one focused memory search near the start of the turn"));
+    assert!(prompt.contains("Skip that early search only when the task is clearly self-contained and durable prior context is very unlikely to help"));
+    assert!(prompt.contains("strongly consider storing it with memory_store if it is likely to help future turns"));
     assert!(prompt.contains("prefer repository patterns"));
     assert!(prompt.contains("preserve unrelated user worktree changes"));
     assert!(prompt.contains("Terminal work MUST be an executable action"));
