@@ -56,6 +56,7 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 | `list-sessions` | Show resumable sessions. |
 | `rename-session` | Rename the current or target session. |
 | `kill-session` | Terminate a session and all panes. |
+| `exit` | Terminate the current session and exit Mezzanine. |
 | `help` | Show the terminal command guide. |
 | `copy-mode` | Enter pane-local copy mode. |
 | `copy-selection` | Copy the active selection to a buffer and clipboard when available. |

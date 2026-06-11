@@ -545,7 +545,7 @@ fn terminal_command_category(name: &str) -> &'static str {
         }
         "help" | "list-commands" | "mark-pane-ready" | "refresh-client" | "show-messages"
         | "show-metrics" => "diagnostics and help",
-        "approve-observer" | "attach-session" | "choose-observer" | "detach-client"
+        "approve-observer" | "attach-session" | "choose-observer" | "detach-client" | "exit"
         | "kill-session" | "list-clients" | "list-observers" | "list-sessions"
         | "reject-observer" | "rename-session" | "load-layout" | "revoke-observer"
         | "save-layout" => "sessions and clients",
@@ -573,6 +573,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "delete-buffer" => "delete a paste buffer.",
         "detach-client" => "detach a client without terminating the session.",
         "display-panes" => "show temporary pane labels for selection.",
+        "exit" => "terminate the current session and exit Mezzanine.",
         "export-history" => "export bounded pane history.",
         "help" => "show this guide.",
         "join-pane" => "move a pane into another window or split.",

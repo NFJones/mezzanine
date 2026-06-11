@@ -1424,6 +1424,7 @@ The command language MUST include commands equivalent to:
 - `list-sessions`
 - `rename-session`
 - `kill-session`
+- `exit`
 - `help`
 - `copy-mode`
 - `copy-selection`
@@ -1509,6 +1510,7 @@ The baseline commands MUST have the following semantics:
 | `list-sessions` | Return resumable sessions, including identity, name, creation time, last attach time, window count, attached client count, and primary availability. |
 | `rename-session` | Rename the target session. Repeating the command with the same target and name MUST be idempotent. |
 | `kill-session` | Terminate the target session and all panes after confirmation or an explicit force flag unless policy permits destructive session termination without prompting. |
+| `exit` | Terminate the current session and all panes, then exit Mezzanine. It MUST route through the runtime session shutdown path so attached clients and the server process exit cleanly. |
 | `help` | Render a command guide for the Mezzanine command set in the interactive command-output overlay, with a column-aligned key binding list section at the bottom. |
 | `copy-mode` | Enter pane-local copy mode for scrolling visible and historical terminal content, moving a selection cursor, selecting text, and copying text without sending input to the pane process or opening a command-output view. |
 | `copy-selection` | Copy the active copy-mode selection to the active or named paste buffer and to the host clipboard when host clipboard integration is available. |

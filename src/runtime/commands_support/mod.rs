@@ -144,6 +144,15 @@ pub(super) fn execute_runtime_live_terminal_command(
     invocation: &CommandInvocation,
 ) -> Result<Option<CommandOutcome>> {
     match invocation.name.as_str() {
+        "exit" => {
+            if !invocation.args.is_empty() {
+                return Err(MezError::invalid_args("exit accepts no arguments"));
+            }
+            service.kill_session(primary_client_id, true)?;
+            Ok(Some(CommandOutcome::Mutated {
+                command: invocation.name.clone(),
+            }))
+        }
         "send-prefix" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_send_prefix_command(service, primary_client_id)?,

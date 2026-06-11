@@ -250,6 +250,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "list-sessions",
     "rename-session",
     "kill-session",
+    "exit",
     "copy-mode",
     "copy-selection",
     "paste-clipboard",

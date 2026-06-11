@@ -919,6 +919,7 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "rename-window" => Some(" <name>"),
         "kill-window" => Some(" [-t target-window]"),
         "select-window" | "attach-session" | "kill-session" => Some(" <target>"),
+        "exit" => Some(""),
         "split-window" => Some(" [-h|-v] [-d] [-c dir] [-- command]"),
         "kill-pane" | "zoom-pane" | "display-panes" => Some(" [-t target-pane]"),
         "select-pane" | "swap-pane" => Some(" <-U|-D|-L|-R|next|previous|last>"),
