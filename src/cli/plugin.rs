@@ -6,8 +6,8 @@
 
 use super::{Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, serialize_json};
 use crate::plugins::{
-    PluginRegistry, install_local_plugin, plugin_inspect_display, plugin_list_display,
-    set_plugin_enabled, uninstall_plugin,
+    PluginManifest, PluginRegistry, install_local_plugin, plugin_inspect_display,
+    plugin_list_display, set_plugin_enabled, uninstall_plugin,
 };
 use std::path::PathBuf;
 
@@ -60,14 +60,9 @@ pub(super) fn run_plugin<W: Write>(
             write_plugin_mutation(stdout, output_format, "disable", Some(&message))?;
         }
         PluginCliCommand::Marketplace { .. } => {
-            write_plugin_mutation(
-                stdout,
-                output_format,
-                "marketplace",
-                Some(
-                    "plugin marketplace support is planned; local install/list/inspect/enable/disable/uninstall are available",
-                ),
-            )?;
+            return Err(crate::MezError::invalid_args(
+                "plugin marketplace support is not implemented; local install/list/inspect/enable/disable/uninstall are available",
+            ));
         }
     }
     Ok(())
@@ -144,6 +139,23 @@ struct PluginListJson {
 struct PluginInspectJson {
     /// Installed plugin record.
     plugin: PluginJson,
+    /// Payload declarations read from the installed manifest.
+    payloads: PluginPayloadsJson,
+}
+
+/// Secret-free manifest payload declarations emitted by JSON inspect.
+#[derive(Serialize)]
+struct PluginPayloadsJson {
+    /// Relative skill root declared by the plugin.
+    skills: Option<String>,
+    /// Reserved relative MCP payload path.
+    mcp_servers: Option<String>,
+    /// Reserved relative hook payload path.
+    hooks: Option<String>,
+    /// Reserved relative subagent payload path.
+    subagents: Option<String>,
+    /// Reserved relative personality payload path.
+    personalities: Option<String>,
 }
 
 /// Secret-free installed plugin JSON record.
@@ -227,9 +239,45 @@ fn plugin_inspect_json(config_root: &std::path::Path, id: &str) -> Result<String
             format!("plugin {id:?} is not installed"),
         )
     })?;
+    let manifest = PluginManifest::read_from_root(&plugin.path)?;
+    if manifest.id != plugin.id {
+        return Err(crate::MezError::config(format!(
+            "plugin {:?} manifest id changed to {}; refusing JSON inspect",
+            plugin.id, manifest.id
+        )));
+    }
     serialize_json(&PluginInspectJson {
         plugin: plugin_json(plugin),
+        payloads: plugin_payloads_json(&manifest),
     })
+}
+
+/// Converts manifest payload declarations into JSON inspect output.
+fn plugin_payloads_json(manifest: &PluginManifest) -> PluginPayloadsJson {
+    PluginPayloadsJson {
+        skills: manifest.payloads.skills.as_deref().map(pathbuf_to_string),
+        mcp_servers: manifest
+            .payloads
+            .mcp_servers
+            .as_deref()
+            .map(pathbuf_to_string),
+        hooks: manifest.payloads.hooks.as_deref().map(pathbuf_to_string),
+        subagents: manifest
+            .payloads
+            .subagents
+            .as_deref()
+            .map(pathbuf_to_string),
+        personalities: manifest
+            .payloads
+            .personalities
+            .as_deref()
+            .map(pathbuf_to_string),
+    }
+}
+
+/// Renders one relative plugin payload path for JSON output.
+fn pathbuf_to_string(path: &std::path::Path) -> String {
+    path.display().to_string()
 }
 
 /// Converts one installed plugin record into secret-free JSON.

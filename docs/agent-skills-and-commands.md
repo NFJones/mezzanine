@@ -110,6 +110,7 @@ Common slash commands:
 | `/permissions` | Inspect or change permission policy. |
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
+| `/plugin` | Show read-only installed plugin status with `list`, `status`, and `inspect`; use `mez plugin` for lifecycle changes. |
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |

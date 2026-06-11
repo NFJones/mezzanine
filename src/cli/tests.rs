@@ -3783,6 +3783,23 @@ fn plugin_cli_owns_local_lifecycle_mutations() {
         vec![
             "mez".to_string(),
             "plugin".to_string(),
+            "inspect".to_string(),
+            "demo-plugin".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let inspect_json = String::from_utf8(stdout).unwrap();
+    assert!(inspect_json.contains(r#""payloads":{"skills":"skills""#));
+
+    stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
             "uninstall".to_string(),
             "demo-plugin".to_string(),
         ],
@@ -3795,6 +3812,50 @@ fn plugin_cli_owns_local_lifecycle_mutations() {
     let registry = crate::plugins::PluginRegistry::read(&home.join(".config/mezzanine")).unwrap();
     assert!(!registry.plugins.contains_key("demo-plugin"));
     assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies unimplemented plugin marketplace commands fail instead of
+/// returning success-shaped mutation output.
+#[test]
+fn plugin_cli_marketplace_reports_unimplemented_error() {
+    let (env, home) = test_env("plugin-marketplace");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let plain_error = run_with_plain(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
+            "marketplace".to_string(),
+            "search".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+    assert!(plain_error.message().contains("not implemented"));
+    assert!(stdout.is_empty());
+
+    stdout = Vec::new();
+    let json_error = run_with(
+        vec![
+            "mez".to_string(),
+            "plugin".to_string(),
+            "marketplace".to_string(),
+            "search".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+    assert!(json_error.message().contains("not implemented"));
+    assert!(stdout.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }

@@ -278,7 +278,7 @@ impl RuntimeSessionService {
             };
             let document = load_skill_document(summary)?;
             blocks.push(ContextBlock {
-                source: ContextSourceKind::UserInstruction,
+                source: ContextSourceKind::SkillInstruction,
                 label: format!("explicit skill {}", invocation.name),
                 content: self.runtime_skill_context_text(
                     document,

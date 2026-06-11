@@ -80,6 +80,18 @@ pub fn load_enabled_plugins(config_root: &Path) -> PluginLoadOutcome {
                 plugin.id
             ));
         }
+        if manifest.payloads.subagents.is_some() {
+            outcome.diagnostics.push(format!(
+                "plugin {} declares subagents; plugin subagent activation is reserved for a later phase",
+                plugin.id
+            ));
+        }
+        if manifest.payloads.personalities.is_some() {
+            outcome.diagnostics.push(format!(
+                "plugin {} declares personalities; plugin personality activation is reserved for a later phase",
+                plugin.id
+            ));
+        }
     }
     outcome
 }

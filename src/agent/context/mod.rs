@@ -55,6 +55,12 @@ pub enum ContextSourceKind {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     UserInstruction,
+    /// Represents explicitly loaded skill instructions.
+    ///
+    /// Skill bodies are model-visible workflow context, but they are not the
+    /// active user prompt and must not share the user-instruction source
+    /// category used for the submitted prompt.
+    SkillInstruction,
     /// Represents the Developer Instruction case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -190,6 +196,7 @@ impl TrustDomain {
             ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage => {
                 TrustDomain::UserInput
             }
+            ContextSourceKind::SkillInstruction => TrustDomain::ProjectFile,
             ContextSourceKind::RuntimeHint => TrustDomain::Configuration,
             ContextSourceKind::ProjectGuidance => TrustDomain::ProjectFile,
             ContextSourceKind::Memory => TrustDomain::UserInput,
@@ -304,6 +311,7 @@ impl ContextBlock {
             | ContextSourceKind::CommittedEvidence => ContextStability::SessionStable,
             ContextSourceKind::EvidenceLedger => ContextStability::TurnVolatile,
             ContextSourceKind::UserInstruction
+            | ContextSourceKind::SkillInstruction
             | ContextSourceKind::LocalMessage
             | ContextSourceKind::RuntimeHint
             | ContextSourceKind::ActionResult => ContextStability::TurnVolatile,
@@ -333,6 +341,7 @@ impl ContextBlock {
                 }
             }
             ContextSourceKind::UserInstruction
+            | ContextSourceKind::SkillInstruction
             | ContextSourceKind::LocalMessage
             | ContextSourceKind::RuntimeHint
             | ContextSourceKind::EvidenceLedger

@@ -163,6 +163,7 @@ pub(super) fn role_for_source(source: ContextSourceKind) -> ModelMessageRole {
         }
         ContextSourceKind::TranscriptAssistant => ModelMessageRole::Assistant,
         ContextSourceKind::UserInstruction
+        | ContextSourceKind::SkillInstruction
         | ContextSourceKind::LocalMessage
         | ContextSourceKind::ProjectGuidance
         | ContextSourceKind::Memory

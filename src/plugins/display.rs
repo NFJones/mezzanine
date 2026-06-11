@@ -28,10 +28,18 @@ pub fn plugin_command_from_args(args: &str) -> Result<PluginCommand> {
         return Ok(PluginCommand::List);
     };
     match command {
-        "list" => Ok(PluginCommand::List),
+        "list" => {
+            require_exact_words(&words, 1, "plugin list does not accept extra arguments")?;
+            Ok(PluginCommand::List)
+        }
         "status" if words.len() == 1 => Ok(PluginCommand::List),
         "status" | "inspect" => {
             let id = required_word(&words, 1, "plugin status requires a plugin id")?;
+            require_exact_words(
+                &words,
+                2,
+                "plugin inspect/status accepts exactly one plugin id",
+            )?;
             Ok(PluginCommand::Inspect { id })
         }
         "install" | "add" | "uninstall" | "remove" | "enable" | "disable" | "marketplace" => {
@@ -142,6 +150,14 @@ fn required_word(words: &[&str], index: usize, message: &str) -> Result<String> 
         .get(index)
         .map(|word| (*word).to_string())
         .ok_or_else(|| MezError::invalid_args(message))
+}
+
+fn require_exact_words(words: &[&str], expected: usize, message: &str) -> Result<()> {
+    if words.len() == expected {
+        Ok(())
+    } else {
+        Err(MezError::invalid_args(message))
+    }
 }
 
 fn plugin_cli_migration_error() -> MezError {

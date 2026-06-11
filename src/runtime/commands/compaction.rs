@@ -655,6 +655,7 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
     match source {
         ContextSourceKind::System => "system",
         ContextSourceKind::UserInstruction => "user-instruction",
+        ContextSourceKind::SkillInstruction => "skill-instruction",
         ContextSourceKind::DeveloperInstruction => "developer-instruction",
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",

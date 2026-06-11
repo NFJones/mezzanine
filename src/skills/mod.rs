@@ -74,6 +74,19 @@ pub struct SkillSummary {
     pub source: SkillSource,
     /// Absolute or caller-supplied path to the backing `SKILL.md` file.
     pub path: PathBuf,
+    /// Owning plugin id when this skill came from an enabled installed plugin.
+    pub plugin_id: Option<String>,
+}
+
+impl SkillSummary {
+    /// Returns a human-facing source label that includes plugin ownership when
+    /// available.
+    pub fn attribution_label(&self) -> String {
+        match self.plugin_id.as_deref() {
+            Some(plugin_id) => format!("{} ({plugin_id})", self.source.as_str()),
+            None => self.source.as_str().to_string(),
+        }
+    }
 }
 
 /// Non-fatal discovery diagnostic for an invalid or unreadable skill path.
@@ -142,6 +155,7 @@ impl SkillCatalog {
                     "name": skill.name,
                     "description": skill.description,
                     "source": skill.source.as_str(),
+                    "plugin_id": skill.plugin_id.as_deref(),
                     "path": skill.path.to_string_lossy(),
                 })
             }).collect::<Vec<_>>(),
@@ -214,6 +228,7 @@ pub fn discover_skill_catalog_with_plugin_roots(
         discover_skills_under_root(
             &root.join(SKILLS_DIRECTORY_NAME),
             SkillSource::User,
+            None,
             &mut skills,
             &mut diagnostics,
         );
@@ -222,6 +237,7 @@ pub fn discover_skill_catalog_with_plugin_roots(
         discover_skills_under_root(
             &root.path,
             SkillSource::Plugin,
+            Some(root.plugin_id.as_str()),
             &mut skills,
             &mut diagnostics,
         );
@@ -230,6 +246,7 @@ pub fn discover_skill_catalog_with_plugin_roots(
         discover_skills_under_root(
             &root.join(".mezzanine").join(SKILLS_DIRECTORY_NAME),
             SkillSource::Project,
+            None,
             &mut skills,
             &mut diagnostics,
         );
@@ -280,10 +297,17 @@ pub fn load_skill_document(summary: &SkillSummary) -> Result<SkillDocument> {
 /// - `document`: Loaded skill document.
 /// - `additional_context`: Optional semantic argument to append.
 pub fn skill_context_text(document: &SkillDocument, additional_context: Option<&str>) -> String {
+    let plugin_line = document
+        .summary
+        .plugin_id
+        .as_deref()
+        .map(|plugin_id| format!("Plugin: {plugin_id}\n"))
+        .unwrap_or_default();
     let mut text = format!(
-        "# Skill: {}\n\nSource: {}\nPath: {}\n\nInvocation state: this skill is already loaded for the current turn. Do not call `request_skills` or `call_skill` merely to discover, confirm, or reload this skill; follow the workflow below with the currently available actions, or request a missing action family with `request_capability`.\n\n{}",
+        "# Skill: {}\n\nSource: {}\n{}Path: {}\n\nInvocation state: this skill is already loaded for the current turn. Do not call `request_skills` or `call_skill` merely to discover, confirm, or reload this skill; follow the workflow below with the currently available actions, or request a missing action family with `request_capability`.\n\n{}",
         document.summary.name,
         document.summary.source.as_str(),
+        plugin_line,
         document.summary.path.display(),
         document.text.trim_end()
     );
@@ -313,6 +337,7 @@ fn builtin_skill_summaries() -> Vec<SkillSummary> {
         description: description.to_string(),
         source: SkillSource::Builtin,
         path: builtin_skill_path(name),
+        plugin_id: None,
     })
     .collect()
 }
@@ -414,6 +439,7 @@ pub fn parse_skill_prompt_invocation(input: &str) -> Option<SkillPromptInvocatio
 fn discover_skills_under_root(
     root: &Path,
     source: SkillSource,
+    plugin_id: Option<&str>,
     skills: &mut BTreeMap<String, SkillSummary>,
     diagnostics: &mut Vec<SkillDiagnostic>,
 ) {
@@ -451,15 +477,60 @@ fn discover_skills_under_root(
     entries.sort();
     for path in entries {
         let skill_path = path.join(SKILL_FILE_NAME);
-        match read_skill_summary(&path, &skill_path, source) {
+        match read_skill_summary(&path, &skill_path, source, plugin_id) {
             Ok(summary) => {
-                skills.insert(summary.name.clone(), summary);
+                insert_skill_summary(skills, diagnostics, summary);
             }
             Err(message) => diagnostics.push(SkillDiagnostic {
                 path: skill_path,
                 message,
             }),
         }
+    }
+}
+
+/// Inserts one discovered skill while reporting name collisions and enforcing
+/// source precedence.
+fn insert_skill_summary(
+    skills: &mut BTreeMap<String, SkillSummary>,
+    diagnostics: &mut Vec<SkillDiagnostic>,
+    summary: SkillSummary,
+) {
+    if let Some(existing) = skills.get(&summary.name) {
+        let replace =
+            skill_source_precedence(summary.source) > skill_source_precedence(existing.source);
+        diagnostics.push(SkillDiagnostic {
+            path: summary.path.clone(),
+            message: if replace {
+                format!(
+                    "skill name {:?} from {} overrides existing {} entry",
+                    summary.name,
+                    summary.attribution_label(),
+                    existing.attribution_label()
+                )
+            } else {
+                format!(
+                    "skill name {:?} from {} ignored because existing {} entry has precedence",
+                    summary.name,
+                    summary.attribution_label(),
+                    existing.attribution_label()
+                )
+            },
+        });
+        if !replace {
+            return;
+        }
+    }
+    skills.insert(summary.name.clone(), summary);
+}
+
+/// Returns deterministic skill-source precedence from lowest to highest.
+fn skill_source_precedence(source: SkillSource) -> u8 {
+    match source {
+        SkillSource::Builtin => 0,
+        SkillSource::Plugin => 1,
+        SkillSource::User => 2,
+        SkillSource::Project => 3,
     }
 }
 
@@ -473,6 +544,7 @@ fn read_skill_summary(
     directory: &Path,
     skill_path: &Path,
     source: SkillSource,
+    plugin_id: Option<&str>,
 ) -> std::result::Result<SkillSummary, String> {
     if !directory.is_dir() {
         return Err("skill entry is not a directory".to_string());
@@ -508,6 +580,7 @@ fn read_skill_summary(
         description: front_matter.description.trim().to_string(),
         source,
         path: skill_path.to_path_buf(),
+        plugin_id: plugin_id.map(ToOwned::to_owned),
     })
 }
 
@@ -550,9 +623,11 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 mod tests {
     use super::{
         BUILTIN_CREATE_SKILL_NAME, BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX,
-        SkillSource, discover_skill_catalog, is_valid_skill_name, load_skill_document,
-        parse_skill_prompt_invocation, skill_context_text, split_skill_front_matter,
+        SkillSource, discover_skill_catalog, discover_skill_catalog_with_plugin_roots,
+        is_valid_skill_name, load_skill_document, parse_skill_prompt_invocation,
+        skill_context_text, split_skill_front_matter,
     };
+    use crate::plugins::PluginSkillRoot;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -627,6 +702,77 @@ mod tests {
         assert_eq!(overridden.description, "Project workflow");
         assert_eq!(overridden.source, SkillSource::Project);
     }
+
+    /// Verifies plugin skill collisions are diagnostic-only and cannot silently
+    /// shadow user skills, while project skills remain the highest precedence.
+    #[test]
+    fn skill_catalog_reports_plugin_collisions_and_preserves_precedence() {
+        let root = test_temp_root("plugin-precedence");
+        let user_root = root.join("user");
+        let project_root = root.join("repo");
+        let plugin_a = root.join("plugins/a/skills");
+        let plugin_b = root.join("plugins/b/skills");
+        write_skill(
+            &user_root.join("skills"),
+            "review",
+            "User review",
+            "user body",
+        );
+        write_skill(&plugin_a, "review", "Plugin review", "plugin body");
+        write_skill(
+            &plugin_a,
+            "plugin-only",
+            "Plugin-only workflow",
+            "plugin body",
+        );
+        write_skill(
+            &plugin_b,
+            "plugin-only",
+            "Second plugin workflow",
+            "plugin body",
+        );
+        write_skill(
+            &project_root.join(".mezzanine/skills"),
+            "review",
+            "Project review",
+            "project body",
+        );
+
+        let catalog = discover_skill_catalog_with_plugin_roots(
+            Some(&user_root),
+            Some(&project_root),
+            &[
+                PluginSkillRoot {
+                    plugin_id: "plugin-a".to_string(),
+                    path: plugin_a,
+                },
+                PluginSkillRoot {
+                    plugin_id: "plugin-b".to_string(),
+                    path: plugin_b,
+                },
+            ],
+        );
+
+        let review = catalog.get("review").unwrap();
+        let plugin_only = catalog.get("plugin-only").unwrap();
+        assert_eq!(review.source, SkillSource::Project);
+        assert_eq!(review.description, "Project review");
+        assert_eq!(plugin_only.source, SkillSource::Plugin);
+        assert_eq!(plugin_only.plugin_id.as_deref(), Some("plugin-a"));
+        assert!(
+            catalog
+                .structured_json()
+                .contains(r#""plugin_id":"plugin-a""#)
+        );
+        assert!(catalog.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("Plugin review")
+                || diagnostic.message.contains("plugin-a") && diagnostic.message.contains("ignored")
+        }));
+        assert!(catalog.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("plugin-b") && diagnostic.message.contains("ignored")
+        }));
+    }
+
     /// Verifies skill front matter parsing still accepts YAML quoted scalars.
     ///
     /// This regression scenario covers the maintained YAML parser replacement

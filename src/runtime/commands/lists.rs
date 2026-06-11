@@ -74,12 +74,13 @@ impl RuntimeSessionService {
                     vec![
                         format!("`${}`", skill.name),
                         skill.source.as_str().to_string(),
+                        skill.plugin_id.clone().unwrap_or_else(|| "-".to_string()),
                         skill.description.clone(),
                     ]
                 })
                 .collect::<Vec<_>>();
             lines.extend(runtime_markdown_table(
-                &["Skill", "Scope", "Description"],
+                &["Skill", "Scope", "Plugin", "Description"],
                 &rows,
             ));
         }

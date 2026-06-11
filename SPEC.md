@@ -4754,8 +4754,10 @@ effective skill catalog, insert the complete `SKILL.md` text into the new
 turn's model context, and append any text after the skill token under a
 markdown `Additional context` heading. The submitted prompt remains the latest
 user instruction, so the additional text is available both as user input and as
-the skill-specific semantic argument. The agent prompt selector SHOULD provide
-tab completion for `$<skill-name>` from the effective skill catalog.
+the skill-specific semantic argument. Loaded skill bodies MUST use a distinct
+skill context source rather than the source category used for the active user
+prompt. The agent prompt selector SHOULD provide tab completion for
+`$<skill-name>` from the effective skill catalog.
 
 Skill content is instruction-like context, but it does not override higher
 priority policy, system instructions, developer instructions, user
@@ -4766,6 +4768,10 @@ MUST enter the effective skill catalog only when its installed plugin is
 enabled. Plugin skill roots MUST use the same explicit `$<skill-name>` loading
 path as user and project skills; installation alone MUST NOT inject plugin
 skill text into model context.
+Plugin skills have lower precedence than user and trusted project skills and
+higher precedence than built-in skills. Skill name collisions SHOULD be
+reported as discovery diagnostics, and catalog, listing, and invocation
+metadata for plugin skills MUST include the owning plugin id.
 Skill names and descriptions SHOULD NOT be embedded into the stable system
 prompt. While model-selected skill actions are disabled, users SHOULD discover
 available skills with `/list-skills` and explicitly select them with
@@ -4837,7 +4843,10 @@ The baseline command capabilities are:
   commands. Installing a plugin MUST copy or register local package files and
   persist installed-plugin state, but it MUST NOT execute plugin content.
   Enabled plugin skill payloads MUST be included in the effective skill catalog
-  with source scope `plugin`.
+  with source scope `plugin` and owning plugin id attribution. The `/plugin`
+  parser MUST reject trailing arguments that are not accepted by the selected
+  read-only subcommand, and prompt completion SHOULD offer installed plugin ids
+  after `status` and `inspect` rather than repeating subcommands.
   Plugin-declared MCP servers, hooks, subagents, personalities, marketplaces,
   and network-backed install/upgrade flows MUST remain inactive unless a later
   explicit implementation and approval-gated activation path supports them.

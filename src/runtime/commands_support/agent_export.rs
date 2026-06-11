@@ -592,6 +592,7 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
     match source {
         ContextSourceKind::System => "system",
         ContextSourceKind::UserInstruction => "user-instruction",
+        ContextSourceKind::SkillInstruction => "skill-instruction",
         ContextSourceKind::DeveloperInstruction => "developer-instruction",
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",

@@ -2221,7 +2221,7 @@ fn runtime_agent_context_explicit_skill_prompt_loads_skill_context() {
         .find(|block| block.label == "user prompt")
         .expect("missing raw user prompt block");
 
-    assert_eq!(skill_block.source, ContextSourceKind::UserInstruction);
+    assert_eq!(skill_block.source, ContextSourceKind::SkillInstruction);
     assert!(skill_block.content.contains("name: review"));
     assert!(skill_block.content.contains("Check tests and risks."));
     assert!(
@@ -2282,7 +2282,7 @@ fn runtime_agent_context_builtin_create_skill_prompt_loads_builtin_context() {
         .find(|block| block.label == "explicit skill create-skill")
         .expect("missing explicit built-in skill context block");
 
-    assert_eq!(skill_block.source, ContextSourceKind::UserInstruction);
+    assert_eq!(skill_block.source, ContextSourceKind::SkillInstruction);
     assert!(skill_block.content.contains("Source: builtin"));
     assert!(skill_block.content.contains("name: create-skill"));
     assert!(skill_block.content.contains("Project scope:"));
@@ -2676,11 +2676,11 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
     );
     assert!(
         response
-            .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
+            .contains("| `$create-skill` | builtin | - | Create or modify concise Mezzanine skills"),
         "{response}"
     );
     assert!(
-        response.contains("| `$review` | user | Review workflow |"),
+        response.contains("| `$review` | user | - | Review workflow |"),
         "{response}"
     );
 }
@@ -2706,7 +2706,7 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
 
     assert!(
         response
-            .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
+            .contains("| `$create-skill` | builtin | - | Create or modify concise Mezzanine skills"),
         "{response}"
     );
     assert!(
@@ -2760,7 +2760,7 @@ fn runtime_plugin_install_enable_exposes_plugin_skill_in_list_skills() {
         "{install_response}"
     );
     assert!(
-        list_response.contains("| `$demo` | plugin | Demo plugin workflow |"),
+        list_response.contains("| `$demo` | plugin | demo-plugin | Demo plugin workflow |"),
         "{list_response}"
     );
 }

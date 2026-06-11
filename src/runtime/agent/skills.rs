@@ -201,14 +201,17 @@ impl RuntimeSessionService {
                     turn,
                     action,
                     vec![content],
-                    Some(format!(
-                        r#"{{"name":"{}","source":"{}","path":"{}","skill_bytes":{},"additional_context_bytes":{}}}"#,
-                        json_escape(&document.summary.name),
-                        document.summary.source.as_str(),
-                        json_escape(&document.summary.path.to_string_lossy()),
-                        document.text.len(),
-                        additional_context.as_deref().map(str::len).unwrap_or(0)
-                    )),
+                    Some(
+                        serde_json::json!({
+                            "name": &document.summary.name,
+                            "source": document.summary.source.as_str(),
+                            "plugin_id": document.summary.plugin_id.as_deref(),
+                            "path": document.summary.path.to_string_lossy(),
+                            "skill_bytes": document.text.len(),
+                            "additional_context_bytes": additional_context.as_deref().map(str::len).unwrap_or(0),
+                        })
+                        .to_string(),
+                    ),
                 );
                 skill_context.loaded_skills.insert(name.clone());
                 Ok(result)

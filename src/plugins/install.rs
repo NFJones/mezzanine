@@ -52,6 +52,7 @@ pub fn install_local_plugin(config_root: &Path, source: &Path, enabled: bool) ->
         )));
     }
     let destination = installed_plugin_root(config_root, &manifest.id);
+    ensure_plugin_copy_boundary(&source, &destination)?;
     if destination.exists() {
         std::fs::remove_dir_all(&destination).map_err(|error| {
             MezError::new(
@@ -95,19 +96,61 @@ pub fn uninstall_plugin(config_root: &Path, plugin_id: &str) -> Result<String> {
             format!("plugin {plugin_id:?} is not installed"),
         )
     })?;
-    if removed.path.exists() {
-        std::fs::remove_dir_all(&removed.path).map_err(|error| {
+    let expected = installed_plugin_root(config_root, plugin_id);
+    if !same_plugin_install_path(&removed.path, &expected)? {
+        return Err(MezError::config(format!(
+            "plugin {plugin_id:?} registry path {} does not match expected installed path {}; refusing to uninstall",
+            removed.path.display(),
+            expected.display()
+        )));
+    }
+    if expected.exists() {
+        std::fs::remove_dir_all(&expected).map_err(|error| {
             MezError::new(
                 crate::MezErrorKind::Io,
                 format!(
                     "failed to remove plugin directory {}: {error}",
-                    removed.path.display()
+                    expected.display()
                 ),
             )
         })?;
     }
     registry.write(config_root)?;
     Ok(format!("uninstalled plugin {plugin_id}"))
+}
+
+/// Verifies local plugin copies cannot recursively include themselves.
+fn ensure_plugin_copy_boundary(source: &Path, destination: &Path) -> Result<()> {
+    let source = normalized_absolute_path(source)?;
+    let destination = normalized_absolute_path(destination)?;
+    if destination.starts_with(&source) || source.starts_with(&destination) {
+        return Err(MezError::config(format!(
+            "plugin source {} and destination {} must not contain each other",
+            source.display(),
+            destination.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Returns whether a persisted installed path matches the expected store root.
+fn same_plugin_install_path(actual: &Path, expected: &Path) -> Result<bool> {
+    let actual = normalized_absolute_path(actual)?;
+    let expected = normalized_absolute_path(expected)?;
+    Ok(actual == expected)
+}
+
+/// Produces an absolute path for equality and containment checks without
+/// requiring the final path component to exist yet.
+fn normalized_absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()
+        .map_err(|error| {
+            MezError::invalid_state(format!("failed to read current directory: {error}"))
+        })?
+        .join(path))
 }
 
 /// Updates installed plugin enablement state.
