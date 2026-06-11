@@ -3720,6 +3720,12 @@ The baseline action types are:
   override hunk-header anchors, MUST NOT override body context, and MUST be
   rejected when candidates are tied, nearly tied, or distant from the hinted old
   line.
+  A single update hunk with the case-insensitive header anchor
+  `@@ replace whole file` is an explicit whole-file replacement convention. It
+  MUST be the only hunk in that update operation, MUST contain only `+` added
+  lines plus an optional `*** End of File` marker, and MUST replace the complete
+  target file content without old-context matching. Mezzanine MUST NOT provide a
+  separate `*** Replace File` directive.
   Hunk-header anchors MUST be matched as ordered literal substring constraints
   against the current target file; they MUST NOT replace the required hunk body
   context. Implementations MAY use distinctive Rust-like hunk-header anchors as
@@ -3749,6 +3755,7 @@ The baseline action types are:
   diagnostic SHOULD identify the search scope, candidate spans, useful
   hunk-header anchor state, and range-hint rejection details when available.
   When old-context matching fails, the diagnostic SHOULD conservatively report
+  non-exact first old-context matches, when available, and SHOULD report
   whether the replacement block or distinctive added lines are already present
   in the relevant target scope so the model can reconcile current file state
   instead of retrying a stale hunk.
@@ -6240,7 +6247,8 @@ instead of reread. It MUST state that rereads are exceptional and require a
 concrete reason such as stale or truncated evidence, an intended hunk outside
 the covered range, or a prior patch or validation result showing that the
 first owner read was insufficient. The prompt MUST recommend several small
-anchored hunks over one large brittle hunk. It MUST state that after an
+anchored hunks over one large brittle hunk, and MAY describe `@@ replace whole
+file` as the explicit add-only whole-file replacement convention. It MUST state that after an
 `apply_patch` hunk or context mismatch, the model should reuse already-read
 fresh current context when available, otherwise re-read only missing or stale
 candidate/owner ranges, and retry with a smaller fresh Mezzanine patch using a

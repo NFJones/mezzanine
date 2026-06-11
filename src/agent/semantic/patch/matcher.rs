@@ -20,6 +20,20 @@ pub(super) fn apply_patch_hunks_to_file(
     mut file: ApplyPatchTextFile,
     hunks: &[MezPatchHunk],
 ) -> Result<ApplyPatchTextFile> {
+    if let Some(hunk) = hunks.iter().find(|hunk| hunk.replace_whole_file) {
+        if hunks.len() != 1 {
+            return Err(MezError::invalid_args(format!(
+                "apply_patch: whole-file replacement for {path} must be the only update hunk"
+            )));
+        }
+        if !hunk.old.is_empty() {
+            return Err(MezError::invalid_args(format!(
+                "apply_patch: whole-file replacement hunk for {path} must contain only added lines"
+            )));
+        }
+        file.lines = hunk.new.clone();
+        return Ok(file);
+    }
     let mut cursor = 0usize;
     for hunk in hunks {
         let hunk_match = find_hunk_position(&file, hunk, cursor)
@@ -353,6 +367,19 @@ fn apply_patch_hunk_mismatch_error(
         let anchor_lines = apply_patch_anchor_line_numbers(&file.lines, first_line);
         if anchor_lines.is_empty() {
             message.push_str("\napply_patch: first old-context line was not found anywhere");
+            if let Some((mode, nearby_lines)) =
+                apply_patch_non_exact_anchor_line_numbers(&file.lines, first_line)
+            {
+                message.push_str(&format!(
+                    "\napply_patch: first old-context line nearest non-exact match mode={} current line(s): {}",
+                    mode.as_str(),
+                    nearby_lines
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
         } else {
             message.push_str(&format!(
                 "\napply_patch: first old-context line appears at current line(s): {}",
@@ -372,12 +399,7 @@ fn apply_patch_hunk_mismatch_error(
                 .or_else(|| {
                     hunk.old
                         .first()
-                        .and_then(|line| {
-                            apply_patch_anchor_line_numbers(&file.lines, line)
-                                .first()
-                                .copied()
-                        })
-                        .and_then(|line| line.checked_sub(1))
+                        .and_then(|line| apply_patch_first_old_context_center(&file.lines, line))
                 })
         })
         .or_else(|| (!file.lines.is_empty()).then_some(0));
@@ -1602,6 +1624,38 @@ fn apply_patch_anchor_line_numbers(lines: &[String], anchor: &str) -> Vec<usize>
         .filter_map(|(index, line)| (line == anchor).then_some(index + 1))
         .take(APPLY_PATCH_MISMATCH_ANCHOR_LIMIT)
         .collect()
+}
+
+fn apply_patch_first_old_context_center(lines: &[String], anchor: &str) -> Option<usize> {
+    apply_patch_anchor_line_numbers(lines, anchor)
+        .first()
+        .copied()
+        .or_else(|| {
+            apply_patch_non_exact_anchor_line_numbers(lines, anchor)
+                .and_then(|(_, line_numbers)| line_numbers.first().copied())
+        })
+        .and_then(|line| line.checked_sub(1))
+}
+
+fn apply_patch_non_exact_anchor_line_numbers(
+    lines: &[String],
+    anchor: &str,
+) -> Option<(ApplyPatchMatchMode, Vec<usize>)> {
+    APPLY_PATCH_MATCH_MODES
+        .iter()
+        .copied()
+        .filter(|mode| *mode != ApplyPatchMatchMode::Exact)
+        .find_map(|mode| {
+            let line_numbers = lines
+                .iter()
+                .enumerate()
+                .filter_map(|(index, line)| {
+                    patch_line_matches(line, anchor, mode).then_some(index + 1)
+                })
+                .take(APPLY_PATCH_MISMATCH_ANCHOR_LIMIT)
+                .collect::<Vec<_>>();
+            (!line_numbers.is_empty()).then_some((mode, line_numbers))
+        })
 }
 
 fn apply_patch_mismatch_excerpt(line: &str) -> String {

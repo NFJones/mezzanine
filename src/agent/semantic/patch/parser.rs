@@ -77,6 +77,8 @@ pub(super) struct MezPatchHunk {
     pub(super) anchors: Vec<String>,
     /// Optional unified-diff old-line hint.
     pub(super) range_hint: Option<MezPatchRangeHint>,
+    /// Whether this hunk replaces the complete target file content.
+    pub(super) replace_whole_file: bool,
     /// Raw hunk lines in parsed form.
     pub(super) lines: Vec<MezPatchHunkLine>,
     /// Old-side lines that must match the current file.
@@ -521,12 +523,13 @@ fn parse_mez_patch_hunk(
     if index >= lines.len() {
         return apply_patch_parse_error("expected hunk header");
     }
-    let (anchors, range_hint) = if is_mez_hunk_header_line(lines[index]) {
-        let (anchors, range_hint) = parse_mez_patch_hunk_header(lines[index].trim());
+    let (anchors, range_hint, replace_whole_file) = if is_mez_hunk_header_line(lines[index]) {
+        let (anchors, range_hint, replace_whole_file) =
+            parse_mez_patch_hunk_header(lines[index].trim());
         index += 1;
-        (anchors, range_hint)
+        (anchors, range_hint, replace_whole_file)
     } else if allow_missing_header {
-        (Vec::new(), None)
+        (Vec::new(), None, false)
     } else {
         return apply_patch_parse_error("expected hunk header");
     };
@@ -580,6 +583,7 @@ fn parse_mez_patch_hunk(
         MezPatchHunk {
             anchors,
             range_hint,
+            replace_whole_file,
             lines: hunk_lines,
             old,
             new,
@@ -593,16 +597,19 @@ fn is_mez_hunk_header_line(line: &str) -> bool {
         || (!line.starts_with([' ', '+', '-']) && line.trim_start().starts_with("@@"))
 }
 
-fn parse_mez_patch_hunk_header(header: &str) -> (Vec<String>, Option<MezPatchRangeHint>) {
+fn parse_mez_patch_hunk_header(header: &str) -> (Vec<String>, Option<MezPatchRangeHint>, bool) {
     let body = header.strip_prefix("@@").unwrap_or(header).trim();
     let (body, range_hint) = strip_unified_hunk_range_metadata(body);
+    if body.eq_ignore_ascii_case("replace whole file") {
+        return (Vec::new(), range_hint, true);
+    }
     let anchors = body
         .split("@@")
         .map(str::trim)
         .filter(|anchor| !anchor.is_empty())
         .map(ToString::to_string)
         .collect();
-    (anchors, range_hint)
+    (anchors, range_hint, false)
 }
 
 fn strip_unified_hunk_range_metadata(body: &str) -> (&str, Option<MezPatchRangeHint>) {

@@ -3978,7 +3978,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
-        description.contains("For whole-file replacement, use *** Update File with hunks"),
+        description.contains("For whole-file replacement, use an Update File hunk headed @@ replace whole file"),
         "{description}"
     );
     assert!(description.contains("relative safe paths"), "{description}");

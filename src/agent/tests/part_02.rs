@@ -2907,6 +2907,84 @@ fn semantic_apply_patch_hunk_mismatch_reports_present_distinctive_added_lines() 
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
+/// Verifies hunk mismatch diagnostics report nearby non-exact first-context matches.
+///
+/// Models can self-correct faster when a copied old-context line only differs
+/// by trailing or surrounding whitespace. The mismatch diagnostic should report
+/// the matching mode and current line instead of only saying that the exact old
+/// line is absent.
+#[test]
+fn semantic_apply_patch_hunk_mismatch_reports_non_exact_first_context_line() {
+    let temp = test_temp_dir("semantic-codex-patch-non-exact-first-context");
+    std::fs::write(temp.join("note.txt"), "old   \nother\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n-context\n+new\n+context\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("first old-context line was not found anywhere"),
+        "{error}"
+    );
+    assert!(
+        error.contains(
+            "first old-context line nearest non-exact match mode=trim_end current line(s): 1"
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("suggested_read_range=note.txt:1-2"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies `@@ replace whole file` updates replace complete file contents.
+///
+/// This gives models a safer explicit convention for generated or heavily
+/// shifted files without adding a separate `Replace File` directive. The hunk
+/// body is still parsed as Mezzanine patch text and only `+` lines become the
+/// final file content.
+#[test]
+fn semantic_apply_patch_replace_whole_file_hunk_replaces_complete_file() {
+    let temp = test_temp_dir("semantic-codex-patch-replace-whole-file");
+    std::fs::write(temp.join("note.txt"), "old\nbody\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.txt\n@@ replace whole file\n+new\n+body\n*** End Patch";
+
+    let output = run_apply_patch_action(&temp, patch);
+
+    assert!(
+        output.status.success(),
+        "command failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("note.txt")).unwrap(),
+        "new\nbody\n"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+/// Verifies whole-file replacement hunks reject mixed old and new context.
+///
+/// The convention should not silently behave like an ordinary hunk with a large
+/// stale old side. Requiring add-only bodies keeps the model-facing recovery
+/// path deterministic and easy to repair.
+#[test]
+fn semantic_apply_patch_replace_whole_file_hunk_rejects_old_context() {
+    let temp = test_temp_dir("semantic-codex-patch-replace-whole-file-old");
+    std::fs::write(temp.join("note.txt"), "old\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.txt\n@@ replace whole file\n-old\n+new\n*** End Patch";
+
+    let error = apply_patch_write_error(&temp, patch);
+
+    assert!(
+        error.contains("whole-file replacement hunk for note.txt must contain only added lines"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
 /// Verifies `@@` header anchors can disambiguate repeated exact hunk context.
 ///
 /// Repeated single-line context is common in tests and documentation. Header
