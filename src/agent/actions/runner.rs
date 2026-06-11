@@ -11,9 +11,10 @@ use super::super::ModelProvider;
 #[cfg(test)]
 use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
-    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage,
-    PathScopes, PermissionPolicy, Result, SessionApprovalStore, assemble_model_request,
+    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
+    AllowedActionSet, McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest,
+    ModelTokenUsage, PathScopes, PermissionPolicy, Result, SessionApprovalStore,
+    assemble_model_request,
 };
 #[cfg(test)]
 use super::super::{MarkerToken, McpToolCallPlan, Path};
@@ -48,6 +49,17 @@ const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
 /// Maximum non-executing capability negotiations before a turn fails closed.
 const CAPABILITY_REQUEST_ATTEMPT_LIMIT: usize = 3;
+
+/// Exposes persistent-memory actions on the main model action surface when enabled.
+fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
+    request.memory_actions_enabled = memory_actions_enabled;
+    if !memory_actions_enabled {
+        return;
+    }
+    request
+        .allowed_actions
+        .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
+}
 
 /// Carries agent turn runner state for this subsystem.
 ///
@@ -119,7 +131,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             request.allowed_actions = allowed_actions;
         }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
-        request.memory_actions_enabled = self.memory_actions_enabled;
+        expose_default_memory_actions(&mut request, self.memory_actions_enabled);
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
         let mut response_request: ModelRequest;
@@ -488,7 +500,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             request.allowed_actions = allowed_actions;
         }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
-        request.memory_actions_enabled = self.memory_actions_enabled;
+        expose_default_memory_actions(&mut request, self.memory_actions_enabled);
         let mut repair_attempts = 0usize;
         let mut capability_attempts = 0usize;
         let mut response_request: ModelRequest;
