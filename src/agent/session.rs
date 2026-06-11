@@ -666,8 +666,9 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "diff"
         | "list-modified-files" => "copy and diagnostics",
         "approval" | "approve" | "routing" | "init" | "latency" | "list-mcp" | "log-level"
-        | "memory" | "directive" | "logout" | "model" | "permissions" | "personality"
-        | "plugin" | "trust" => "configuration",
+        | "memory" | "directive" | "logout" | "model" | "permissions" | "personality" | "trust" => {
+            "configuration"
+        }
         "help" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
@@ -705,7 +706,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "logout" => "log out of a provider account.",
         "list-mcp" => "list configured MCP servers and tools.",
         "memory" => "inspect or change persistent memory enablement.",
-        "plugin" => "show installed plugin status; use `mez plugin ...` for lifecycle changes.",
         "remember" => "generate durable memories from the current context or a statement.",
         "model" => "inspect or change model and reasoning settings.",
         "latency" => "inspect or change latency/cost preference.",

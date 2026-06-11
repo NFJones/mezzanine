@@ -2499,7 +2499,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
         .unwrap();
     assert!(skills.contains("Project review workflow"), "{skills}");
     assert!(
-        skills.contains("| `$review` | project | - | Project review workflow |"),
+        skills.contains("| `$review` | project | Project review workflow |"),
         "{skills}"
     );
     let _ = fs::remove_dir_all(root);

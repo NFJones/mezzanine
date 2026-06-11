@@ -602,30 +602,6 @@ impl RuntimeSessionService {
                 )
             }));
         }
-        if let Some(config_root) = self.config_root.as_deref()
-            && let Ok(registry) = crate::plugins::PluginRegistry::read(config_root)
-        {
-            candidates.extend(registry.plugins.values().flat_map(|plugin| {
-                let candidate =
-                    SelectorCandidate::new(plugin.id.clone(), SelectorCandidateKind::Value, true)
-                        .with_detail(format!(
-                            "enabled={} version {}",
-                            plugin.enabled, plugin.version
-                        ));
-                [
-                    SelectorExtraCandidate::new(
-                        SelectorSurface::AgentCommand,
-                        "plugin inspect",
-                        candidate.clone(),
-                    ),
-                    SelectorExtraCandidate::new(
-                        SelectorSurface::AgentCommand,
-                        "plugin status",
-                        candidate,
-                    ),
-                ]
-            }));
-        }
         let Some(store) = self.agent_transcript_store.as_ref() else {
             return candidates;
         };

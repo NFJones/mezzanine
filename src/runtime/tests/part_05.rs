@@ -2676,11 +2676,11 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
     );
     assert!(
         response
-            .contains("| `$create-skill` | builtin | - | Create or modify concise Mezzanine skills"),
+            .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
         "{response}"
     );
     assert!(
-        response.contains("| `$review` | user | - | Review workflow |"),
+        response.contains("| `$review` | user | Review workflow |"),
         "{response}"
     );
 }
@@ -2706,7 +2706,7 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
 
     assert!(
         response
-            .contains("| `$create-skill` | builtin | - | Create or modify concise Mezzanine skills"),
+            .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
         "{response}"
     );
     assert!(
@@ -2714,55 +2714,6 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
         "{response}"
     );
     assert!(response.contains("Start a prompt with `$`"), "{response}");
-}
-
-/// Verifies a CLI-installed local skill-only package appears in the same
-/// effective catalog used by `/list-skills`. This protects the plugin command
-/// split: lifecycle mutations are CLI-owned while slash commands stay read-only.
-#[test]
-fn runtime_plugin_install_enable_exposes_plugin_skill_in_list_skills() {
-    let root = temp_root("runtime-plugin-skill");
-    let config_root = root.join("config");
-    let package_root = root.join("plugin-package");
-    fs::create_dir_all(package_root.join("skills/demo")).unwrap();
-    fs::write(
-        package_root.join("mez-plugin.toml"),
-        "schema_version = 1\nid = \"demo-plugin\"\nname = \"Demo Plugin\"\ndescription = \"Adds demo workflow.\"\nversion = \"0.1.0\"\n\n[payloads]\nskills = \"skills\"\n",
-    )
-    .unwrap();
-    fs::write(
-        package_root.join("skills/demo/SKILL.md"),
-        "---\nname: demo\ndescription: Demo plugin workflow\n---\n\nUse demo.\n",
-    )
-    .unwrap();
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    service.set_config_root(config_root);
-
-    let install_response = crate::plugins::install_local_plugin(
-        service.config_root.as_deref().unwrap(),
-        &package_root,
-        true,
-    )
-    .unwrap();
-    let list_response = service
-        .execute_agent_shell_command(&primary, "/list-skills")
-        .unwrap();
-
-    assert!(
-        install_response.contains("installed plugin demo-plugin enabled=true"),
-        "{install_response}"
-    );
-    assert!(
-        list_response.contains("| `$demo` | plugin | demo-plugin | Demo plugin workflow |"),
-        "{list_response}"
-    );
 }
 
 /// Verifies overlapping compaction attempts are rejected before they can start

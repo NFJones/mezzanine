@@ -338,7 +338,6 @@ fn slash_command_registry_contains_required_baseline_commands() {
         "directive",
         "list-sessions",
         "list-skills",
-        "plugin",
         "copy-context",
         "copy-trace-log",
         "copy-patches",
@@ -428,10 +427,6 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     let skills = parse_slash_command("/list-skills").unwrap().unwrap();
     assert_eq!(skills.name, "list-skills");
     assert_eq!(skills.effect, SlashCommandEffect::ReadOnly);
-    let plugin = parse_slash_command("/plugins list").unwrap().unwrap();
-    assert_eq!(plugin.name, "plugin");
-    assert_eq!(plugin.args, "list");
-    assert_eq!(plugin.effect, SlashCommandEffect::ReadOnly);
     let directive = parse_slash_command("/directive focus on regressions")
         .unwrap()
         .unwrap();

@@ -8,30 +8,6 @@
 use super::*;
 
 impl RuntimeSessionService {
-    /// Executes read-only `/plugin` status against the local plugin registry.
-    ///
-    /// # Parameters
-    /// - `pane_id`: Pane whose current working directory resolves relative install paths.
-    /// - `input`: Full slash-command input.
-    pub(super) fn execute_agent_shell_plugin_command(
-        &mut self,
-        _pane_id: &str,
-        input: &str,
-    ) -> Result<AgentShellCommandOutcome> {
-        let root = self.config_root.clone().ok_or_else(|| {
-            MezError::invalid_state("plugin commands require a configured Mezzanine config root")
-        })?;
-        let invocation = parse_slash_command(input)?.ok_or_else(|| {
-            MezError::invalid_args("plugin command must be invoked as a slash command")
-        })?;
-        let command = crate::plugins::plugin_command_from_args(&invocation.args)?;
-        let body = crate::plugins::plugin_status_display(&root, command)?;
-        Ok(AgentShellCommandOutcome::Display {
-            command: "plugin".to_string(),
-            body,
-        })
-    }
-
     /// Executes `/list-skills` and returns the effective skill catalog.
     ///
     /// The command is read-only and intentionally uses the same effective
@@ -74,13 +50,12 @@ impl RuntimeSessionService {
                     vec![
                         format!("`${}`", skill.name),
                         skill.source.as_str().to_string(),
-                        skill.plugin_id.clone().unwrap_or_else(|| "-".to_string()),
                         skill.description.clone(),
                     ]
                 })
                 .collect::<Vec<_>>();
             lines.extend(runtime_markdown_table(
-                &["Skill", "Scope", "Plugin", "Description"],
+                &["Skill", "Scope", "Description"],
                 &rows,
             ));
         }

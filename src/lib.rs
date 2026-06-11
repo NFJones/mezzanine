@@ -104,11 +104,6 @@ pub mod message;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod permissions;
-/// Exposes the plugins module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-pub mod plugins;
 /// Exposes the process module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

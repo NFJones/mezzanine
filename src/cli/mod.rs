@@ -122,11 +122,6 @@ mod mcp;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod memory;
-/// Exposes the plugin module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod plugin;
 /// Exposes the serve module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -159,7 +154,6 @@ use json::{
 };
 use mcp::{load_runtime_config_layers, run_mcp};
 use memory::run_memory;
-use plugin::run_plugin;
 use serve::{
     LoadedRuntimeConfig, ParsedServeOptions, RestoredSnapshotDaemonRequest, RuntimeDaemonStartup,
     apply_default_serve_auxiliary_sockets, run_foreground_control_daemon, run_new, run_serve,

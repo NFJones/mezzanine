@@ -1731,7 +1731,6 @@ fn agent_shell_executes_builtin_slash_command_effects() {
     );
     assert!(!body.contains("/mention"), "{body}");
     assert!(!body.contains("/plan"), "{body}");
-    assert!(!body.contains("/plugins"), "{body}");
     assert!(!body.contains("/ps"), "{body}");
     assert!(!body.contains("/review"), "{body}");
     assert!(!body.contains("effect="), "{body}");

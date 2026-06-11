@@ -644,17 +644,7 @@ fn selector_context_command(surface: SelectorSurface, context: &TokenContext) ->
         SelectorSurface::MezzanineCommand => command.to_string(),
         SelectorSurface::AgentCommand => {
             let command = command.strip_prefix('/').unwrap_or(command);
-            let canonical = canonical_agent_command(command);
-            if canonical == "plugin"
-                && matches!(
-                    context.tokens_before.get(1).map(String::as_str),
-                    Some("inspect" | "status")
-                )
-            {
-                format!("plugin {}", context.tokens_before[1])
-            } else {
-                canonical.to_string()
-            }
+            canonical_agent_command(command).to_string()
         }
     })
 }
@@ -828,12 +818,11 @@ fn common_target_flags() -> &'static [&'static str] {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn agent_argument_candidates(command: &str, context: &TokenContext) -> Vec<SelectorCandidate> {
+fn agent_argument_candidates(command: &str, _context: &TokenContext) -> Vec<SelectorCandidate> {
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
-        "plugin" => plugin_argument_candidates(context),
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
@@ -894,16 +883,6 @@ fn agent_argument_candidates(command: &str, context: &TokenContext) -> Vec<Selec
     dedupe_candidates(candidates)
 }
 
-/// Returns context-aware `/plugin` argument candidates.
-fn plugin_argument_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
-    match context.tokens_before.get(1).map(String::as_str) {
-        Some("list") => Vec::new(),
-        Some("status" | "inspect") => Vec::new(),
-        Some(_) => Vec::new(),
-        None => value_candidates(&["status", "list", "inspect"]),
-    }
-}
-
 /// Runs the mezzanine parameter hint operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -961,7 +940,6 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork] <prompt>"),
         "memory" => Some(" <on|off|toggle|status|show>"),
-        "plugin" => Some(" [status [plugin-id]|list|inspect plugin-id]"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
         }
@@ -1947,7 +1925,6 @@ mod tests {
         let cases = [
             ("/directive ", " <status|show|clear|default|none|text>"),
             ("/memory ", " <on|off|toggle|status|show>"),
-            ("/plugin ", " [status [plugin-id]|list|inspect plugin-id]"),
             ("/remember ", " [statement]"),
             ("/fork ", " [conversation-id]"),
             ("/debug-config ", " [filter]"),
@@ -1966,8 +1943,6 @@ mod tests {
         let cases = [
             ("/directive cl", "ear", SelectorCandidateKind::Value),
             ("/memory to", "ggle", SelectorCandidateKind::Value),
-            ("/plugin sta", "tus", SelectorCandidateKind::Value),
-            ("/plugin ins", "pect", SelectorCandidateKind::Value),
             (
                 "/debug-config mc",
                 "p_servers",
@@ -2003,52 +1978,6 @@ mod tests {
                 SelectorSurface::MezzanineCommand,
                 "list-themes to",
                 "list-themes to".len(),
-            )
-            .is_none()
-        );
-    }
-
-    /// Verifies `/plugin` second-slot completions use plugin id candidates
-    /// instead of stale first-slot subcommands.
-    #[test]
-    fn selector_plugin_second_slot_uses_runtime_plugin_id_candidates() {
-        let extra = vec![SelectorExtraCandidate::new(
-            SelectorSurface::AgentCommand,
-            "plugin inspect",
-            SelectorCandidate::new("demo-plugin", SelectorCandidateKind::Value, true),
-        )];
-
-        let plan = plan_selector_with_extra(
-            SelectorSurface::AgentCommand,
-            "/plugin inspect demo",
-            "/plugin inspect demo".len(),
-            &extra,
-        )
-        .expect("plugin id completion should be available");
-
-        assert_eq!(plan.replacement_start, "/plugin inspect ".len());
-        assert!(plan.candidates.iter().any(|candidate| {
-            candidate.value == "demo-plugin" && candidate.kind == SelectorCandidateKind::Value
-        }));
-        assert!(
-            plan.candidates.iter().all(|candidate| !matches!(
-                candidate.value.as_str(),
-                "status" | "list" | "inspect"
-            )),
-            "{:#?}",
-            plan.candidates
-        );
-    }
-
-    /// Verifies `/plugin list` does not expose stale argument completions after
-    /// the subcommand because list takes no plugin id.
-    #[test]
-    fn selector_plugin_list_suppresses_stale_argument_candidates() {
-        assert!(
-            plan_selector(
-                SelectorSurface::AgentCommand,
-                "/plugin list demo",
-                "/plugin list demo".len(),
             )
             .is_none()
         );
