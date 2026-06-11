@@ -5791,7 +5791,10 @@ pane shell in their own configured execution context. An MCP server that can
 mutate the local filesystem, execute local processes, or access local
 credentials outside the pane shell MUST be explicitly configured for that
 purpose, MUST be visible in `/list-mcp` and `/status`, and MUST remain subject to
-permission and audit policy.
+permission and audit policy. MCP external-capability metadata MAY also include
+user-authored `usage_instructions`; when present, those instructions MUST be
+non-secret, model-visible prompt context so the agent can decide whether and how
+to use the server.
 
 MCP servers MAY be authenticated through provider-specific flows. Secret values
 for MCP servers MUST be stored through the auth configuration or environment

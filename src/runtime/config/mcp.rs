@@ -127,5 +127,8 @@ fn runtime_mcp_external_capability(value: &Value) -> Result<McpExternalCapabilit
         purpose: runtime_json_string(object.get("purpose"))
             .unwrap_or_default()
             .to_string(),
+        usage_instructions: runtime_json_string(object.get("usage_instructions"))
+            .unwrap_or_default()
+            .to_string(),
     })
 }

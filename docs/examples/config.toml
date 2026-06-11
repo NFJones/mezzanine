@@ -451,6 +451,10 @@ auth_token_file = ""
 observer_policy = "primary-approval"
 
 [mcp_servers]
+# Example per-server model-visible MCP guidance:
+# [mcp_servers.example.external_capability]
+# purpose = "Issue and pull request operations"
+# usage_instructions = "Use for issue triage and pull request review tasks."
 
 [auth]
 auth_file = "auth.toml"

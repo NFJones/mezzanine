@@ -109,6 +109,7 @@ fn runtime_snapshot_mcp_external_capability(
         executes_processes_outside_shell: capability.executes_processes_outside_shell,
         accesses_credentials_outside_shell: capability.accesses_credentials_outside_shell,
         purpose: capability.purpose.clone(),
+        usage_instructions: capability.usage_instructions.clone(),
     }
 }
 

@@ -106,9 +106,10 @@ pub fn append_mcp_context(
     }
     for server in &unavailable_servers {
         lines.push(format!(
-            "unavailable_server={} purpose={} retryable={} reason={}",
+            "unavailable_server={} purpose={} usage_instructions={} retryable={} reason={}",
             server.server_id,
             mcp_context_quoted_value(&server.purpose),
+            mcp_context_quoted_value(&server.usage_instructions),
             server.retryable,
             mcp_context_quoted_value(&server.reason)
         ));
@@ -132,10 +133,11 @@ pub fn append_mcp_context(
 /// Formats one available MCP server manifest line for prompt context.
 fn mcp_available_server_line(server: &McpPromptServer) -> String {
     format!(
-        "server={} status=available name={} purpose={} tools={} approval_required_tools={}",
+        "server={} status=available name={} purpose={} usage_instructions={} tools={} approval_required_tools={}",
         server.server_id,
         mcp_context_quoted_value(&server.display_name),
         mcp_context_quoted_value(&server.purpose),
+        mcp_context_quoted_value(&server.usage_instructions),
         server.tool_count,
         server.approval_required_tool_count
     )

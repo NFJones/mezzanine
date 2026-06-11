@@ -261,6 +261,11 @@ pub struct McpExternalCapability {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub purpose: String,
+    /// Stores user-authored usage instructions for this server.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub usage_instructions: String,
 }
 
 impl McpExternalCapability {
@@ -275,6 +280,7 @@ impl McpExternalCapability {
             executes_processes_outside_shell: false,
             accesses_credentials_outside_shell: false,
             purpose: String::new(),
+            usage_instructions: String::new(),
         }
     }
 
@@ -1035,6 +1041,11 @@ pub struct McpPromptServer {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub purpose: String,
+    /// Stores user-authored usage instructions for this server.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub usage_instructions: String,
     /// Stores the tool count value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -1063,6 +1074,11 @@ pub struct McpPromptUnavailableServer {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub purpose: String,
+    /// Stores user-authored usage instructions for this server.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub usage_instructions: String,
     /// Stores the reason value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -2969,6 +2969,7 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
+                usage_instructions: "Use read_file only when the task needs file contents.".to_string(),
                 tool_count: 1,
                 approval_required_tool_count: 1,
             }],
@@ -2982,6 +2983,7 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
             unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
                 reason: "authentication failed".to_string(),
                 retryable: true,
             }],
@@ -3019,6 +3021,11 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert!(
         context.blocks[0]
             .content
+            .contains("usage_instructions=\"Use read_file only when the task needs file contents.\"")
+    );
+    assert!(
+        context.blocks[0]
+            .content
             .contains("unavailable_server=gitlab")
     );
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
@@ -3042,6 +3049,7 @@ fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
+                usage_instructions: "Use read_file only when the task needs file contents.".to_string(),
                 tool_count: 1,
                 approval_required_tool_count: 1,
             }],
@@ -3086,6 +3094,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
             server_id: "fs".to_string(),
             display_name: "Filesystem".to_string(),
             purpose: "Read project files through MCP".to_string(),
+            usage_instructions: "Use read_file only when the task needs file contents.".to_string(),
             tool_count: 1,
             approval_required_tool_count: 1,
         }],
@@ -3103,6 +3112,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
             server_id: "git".to_string(),
             display_name: "Git".to_string(),
             purpose: "Read Git state through MCP".to_string(),
+            usage_instructions: "Use status for Git state summaries.".to_string(),
             tool_count: 1,
             approval_required_tool_count: 0,
         }],
@@ -4303,6 +4313,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
+                usage_instructions: "Use read_file only when the task needs file contents.".to_string(),
                 tool_count: 1,
                 approval_required_tool_count: 1,
             }],
@@ -4317,6 +4328,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
             unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
                 reason: "authentication failed".to_string(),
                 retryable: true,
             }],

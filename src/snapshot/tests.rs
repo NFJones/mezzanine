@@ -411,6 +411,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
             executes_processes_outside_shell: false,
             accesses_credentials_outside_shell: false,
             purpose: String::new(),
+            usage_instructions: String::new(),
         },
         tools: vec![SnapshotMcpToolState {
             server_id: "fs".to_string(),
@@ -1209,6 +1210,7 @@ fn snapshot_payload_rejects_invalid_approval_metadata() {
             executes_processes_outside_shell: false,
             accesses_credentials_outside_shell: false,
             purpose: String::new(),
+            usage_instructions: String::new(),
         },
         tools: vec![SnapshotMcpToolState {
             server_id: "fs".to_string(),

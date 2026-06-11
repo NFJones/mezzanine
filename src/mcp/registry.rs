@@ -371,6 +371,11 @@ impl McpRegistry {
                     server_id: server.configured.id.clone(),
                     display_name: server.configured.name.clone(),
                     purpose: server.configured.external_capability.purpose.clone(),
+                    usage_instructions: server
+                        .configured
+                        .external_capability
+                        .usage_instructions
+                        .clone(),
                     tool_count: available_tools.len(),
                     approval_required_tool_count,
                 }
@@ -415,6 +420,11 @@ impl McpRegistry {
             .map(|server| McpPromptUnavailableServer {
                 server_id: server.configured.id.clone(),
                 purpose: server.configured.external_capability.purpose.clone(),
+                usage_instructions: server
+                    .configured
+                    .external_capability
+                    .usage_instructions
+                    .clone(),
                 reason: if server.configured.enabled {
                     server
                         .blacklist_reason

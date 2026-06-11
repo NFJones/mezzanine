@@ -347,6 +347,8 @@ pub struct SnapshotMcpExternalCapability {
     pub accesses_credentials_outside_shell: bool,
     /// Human-readable purpose for external capabilities.
     pub purpose: String,
+    /// User-authored usage instructions for model-facing MCP guidance.
+    pub usage_instructions: String,
 }
 
 /// Sanitized MCP tool state captured with a session snapshot.
