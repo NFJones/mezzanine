@@ -1352,6 +1352,49 @@ fn terminal_output_style_spans_merge_overlay_background_with_diff_foreground() {
     );
 }
 
+/// Verifies ASCII-only row diffs still use bounded attached-terminal updates.
+///
+/// This regression keeps the retained-frame optimization active for ordinary
+/// single-width text after the wide-glyph safety fallback is added. Narrow row
+/// changes should continue to emit a compact cursor-positioned segment update
+/// instead of forcing a full-row redraw.
+#[cfg(test)]
+#[test]
+fn attached_terminal_row_span_update_keeps_ascii_segment_diffs() {
+    let span_update =
+        encode_safe_changed_row_span_update(2, "status: old", "status: new", &[], &[]);
+
+    assert_eq!(span_update, Some(b"\x1b[2;9H\x1b[0mnew".to_vec()));
+}
+
+/// Verifies row diffs reject segment updates beside an old wide glyph.
+///
+/// Full-screen TUIs often update one ASCII cell next to an existing wide
+/// grapheme. A partial rewrite can leave the old continuation cell visible on
+/// the host terminal, so the diff encoder must fall back to a full-row redraw
+/// when the changed span abuts the previous wide-glyph footprint.
+#[cfg(test)]
+#[test]
+fn attached_terminal_row_span_update_rejects_change_adjacent_to_previous_wide_glyph() {
+    let span_update = encode_safe_changed_row_span_update(1, "a界x", "a界y", &[], &[]);
+
+    assert!(span_update.is_none(), "{span_update:?}");
+}
+
+/// Verifies row diffs reject segment updates that replace one wide glyph.
+///
+/// This regression covers full-screen rows that swap one double-width grapheme
+/// for another while leaving the surrounding text stable. The host terminal
+/// needs a full-row rewrite to replace the old continuation footprint safely,
+/// so the segment diff path must decline the update.
+#[cfg(test)]
+#[test]
+fn attached_terminal_row_span_update_rejects_wide_glyph_replacement() {
+    let span_update = encode_safe_changed_row_span_update(1, "a界x", "a海x", &[], &[]);
+
+    assert!(span_update.is_none(), "{span_update:?}");
+}
+
 /// Runs the output row count changed operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1401,6 +1444,11 @@ fn encode_safe_changed_row_span_update(
     let end_column = current_end_cell.column_end;
     let (start_column, end_column) =
         expand_changed_column_range(previous_spans, spans, start_column, end_column);
+    if changed_span_touches_wide_grapheme(&previous_cells, start_column, end_column)
+        || changed_span_touches_wide_grapheme(&current_cells, start_column, end_column)
+    {
+        return None;
+    }
     let start_cell = current_cells
         .iter()
         .position(|cell| cell.column_end > start_column)?;
@@ -1423,6 +1471,24 @@ fn encode_safe_changed_row_span_update(
     let mut row_update = format!("\x1b[{row};1H\x1b[0m").into_bytes();
     row_update.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
     (span_update.len() < row_update.len()).then_some(span_update)
+}
+
+/// Returns whether a changed column range overlaps or abuts any wide grapheme.
+///
+/// Host terminals can retain a stale continuation cell when a retained-frame
+/// diff rewrites only part of a row next to a double-width grapheme. Callers
+/// should fall back to a full-row redraw whenever the changed range touches a
+/// wide-glyph footprint in either the previous or current row.
+fn changed_span_touches_wide_grapheme(
+    cells: &[TerminalRowCell<'_>],
+    start_column: usize,
+    end_column: usize,
+) -> bool {
+    cells.iter().any(|cell| {
+        cell.column_end.saturating_sub(cell.column_start) > 1
+            && cell.column_start <= end_column
+            && cell.column_end >= start_column
+    })
 }
 
 /// Expands one changed column range to include any overlapping style spans.
