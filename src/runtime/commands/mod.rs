@@ -425,6 +425,9 @@ impl RuntimeSessionService {
         } else {
             self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
         };
+        if let Some(loop_turn) = self.agent_loop_turns.remove(&turn_id) {
+            self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+        }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(

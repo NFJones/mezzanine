@@ -3648,6 +3648,52 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     fs::remove_dir_all(target.parent().unwrap()).unwrap();
 }
 
+/// Verifies stopping a `/loop`-owned turn clears the pane loop controller
+/// state before the turn finishes interrupted.
+///
+/// Early stop previously bypassed the normal loop follow-up cleanup, leaving
+/// stale `agent_loops_by_pane` and `agent_loop_turns` entries that blocked the
+/// next `/loop` command in the same pane.
+#[test]
+fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service
+        .pane_screens
+        .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+
+    let outcome = service
+        .execute_agent_shell_loop_command("%1", "/loop review this document")
+        .unwrap();
+
+    assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    assert!(service.agent_loops_by_pane.contains_key("%1"));
+    assert!(service.agent_loop_turns.contains_key("turn-1"));
+
+    let stopped = service.stop_agent_turn_for_pane("%1").unwrap();
+
+    assert_eq!(stopped.turn_id, "turn-1");
+    assert!(!service.agent_loops_by_pane.contains_key("%1"));
+    assert!(!service.agent_loop_turns.contains_key("turn-1"));
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+
+    let restarted = service
+        .execute_agent_shell_loop_command("%1", "/loop review this document")
+        .unwrap();
+
+    assert!(matches!(restarted, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.
