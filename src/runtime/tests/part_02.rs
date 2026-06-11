@@ -3434,18 +3434,9 @@ fn runtime_service_starts_processes_for_created_windows_and_panes() {
         Some(split_start.primary_pid)
     );
 
-    let mut exited = 0usize;
-    for _ in 0..50 {
-        let activity_sequences = tracked_pane_activity_sequences(&service);
-        exited += service.poll_pane_processes().unwrap().len();
-        if exited >= 2 {
-            break;
-        }
-        wait_for_any_tracked_pane_activity_after(
-            &service,
-            activity_sequences,
-            Duration::from_millis(10),
-        );
+    let mut exited = poll_until_exit(&mut service).len();
+    while exited < 2 {
+        exited += poll_until_exit(&mut service).len();
     }
     assert_eq!(exited, 2);
 }
