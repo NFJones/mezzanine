@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 13;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 14;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +104,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             12 => {
                 current_text = migrate_v12_to_v13(format, &current_text)?;
                 current_version = 13;
+            }
+            13 => {
+                current_text = migrate_v13_to_v14(format, &current_text)?;
+                current_version = 14;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -969,6 +973,65 @@ fn migrate_json_compatible_v12_to_v13(format: ConfigFormat, text: &str) -> Resul
     }
 }
 
+/// Applies the version 13 to version 14 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v13_to_v14(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v13_to_v14(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v13_to_v14(format, text),
+    }
+}
+
+/// Applies the version 13 to version 14 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v13_to_v14(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    for path in removed_v14_paths() {
+        remove_toml_path(&mut document, path)?;
+    }
+    remove_toml_model_profile_dead_aliases(&mut document);
+    set_toml_path_item(&mut document, "version", toml_edit::value(14))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 13 to version 14 migration to JSON and YAML config
+/// files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v13_to_v14(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    for path in removed_v14_paths() {
+        remove_json_path(&mut document, path);
+    }
+    remove_json_model_profile_dead_aliases(&mut document);
+    set_json_path_value(&mut document, "version", serde_json::json!(14))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
 /// Parses a JSON or YAML config file into a JSON value tree.
 ///
 /// # Parameters
@@ -1010,6 +1073,52 @@ fn removed_v2_paths() -> &'static [&'static str] {
 /// Returns config paths removed from the current schema during v12 migration.
 fn removed_v12_paths() -> &'static [&'static str] {
     &[]
+}
+
+/// Returns config paths removed from the current schema during v14 migration.
+fn removed_v14_paths() -> &'static [&'static str] {
+    &[
+        "auth.auth_file",
+        "auth.credential_store",
+        "auth.default_profile",
+    ]
+}
+
+/// Removes model-profile compatibility aliases deleted in schema v14.
+///
+/// The aliases were accepted for compatibility but only copied into provider
+/// options; they did not participate in runtime fallback compatibility,
+/// routing, provider requests, or approval enforcement.
+fn remove_toml_model_profile_dead_aliases(document: &mut toml_edit::DocumentMut) {
+    let Some(profiles) = document
+        .as_table_mut()
+        .get_mut("model_profiles")
+        .and_then(toml_edit::Item::as_table_mut)
+    else {
+        return;
+    };
+    for (_name, profile) in profiles.iter_mut() {
+        if let Some(profile_table) = profile.as_table_mut() {
+            profile_table.remove("privacy");
+            profile_table.remove("approval");
+        }
+    }
+}
+
+/// Removes model-profile compatibility aliases deleted in schema v14.
+fn remove_json_model_profile_dead_aliases(document: &mut serde_json::Value) {
+    let Some(profiles) = document
+        .get_mut("model_profiles")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for profile in profiles.values_mut() {
+        if let Some(profile_object) = profile.as_object_mut() {
+            profile_object.remove("privacy");
+            profile_object.remove("approval");
+        }
+    }
 }
 
 /// Copies one default TOML item into the target document if it is absent.

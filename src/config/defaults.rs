@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 13
+version = 14
 
 [session]
 detach_behavior = "keep-running"
@@ -469,9 +469,6 @@ observer_policy = "primary-approval"
 # usage_instructions = "Use for issue triage and pull request review tasks."
 
 [auth]
-auth_file = "auth.toml"
-credential_store = "auto"
-default_profile = "default"
 provider_refresh_leeway_seconds = 86400
 
 [instructions]

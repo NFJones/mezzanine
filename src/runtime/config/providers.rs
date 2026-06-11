@@ -258,11 +258,6 @@ fn runtime_model_profile_from_config(
             .entry("reasoning_effort".to_string())
             .or_insert_with(|| reasoning_effort.to_string());
     }
-    if let Some(privacy) = runtime_json_string(object.get("privacy")) {
-        provider_options
-            .entry("privacy".to_string())
-            .or_insert_with(|| privacy.to_string());
-    }
     if let Some(privacy_tier) = runtime_json_string(object.get("privacy_tier")) {
         provider_options
             .entry("privacy_tier".to_string())
@@ -272,11 +267,6 @@ fn runtime_model_profile_from_config(
         provider_options
             .entry("residency".to_string())
             .or_insert_with(|| residency.to_string());
-    }
-    if let Some(approval) = runtime_json_string(object.get("approval")) {
-        provider_options
-            .entry("approval".to_string())
-            .or_insert_with(|| approval.to_string());
     }
     if let Some(approval_policy) = runtime_json_string(object.get("approval_policy")) {
         provider_options

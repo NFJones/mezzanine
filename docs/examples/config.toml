@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 13
+version = 14
 
 [session]
 detach_behavior = "keep-running"
@@ -457,9 +457,6 @@ observer_policy = "primary-approval"
 # usage_instructions = "Use for issue triage and pull request review tasks."
 
 [auth]
-auth_file = "auth.toml"
-credential_store = "auto"
-default_profile = "default"
 provider_refresh_leeway_seconds = 86400
 
 [instructions]

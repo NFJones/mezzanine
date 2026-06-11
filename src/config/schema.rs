@@ -552,10 +552,8 @@ pub(super) const MODEL_PROFILE_KEYS: &[&str] = &[
     "max_output_tokens",
     "provider_options",
     "safety_tier",
-    "privacy",
     "privacy_tier",
     "residency",
-    "approval",
     "approval_policy",
     "fallback_profiles",
 ];
@@ -640,12 +638,7 @@ pub(super) const CONTROL_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const AUTH_KEYS: &[&str] = &[
-    "auth_file",
-    "credential_store",
-    "default_profile",
-    "provider_refresh_leeway_seconds",
-];
+pub(super) const AUTH_KEYS: &[&str] = &["provider_refresh_leeway_seconds"];
 
 /// Defines the INSTRUCTION KEYS const used by this subsystem.
 ///

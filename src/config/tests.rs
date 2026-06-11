@@ -735,7 +735,7 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 13"));
+    assert!(plan.text.contains("version = 14"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(
         plan.text
@@ -767,6 +767,139 @@ auto_reasoning_enabled = true
     assert!(validation.valid, "{:?}", validation.diagnostics);
 }
 
+/// Verifies that the schema v14 migration removes config fields that were
+/// accepted by earlier schemas but had no meaningful runtime behavior. This
+/// protects startup for legacy primary configs while keeping the current schema
+/// free of auth-store selector fields and model-profile compatibility aliases.
+#[test]
+fn migrates_v13_dead_config_fields_to_current_schema() {
+    let legacy = r#"
+version = 13
+
+[auth]
+auth_file = "custom-auth.toml"
+credential_store = "file"
+default_profile = "legacy"
+provider_refresh_leeway_seconds = 3600
+
+[model_profiles.default]
+provider = "openai"
+model = "gpt-5.2"
+privacy = "legacy-private"
+privacy_tier = "standard"
+residency = "global"
+approval = "legacy-approval"
+approval_policy = "ask"
+
+[model_profiles.fast]
+provider = "openai"
+model = "gpt-5-mini"
+privacy = "legacy-fast"
+approval = "legacy-fast-approval"
+"#;
+
+    let plan = migrate_config_text(ConfigFormat::Toml, legacy).unwrap();
+    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
+
+    assert_eq!(plan.from_version, 13);
+    assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+    assert!(plan.changed);
+    assert_eq!(values.get("version"), Some(&"14".to_string()));
+    assert_eq!(
+        values.get("auth.provider_refresh_leeway_seconds"),
+        Some(&"3600".to_string())
+    );
+    assert!(!values.contains_key("auth.auth_file"));
+    assert!(!values.contains_key("auth.credential_store"));
+    assert!(!values.contains_key("auth.default_profile"));
+    assert!(!values.contains_key("model_profiles.default.privacy"));
+    assert!(!values.contains_key("model_profiles.default.approval"));
+    assert!(!values.contains_key("model_profiles.fast.privacy"));
+    assert!(!values.contains_key("model_profiles.fast.approval"));
+    assert_eq!(
+        values.get("model_profiles.default.privacy_tier"),
+        Some(&"standard".to_string())
+    );
+    assert_eq!(
+        values.get("model_profiles.default.approval_policy"),
+        Some(&"ask".to_string())
+    );
+
+    let validation = validate_config_text(ConfigFormat::Toml, &plan.text, ConfigScope::Primary);
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies that current-schema configs reject fields removed in schema v14
+/// instead of continuing to accept inert compatibility settings. This keeps
+/// primary configs and project overlays aligned with the reduced live surface.
+#[test]
+fn rejects_v14_dead_config_fields() {
+    let invalid_auth_file = validate_config_text(
+        ConfigFormat::Toml,
+        "[auth]\nauth_file = \"custom-auth.toml\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!invalid_auth_file.valid);
+    assert!(invalid_auth_file.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "auth.auth_file"
+            && diagnostic.message == "unknown auth configuration key"
+    }));
+
+    let invalid_credential_store = validate_config_text(
+        ConfigFormat::Toml,
+        "[auth]\ncredential_store = \"file\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!invalid_credential_store.valid);
+    assert!(
+        invalid_credential_store
+            .diagnostics
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.path == "auth.credential_store"
+                    && diagnostic.message == "unknown auth configuration key"
+            })
+    );
+
+    let invalid_default_profile = validate_config_text(
+        ConfigFormat::Toml,
+        "[auth]\ndefault_profile = \"legacy\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!invalid_default_profile.valid);
+    assert!(
+        invalid_default_profile
+            .diagnostics
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.path == "auth.default_profile"
+                    && diagnostic.message == "unknown auth configuration key"
+            })
+    );
+
+    let invalid_privacy_alias = validate_config_text(
+        ConfigFormat::Toml,
+        "[model_profiles.default]\nprivacy = \"legacy-private\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!invalid_privacy_alias.valid);
+    assert!(invalid_privacy_alias.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "model_profiles.default.privacy"
+            && diagnostic.message == "unknown model profile configuration key"
+    }));
+
+    let invalid_approval_alias = validate_config_text(
+        ConfigFormat::Toml,
+        "[model_profiles.default]\napproval = \"legacy-approval\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!invalid_approval_alias.valid);
+    assert!(invalid_approval_alias.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "model_profiles.default.approval"
+            && diagnostic.message == "unknown model profile configuration key"
+    }));
+}
+
 /// Verifies that non-TOML primary config formats follow the same schema
 /// migration contract as TOML: renamed keys are canonicalized, deleted keys are
 /// removed, and current defaults are backfilled before validation. This keeps
@@ -790,7 +923,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"13".to_string()));
+    assert_eq!(values.get("version"), Some(&"14".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -868,7 +1001,7 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"13".to_string()));
+    assert_eq!(values.get("version"), Some(&"14".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -916,7 +1049,7 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"13".to_string()));
+    assert_eq!(values.get("version"), Some(&"14".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -947,7 +1080,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"13".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"14".to_string()));
     assert_eq!(
         missing_values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -959,7 +1092,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"13".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"14".to_string()));
     assert_eq!(
         explicit_values.get("terminal.emoji_width"),
         Some(&"narrow".to_string())

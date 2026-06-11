@@ -2343,7 +2343,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 13 is the current configuration schema version for this
+schema version 14 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2540,8 +2540,8 @@ The `model_profiles` table MUST be a map keyed by model profile identity. Each
 profile MUST define `provider` and `model`, and MAY define
 `reasoning_profile`, `reasoning_effort`, `latency_preference`,
 `multimodal_required`, `context_window_tokens`, `context_limit_tokens`,
-`max_output_tokens`, `provider_options`, `safety_tier`, `privacy`,
-`privacy_tier`, `residency`, `approval`, `approval_policy`, and
+`max_output_tokens`, `provider_options`, `safety_tier`, `privacy_tier`,
+`residency`, `approval_policy`, and
 `fallback_profiles`. `context_window_tokens`, `context_limit_tokens`, and
 `max_output_tokens` MUST be positive token counts when present.
 `context_window_tokens` and `context_limit_tokens` MUST drive context-usage
@@ -2732,8 +2732,7 @@ server entry MUST support `name`, `command`, and `args` for stdio servers,
 server approval settings, tool approval settings, and declared external
 capability metadata.
 
-The `auth` table MUST support `auth_file`, `credential_store`,
-`default_profile`, and `provider_refresh_leeway_seconds`.
+The `auth` table MUST support `provider_refresh_leeway_seconds`.
 `auth.provider_refresh_leeway_seconds` MUST be an integer number of seconds,
 MUST default to `86400`, and defines how far before stored provider access-token
 expiry Mezzanine starts proactive refresh. The `auth` table MUST NOT contain

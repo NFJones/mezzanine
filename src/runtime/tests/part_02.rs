@@ -1459,7 +1459,7 @@ fn runtime_control_config_project_persistence_requires_trusted_root() {
     let project_config_dir = root.join(".mezzanine");
     let project_path = project_config_dir.join("config.toml");
     fs::create_dir_all(&project_config_dir).unwrap();
-    fs::write(&project_path, "version = 13\n[history]\nlines = 10\n").unwrap();
+    fs::write(&project_path, "version = 14\n[history]\nlines = 10\n").unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -2251,7 +2251,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 13\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 14\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -2439,7 +2439,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(&skill_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 13\n[history]\nlines = 11\n").unwrap();
+    fs::write(&overlay_path, "version = 14\n[history]\nlines = 11\n").unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
         "---\nname: review\ndescription: Project review workflow\n---\n\nReview this repository.\n",
@@ -2526,7 +2526,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 13\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 14\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);

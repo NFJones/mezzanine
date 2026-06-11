@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `12`. On launch, Mezzanine migrates an
+The current config schema version is `14`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -60,7 +60,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `12` | Config schema version. Do not change this. |
+| `version` | integer | `14` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -483,10 +483,8 @@ parallel_tool_calls = "disabled"
 | `model_profiles.<name>.max_output_tokens` | integer | omitted | Optional provider output-token cap. |
 | `model_profiles.<name>.provider_options` | table | see below | Provider-specific non-secret model options. |
 | `model_profiles.<name>.safety_tier` | string | `"high"` in generated profiles | Safety posture label. |
-| `model_profiles.<name>.privacy` | string | omitted | Compatibility privacy field. |
 | `model_profiles.<name>.privacy_tier` | string | `"standard"` in generated profiles | Privacy posture label. |
 | `model_profiles.<name>.residency` | string | `"global"` in generated profiles | Data residency label. |
-| `model_profiles.<name>.approval` | string | omitted | Compatibility approval field. |
 | `model_profiles.<name>.approval_policy` | string | `"ask"` in generated profiles | Approval policy for this profile: `ask`, `auto-allow`, or `full-access`. |
 | `model_profiles.<name>.fallback_profiles` | string array | `[]` in generated profiles | Ordered fallback profile ids. |
 
@@ -723,9 +721,7 @@ source for that server.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `auth.auth_file` | string | `"auth.toml"` | Non-secret auth metadata file name. |
-| `auth.credential_store` | string | `"auto"` | Credential backend selection. |
-| `auth.default_profile` | string | `"default"` | Default auth profile id. |
+| `auth.provider_refresh_leeway_seconds` | integer | `86400` | Seconds before stored provider access-token expiry when refresh should begin. |
 
 ### `instructions`
 
