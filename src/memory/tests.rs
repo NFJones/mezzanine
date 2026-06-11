@@ -453,7 +453,7 @@ fn persistent_memory_search_uses_fallback_when_fts_is_disabled() {
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE name = 'memory_records_fts'",
             [],
-            |row| row.get::<_, u64>(0),
+            |row| row.get::<_, i64>(0),
         )
         .unwrap();
     assert_eq!(fts_table_count, 0);

@@ -435,6 +435,38 @@ fn ensure_memory_schema_migrations(connection: &Connection) -> Result<()> {
 /// Inserts or replaces a validated memory record.
 fn upsert_record(connection: &Connection, record: &MemoryRecord) -> Result<()> {
     record.validate_for_persistence()?;
+    let created_at_unix_seconds = sqlite_i64_from_u64(
+        record.created_at_unix_seconds,
+        "memory created_at exceeded SQLite integer range",
+    )?;
+    let updated_at_unix_seconds = sqlite_i64_from_u64(
+        record.updated_at_unix_seconds,
+        "memory updated_at exceeded SQLite integer range",
+    )?;
+    let last_used_at_unix_seconds = optional_sqlite_i64_from_u64(
+        record.last_used_at_unix_seconds,
+        "memory last_used_at exceeded SQLite integer range",
+    )?;
+    let use_count = sqlite_i64_from_u64(
+        record.use_count,
+        "memory use_count exceeded SQLite integer range",
+    )?;
+    let confirmed_count = sqlite_i64_from_u64(
+        record.confirmed_count,
+        "memory confirmed_count exceeded SQLite integer range",
+    )?;
+    let last_confirmed_at_unix_seconds = optional_sqlite_i64_from_u64(
+        record.last_confirmed_at_unix_seconds,
+        "memory last_confirmed_at exceeded SQLite integer range",
+    )?;
+    let expires_at_unix_seconds = optional_sqlite_i64_from_u64(
+        record.expires_at_unix_seconds,
+        "memory expires_at exceeded SQLite integer range",
+    )?;
+    let expiration_duration_seconds = optional_sqlite_i64_from_u64(
+        record.expiration_duration_seconds,
+        "memory expiration_duration exceeded SQLite integer range",
+    )?;
     connection.execute(
         "INSERT INTO memory_records (
              id, scope, created_at, updated_at, source, priority, kind, state,
@@ -461,19 +493,19 @@ fn upsert_record(connection: &Connection, record: &MemoryRecord) -> Result<()> {
         params![
             record.id,
             encode_scope(&record.scope),
-            record.created_at_unix_seconds,
-            record.updated_at_unix_seconds,
+            created_at_unix_seconds,
+            updated_at_unix_seconds,
             source_name(record.source),
             record.priority,
             kind_name(record.kind),
             state_name(record.state),
-            record.last_used_at_unix_seconds,
-            record.use_count,
-            record.confirmed_count,
-            record.last_confirmed_at_unix_seconds,
+            last_used_at_unix_seconds,
+            use_count,
+            confirmed_count,
+            last_confirmed_at_unix_seconds,
             record.supersedes_id,
-            record.expires_at_unix_seconds,
-            record.expiration_duration_seconds,
+            expires_at_unix_seconds,
+            expiration_duration_seconds,
             record.content,
             scope_text(&record.scope),
         ],
@@ -491,8 +523,8 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
     Ok(MemoryRecord {
         id: row.get(0)?,
         scope: decode_scope(&scope).map_err(rusqlite_from_mez_error)?,
-        created_at_unix_seconds: row.get::<_, u64>(2)?,
-        updated_at_unix_seconds: row.get::<_, u64>(3)?,
+        created_at_unix_seconds: row_u64(row, 2, "invalid memory created_at")?,
+        updated_at_unix_seconds: row_u64(row, 3, "invalid memory updated_at")?,
         source: parse_source(&source).map_err(rusqlite_from_mez_error)?,
         priority: u8::try_from(priority).map_err(|_| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -503,15 +535,67 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
         })?,
         kind: parse_kind(&kind).map_err(rusqlite_from_mez_error)?,
         state: parse_state(&state).map_err(rusqlite_from_mez_error)?,
-        last_used_at_unix_seconds: row.get(8)?,
-        use_count: row.get(9)?,
-        confirmed_count: row.get(10)?,
-        last_confirmed_at_unix_seconds: row.get(11)?,
+        last_used_at_unix_seconds: optional_row_u64(row, 8, "invalid memory last_used_at")?,
+        use_count: row_u64(row, 9, "invalid memory use_count")?,
+        confirmed_count: row_u64(row, 10, "invalid memory confirmed_count")?,
+        last_confirmed_at_unix_seconds: optional_row_u64(
+            row,
+            11,
+            "invalid memory last_confirmed_at",
+        )?,
         supersedes_id: row.get(12)?,
-        expires_at_unix_seconds: row.get(13)?,
-        expiration_duration_seconds: row.get(14)?,
+        expires_at_unix_seconds: optional_row_u64(row, 13, "invalid memory expires_at")?,
+        expiration_duration_seconds: optional_row_u64(
+            row,
+            14,
+            "invalid memory expiration_duration",
+        )?,
         content: row.get(15)?,
     })
+}
+
+/// Converts one unsigned integer into a SQLite-compatible signed integer.
+fn sqlite_i64_from_u64(value: u64, message: &'static str) -> Result<i64> {
+    i64::try_from(value).map_err(|_| MezError::invalid_args(message))
+}
+
+/// Converts one optional unsigned integer into a SQLite-compatible signed integer.
+fn optional_sqlite_i64_from_u64(value: Option<u64>, message: &'static str) -> Result<Option<i64>> {
+    value
+        .map(|value| sqlite_i64_from_u64(value, message))
+        .transpose()
+}
+
+/// Reads one SQLite integer column into a checked unsigned integer.
+fn row_u64(row: &rusqlite::Row<'_>, index: usize, message: &'static str) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(index)?;
+    u64::try_from(value).map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Integer,
+            Box::new(MezError::invalid_args(message)),
+        )
+    })
+}
+
+/// Reads one optional SQLite integer column into a checked unsigned integer.
+fn optional_row_u64(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    message: &'static str,
+) -> rusqlite::Result<Option<u64>> {
+    let value: Option<i64> = row.get(index)?;
+    value
+        .map(|value| {
+            u64::try_from(value).map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    index,
+                    rusqlite::types::Type::Integer,
+                    Box::new(MezError::invalid_args(message)),
+                )
+            })
+        })
+        .transpose()
 }
 
 /// Converts a Mezzanine parse error into a SQLite row conversion error.
