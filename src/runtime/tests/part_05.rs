@@ -4807,15 +4807,13 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
     );
 }
 
-/// Verifies runtime suppresses repeated progress `say` updates during a turn.
+/// Verifies runtime keeps repeated progress `say` updates visible during a turn.
 ///
-/// Progress messages are user-visible sequence points. When a later provider
-/// batch paraphrases an already displayed owner or diagnosis, the duplicate
-/// should not be rendered, copied, retained in assistant context, or added back
-/// into the progress ledger. The action still succeeds with compact feedback so
-/// the model can continue without entering a correction loop.
+/// Progress messages are user-visible sequence points, and repeated provider
+/// updates should still render as ordinary progress output instead of being
+/// silently transformed into a suppression marker.
 #[test]
-fn runtime_agent_suppresses_redundant_progress_say_updates() {
+fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -4927,16 +4925,13 @@ fn runtime_agent_suppresses_redundant_progress_say_updates() {
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains(first_progress), "{pane_text}");
-    assert!(!pane_text.contains(duplicate_progress), "{pane_text}");
+    assert!(pane_text.contains(duplicate_progress), "{pane_text}");
     assert!(pane_text.contains(final_text), "{pane_text}");
     assert!(
-        executions[0].action_results.iter().any(|result| {
-            result.action_id == "say-progress-2"
-                && result
-                    .structured_content_json
-                    .as_deref()
-                    .is_some_and(|content| content.contains("suppressed_duplicate_progress"))
-        }),
+        executions[0]
+            .action_results
+            .iter()
+            .any(|result| result.action_id == "say-progress-2" && !result.is_error),
         "{:?}",
         executions[0].action_results
     );

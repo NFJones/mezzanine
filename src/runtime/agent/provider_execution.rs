@@ -715,25 +715,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Returns progress `say` entries already visible during an active turn.
-    ///
-    /// # Parameters
-    /// - `turn_id`: Active turn whose current progress ledger should be read.
-    fn current_turn_progress_say_entries(&self, turn_id: &str) -> Vec<String> {
-        let Some(context) = self.agent_turn_contexts.get(turn_id) else {
-            return Vec::new();
-        };
-        context
-            .blocks
-            .iter()
-            .filter(|block| {
-                block.source == ContextSourceKind::RuntimeHint
-                    && block.label == RUNTIME_PROGRESS_SAY_LEDGER_LABEL
-            })
-            .flat_map(|block| runtime_progress_say_entries_from_ledger(&block.content))
-            .collect()
-    }
-
     /// Returns rationale entries already emitted during an active turn.
     ///
     /// # Parameters
@@ -751,92 +732,6 @@ impl RuntimeSessionService {
             })
             .flat_map(|block| runtime_rationale_entries_from_ledger(&block.content))
             .collect()
-    }
-
-    /// Suppresses progress `say` actions that repeat an already visible update.
-    ///
-    /// The provider still receives a successful action result explaining the
-    /// suppression, but the duplicate text is removed before user display,
-    /// assistant context, copy retention, and progress-ledger updates.
-    ///
-    /// # Parameters
-    /// - `turn`: Active turn receiving the provider execution.
-    /// - `execution`: Provider execution whose progress actions may be filtered.
-    fn suppress_redundant_progress_say_actions(
-        &mut self,
-        turn: &AgentTurnRecord,
-        execution: &mut AgentTurnExecution,
-    ) -> Result<usize> {
-        let mut visible_entries = self.current_turn_progress_say_entries(&turn.turn_id);
-        let Some(batch) = execution.response.action_batch.as_mut() else {
-            return Ok(0);
-        };
-        if let Some(rationale_entry) = runtime_normalize_progress_say_entry(&batch.rationale)
-            && runtime_progress_say_entry_repeats_existing(&rationale_entry, &visible_entries)
-        {
-            batch.rationale.clear();
-        }
-        let mut suppressed_actions = Vec::new();
-        let mut suppressed_action_ids = Vec::new();
-        for action in &mut batch.actions {
-            let AgentActionPayload::Say {
-                status,
-                text,
-                content_type: _,
-            } = &mut action.payload
-            else {
-                continue;
-            };
-            if *status != SayStatus::Progress {
-                continue;
-            }
-            let Some(entry) = runtime_normalize_progress_say_entry(text) else {
-                continue;
-            };
-            if runtime_progress_say_entry_repeats_existing(&entry, &visible_entries) {
-                text.clear();
-                action.rationale.clear();
-                suppressed_action_ids.push(action.id.clone());
-                suppressed_actions.push(action.clone());
-            } else {
-                visible_entries.push(entry);
-            }
-        }
-        for action_id in &suppressed_action_ids {
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "action {action_id} progress_say suppressed reason=repeated_current_turn_progress"
-                ),
-            )?;
-        }
-        for action in &suppressed_actions {
-            if let Some(result) = execution
-                .action_results
-                .iter_mut()
-                .find(|result| result.action_id == action.id)
-            {
-                *result = ActionResult::succeeded(
-                    turn,
-                    action,
-                    vec![
-                        "progress say suppressed because it repeated an already visible current-turn update; continue with only materially new progress".to_string(),
-                    ],
-                    Some(
-                        r#"{"kind":"say","status":"progress","display":"suppressed_duplicate_progress","reason":"repeated_current_turn_progress"}"#
-                            .to_string(),
-                    ),
-                );
-            }
-        }
-        if !suppressed_actions.is_empty() {
-            execution.terminal_state = runtime_agent_turn_state_from_action_results(
-                &execution.action_results,
-                execution.final_turn,
-            );
-        }
-        Ok(suppressed_actions.len())
     }
 
     /// Suppresses batch/action rationale that repeats already-emitted same-turn intent.
@@ -1049,7 +944,6 @@ impl RuntimeSessionService {
         );
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
-        self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
@@ -1302,7 +1196,6 @@ impl RuntimeSessionService {
         );
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
         self.append_agent_trace_maap_response(turn, &execution.response)?;
-        self.suppress_redundant_progress_say_actions(turn, &mut execution)?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;

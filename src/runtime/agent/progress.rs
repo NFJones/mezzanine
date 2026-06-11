@@ -194,20 +194,6 @@ pub(super) fn runtime_merge_rationale_entries(
     }
 }
 
-/// Reports whether a progress entry repeats one already visible in the turn.
-///
-/// # Parameters
-/// - `entry`: The candidate progress text.
-/// - `existing_entries`: Bounded progress entries already shown this turn.
-pub(super) fn runtime_progress_say_entry_repeats_existing(
-    entry: &str,
-    existing_entries: &[String],
-) -> bool {
-    existing_entries
-        .iter()
-        .any(|existing| runtime_progress_say_entries_are_redundant(existing, entry))
-}
-
 /// Reports whether a rationale entry repeats one already visible in the turn.
 pub(super) fn runtime_rationale_entry_repeats_existing(
     entry: &str,
