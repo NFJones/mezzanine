@@ -750,6 +750,7 @@ impl RuntimeSessionService {
         self.agent_modified_files.remove(pane_id);
         self.active_copy_modes.remove(pane_id);
         self.pane_current_working_directories.remove(pane_id);
+        self.pane_foreground_process_groups.remove(pane_id);
         self.deferred_pane_inputs
             .retain(|input| input.pane_id != pane_id);
         self.deferred_pane_resizes.remove(pane_id);

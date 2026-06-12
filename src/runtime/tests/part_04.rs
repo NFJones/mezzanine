@@ -3447,6 +3447,106 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies stale readiness recovery can use async foreground metadata when
+/// synchronous PTY foreground queries are temporarily unavailable.
+///
+/// New panes and panes recreated by `load-layout` can have a valid shell prompt
+/// while a direct `tcgetpgrp` style foreground query is still unavailable. The
+/// async pane worker reports foreground process groups separately, and readiness
+/// recovery should use that cached observation instead of leaving shell actions
+/// stranded behind stale interactive-blocked state.
+#[test]
+fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foreground_group() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "inspect the working directory".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let execution_after_dispatch = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+
+    assert!(execution_after_dispatch.is_some());
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Probing
+    );
+    assert!(
+        service
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that runtime model-profile overrides feed both provider execution
 /// and the live `agent/list` state surface. The selected profile must remain
 /// visible while the turn is running and after the turn completes so clients do

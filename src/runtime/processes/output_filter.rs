@@ -1436,6 +1436,8 @@ impl RuntimeSessionService {
             self.pane_current_working_directories
                 .insert(pane_id.clone(), PathBuf::from(current_working_directory));
         }
+        self.pane_foreground_process_groups
+            .insert(pane_id.clone(), process_group_id);
         let Some(title) = self.title_from_foreground_process_metadata(
             &pane_id,
             process_name.into(),

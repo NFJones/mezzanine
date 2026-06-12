@@ -33,6 +33,13 @@ pub struct PaneProcessManager {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) processes: BTreeMap<String, PaneProcess>,
+    /// Test-only foreground process-group observations.
+    ///
+    /// Runtime tests use this override to model hosts where the synchronous
+    /// PTY foreground query is temporarily unavailable without replacing the
+    /// live pane process handle.
+    #[cfg(test)]
+    foreground_process_group_ids_for_test: BTreeMap<String, Option<u32>>,
 }
 
 impl PaneProcessManager {
@@ -44,6 +51,8 @@ impl PaneProcessManager {
     pub fn new() -> Self {
         Self {
             processes: BTreeMap::new(),
+            #[cfg(test)]
+            foreground_process_group_ids_for_test: BTreeMap::new(),
         }
     }
 
@@ -143,6 +152,20 @@ impl PaneProcessManager {
         }
     }
 
+    /// Overrides the foreground process-group query for tests.
+    ///
+    /// `None` models platforms or timing windows where `tcgetpgrp` cannot
+    /// currently report a foreground process group for the PTY.
+    #[cfg(test)]
+    pub fn set_foreground_process_group_id_for_test(
+        &mut self,
+        pane_id: &str,
+        foreground_process_group_id: Option<u32>,
+    ) {
+        self.foreground_process_group_ids_for_test
+            .insert(pane_id.to_string(), foreground_process_group_id);
+    }
+
     /// Returns the live primary process name for a pane.
     ///
     /// The value is sourced from the tracked process handle and is `None` when
@@ -155,6 +178,10 @@ impl PaneProcessManager {
 
     /// Returns the foreground process-group id for a pane's PTY when available.
     pub fn foreground_process_group_id(&self, pane_id: &str) -> Option<u32> {
+        #[cfg(test)]
+        if let Some(override_value) = self.foreground_process_group_ids_for_test.get(pane_id) {
+            return *override_value;
+        }
         self.processes
             .get(pane_id)
             .and_then(PaneProcess::foreground_process_group_id)

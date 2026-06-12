@@ -1445,6 +1445,13 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) pane_current_working_directories: BTreeMap<String, PathBuf>,
+    /// Last foreground process group reported by the async pane worker.
+    ///
+    /// The synchronous PTY metadata path is best-effort and can be unavailable
+    /// immediately after new pane creation or layout restoration. This cache
+    /// lets readiness recovery use the actor-owned foreground observation when
+    /// it is newer than no host metadata at all.
+    pub(super) pane_foreground_process_groups: BTreeMap<String, u32>,
     /// Stores the deferred pane inputs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
