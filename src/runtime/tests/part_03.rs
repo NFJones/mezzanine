@@ -3814,10 +3814,10 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     service.record_agent_provider_token_usage(
         "%1",
         crate::agent::ModelTokenUsage {
-            input_tokens: 0,
+            input_tokens: 40,
             output_tokens: 0,
             reasoning_tokens: 0,
-            cached_input_tokens: Some(20),
+            cached_input_tokens: None,
         },
     );
     let deepseek_profile = runtime_model_profile("deepseek", "deepseek-chat");
@@ -3926,7 +3926,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| openai | gpt-fast | 20 | 100 | 34 | 9 | 83.33% |"),
+        response.contains("| openai | gpt-fast | 80 | 80 | 34 | 9 | 50.00% |"),
         "{response}"
     );
     assert!(
@@ -3934,7 +3934,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| openai | gpt-fast | 50 | 130 | 44 | 13 | 72.22% |"),
+        response.contains("| openai | gpt-fast | 110 | 110 | 44 | 13 | 50.00% |"),
         "{response}"
     );
     assert!(!response.contains("| runtime-metrics | metrics-only |"), "{response}");

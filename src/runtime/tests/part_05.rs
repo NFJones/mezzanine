@@ -3962,7 +3962,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
 
     assert!(
         status.contains(
-            "| Provider tokens | gpt-saved via openai: input=450 (+ 450 cached) cache_hit=50.00% output=80 reasoning=33 total=980 |"
+            "| Provider tokens | gpt-saved via openai: input=450 (+ 450 cached best-effort) cache_hit=50.00% output=80 reasoning=33 total=980 |"
         ),
         "{status}"
     );
