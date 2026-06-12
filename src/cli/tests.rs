@@ -706,7 +706,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
     let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
 
     assert_eq!(layers.len(), 1);
-    assert_eq!(effective.get("version"), Some("14"));
+    assert_eq!(effective.get("version"), Some("15"));
     assert_eq!(
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
@@ -715,7 +715,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
         effective.get("agents.implementation_pressure_after_shell_actions"),
         Some("3")
     );
-    assert!(migrated.contains("version = 14"));
+    assert!(migrated.contains("version = 15"));
     assert!(migrated.contains("emoji_width = \"wide\""));
     assert!(migrated.contains("provider_refresh_leeway_seconds = 86400"));
     assert!(migrated.contains("implementation_pressure_after_shell_actions = 3"));
@@ -743,12 +743,12 @@ fn startup_config_layers_discover_project_overlays_and_apply_trust() {
     fs::create_dir_all(project.join(".mezzanine")).unwrap();
     fs::write(
         project.join(".mezzanine/config.toml"),
-        "version = 14\n[history]\nlines = 7\n",
+        "version = 15\n[history]\nlines = 7\n",
     )
     .unwrap();
     fs::write(
         nested.join(".mezzanine/config.toml"),
-        "version = 14\n[history]\nlines = 11\n",
+        "version = 15\n[history]\nlines = 11\n",
     )
     .unwrap();
 
@@ -4172,7 +4172,7 @@ fn memory_cli_manages_lifecycle_metadata_and_retention() {
     fs::create_dir_all(paths.root()).unwrap();
     fs::write(
         paths.root().join("config.toml"),
-        "version = 14\n[memory]\nmax_records = 2\narchive_before_prune = true\n",
+        "version = 15\n[memory]\nmax_records = 2\narchive_before_prune = true\n",
     )
     .unwrap();
 
@@ -4233,6 +4233,94 @@ fn memory_cli_accepts_sensitive_persistent_content_without_consent_flag() {
         String::from_utf8(stdout)
             .unwrap()
             .contains("api_key = sk-secret")
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies issue cli adds queries and deletes project-scoped records.
+///
+/// This regression scenario documents the local issue tracker behavior exposed
+/// to scripts so project filters, kind filters, and delete results stay stable.
+#[test]
+fn issue_cli_adds_queries_and_deletes_project_records() {
+    let (env, home) = test_env("issue-cli");
+    let mut stderr = Vec::new();
+
+    let mut add_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "add".to_string(),
+            "--kind".to_string(),
+            "defect".to_string(),
+            "--title".to_string(),
+            "Fix renderer panic".to_string(),
+            "--body".to_string(),
+            "panic while drawing borders".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut add_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let add_output = String::from_utf8(add_stdout).unwrap();
+    assert!(add_output.contains(r#""project":"/work/repo""#));
+    assert!(add_output.contains(r#""kind":"defect""#));
+    assert!(add_output.contains(r#""title":"Fix renderer panic""#));
+    let id = add_output
+        .split(r#""id":""#)
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .unwrap()
+        .to_string();
+
+    let mut query_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "query".to_string(),
+            "--kind".to_string(),
+            "defect".to_string(),
+            "--text".to_string(),
+            "borders".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut query_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(String::from_utf8(query_stdout).unwrap().contains(&id));
+
+    let mut delete_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "delete".to_string(),
+            id,
+        ],
+        env,
+        false,
+        &mut delete_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(delete_stdout)
+            .unwrap()
+            .contains(r#""deleted":true"#)
     );
     assert!(stderr.is_empty());
 

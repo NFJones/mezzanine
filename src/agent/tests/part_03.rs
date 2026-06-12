@@ -1936,7 +1936,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         value["tools"].as_array().unwrap().len(),
-        9,
+        10,
         "all stable OpenAI MAAP function surfaces should remain advertised"
     );
     let schema_properties = capability_tool["parameters"]["properties"]
@@ -3889,7 +3889,7 @@ fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_s
     let action_types = openai_tool_action_types(current_tool);
 
     assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
-    assert_eq!(value["tools"].as_array().unwrap().len(), 10);
+    assert_eq!(value["tools"].as_array().unwrap().len(), 11);
     assert!(action_types.contains(&"say".to_string()));
     assert!(action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"shell_command".to_string()));
