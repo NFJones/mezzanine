@@ -395,7 +395,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `agents.auto_sizing.medium_model_profile` | string | `"auto-size-medium"` | Profile for medium turns. |
 | `agents.auto_sizing.large_model_profile` | string | `"auto-size-large"` | Profile for large turns. |
 | `agents.auto_sizing.allowed_reasoning_efforts` | string array | `["low", "medium", "high", "xhigh"]` | Reasoning efforts the router may select. |
-| `agents.auto_sizing.fallback_policy` | string | `"use-default-profile"` | Fallback when routing fails. |
+| `agents.auto_sizing.fallback_policy` | string | `"use-default-profile"` | Fallback for invalid router decisions; routing-model provider request failures are surfaced as turn errors. |
 
 ### `providers.<name>`
 

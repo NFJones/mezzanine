@@ -72,16 +72,22 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> RuntimeAutoSizingExecution {
+) -> Result<RuntimeAutoSizingExecution> {
     let request = match runtime_auto_sizing_request(auto_sizing, turn, context) {
         Ok(request) => request,
         Err(error) => {
-            return runtime_auto_sizing_fallback(auto_sizing, error.message().to_string());
+            return Ok(runtime_auto_sizing_fallback(
+                auto_sizing,
+                error.message().to_string(),
+            ));
         }
     };
     match provider.send_request_async(&request).await {
-        Ok(response) => runtime_auto_sizing_execution_from_response(auto_sizing, &response),
-        Err(error) => runtime_auto_sizing_fallback(auto_sizing, error.message().to_string()),
+        Ok(response) => Ok(runtime_auto_sizing_execution_from_response(
+            auto_sizing,
+            &response,
+        )),
+        Err(error) => Err(runtime_auto_sizing_provider_error(auto_sizing, error)),
     }
 }
 
@@ -92,17 +98,44 @@ pub(crate) fn runtime_execute_auto_sizing_with_provider<P: crate::agent::ModelPr
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> RuntimeAutoSizingExecution {
+) -> Result<RuntimeAutoSizingExecution> {
     let request = match runtime_auto_sizing_request(auto_sizing, turn, context) {
         Ok(request) => request,
         Err(error) => {
-            return runtime_auto_sizing_fallback(auto_sizing, error.message().to_string());
+            return Ok(runtime_auto_sizing_fallback(
+                auto_sizing,
+                error.message().to_string(),
+            ));
         }
     };
     match provider.send_request(&request) {
-        Ok(response) => runtime_auto_sizing_execution_from_response(auto_sizing, &response),
-        Err(error) => runtime_auto_sizing_fallback(auto_sizing, error.message().to_string()),
+        Ok(response) => Ok(runtime_auto_sizing_execution_from_response(
+            auto_sizing,
+            &response,
+        )),
+        Err(error) => Err(runtime_auto_sizing_provider_error(auto_sizing, error)),
     }
+}
+
+fn runtime_auto_sizing_provider_error(
+    auto_sizing: &RuntimeAutoSizingDispatch,
+    error: MezError,
+) -> MezError {
+    let message = format!(
+        "auto-sizing router request failed for profile `{}` provider `{}` model `{}`: {}",
+        auto_sizing.router_profile_name,
+        auto_sizing.router_profile.provider,
+        auto_sizing.router_profile.model,
+        error.message()
+    );
+    let mut routed_error = MezError::new(error.kind(), message);
+    if let Some(raw_text) = error.provider_raw_text() {
+        routed_error = routed_error.with_provider_raw_text(raw_text.to_string());
+    }
+    if let Some(failure_json) = error.provider_failure_json() {
+        routed_error = routed_error.with_provider_failure_json(failure_json.to_string());
+    }
+    routed_error
 }
 
 /// Applies the provider request's effective model/reasoning to actor state.

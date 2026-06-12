@@ -557,6 +557,143 @@ reasoning_profile = "high"
     assert!(!normal_request_context.contains("multi-file feature work"));
 }
 
+/// Verifies that an inaccessible routing model fails the turn instead of
+/// silently falling back to the default profile.
+///
+/// Router provider request failures usually mean the configured router model is
+/// unavailable to the account or provider. The user needs that provider error
+/// surfaced so they can choose a routing model they can access.
+#[test]
+fn runtime_agent_turn_routing_provider_error_fails_turn() {
+    struct InaccessibleRouterProvider {
+        requests: RefCell<Vec<crate::agent::ModelRequest>>,
+    }
+
+    impl ModelProvider for InaccessibleRouterProvider {
+        fn provider_id(&self) -> &str {
+            "runtime-batch"
+        }
+
+        fn send_request(
+            &self,
+            request: &crate::agent::ModelRequest,
+        ) -> Result<crate::agent::ModelResponse> {
+            self.requests.borrow_mut().push(request.clone());
+            if request.interaction_kind == crate::agent::ModelInteractionKind::AutoSizing {
+                return Err(MezError::invalid_state(
+                    "OpenAI Responses API returned status 404: model `gpt-5.3-codex-spark` is not available",
+                )
+                .with_provider_failure_json(
+                    r#"{"status_code":404,"error":{"message":"model `gpt-5.3-codex-spark` is not available","type":"invalid_request_error","code":"model_not_found"}}"#,
+                ));
+            }
+            Ok(runtime_say_response(&request.turn_id, "unexpected normal response", true))
+        }
+    }
+
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("runtime-routing-provider-fail-transcript");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+routing = true
+
+[agents.auto_sizing]
+router_model_profile = "router"
+small_model_profile = "default"
+medium_model_profile = "default"
+large_model_profile = "default"
+fallback_policy = "use-default-profile"
+
+[providers.runtime-batch]
+kind = "openai"
+models = ["gpt-default", "gpt-5.3-codex-spark"]
+default_model = "gpt-default"
+
+[model_profiles.default]
+provider = "runtime-batch"
+model = "gpt-default"
+reasoning_profile = "medium"
+
+[model_profiles.router]
+provider = "runtime-batch"
+model = "gpt-5.3-codex-spark"
+reasoning_profile = "low"
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"router-fail-prompt","method":"agent/shell/command","params":{"idempotency_key":"router-fail-prompt","input":"use routing"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let provider = InaccessibleRouterProvider {
+        requests: RefCell::new(Vec::new()),
+    };
+    let error = service
+        .poll_agent_provider_tasks_with_provider(&provider, 1)
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(
+        error
+            .message()
+            .contains("auto-sizing router request failed for profile `router`"),
+        "{error}"
+    );
+    assert_eq!(provider.requests.borrow().len(), 1);
+    assert_eq!(
+        provider.requests.borrow()[0].interaction_kind,
+        crate::agent::ModelInteractionKind::AutoSizing
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    let entries = transcript_store.inspect(&conversation_id).unwrap();
+    let failure = entries
+        .iter()
+        .find(|entry| {
+            entry.role == crate::transcript::TranscriptRole::Assistant
+                && entry.content.contains("provider_error")
+        })
+        .unwrap();
+    assert!(failure.content.contains("gpt-5.3-codex-spark"));
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    let _ = fs::remove_dir_all(transcript_root);
+}
+
 /// Builds the synthetic model response used by compaction completion tests.
 fn runtime_test_compaction_response(summary: &str) -> crate::agent::ModelResponse {
     crate::agent::ModelResponse {

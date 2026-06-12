@@ -1451,7 +1451,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &turn,
                     &context,
                 )
-                .await;
+                .await?;
                 merge_model_token_usage_by_model(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
@@ -1465,7 +1465,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &turn,
                     &context,
                 )
-                .await;
+                .await?;
                 merge_model_token_usage_by_model(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
@@ -1479,7 +1479,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &turn,
                     &context,
                 )
-                .await;
+                .await?;
                 merge_model_token_usage_by_model(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
@@ -1501,7 +1501,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &turn,
                     &context,
                 )
-                .await;
+                .await?;
                 merge_model_token_usage_by_model(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
@@ -1515,7 +1515,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &turn,
                     &context,
                 )
-                .await;
+                .await?;
                 merge_model_token_usage_by_model(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
@@ -1529,7 +1529,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &turn,
                     &context,
                 )
-                .await;
+                .await?;
                 merge_model_token_usage_by_model(
                     &mut routing_token_usage_by_model,
                     auto_sizing_execution.token_usage_by_model(),
@@ -1736,27 +1736,28 @@ async fn runtime_apply_same_provider_auto_sizing_if_needed<P: AsyncModelProvider
     auto_sizing: Option<&crate::runtime::RuntimeAutoSizingDispatch>,
     turn: &AgentTurnRecord,
     context: &crate::agent::AgentContext,
-) -> (
+) -> Result<(
     ModelProfile,
     std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
-) {
+)> {
     if has_separate_router_provider {
-        return (current_profile, std::collections::BTreeMap::new());
+        return Ok((current_profile, std::collections::BTreeMap::new()));
     }
     let Some(auto_sizing) = auto_sizing else {
-        return (current_profile, std::collections::BTreeMap::new());
+        return Ok((current_profile, std::collections::BTreeMap::new()));
     };
     let current_provider = current_profile.provider.clone();
     if auto_sizing.router_profile.provider != current_provider {
-        return (current_profile, std::collections::BTreeMap::new());
+        return Ok((current_profile, std::collections::BTreeMap::new()));
     }
     let auto_sizing_execution =
-        runtime_execute_auto_sizing_with_async_provider(provider, auto_sizing, turn, context).await;
+        runtime_execute_auto_sizing_with_async_provider(provider, auto_sizing, turn, context)
+            .await?;
     let usage_by_model = auto_sizing_execution.token_usage_by_model();
     if auto_sizing_execution.selected_profile.provider == current_provider {
-        (auto_sizing_execution.selected_profile, usage_by_model)
+        Ok((auto_sizing_execution.selected_profile, usage_by_model))
     } else {
-        (current_profile, usage_by_model)
+        Ok((current_profile, usage_by_model))
     }
 }
 
@@ -2196,7 +2197,8 @@ mod tests {
                 &turn,
                 &context,
             )
-            .await;
+            .await
+            .unwrap();
 
         assert!(!routing_token_usage_by_model.is_empty());
         assert_eq!(selected.provider, "deepseek");
@@ -2264,7 +2266,8 @@ mod tests {
                 &turn,
                 &context,
             )
-            .await;
+            .await
+            .unwrap();
 
         assert!(routing_token_usage_by_model.is_empty());
         assert_eq!(selected.provider, "deepseek");

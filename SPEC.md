@@ -2534,8 +2534,9 @@ classification may choose. `router_model_profile` MUST default to
 `large_model_profile` MUST default to `auto-size-large`.
 `allowed_reasoning_efforts` MUST default to `["low", "medium", "high",
 "xhigh"]`. `fallback_policy` MUST default to `use-default-profile`, meaning
-router failures fall back to the user-selected default model profile for the
-turn.
+invalid or unusable router decisions fall back to the user-selected default
+model profile for the turn. Provider request failures from the routing model
+MUST fail the turn and surface the provider error to the user.
 
 The `model_presets` table MUST be a map keyed by model preset identity. Each
 preset MUST define `default_model_profile` and MAY define

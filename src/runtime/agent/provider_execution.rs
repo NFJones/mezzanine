@@ -72,8 +72,36 @@ impl RuntimeSessionService {
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
         {
-            let auto_sizing_execution =
-                runtime_execute_auto_sizing_with_provider(provider, &auto_sizing, &turn, &context);
+            let auto_sizing_execution = match runtime_execute_auto_sizing_with_provider(
+                provider,
+                &auto_sizing,
+                &turn,
+                &context,
+            ) {
+                Ok(execution) => execution,
+                Err(error) => {
+                    self.append_agent_trace_provider_error(
+                        &turn,
+                        provider.provider_id(),
+                        &auto_sizing.router_profile,
+                        &error,
+                    )?;
+                    self.append_provider_request_failure_audit(
+                        &turn,
+                        &auto_sizing.router_profile,
+                        provider.provider_id(),
+                        &error,
+                    )?;
+                    self.runtime_metrics.record_provider_failure();
+                    self.fail_agent_turn_for_provider_error(
+                        &turn,
+                        provider.provider_id(),
+                        &auto_sizing.router_profile,
+                        &error,
+                    )?;
+                    return Err(error);
+                }
+            };
             routing_token_usage_by_model = auto_sizing_execution.token_usage_by_model();
             self.record_auto_sizing_outcome(
                 &turn,
@@ -339,8 +367,36 @@ impl RuntimeSessionService {
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
         {
-            let auto_sizing_execution =
-                runtime_execute_auto_sizing_with_provider(provider, &auto_sizing, &turn, &context);
+            let auto_sizing_execution = match runtime_execute_auto_sizing_with_provider(
+                provider,
+                &auto_sizing,
+                &turn,
+                &context,
+            ) {
+                Ok(execution) => execution,
+                Err(error) => {
+                    self.append_agent_trace_provider_error(
+                        &turn,
+                        provider.provider_id(),
+                        &auto_sizing.router_profile,
+                        &error,
+                    )?;
+                    self.append_provider_request_failure_audit(
+                        &turn,
+                        &auto_sizing.router_profile,
+                        provider.provider_id(),
+                        &error,
+                    )?;
+                    self.runtime_metrics.record_provider_failure();
+                    self.fail_agent_turn_for_provider_error(
+                        &turn,
+                        provider.provider_id(),
+                        &auto_sizing.router_profile,
+                        &error,
+                    )?;
+                    return Err(error);
+                }
+            };
             routing_token_usage_by_model = auto_sizing_execution.token_usage_by_model();
             self.record_auto_sizing_outcome(
                 &turn,
