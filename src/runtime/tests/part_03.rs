@@ -3558,6 +3558,112 @@ fn runtime_agent_loop_fork_option_starts_when_parent_conversation_has_no_saved_e
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies `/loop --new` starts the first iteration in a fresh ephemeral
+/// conversation with no parent transcript source and honors a per-command
+/// loop-limit override.
+///
+/// New-mode loop attempts must isolate each work iteration from both the
+/// current pane conversation and any parent transcript fork while still
+/// restoring the parent conversation as the durable pane binding.
+#[test]
+fn runtime_agent_loop_new_option_starts_first_iteration_in_fresh_ephemeral_conversation() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-new"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service
+        .pane_screens
+        .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    let old_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: old_session.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "review this document".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+
+    let outcome = service
+        .execute_agent_shell_loop_command("%1", "/loop --new --limit 3 review this document")
+        .unwrap();
+
+    assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    let loop_state = service.agent_loops_by_pane.get("%1").unwrap();
+    assert_eq!(
+        loop_state.mode,
+        crate::runtime::agent_state::RuntimeAgentLoopMode::NewEachIteration
+    );
+    assert_eq!(loop_state.max_iterations, 3);
+    let loop_session = {
+        let session = service.agent_shell_store().get("%1").unwrap();
+        assert_ne!(session.session_id, old_session);
+        assert!(session.ephemeral);
+        assert!(session.ephemeral_transcript_source_conversation_id.is_none());
+        assert_eq!(session.ephemeral_transcript_source_entries, 0);
+        assert_eq!(session.transcript_entries, 0);
+        assert_eq!(session.visibility, AgentShellVisibility::Visible);
+        session.session_id.clone()
+    };
+    assert!(transcript_store.summary(&loop_session).unwrap().is_none());
+    let saved = transcript_store.list().unwrap();
+    assert!(saved.iter().any(|summary| summary.conversation_id == old_session));
+    assert!(!saved.iter().any(|summary| summary.conversation_id == loop_session));
+    service.checkpoint_agent_session_metadata().unwrap();
+    let metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    assert_eq!(metadata.len(), 1, "{metadata:#?}");
+    assert_eq!(metadata[0].conversation_id, old_session);
+    assert_eq!(metadata[0].transcript_entries, 1);
+    let pane_text = service.pane_screen("%1").unwrap().visible_lines().join("\n");
+    assert!(pane_text.contains("user> /loop --new --limit 3 review this document"), "{pane_text}");
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies `/loop --limit` rejects a non-positive per-command loop limit.
+///
+/// A zero iteration budget would prevent `/loop` from running even the first
+/// work turn, so the command must fail validation before mutating pane loop
+/// state.
+#[test]
+fn runtime_agent_loop_limit_option_rejects_zero() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-limit-zero"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store);
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    service
+        .pane_screens
+        .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+
+    let error = service
+        .execute_agent_shell_loop_command("%1", "/loop --limit 0 review this document")
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("/loop --limit requires a positive integer"),
+        "{error}"
+    );
+    assert!(!service.agent_loops_by_pane.contains_key("%1"));
+}
+
 /// Verifies `/loop` schedules another work iteration after a completed turn
 /// that emitted an `apply_patch` action.
 ///

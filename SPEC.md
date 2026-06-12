@@ -2507,11 +2507,18 @@ the command is invoked with `--fork`, `/loop` MUST start every work iteration
 from a fresh context forked from the parent pane conversation that invoked the
 loop. Each fork MUST use the same parent conversation, so later fork-mode work
 turns cannot see prior `/loop` attempts or loop controller assessments.
+When the command is invoked with `--new`, `/loop` MUST start every work
+iteration in a fresh empty conversation instead of reusing the current pane
+conversation or forking the parent transcript. New-mode work conversations
+MUST also be ephemeral and MUST start with no transcript entries or parent
+transcript source.
 Fork-mode work conversations MUST be ephemeral: they MUST NOT be persisted as
 saved agent conversations, MUST NOT appear in `/list-sessions` or `/resume`
 pickers, and MUST NOT replace the parent conversation in active-session
 metadata checkpoints. The parent conversation that invoked `/loop` MUST remain
-the resumable/listable conversation while fork-mode iterations run.
+the resumable/listable conversation while fork-mode or new-mode iterations run.
+The `/loop` command MUST accept `--limit <int>` as a per-command positive
+integer override for `agents.loop_limit`.
 Mezzanine MUST continue running work iterations after any completed iteration
 that emitted an `apply_patch` action, and MUST terminate the loop after the
 first completed work iteration that emitted no `apply_patch` actions or when

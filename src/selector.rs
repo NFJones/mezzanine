@@ -821,7 +821,7 @@ fn common_target_flags() -> &'static [&'static str] {
 fn agent_argument_candidates(command: &str, _context: &TokenContext) -> Vec<SelectorCandidate> {
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
-        "loop" => flag_candidates(&["--fork"]),
+        "loop" => flag_candidates(&["--fork", "--new", "--limit"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
@@ -938,7 +938,7 @@ fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
 fn agent_parameter_hint(command: &str) -> Option<&'static str> {
     match command {
         "directive" => Some(" <status|show|clear|default|none|text>"),
-        "loop" => Some(" [--fork] <prompt>"),
+        "loop" => Some(" [--fork|--new] [--limit <int>] <prompt>"),
         "memory" => Some(" <on|off|toggle|status|show>"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
@@ -1893,7 +1893,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(loop_hint.text, " [--fork] <prompt>");
+        assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
         assert_eq!(latency_hint.text, " <slow|default|fast>");
         assert_eq!(trust_hint.text, " <project-root|latest|list|pending>");
         assert_eq!(
@@ -1902,20 +1902,39 @@ mod tests {
         );
     }
 
-    /// Verifies `/loop` flag completions surface the documented fork option as
-    /// transient shadow text before users accept a selector candidate.
+    /// Verifies `/loop` flag completions surface the documented iteration-mode
+    /// and limit options as transient shadow text before users accept a
+    /// selector candidate.
     #[test]
-    fn selector_shadow_hint_completes_loop_fork_flag() {
-        let hint = shadow_hint(
+    fn selector_shadow_hint_completes_loop_flags() {
+        let fork_hint = shadow_hint(
             SelectorSurface::AgentCommand,
             "/loop --f",
             "/loop --f".len(),
         )
         .unwrap();
+        let new_hint = shadow_hint(
+            SelectorSurface::AgentCommand,
+            "/loop --n",
+            "/loop --n".len(),
+        )
+        .unwrap();
+        let limit_hint = shadow_hint(
+            SelectorSurface::AgentCommand,
+            "/loop --l",
+            "/loop --l".len(),
+        )
+        .unwrap();
 
-        assert_eq!(hint.insert_at, "/loop --f".len());
-        assert_eq!(hint.text, "ork");
-        assert_eq!(hint.kind, SelectorCandidateKind::Flag);
+        assert_eq!(fork_hint.insert_at, "/loop --f".len());
+        assert_eq!(fork_hint.text, "ork");
+        assert_eq!(fork_hint.kind, SelectorCandidateKind::Flag);
+        assert_eq!(new_hint.insert_at, "/loop --n".len());
+        assert_eq!(new_hint.text, "ew");
+        assert_eq!(new_hint.kind, SelectorCandidateKind::Flag);
+        assert_eq!(limit_hint.insert_at, "/loop --l".len());
+        assert_eq!(limit_hint.text, "imit");
+        assert_eq!(limit_hint.kind, SelectorCandidateKind::Flag);
     }
 
     /// Verifies argument-bearing slash commands expose parameter shadow hints

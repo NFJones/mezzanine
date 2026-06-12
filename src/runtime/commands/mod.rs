@@ -94,15 +94,108 @@ fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
     )
 }
 
-/// Parses `/loop` arguments into conversation mode and original prompt text.
-fn parse_agent_loop_args(args: &str) -> Result<(RuntimeAgentLoopMode, &str)> {
-    let trimmed = args.trim();
-    if let Some(rest) = trimmed.strip_prefix("--fork")
-        && rest.chars().next().is_none_or(char::is_whitespace)
-    {
-        return Ok((RuntimeAgentLoopMode::ForkEachIteration, rest.trim_start()));
+/// Parsed `/loop` arguments.
+struct ParsedAgentLoopArgs<'a> {
+    /// Conversation preparation mode for each loop iteration.
+    mode: RuntimeAgentLoopMode,
+    /// Optional per-command iteration limit override.
+    max_iterations: Option<usize>,
+    /// Original user prompt to re-run.
+    original_prompt: &'a str,
+}
+
+/// Parses `/loop` arguments into conversation mode, optional limit override,
+/// and original prompt text.
+fn parse_agent_loop_args(args: &str) -> Result<ParsedAgentLoopArgs<'_>> {
+    let mut remaining = args.trim();
+    let mut mode = RuntimeAgentLoopMode::ReuseCurrentConversation;
+    let mut max_iterations = None;
+
+    loop {
+        if remaining.is_empty() {
+            return Ok(ParsedAgentLoopArgs {
+                mode,
+                max_iterations,
+                original_prompt: remaining,
+            });
+        }
+
+        if let Some(rest) = remaining.strip_prefix("--fork")
+            && rest.chars().next().is_none_or(char::is_whitespace)
+        {
+            if mode != RuntimeAgentLoopMode::ReuseCurrentConversation {
+                return Err(MezError::invalid_args(
+                    "/loop accepts at most one of --fork or --new",
+                ));
+            }
+            mode = RuntimeAgentLoopMode::ForkEachIteration;
+            remaining = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = remaining.strip_prefix("--new")
+            && rest.chars().next().is_none_or(char::is_whitespace)
+        {
+            if mode != RuntimeAgentLoopMode::ReuseCurrentConversation {
+                return Err(MezError::invalid_args(
+                    "/loop accepts at most one of --fork or --new",
+                ));
+            }
+            mode = RuntimeAgentLoopMode::NewEachIteration;
+            remaining = rest.trim_start();
+            continue;
+        }
+
+        if let Some(rest) = remaining.strip_prefix("--limit") {
+            let Some(next) = rest.chars().next() else {
+                return Err(MezError::invalid_args(
+                    "/loop --limit requires a positive integer",
+                ));
+            };
+            let value_tail = if next == '=' {
+                &rest[1..]
+            } else if next.is_whitespace() {
+                rest.trim_start()
+            } else {
+                return Ok(ParsedAgentLoopArgs {
+                    mode,
+                    max_iterations,
+                    original_prompt: remaining,
+                });
+            };
+            if max_iterations.is_some() {
+                return Err(MezError::invalid_args(
+                    "/loop --limit may only be provided once",
+                ));
+            }
+            let value_end = value_tail
+                .find(char::is_whitespace)
+                .unwrap_or(value_tail.len());
+            let (value, tail) = value_tail.split_at(value_end);
+            if value.is_empty() {
+                return Err(MezError::invalid_args(
+                    "/loop --limit requires a positive integer",
+                ));
+            }
+            let parsed = value
+                .parse::<usize>()
+                .map_err(|_| MezError::invalid_args("/loop --limit requires a positive integer"))?;
+            if parsed == 0 {
+                return Err(MezError::invalid_args(
+                    "/loop --limit requires a positive integer",
+                ));
+            }
+            max_iterations = Some(parsed);
+            remaining = tail.trim_start();
+            continue;
+        }
+
+        return Ok(ParsedAgentLoopArgs {
+            mode,
+            max_iterations,
+            original_prompt: remaining,
+        });
     }
-    Ok((RuntimeAgentLoopMode::ReuseCurrentConversation, trimmed))
 }
 
 /// Returns the trace and status label for a `/loop` conversation mode.
@@ -110,6 +203,7 @@ fn runtime_agent_loop_mode_name(mode: RuntimeAgentLoopMode) -> &'static str {
     match mode {
         RuntimeAgentLoopMode::ReuseCurrentConversation => "reuse_current_conversation",
         RuntimeAgentLoopMode::ForkEachIteration => "fork_each_iteration",
+        RuntimeAgentLoopMode::NewEachIteration => "new_each_iteration",
     }
 }
 
@@ -575,8 +669,8 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("loop command must be submitted as an agent slash command")
         })?;
-        let (mode, original_prompt) = parse_agent_loop_args(invocation.args.trim())?;
-        if original_prompt.is_empty() {
+        let parsed = parse_agent_loop_args(invocation.args.trim())?;
+        if parsed.original_prompt.is_empty() {
             return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
         }
         if self.agent_loops_by_pane.contains_key(pane_id) {
@@ -594,18 +688,21 @@ impl RuntimeSessionService {
         let parent_conversation_id = parent_session.session_id.clone();
         let parent_transcript_entries = parent_session.transcript_entries;
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
+        let max_iterations = parsed
+            .max_iterations
+            .unwrap_or(self.agent_loop_limit.max(1));
         self.agent_loops_by_pane.insert(
             pane_id.to_string(),
             RuntimeAgentLoopState {
                 pane_id: pane_id.to_string(),
-                original_prompt: original_prompt.to_string(),
-                mode,
+                original_prompt: parsed.original_prompt.to_string(),
+                mode: parsed.mode,
                 parent_conversation_id: parent_conversation_id.clone(),
                 parent_transcript_entries,
                 parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
                 iteration: 1,
                 emitted_apply_patch: false,
-                max_iterations: self.agent_loop_limit.max(1),
+                max_iterations,
             },
         );
         let started = match self.start_agent_loop_work_turn(pane_id) {
@@ -624,8 +721,8 @@ impl RuntimeSessionService {
                 "pane={} agent_prompt_turn={} loop_iteration=1 loop_limit={} mode={} parent_conversation={} state={}",
                 pane_id,
                 started.turn_id,
-                self.agent_loop_limit.max(1),
-                runtime_agent_loop_mode_name(mode),
+                max_iterations,
+                runtime_agent_loop_mode_name(parsed.mode),
                 parent_conversation_id,
                 runtime_agent_turn_state_name(started.state)
             ),
@@ -701,6 +798,20 @@ impl RuntimeSessionService {
                     )?;
                 Ok((session.session_id.clone(), session.transcript_entries))
             }
+            RuntimeAgentLoopMode::NewEachIteration => {
+                let target_conversation_id = Self::runtime_new_agent_conversation_id();
+                let session = self
+                    .agent_shell_store
+                    .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                        pane_id,
+                        &target_conversation_id,
+                        0,
+                        None,
+                        None,
+                        0,
+                    )?;
+                Ok((session.session_id.clone(), session.transcript_entries))
+            }
         }
     }
 
@@ -711,7 +822,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         state: &RuntimeAgentLoopState,
     ) -> Result<()> {
-        if state.mode != RuntimeAgentLoopMode::ForkEachIteration {
+        if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation {
             return Ok(());
         }
         self.agent_shell_store.bind_conversation_with_lineage(

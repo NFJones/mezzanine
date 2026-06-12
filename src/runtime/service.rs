@@ -1895,14 +1895,22 @@ impl RuntimeSessionService {
                     || session
                         .ephemeral_transcript_source_conversation_id
                         .is_some()
+                    || self.agent_loops_by_pane.contains_key(&session.pane_id)
             })
             .map(|session| {
+                let fallback_parent = self.agent_loops_by_pane.get(&session.pane_id);
                 let conversation_id = session
                     .ephemeral_transcript_source_conversation_id
                     .clone()
+                    .or_else(|| fallback_parent.map(|state| state.parent_conversation_id.clone()))
                     .unwrap_or_else(|| session.session_id.clone());
                 let transcript_entries = if session.ephemeral {
-                    session.ephemeral_transcript_source_entries
+                    session
+                        .ephemeral_transcript_source_conversation_id
+                        .as_ref()
+                        .map(|_| session.ephemeral_transcript_source_entries)
+                        .or_else(|| fallback_parent.map(|state| state.parent_transcript_entries))
+                        .unwrap_or(session.transcript_entries)
                 } else {
                     session.transcript_entries
                 };

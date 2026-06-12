@@ -300,6 +300,8 @@ pub enum RuntimeAgentLoopMode {
     ReuseCurrentConversation,
     /// Run each iteration in a fresh transcript fork of the parent conversation.
     ForkEachIteration,
+    /// Run each iteration in a fresh empty conversation with no parent fork context.
+    NewEachIteration,
 }
 
 /// Runtime-owned state for one active `/loop` command.
@@ -311,7 +313,8 @@ pub struct RuntimeAgentLoopState {
     pub original_prompt: String,
     /// Conversation preparation mode for loop-owned work turns.
     pub mode: RuntimeAgentLoopMode,
-    /// Parent conversation id used when fresh loop iterations fork.
+    /// Parent conversation id restored after fresh loop iterations and used as
+    /// the fork source when applicable.
     pub parent_conversation_id: String,
     /// Durable parent transcript count to restore after ephemeral loop forks.
     pub parent_transcript_entries: u64,
