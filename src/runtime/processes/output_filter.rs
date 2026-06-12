@@ -649,6 +649,7 @@ pub(super) fn latest_agent_shell_transaction_output_lines(
         let mut output = decoded.output;
         if let Some((_before, tail)) = raw_output.rsplit_once("__MEZ_SHELL_OUTPUT_BASE64_END__")
             && !tail.trim().is_empty()
+            && !tail.contains("__MEZ_SHELL_OUTPUT_BASE64_")
         {
             output.push_str(tail);
         }
@@ -656,6 +657,7 @@ pub(super) fn latest_agent_shell_transaction_output_lines(
     } else {
         output.to_string()
     };
+    let empty_commands: Vec<String> = Vec::new();
     let mut lines = output
         .replace("\r\n", "\n")
         .replace('\r', "\n")
@@ -665,7 +667,12 @@ pub(super) fn latest_agent_shell_transaction_output_lines(
         .map(|line| line.trim_end().to_string())
         .filter(|line| {
             let trimmed = line.trim();
-            !trimmed.is_empty() && !shell_observation_line_looks_like_prompt(trimmed)
+            !trimmed.is_empty()
+                && !trimmed.starts_with("$ ")
+                && !trimmed.starts_with("> ")
+                && !trimmed.starts_with("__MEZ_SHELL_OUTPUT_BASE64_")
+                && !mez_wrapper_echo_text_is_hidden(trimmed, &empty_commands)
+                && !shell_observation_line_looks_like_prompt(trimmed)
         })
         .take(max_lines)
         .collect::<Vec<_>>();
@@ -1620,6 +1627,17 @@ mod tests {
             1,
             "exactly one echo hello world should remain: {text}"
         );
+    }
+
+    /// Verifies hidden-live shell output previews use decoded command output as
+    /// the authoritative source. Wrapper framing and prompt repaint bytes after
+    /// the transport frame must remain out of pane status lines.
+    #[test]
+    fn latest_agent_shell_transaction_output_lines_ignores_transport_framing_tail() {
+        let output = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nQVNZTkNfUEFORV9TVElMTF9BTElWRQo=\n__MEZ_SHELL_OUTPUT_BASE64_END__\nMEZ_MARKER_TOKEN='abc'\n$ prompt repaint\n";
+        let lines = latest_agent_shell_transaction_output_lines(output, 5);
+
+        assert_eq!(lines, vec!["ASYNC_PANE_STILL_ALIVE".to_string()]);
     }
 
     /// Verifies prompt detection correctly identifies common prompt patterns.

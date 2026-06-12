@@ -2567,6 +2567,111 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies shell-command pane logging stays empty when the wrapped command
+/// itself emits no output. The user-visible bug was raw Mezzanine framing
+/// leaking into the pane log because the success path preserved raw PTY preview
+/// text when the cleaned command output was empty.
+#[test]
+fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-hidden-empty-output","input":"print nothing"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "maap shell response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "shell-1".to_string(),
+                    rationale: "print nothing".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Print nothing".to_string(),
+                        command: ":".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.pending_agent_provider_tasks.remove("turn-1");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    for _ in 0..50 {
+        let _ = service.poll_pane_outputs(4096).unwrap();
+        if service.pending_agent_provider_tasks.contains("turn-1") {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("$ :"), "{pane_text}");
+    assert!(
+        !pane_text.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__"),
+        "{pane_text}"
+    );
+    assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
+    assert!(!pane_text.contains("MEZ_STATUS"), "{pane_text}");
+    assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");
+    assert!(!pane_text.contains("unset MEZ_MARKER_TOKEN"), "{pane_text}");
+    let context_text = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(context_text.contains("command: :"), "{context_text}");
+    assert!(context_text.contains("exit_code: 0"), "{context_text}");
+    assert!(!context_text.contains("MEZ_MARKER_TOKEN"), "{context_text}");
+    assert!(
+        !context_text.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__"),
+        "{context_text}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies that a bash-backed pane shell survives the first agent shell
 /// transaction after the command is displayed. The user-visible failure mode
 /// was the primary pane exiting immediately after an agent command preview, so

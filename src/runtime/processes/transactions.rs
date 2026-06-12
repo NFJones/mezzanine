@@ -2112,11 +2112,9 @@ impl RuntimeSessionService {
             if exit_code == 0 {
                 let processed_output =
                     postprocess_shell_action_success_output(&action, raw_output_preview)?;
-                if transport_diagnostics.saw_begin_marker || !processed_output.trim().is_empty() {
-                    transaction_ref.observed_output_preview = processed_output;
-                    transaction_ref.observed_output_bytes =
-                        transaction_ref.observed_output_preview.len();
-                }
+                transaction_ref.observed_output_preview = processed_output;
+                transaction_ref.observed_output_bytes =
+                    transaction_ref.observed_output_preview.len();
             }
             let signal: Option<i32> = if exit_code > 128 && exit_code < 256 {
                 Some(exit_code - 128)
