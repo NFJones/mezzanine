@@ -3783,12 +3783,24 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap()
+        .pane_id;
+    service.session.select_pane(&primary, "%1").unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
     service.pane_screens.insert("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second_pane.as_str())
         .unwrap();
     service.record_agent_provider_token_usage(
         "%1",
@@ -3825,6 +3837,15 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         },
         Some(&deepseek_profile),
     );
+    service.record_agent_provider_token_usage(
+        second_pane.as_str(),
+        crate::agent::ModelTokenUsage {
+            input_tokens: 60,
+            output_tokens: 10,
+            reasoning_tokens: 4,
+            cached_input_tokens: Some(30),
+        },
+    );
     service.runtime_metrics.record_provider_token_usage(
         crate::agent::ModelTokenUsage {
             input_tokens: 300,
@@ -3838,7 +3859,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             reasoning_tokens: 15,
             cached_input_tokens: Some(120),
         },
-        &crate::agent::ModelTokenUsageKey::new("anthropic", "claude-sonnet"),
+        &crate::agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
     );
     service
         .subagent_scopes
@@ -3913,9 +3934,10 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| anthropic | claude-sonnet | 180 | 120 | 75 | 15 | 40.00% |"),
+        response.contains("| openai | gpt-fast | 50 | 130 | 44 | 13 | 72.22% |"),
         "{response}"
     );
+    assert!(!response.contains("| runtime-metrics | metrics-only |"), "{response}");
     assert!(!response.contains("Provider rate limits"), "{response}");
     assert!(!response.contains("### Quota Usage"), "{response}");
     assert!(

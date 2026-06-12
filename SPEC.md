@@ -4956,11 +4956,12 @@ The baseline command capabilities are:
   status data as a markdown table. When per-model token usage is available,
   `/status` MUST render the current session provider/model accounting table and
   then a separate mez-instance-wide provider/model accounting table beneath it
-  using the same per-model columns, including cache hit percentage. If a
-  provider omits cached-token accounting, the status display SHOULD show that
-  counter as unknown rather than as zero. Provider token counters MUST include
-  auxiliary routing/model-sizing provider requests as separate provider/model
-  rows when token usage is reported.
+  aggregated across all active agent sessions and panes using the same
+  per-model columns, including cache hit percentage. If a provider omits
+  cached-token accounting, the status display SHOULD show that counter as
+  unknown rather than as zero. Provider token counters MUST include auxiliary
+  routing/model-sizing provider requests as separate provider/model rows when
+  token usage is reported.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
 - `/statusline`: Configure agent shell status-line fields.
