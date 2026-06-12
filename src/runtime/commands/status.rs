@@ -265,7 +265,7 @@ impl RuntimeSessionService {
                 ),
             ],
             vec![
-                "Provider tokens".to_string(),
+                "Pane agent tokens".to_string(),
                 Self::runtime_agent_provider_token_usage_summary(&token_usage_by_model),
             ],
             vec![
@@ -277,32 +277,34 @@ impl RuntimeSessionService {
         lines.extend(runtime_markdown_table(&["Field", "Value"], &rows));
         if !token_usage_by_model.is_empty() {
             lines.push(String::new());
-            lines.push("### Provider Token Usage".to_string());
+            lines.push("### Pane Agent Token Usage".to_string());
+            lines.push(String::new());
             lines.extend(runtime_markdown_table(
                 &[
                     "Provider",
                     "Model",
                     "Billed input",
-                    "Cached input (best effort)",
+                    "Cached input",
                     "Output",
                     "Reasoning",
-                    "Cache Hit % (best effort)",
+                    "Cache Hit %",
                 ],
                 &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
             ));
         }
         if !instance_token_usage_by_model.is_empty() {
             lines.push(String::new());
-            lines.push("### Instance Provider Token Usage".to_string());
+            lines.push("### Mez Session Token Usage".to_string());
+            lines.push(String::new());
             lines.extend(runtime_markdown_table(
                 &[
                     "Provider",
                     "Model",
                     "Billed input",
-                    "Cached input (best effort)",
+                    "Cached input",
                     "Output",
                     "Reasoning",
-                    "Cache Hit % (best effort)",
+                    "Cache Hit %",
                 ],
                 &Self::runtime_agent_provider_token_usage_rows(&instance_token_usage_by_model),
             ));
@@ -346,7 +348,7 @@ impl RuntimeSessionService {
                     )
                 })
                 .unwrap_or_else(|| "none".to_string()),
-            count => format!("{count} models; see Provider Token Usage"),
+            count => format!("{count} models; see Pane Agent Token Usage"),
         }
     }
 
@@ -398,7 +400,7 @@ impl RuntimeSessionService {
     /// Formats one provider/model token usage value for compact displays.
     fn runtime_agent_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
         format!(
-            "input={} (+ {} cached best-effort) cache_hit={} output={} reasoning={} total={}",
+            "input={} (+ {} cached) cache_hit={} output={} reasoning={} total={}",
             usage.billed_input_tokens(),
             usage.cached_input_tokens_display(),
             usage.cached_input_hit_ratio_display(),
