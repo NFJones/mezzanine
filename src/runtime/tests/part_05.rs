@@ -536,6 +536,10 @@ reasoning_profile = "high"
         "{status}"
     );
     assert!(
+        status.contains("### Instance Provider Token Usage"),
+        "{status}"
+    );
+    assert!(
         status.contains("| runtime-batch | gpt-router | 60 | 30 | 10 | 3 | 33.33% |"),
         "{status}"
     );

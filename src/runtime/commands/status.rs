@@ -171,6 +171,8 @@ impl RuntimeSessionService {
             .get(&session.session_id)
             .cloned()
             .unwrap_or_default();
+        let instance_token_usage_by_model =
+            self.runtime_metrics.provider_token_usage_by_model.clone();
         let running_turn = session
             .running_turn_id
             .as_deref()
@@ -287,6 +289,22 @@ impl RuntimeSessionService {
                     "Cache Hit %",
                 ],
                 &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
+            ));
+        }
+        if !instance_token_usage_by_model.is_empty() {
+            lines.push(String::new());
+            lines.push("### Instance Provider Token Usage".to_string());
+            lines.extend(runtime_markdown_table(
+                &[
+                    "Provider",
+                    "Model",
+                    "Billed input",
+                    "Cached input",
+                    "Output",
+                    "Reasoning",
+                    "Cache Hit %",
+                ],
+                &Self::runtime_agent_provider_token_usage_rows(&instance_token_usage_by_model),
             ));
         }
         if !active_scopes.is_empty() {

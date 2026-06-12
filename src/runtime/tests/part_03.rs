@@ -3825,6 +3825,21 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         },
         Some(&deepseek_profile),
     );
+    service.runtime_metrics.record_provider_token_usage(
+        crate::agent::ModelTokenUsage {
+            input_tokens: 300,
+            output_tokens: 75,
+            reasoning_tokens: 15,
+            cached_input_tokens: Some(120),
+        },
+        crate::agent::ModelTokenUsage {
+            input_tokens: 300,
+            output_tokens: 75,
+            reasoning_tokens: 15,
+            cached_input_tokens: Some(120),
+        },
+        &crate::agent::ModelTokenUsageKey::new("anthropic", "claude-sonnet"),
+    );
     service
         .subagent_scopes
         .register(
@@ -3879,12 +3894,26 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         response.contains("### Provider Token Usage"),
         "{response}"
     );
+    let session_heading = response
+        .find("### Provider Token Usage")
+        .expect("session token usage heading should be present");
+    let instance_heading = response
+        .find("### Instance Provider Token Usage")
+        .expect("instance token usage heading should be present");
+    assert!(
+        session_heading < instance_heading,
+        "{response}"
+    );
     assert!(
         response.contains("| openai | gpt-fast | 20 | 100 | 34 | 9 | 83.33% |"),
         "{response}"
     );
     assert!(
         response.contains("| deepseek | deepseek-chat | 100 | 100 | 50 | 20 | 50.00% |"),
+        "{response}"
+    );
+    assert!(
+        response.contains("| anthropic | claude-sonnet | 180 | 120 | 75 | 15 | 40.00% |"),
         "{response}"
     );
     assert!(!response.contains("Provider rate limits"), "{response}");

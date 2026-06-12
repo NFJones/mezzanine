@@ -4953,10 +4953,14 @@ The baseline command capabilities are:
 - `/status`: Show session status, including model, policy, identity, writable
   roots, context usage, and cumulative provider token counters. The status
   display SHOULD be `text/markdown; charset=utf-8` and SHOULD present the main
-  status data as a markdown table. If a provider omits cached-token accounting,
-  the status display SHOULD show that counter as unknown rather than as zero.
-  Provider token counters MUST include auxiliary routing/model-sizing provider
-  requests as separate provider/model rows when token usage is reported.
+  status data as a markdown table. When per-model token usage is available,
+  `/status` MUST render the current session provider/model accounting table and
+  then a separate mez-instance-wide provider/model accounting table beneath it
+  using the same per-model columns, including cache hit percentage. If a
+  provider omits cached-token accounting, the status display SHOULD show that
+  counter as unknown rather than as zero. Provider token counters MUST include
+  auxiliary routing/model-sizing provider requests as separate provider/model
+  rows when token usage is reported.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
 - `/statusline`: Configure agent shell status-line fields.
