@@ -3433,13 +3433,14 @@ fn runtime_agent_loop_reuses_current_conversation_by_default() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
-/// Verifies `/loop --fork` rotates the pane to a fresh forked conversation
+/// Verifies `/loop --fork` rotates the pane to a fresh ephemeral conversation
 /// before the first work iteration starts.
 ///
-/// The explicit fork mode preserves the old behavior for callers that need
-/// each loop attempt to start from a fresh branch of the parent transcript.
+/// Fork-mode loop attempts need isolated model context without creating saved
+/// conversations. This regression keeps the work conversation runtime-only and
+/// checkpoints the parent conversation as the resumable pane binding.
 #[test]
-fn runtime_agent_loop_fork_option_starts_first_iteration_in_fresh_forked_conversation() {
+fn runtime_agent_loop_fork_option_starts_first_iteration_in_ephemeral_conversation() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-fork"));
     let mut service = test_runtime_service();
     service.set_agent_transcript_store(transcript_store.clone());
@@ -3466,15 +3467,40 @@ fn runtime_agent_loop_fork_option_starts_first_iteration_in_fresh_forked_convers
             content: "review this document".to_string(),
         })
         .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
 
     let outcome = service
         .execute_agent_shell_loop_command("%1", "/loop --fork review this document")
         .unwrap();
 
     assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
-    let session = service.agent_shell_store().get("%1").unwrap();
-    assert_ne!(session.session_id, old_session);
-    assert_eq!(session.visibility, AgentShellVisibility::Visible);
+    let loop_session = {
+        let session = service.agent_shell_store().get("%1").unwrap();
+        assert_ne!(session.session_id, old_session);
+        assert!(session.ephemeral);
+        assert_eq!(
+            session.ephemeral_transcript_source_conversation_id.as_deref(),
+            Some(old_session.as_str())
+        );
+        assert_eq!(session.ephemeral_transcript_source_entries, 1);
+        assert_eq!(session.transcript_entries, 0);
+        assert_eq!(session.visibility, AgentShellVisibility::Visible);
+        session.session_id.clone()
+    };
+    assert!(transcript_store.summary(&loop_session).unwrap().is_none());
+    let saved = transcript_store.list().unwrap();
+    assert!(saved.iter().any(|summary| summary.conversation_id == old_session));
+    assert!(!saved.iter().any(|summary| summary.conversation_id == loop_session));
+    service.checkpoint_agent_session_metadata().unwrap();
+    let metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    assert_eq!(metadata.len(), 1, "{metadata:#?}");
+    assert_eq!(metadata[0].conversation_id, old_session);
+    assert_eq!(metadata[0].transcript_entries, 1);
     let pane_text = service.pane_screen("%1").unwrap().visible_lines().join("\n");
     assert!(pane_text.contains("user> /loop --fork review this document"), "{pane_text}");
     service.pane_processes_mut().terminate_all().unwrap();
@@ -3490,7 +3516,7 @@ fn runtime_agent_loop_fork_option_starts_first_iteration_in_fresh_forked_convers
 fn runtime_agent_loop_fork_option_starts_when_parent_conversation_has_no_saved_entries() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-empty-parent"));
     let mut service = test_runtime_service();
-    service.set_agent_transcript_store(transcript_store);
+    service.set_agent_transcript_store(transcript_store.clone());
     service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
     service
         .pane_screens
@@ -3508,10 +3534,27 @@ fn runtime_agent_loop_fork_option_starts_when_parent_conversation_has_no_saved_e
         .unwrap();
 
     assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
-    let session = service.agent_shell_store().get("%1").unwrap();
-    assert_ne!(session.session_id, old_session);
-    assert_eq!(session.transcript_entries, 0);
-    assert_eq!(session.visibility, AgentShellVisibility::Visible);
+    let loop_session = {
+        let session = service.agent_shell_store().get("%1").unwrap();
+        assert_ne!(session.session_id, old_session);
+        assert!(session.ephemeral);
+        assert_eq!(
+            session.ephemeral_transcript_source_conversation_id.as_deref(),
+            Some(old_session.as_str())
+        );
+        assert_eq!(session.ephemeral_transcript_source_entries, 0);
+        assert_eq!(session.transcript_entries, 0);
+        assert_eq!(session.visibility, AgentShellVisibility::Visible);
+        session.session_id.clone()
+    };
+    assert!(transcript_store.summary(&loop_session).unwrap().is_none());
+    service.checkpoint_agent_session_metadata().unwrap();
+    let metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    assert_eq!(metadata.len(), 1, "{metadata:#?}");
+    assert_eq!(metadata[0].conversation_id, old_session);
+    assert_eq!(metadata[0].transcript_entries, 0);
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -3656,18 +3699,49 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
 /// next `/loop` command in the same pane.
 #[test]
 fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-stop"));
     let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
     service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
     service
         .pane_screens
         .insert("%1".to_string(), TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap());
     service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    let old_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: old_session.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "review this document".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
 
     let outcome = service
-        .execute_agent_shell_loop_command("%1", "/loop review this document")
+        .execute_agent_shell_loop_command("%1", "/loop --fork review this document")
         .unwrap();
 
     assert!(matches!(outcome, crate::runtime::AgentShellCommandOutcome::Mutated { .. }));
+    let loop_session = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    assert_ne!(loop_session, old_session);
     assert!(service.agent_loops_by_pane.contains_key("%1"));
     assert!(service.agent_loop_turns.contains_key("turn-1"));
 
@@ -3676,6 +3750,12 @@ fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
     assert_eq!(stopped.turn_id, "turn-1");
     assert!(!service.agent_loops_by_pane.contains_key("%1"));
     assert!(!service.agent_loop_turns.contains_key("turn-1"));
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert_eq!(session.session_id, old_session);
+    assert!(!session.ephemeral);
+    assert!(session.ephemeral_transcript_source_conversation_id.is_none());
+    assert_eq!(session.ephemeral_transcript_source_entries, 0);
+    assert!(transcript_store.summary(&loop_session).unwrap().is_none());
     assert_eq!(
         service
             .agent_turn_ledger

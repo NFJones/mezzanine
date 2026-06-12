@@ -835,7 +835,9 @@ impl RuntimeSessionService {
             return Ok(());
         };
         if execution.terminal_state != AgentTurnState::Completed {
-            self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+            if let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id) {
+                self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
+            }
             return Ok(());
         }
         match loop_turn.kind {
@@ -846,7 +848,9 @@ impl RuntimeSessionService {
                     .map(|state| state.emitted_apply_patch)
                     .unwrap_or_else(|| !runtime_execution_is_patch_free(execution));
                 if !iteration_emitted_apply_patch {
-                    self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+                    if let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id) {
+                        self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
+                    }
                     self.append_agent_status_text_to_terminal_buffer(
                         &loop_turn.pane_id,
                         &format!(
@@ -862,7 +866,9 @@ impl RuntimeSessionService {
                     return Ok(());
                 };
                 if state.iteration >= state.max_iterations {
-                    self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+                    if let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id) {
+                        self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
+                    }
                     self.append_agent_status_text_to_terminal_buffer(
                         &loop_turn.pane_id,
                         &format!(
@@ -876,7 +882,12 @@ impl RuntimeSessionService {
                 state.emitted_apply_patch = false;
                 self.agent_loops_by_pane
                     .insert(loop_turn.pane_id.clone(), state.clone());
-                let _ = self.start_agent_loop_work_turn(&loop_turn.pane_id)?;
+                if let Err(error) = self.start_agent_loop_work_turn(&loop_turn.pane_id) {
+                    if let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id) {
+                        self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
+                    }
+                    return Err(error);
+                }
                 self.append_agent_status_text_to_terminal_buffer(
                     &loop_turn.pane_id,
                     &format!(

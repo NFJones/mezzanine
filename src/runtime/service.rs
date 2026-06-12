@@ -1784,6 +1784,9 @@ impl RuntimeSessionService {
             session.visibility = visibility;
             session.running_turn_id = None;
             session.transcript_entries = metadata.transcript_entries;
+            session.ephemeral = false;
+            session.ephemeral_transcript_source_conversation_id = None;
+            session.ephemeral_transcript_source_entries = 0;
             session.log_level = log_level;
             session.directive = metadata.directive.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {
@@ -1887,7 +1890,22 @@ impl RuntimeSessionService {
             .agent_shell_store
             .sessions()
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
+            .filter(|session| {
+                !session.ephemeral
+                    || session
+                        .ephemeral_transcript_source_conversation_id
+                        .is_some()
+            })
             .map(|session| {
+                let conversation_id = session
+                    .ephemeral_transcript_source_conversation_id
+                    .clone()
+                    .unwrap_or_else(|| session.session_id.clone());
+                let transcript_entries = if session.ephemeral {
+                    session.ephemeral_transcript_source_entries
+                } else {
+                    session.transcript_entries
+                };
                 let working_directory = self
                     .pane_current_working_directory(&session.pane_id)
                     .map(|path| path.to_string_lossy().into_owned());
@@ -1897,17 +1915,17 @@ impl RuntimeSessionService {
                     .map(|path| discover_project_root(&path).to_string_lossy().into_owned());
                 let token_usage_by_model = self
                     .agent_token_usage_by_conversation
-                    .get(&session.session_id)
+                    .get(&conversation_id)
                     .cloned()
                     .unwrap_or_default();
                 AgentSessionMetadata {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
-                    conversation_id: session.session_id.clone(),
+                    conversation_id: conversation_id.clone(),
                     prompt_cache_lineage_id: session.prompt_cache_lineage_id.clone(),
                     visibility: agent_shell_visibility_json_name(session.visibility).to_string(),
                     running_turn_id: session.running_turn_id.clone(),
-                    transcript_entries: session.transcript_entries,
+                    transcript_entries,
                     log_level: session.log_level.as_str().to_string(),
                     pane_model_profile: self
                         .model_profile_overrides
@@ -1928,11 +1946,11 @@ impl RuntimeSessionService {
                     token_usage_by_model,
                     context_usage: self
                         .agent_context_usage_by_conversation
-                        .get(&session.session_id)
+                        .get(&conversation_id)
                         .cloned(),
                     context_usage_snapshot: self
                         .agent_context_usage_snapshot_by_conversation
-                        .get(&session.session_id)
+                        .get(&conversation_id)
                         .copied(),
                 }
             })

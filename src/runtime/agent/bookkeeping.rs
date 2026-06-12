@@ -24,6 +24,13 @@ impl RuntimeSessionService {
         if let Some(conversation_id) = conversation_id.as_deref() {
             self.record_runtime_agent_patch_results(conversation_id, execution);
         }
+        if self
+            .agent_shell_store
+            .get(&turn.pane_id)
+            .is_some_and(|session| session.ephemeral)
+        {
+            return Ok(0);
+        }
         let Some(store) = self.agent_transcript_store.clone() else {
             return Ok(0);
         };

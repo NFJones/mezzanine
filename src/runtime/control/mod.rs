@@ -148,21 +148,31 @@ impl RuntimeSessionService {
 
         if let Some(session) = self.agent_shell_store.get(pane_id)
             && let Some(store) = self.agent_transcript_store.as_ref()
-            && session.transcript_entries > 0
         {
-            let transcript_context_entries =
-                runtime_transcript_context_entry_limit(session.transcript_entries);
-            match store.inspect_recent(
-                &session.session_id,
-                transcript_context_entries,
-                AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
-            ) {
-                Ok(entries) if !entries.is_empty() => {
-                    blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
+            let transcript_conversation_id = session
+                .ephemeral_transcript_source_conversation_id
+                .as_deref()
+                .unwrap_or(session.session_id.as_str());
+            let transcript_entries = if session.ephemeral {
+                session.ephemeral_transcript_source_entries
+            } else {
+                session.transcript_entries
+            };
+            if transcript_entries > 0 {
+                let transcript_context_entries =
+                    runtime_transcript_context_entry_limit(transcript_entries);
+                match store.inspect_recent(
+                    transcript_conversation_id,
+                    transcript_context_entries,
+                    AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
+                ) {
+                    Ok(entries) if !entries.is_empty() => {
+                        blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
                 }
-                Ok(_) => {}
-                Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
-                Err(error) => return Err(error),
             }
         }
         let agent_id = crate::ids::AgentId::opaque(format!("agent-{pane_id}"))
@@ -429,25 +439,34 @@ impl RuntimeSessionService {
         }
 
         let mut refreshed_blocks = Vec::new();
-        if let Some(store) = self.agent_transcript_store.as_ref()
-            && session.transcript_entries > 0
-        {
-            let transcript_context_entries =
-                runtime_transcript_context_entry_limit(session.transcript_entries);
-            match store.inspect_recent(
-                &session.session_id,
-                transcript_context_entries,
-                AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
-            ) {
-                Ok(entries) if !entries.is_empty() => {
-                    refreshed_blocks.extend(runtime_agent_transcript_context_blocks(
-                        &turn.pane_id,
-                        &entries,
-                    ));
+        if let Some(store) = self.agent_transcript_store.as_ref() {
+            let transcript_conversation_id = session
+                .ephemeral_transcript_source_conversation_id
+                .as_deref()
+                .unwrap_or(session.session_id.as_str());
+            let transcript_entries = if session.ephemeral {
+                session.ephemeral_transcript_source_entries
+            } else {
+                session.transcript_entries
+            };
+            if transcript_entries > 0 {
+                let transcript_context_entries =
+                    runtime_transcript_context_entry_limit(transcript_entries);
+                match store.inspect_recent(
+                    transcript_conversation_id,
+                    transcript_context_entries,
+                    AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
+                ) {
+                    Ok(entries) if !entries.is_empty() => {
+                        refreshed_blocks.extend(runtime_agent_transcript_context_blocks(
+                            &turn.pane_id,
+                            &entries,
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
                 }
-                Ok(_) => {}
-                Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
-                Err(error) => return Err(error),
             }
         }
         let context_memory_records = self.model_context_memory_records_for_pane(&turn.pane_id);

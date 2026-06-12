@@ -313,6 +313,8 @@ pub struct RuntimeAgentLoopState {
     pub mode: RuntimeAgentLoopMode,
     /// Parent conversation id used when fresh loop iterations fork.
     pub parent_conversation_id: String,
+    /// Durable parent transcript count to restore after ephemeral loop forks.
+    pub parent_transcript_entries: u64,
     /// Prompt-cache lineage to retain while rebinding forked loop iterations.
     pub parent_prompt_cache_lineage_id: Option<String>,
     /// One-based work iteration currently being evaluated or executed.

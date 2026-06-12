@@ -263,6 +263,50 @@ pub struct AgentShellSession {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub directive: Option<String>,
+    /// Whether this pane binding is temporary runtime-only state.
+    ///
+    /// Ephemeral conversations are used by loop-owned fork attempts. They may
+    /// receive live model context and terminal output, but must not be saved as
+    /// resumable agent sessions or checkpointed as active pane bindings.
+    pub ephemeral: bool,
+    /// Durable conversation whose transcript should seed an ephemeral turn.
+    pub ephemeral_transcript_source_conversation_id: Option<String>,
+    /// Number of durable source transcript entries available for ephemeral context.
+    pub ephemeral_transcript_source_entries: u64,
+}
+
+/// Persistence policy for one pane conversation binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentShellConversationPersistence {
+    /// Whether this binding is runtime-only.
+    ephemeral: bool,
+    /// Durable conversation id used to seed ephemeral transcript context.
+    transcript_source_conversation_id: Option<String>,
+    /// Number of durable transcript entries available from the source.
+    transcript_source_entries: u64,
+}
+
+impl AgentShellConversationPersistence {
+    /// Builds the policy for a durable, resumable pane conversation binding.
+    fn durable() -> Self {
+        Self {
+            ephemeral: false,
+            transcript_source_conversation_id: None,
+            transcript_source_entries: 0,
+        }
+    }
+
+    /// Builds the policy for a runtime-only conversation binding.
+    fn ephemeral(
+        transcript_source_conversation_id: Option<String>,
+        transcript_source_entries: u64,
+    ) -> Self {
+        Self {
+            ephemeral: true,
+            transcript_source_conversation_id,
+            transcript_source_entries,
+        }
+    }
 }
 
 /// Carries Agent Shell Store state for this subsystem.
@@ -299,6 +343,9 @@ impl AgentShellStore {
                     transcript_entries: 0,
                     log_level: AgentLogLevel::Normal,
                     directive: None,
+                    ephemeral: false,
+                    ephemeral_transcript_source_conversation_id: None,
+                    ephemeral_transcript_source_entries: 0,
                 },
             );
         }
@@ -445,8 +492,78 @@ impl AgentShellStore {
         transcript_entries: u64,
         prompt_cache_lineage_id: Option<String>,
     ) -> Result<&AgentShellSession> {
+        self.bind_conversation_with_lineage_and_persistence(
+            pane_id,
+            conversation_id,
+            transcript_entries,
+            prompt_cache_lineage_id,
+            AgentShellConversationPersistence::durable(),
+        )
+    }
+
+    /// Binds a pane to one runtime-only conversation while optionally
+    /// inheriting prompt-cache lineage from its parent.
+    ///
+    /// Ephemeral bindings are intentionally excluded from durable transcript
+    /// and active-session metadata persistence. They are suitable for
+    /// throw-away loop attempts whose visible parent conversation should remain
+    /// the resumable session.
+    pub fn bind_ephemeral_conversation_with_lineage(
+        &mut self,
+        pane_id: &str,
+        conversation_id: impl Into<String>,
+        transcript_entries: u64,
+        prompt_cache_lineage_id: Option<String>,
+    ) -> Result<&AgentShellSession> {
+        self.bind_ephemeral_conversation_with_lineage_and_transcript_source(
+            pane_id,
+            conversation_id,
+            transcript_entries,
+            prompt_cache_lineage_id,
+            None,
+            0,
+        )
+    }
+
+    /// Binds a pane to a runtime-only conversation seeded from a durable source
+    /// transcript.
+    pub fn bind_ephemeral_conversation_with_lineage_and_transcript_source(
+        &mut self,
+        pane_id: &str,
+        conversation_id: impl Into<String>,
+        transcript_entries: u64,
+        prompt_cache_lineage_id: Option<String>,
+        transcript_source_conversation_id: Option<String>,
+        transcript_source_entries: u64,
+    ) -> Result<&AgentShellSession> {
+        self.bind_conversation_with_lineage_and_persistence(
+            pane_id,
+            conversation_id,
+            transcript_entries,
+            prompt_cache_lineage_id,
+            AgentShellConversationPersistence::ephemeral(
+                transcript_source_conversation_id,
+                transcript_source_entries,
+            ),
+        )
+    }
+
+    /// Binds a pane to one conversation and records whether the binding is
+    /// durable or runtime-only.
+    fn bind_conversation_with_lineage_and_persistence(
+        &mut self,
+        pane_id: &str,
+        conversation_id: impl Into<String>,
+        transcript_entries: u64,
+        prompt_cache_lineage_id: Option<String>,
+        persistence: AgentShellConversationPersistence,
+    ) -> Result<&AgentShellSession> {
         let conversation_id = conversation_id.into();
         validate_non_empty("conversation id", &conversation_id)?;
+        if let Some(source_conversation_id) = persistence.transcript_source_conversation_id.as_ref()
+        {
+            validate_non_empty("transcript source conversation id", source_conversation_id)?;
+        }
         let session = self.session_mut(pane_id)?;
         if session.running_turn_id.is_some() {
             return Err(MezError::conflict(
@@ -459,6 +576,17 @@ impl AgentShellStore {
             session.prompt_cache_lineage_id = lineage_id;
         }
         session.transcript_entries = transcript_entries;
+        session.ephemeral = persistence.ephemeral;
+        session.ephemeral_transcript_source_conversation_id = if persistence.ephemeral {
+            persistence.transcript_source_conversation_id
+        } else {
+            None
+        };
+        session.ephemeral_transcript_source_entries = if persistence.ephemeral {
+            persistence.transcript_source_entries
+        } else {
+            0
+        };
         session.visibility = AgentShellVisibility::Visible;
         Ok(session)
     }
@@ -527,6 +655,9 @@ impl AgentShellStore {
                 transcript_entries: 0,
                 log_level,
                 directive: None,
+                ephemeral: false,
+                ephemeral_transcript_source_conversation_id: None,
+                ephemeral_transcript_source_entries: 0,
             },
         );
         self.get(pane_id)

@@ -425,8 +425,10 @@ impl RuntimeSessionService {
         } else {
             self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
         };
-        if let Some(loop_turn) = self.agent_loop_turns.remove(&turn_id) {
-            self.agent_loops_by_pane.remove(&loop_turn.pane_id);
+        if let Some(loop_turn) = self.agent_loop_turns.remove(&turn_id)
+            && let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id)
+        {
+            self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
         }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
@@ -590,6 +592,7 @@ impl RuntimeSessionService {
             )
         })?;
         let parent_conversation_id = parent_session.session_id.clone();
+        let parent_transcript_entries = parent_session.transcript_entries;
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
         self.agent_loops_by_pane.insert(
             pane_id.to_string(),
@@ -598,6 +601,7 @@ impl RuntimeSessionService {
                 original_prompt: original_prompt.to_string(),
                 mode,
                 parent_conversation_id: parent_conversation_id.clone(),
+                parent_transcript_entries,
                 parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
                 iteration: 1,
                 emitted_apply_patch: false,
@@ -607,7 +611,9 @@ impl RuntimeSessionService {
         let started = match self.start_agent_loop_work_turn(pane_id) {
             Ok(started) => started,
             Err(error) => {
-                self.agent_loops_by_pane.remove(pane_id);
+                if let Some(state) = self.agent_loops_by_pane.remove(pane_id) {
+                    self.restore_agent_loop_parent_conversation(pane_id, &state)?;
+                }
                 return Err(error);
             }
         };
@@ -682,48 +688,39 @@ impl RuntimeSessionService {
                 Ok((session.session_id.clone(), session.transcript_entries))
             }
             RuntimeAgentLoopMode::ForkEachIteration => {
-                let store = self.agent_transcript_store.clone().ok_or_else(|| {
-                    MezError::invalid_state("agent transcript store is unavailable")
-                })?;
                 let target_conversation_id = Self::runtime_new_agent_conversation_id();
-                let summary = match store.fork(
-                    &state.parent_conversation_id,
-                    &target_conversation_id,
-                    current_unix_seconds().max(1),
-                ) {
-                    Ok(summary) => summary,
-                    Err(error)
-                        if (error.kind() == crate::error::MezErrorKind::InvalidState
-                            && error.message() == "source conversation has no entries")
-                            || (error.kind() == crate::error::MezErrorKind::NotFound
-                                && error.message() == "conversation transcript not found") =>
-                    {
-                        crate::transcript::ConversationSummary {
-                            conversation_id: target_conversation_id,
-                            entries: 0,
-                            first_created_at_unix_seconds: 0,
-                            last_created_at_unix_seconds: 0,
-                            last_turn_id: String::new(),
-                            agent_id: String::new(),
-                            pane_id: pane_id.to_string(),
-                            directory: self
-                                .pane_current_working_directory(pane_id)
-                                .map(|path| path.to_string_lossy().into_owned()),
-                            initial_prompt: None,
-                            latest_user_prompt: None,
-                        }
-                    }
-                    Err(error) => return Err(error),
-                };
-                let session = self.agent_shell_store.bind_conversation_with_lineage(
-                    pane_id,
-                    &summary.conversation_id,
-                    summary.entries as u64,
-                    state.parent_prompt_cache_lineage_id.clone(),
-                )?;
+                let session = self
+                    .agent_shell_store
+                    .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                        pane_id,
+                        &target_conversation_id,
+                        0,
+                        state.parent_prompt_cache_lineage_id.clone(),
+                        Some(state.parent_conversation_id.clone()),
+                        state.parent_transcript_entries,
+                    )?;
                 Ok((session.session_id.clone(), session.transcript_entries))
             }
         }
+    }
+
+    /// Restores the pane's durable parent conversation after a loop-owned
+    /// ephemeral fork attempt finishes or is interrupted.
+    pub(in crate::runtime) fn restore_agent_loop_parent_conversation(
+        &mut self,
+        pane_id: &str,
+        state: &RuntimeAgentLoopState,
+    ) -> Result<()> {
+        if state.mode != RuntimeAgentLoopMode::ForkEachIteration {
+            return Ok(());
+        }
+        self.agent_shell_store.bind_conversation_with_lineage(
+            pane_id,
+            &state.parent_conversation_id,
+            state.parent_transcript_entries,
+            state.parent_prompt_cache_lineage_id.clone(),
+        )?;
+        Ok(())
     }
 
     /// Injects user steering input into the currently running pane turn.
@@ -1219,6 +1216,7 @@ mod tests {
             original_prompt: "review this document".to_string(),
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
+            parent_transcript_entries: 0,
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
             emitted_apply_patch: false,
@@ -1229,6 +1227,7 @@ mod tests {
             original_prompt: "review this document".to_string(),
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
+            parent_transcript_entries: 0,
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
             emitted_apply_patch: false,
