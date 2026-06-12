@@ -823,6 +823,9 @@ fn agent_argument_candidates(command: &str, _context: &TokenContext) -> Vec<Sele
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork", "--new", "--limit"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
+        "issue" => value_candidates(&[
+            "add", "query", "delete", "--kind", "--title", "--body", "--text", "--limit",
+        ]),
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
@@ -940,6 +943,7 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork|--new] [--limit <int>] <prompt>"),
         "memory" => Some(" <on|off|toggle|status|show>"),
+        "issue" => Some(" <add|query|delete> [--kind defect|task] [--title text]"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
         }

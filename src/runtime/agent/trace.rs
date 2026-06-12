@@ -654,6 +654,32 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 serde_json::json!(expires_in_days),
             );
         }
+        AgentActionPayload::IssueAdd { kind, title, body } => {
+            data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert(
+                "title".to_string(),
+                runtime_bounded_trace_string_value(title),
+            );
+            data.insert(
+                "body".to_string(),
+                body.as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+        AgentActionPayload::IssueQuery { kind, text, limit } => {
+            data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert(
+                "text".to_string(),
+                text.as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            data.insert("limit".to_string(), serde_json::json!(limit));
+        }
+        AgentActionPayload::IssueDelete { id } => {
+            data.insert("id".to_string(), runtime_bounded_trace_string_value(id));
+        }
         AgentActionPayload::SendMessage {
             recipient,
             content_type,

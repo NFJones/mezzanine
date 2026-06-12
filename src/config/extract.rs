@@ -7,7 +7,7 @@
 use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap, COMMAND_RULE_KEYS,
     CONTROL_KEYS, ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS,
-    INSTRUCTION_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS,
+    INSTRUCTION_KEYS, ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS,
     MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS,
     PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS,
     SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
@@ -298,6 +298,7 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
         "themes" => validate_themes_path(&segments),
         "history" => validate_static_table_path(&segments, "history", HISTORY_KEYS, &[]),
         "memory" => validate_static_table_path(&segments, "memory", MEMORY_KEYS, &[]),
+        "issues" => validate_static_table_path(&segments, "issues", ISSUE_KEYS, &[]),
         "agents" => validate_agents_path(&segments),
         "model_profiles" => validate_model_profile_path(&segments),
         "model_presets" => validate_model_preset_path(&segments),

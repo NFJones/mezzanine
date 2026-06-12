@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 14;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 15;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +108,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             13 => {
                 current_text = migrate_v13_to_v14(format, &current_text)?;
                 current_version = 14;
+            }
+            14 => {
+                current_text = migrate_v14_to_v15(format, &current_text)?;
+                current_version = 15;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -1018,6 +1022,66 @@ fn migrate_json_compatible_v13_to_v14(format: ConfigFormat, text: &str) -> Resul
     }
     remove_json_model_profile_dead_aliases(&mut document);
     set_json_path_value(&mut document, "version", serde_json::json!(14))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
+/// Applies the version 14 to version 15 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v14_to_v15(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v14_to_v15(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v14_to_v15(format, text),
+    }
+}
+
+/// Applies the version 14 to version 15 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v14_to_v15(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+    let default_document = DEFAULT_CONFIG_TOML
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid built-in TOML config: {error}")))?;
+
+    copy_toml_default_if_absent(&mut document, &default_document, "issues")?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(15))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 14 to version 15 migration to JSON and YAML config
+/// files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v14_to_v15(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+    let default_table = toml::from_str::<toml::Table>(DEFAULT_CONFIG_TOML)
+        .map_err(|error| MezError::config(format!("invalid built-in default config: {error}")))?;
+    let default_document = serde_json::to_value(default_table)
+        .map_err(|error| MezError::config(format!("invalid built-in default config: {error}")))?;
+
+    copy_json_default_if_absent(&mut document, &default_document, "issues")?;
+    set_json_path_value(&mut document, "version", serde_json::json!(15))?;
 
     match format {
         ConfigFormat::Json => serde_json::to_string_pretty(&document)

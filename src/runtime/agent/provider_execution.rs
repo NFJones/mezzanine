@@ -1031,6 +1031,8 @@ impl RuntimeSessionService {
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
         let memory_actions_executed =
             self.execute_running_memory_actions_for_turn(turn, &mut execution)?;
+        let _issue_actions_executed =
+            self.execute_running_issue_actions_for_turn(turn, &mut execution)?;
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         self.append_agent_trace_maap_action_results(
@@ -1286,6 +1288,8 @@ impl RuntimeSessionService {
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
         let memory_actions_executed =
             self.execute_running_memory_actions_for_turn(turn, &mut execution)?;
+        let _issue_actions_executed =
+            self.execute_running_issue_actions_for_turn(turn, &mut execution)?;
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         self.append_agent_trace_maap_action_results(

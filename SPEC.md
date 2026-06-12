@@ -4933,6 +4933,10 @@ The baseline command capabilities are:
   `on`, `off`, `toggle`, and `status`, MUST display the active setting when
   invoked without arguments or with `status` or `show`, and MUST persist changes
   to `memory.enabled` in the primary user configuration.
+- `/issue`: Add, query, or delete local project issues for the active pane
+  project. It MUST accept `add`, `query` (or `list`), and `delete` (or
+  `remove`). Records MUST be stored in the runtime-owned SQLite issue store and
+  keyed by the active pane project root.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the
@@ -7284,6 +7288,14 @@ future turns, agents SHOULD consider storing it with `memory_store`. When
 persistent memory is
 disabled, the harness MUST deny the `memory`
 capability and MUST NOT expose `memory_search` or `memory_store`.
+
+When local issue tracking is enabled, the provider action surface MAY expose a
+gated `issues` capability whose concrete action subset contains `issue_add`,
+`issue_query`, and `issue_delete`. These on-demand actions MUST execute through
+the runtime-owned local issue store, MUST scope records to the active pane
+project, and MUST return bounded action results for provider continuation.
+When local issue tracking is disabled, the harness MUST deny the `issues`
+capability and MUST NOT expose issue actions.
 
 Memory content MUST have lower priority than system requirements, active user
 instructions, active policy, and project instruction files.

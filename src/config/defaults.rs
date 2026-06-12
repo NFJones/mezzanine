@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 14
+version = 15
 
 [session]
 detach_behavior = "keep-running"
@@ -186,6 +186,11 @@ candidate_limit = 100
 fts_enabled = true
 archive_before_prune = true
 default_ttl_days = 180
+
+[issues]
+enabled = true
+storage = "sqlite"
+database_path = ""
 
 [agents]
 default_provider = "openai"

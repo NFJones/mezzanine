@@ -64,6 +64,7 @@ use std::fs;
 mod approval;
 mod artifacts;
 mod compaction;
+mod issues;
 mod lists;
 mod model;
 mod model_catalog;

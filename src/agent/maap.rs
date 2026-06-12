@@ -215,6 +215,29 @@ pub enum AgentActionPayload {
         /// Optional retention period in days.
         expires_in_days: Option<u64>,
     },
+    /// Adds one local project issue through the runtime-owned issue store.
+    IssueAdd {
+        /// Issue kind: defect or task.
+        kind: String,
+        /// Single-line issue title.
+        title: String,
+        /// Optional issue detail text.
+        body: Option<String>,
+    },
+    /// Queries local project issues through the runtime-owned issue store.
+    IssueQuery {
+        /// Optional issue kind filter: defect or task.
+        kind: Option<String>,
+        /// Optional title/body substring filter.
+        text: Option<String>,
+        /// Optional maximum records to return.
+        limit: Option<u64>,
+    },
+    /// Deletes one local project issue through the runtime-owned issue store.
+    IssueDelete {
+        /// Issue id to delete.
+        id: String,
+    },
     /// Represents the Send Message case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -660,6 +683,9 @@ impl AgentAction {
             AgentActionPayload::FetchUrl { .. } => "fetch_url",
             AgentActionPayload::MemorySearch { .. } => "memory_search",
             AgentActionPayload::MemoryStore { .. } => "memory_store",
+            AgentActionPayload::IssueAdd { .. } => "issue_add",
+            AgentActionPayload::IssueQuery { .. } => "issue_query",
+            AgentActionPayload::IssueDelete { .. } => "issue_delete",
             AgentActionPayload::SendMessage { .. } => "send_message",
             AgentActionPayload::SpawnAgent { .. } => "spawn_agent",
             AgentActionPayload::ConfigChange { .. } => "config_change",
@@ -762,6 +788,31 @@ impl AgentAction {
                 }
                 Ok(())
             }
+            AgentActionPayload::IssueAdd { kind, title, body } => {
+                validate_non_empty("issue kind", kind)?;
+                crate::issues::IssueKind::parse(kind)?;
+                crate::issues::validate_issue_title(title)?;
+                crate::issues::validate_issue_body(body.as_deref())
+            }
+            AgentActionPayload::IssueQuery { kind, text, limit } => {
+                if let Some(kind) = kind {
+                    crate::issues::IssueKind::parse(kind)?;
+                }
+                if let Some(text) = text
+                    && text.bytes().any(|byte| byte == 0)
+                {
+                    return Err(MezError::invalid_args(
+                        "issue query text must not contain NUL bytes",
+                    ));
+                }
+                if matches!(limit, Some(0)) {
+                    return Err(MezError::invalid_args(
+                        "issue query limit must be greater than zero",
+                    ));
+                }
+                Ok(())
+            }
+            AgentActionPayload::IssueDelete { id } => validate_non_empty("issue id", id),
             AgentActionPayload::SendMessage {
                 recipient,
                 content_type,
@@ -1108,6 +1159,19 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
             keywords: optional_string_array(object, "keywords")?,
             content: required_string(object, "content")?.to_string(),
             expires_in_days: optional_nullable_u64(object, "expires_in_days")?,
+        },
+        "issue_add" => AgentActionPayload::IssueAdd {
+            kind: required_string(object, "kind")?.to_string(),
+            title: required_string(object, "title")?.to_string(),
+            body: optional_string(object, "body")?.map(str::to_string),
+        },
+        "issue_query" => AgentActionPayload::IssueQuery {
+            kind: optional_string(object, "kind")?.map(str::to_string),
+            text: optional_string(object, "text")?.map(str::to_string),
+            limit: optional_nullable_u64(object, "limit")?,
+        },
+        "issue_delete" => AgentActionPayload::IssueDelete {
+            id: required_string(object, "id")?.to_string(),
         },
         "send_message" => AgentActionPayload::SendMessage {
             recipient: required_string(object, "recipient")?.to_string(),

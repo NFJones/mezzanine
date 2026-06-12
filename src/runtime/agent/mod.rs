@@ -71,6 +71,7 @@ mod audit;
 mod bookkeeping;
 mod config_change;
 mod failures;
+mod issues;
 mod lifecycle;
 mod mcp_network;
 mod memory;

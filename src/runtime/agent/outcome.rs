@@ -1607,6 +1607,9 @@ pub(super) fn runtime_agent_action_rationale_repeats_visible_summary(action: &Ag
         | AgentActionPayload::ConfigChange { .. }
         | AgentActionPayload::MemorySearch { .. }
         | AgentActionPayload::MemoryStore { .. }
+        | AgentActionPayload::IssueAdd { .. }
+        | AgentActionPayload::IssueQuery { .. }
+        | AgentActionPayload::IssueDelete { .. }
         | AgentActionPayload::RequestSkills
         | AgentActionPayload::CallSkill { .. } => false,
         AgentActionPayload::ApplyPatch { .. }
@@ -1762,6 +1765,18 @@ pub(super) fn runtime_agent_user_action_phrase(
         }
         AgentActionPayload::MemoryStore { kind, .. } => {
             Some(("memory store", runtime_agent_terminal_preview(kind)))
+        }
+        AgentActionPayload::IssueAdd { title, .. } => {
+            Some(("issue add", runtime_agent_terminal_preview(title)))
+        }
+        AgentActionPayload::IssueQuery { text, .. } => Some((
+            "issue query",
+            text.as_deref()
+                .map(runtime_agent_terminal_preview)
+                .unwrap_or_else(|| "current project".to_string()),
+        )),
+        AgentActionPayload::IssueDelete { id } => {
+            Some(("issue delete", runtime_agent_terminal_preview(id)))
         }
         AgentActionPayload::RequestSkills => Some(("skill lookup", "available skills".to_string())),
         AgentActionPayload::CallSkill { name, .. } => {

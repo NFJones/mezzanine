@@ -38,6 +38,8 @@ pub(super) enum OpenAiMaapToolSurface {
     ConfigChange,
     /// Persistent memory search and storage surface.
     Memory,
+    /// Local project issue tracking surface.
+    Issues,
     /// Narrow fallback for uncommon composite capability grants.
     CurrentRequest,
 }
@@ -47,7 +49,7 @@ impl OpenAiMaapToolSurface {
     /// MAAP function tool is available.
     const FUNCTION_CALL_DISCIPLINE: &str = "Return a function call, not prose.";
     /// Shared capability map for provider-local MAAP tool descriptions.
-    const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; respond_only=final text only.";
+    const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; issues=issue_add, issue_query, or issue_delete; respond_only=final text only.";
     /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
     const ANTI_EXAMPLES: &str = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
 
@@ -63,6 +65,7 @@ impl OpenAiMaapToolSurface {
             Self::Subagent,
             Self::ConfigChange,
             Self::Memory,
+            Self::Issues,
         ]
     }
 
@@ -78,6 +81,7 @@ impl OpenAiMaapToolSurface {
             Self::Subagent => "submit_maap_subagent_actions",
             Self::ConfigChange => "submit_maap_config_change_actions",
             Self::Memory => "submit_maap_memory_actions",
+            Self::Issues => "submit_maap_issues_actions",
             Self::CurrentRequest => "submit_maap_current_actions",
         }
     }
@@ -137,6 +141,12 @@ impl OpenAiMaapToolSurface {
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
+            Self::Issues => format!(
+                "Submit one MAAP batch for local project issue tracking. {} Use only issue_add, issue_query, or issue_delete for issue records. If another action family is needed, emit request_capability instead. {} {}",
+                Self::FUNCTION_CALL_DISCIPLINE,
+                Self::CAPABILITY_MAP,
+                Self::ANTI_EXAMPLES
+            ),
             Self::CurrentRequest => format!(
                 "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
@@ -158,6 +168,7 @@ impl OpenAiMaapToolSurface {
             Self::Subagent => AllowedActionSet::for_capability(AgentCapability::Subagent),
             Self::ConfigChange => AllowedActionSet::for_capability(AgentCapability::ConfigChange),
             Self::Memory => AllowedActionSet::for_capability(AgentCapability::Memory),
+            Self::Issues => AllowedActionSet::for_capability(AgentCapability::Issues),
             Self::CurrentRequest => AllowedActionSet::capability_decision(),
         }
     }
@@ -199,6 +210,7 @@ pub(super) fn openai_maap_tool_surface_for_request(
             OpenAiMaapToolSurface::ConfigChange,
         ),
         (AgentCapability::Memory, OpenAiMaapToolSurface::Memory),
+        (AgentCapability::Issues, OpenAiMaapToolSurface::Issues),
     ] {
         if *allowed_actions == AllowedActionSet::for_capability(capability) {
             return surface;
@@ -314,6 +326,9 @@ fn maap_action_schema(
             AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema()),
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
+            AllowedAction::IssueAdd => action_schemas.push(maap_issue_add_action_schema()),
+            AllowedAction::IssueQuery => action_schemas.push(maap_issue_query_action_schema()),
+            AllowedAction::IssueDelete => action_schemas.push(maap_issue_delete_action_schema()),
             AllowedAction::McpCall => action_schemas.extend(
                 sorted_mcp_prompt_tools(available_mcp_tools)
                     .into_iter()
@@ -565,6 +580,78 @@ fn maap_fetch_url_action_schema() -> serde_json::Value {
             "Use only for explicit http:// or https:// external URLs. For file://, local paths, or created outputs use shell_command; not for random/test/generated local data or replacing apply_patch/shell_command.",
         )],
         &["url"],
+    )
+}
+
+/// Runs the maap issue add action schema operation for this subsystem.
+fn maap_issue_add_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "issue_add",
+        [
+            (
+                "kind",
+                serde_json::json!({
+                    "type": "string",
+                    "enum": ["defect", "task"],
+                    "description": "Issue kind to create: defect for bugs or task for planned work."
+                }),
+            ),
+            described_string_property("title", "Single-line issue title."),
+            (
+                "body",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional issue details. Use null when no body is needed."
+                }),
+            ),
+        ],
+        &["kind", "title", "body"],
+    )
+}
+
+/// Runs the maap issue query action schema operation for this subsystem.
+fn maap_issue_query_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "issue_query",
+        [
+            (
+                "kind",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["defect", "task", null],
+                    "description": "Optional issue kind filter. Use null for both defects and tasks."
+                }),
+            ),
+            (
+                "text",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional title/body substring filter. Use null for no text filter."
+                }),
+            ),
+            (
+                "limit",
+                serde_json::json!({
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Optional maximum issue records to return."
+                }),
+            ),
+        ],
+        &["kind", "text", "limit"],
+    )
+}
+
+/// Runs the maap issue delete action schema operation for this subsystem.
+fn maap_issue_delete_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "issue_delete",
+        [described_string_property(
+            "id",
+            "Issue id to delete from the current project.",
+        )],
+        &["id"],
     )
 }
 

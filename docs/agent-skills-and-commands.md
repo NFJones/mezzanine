@@ -113,6 +113,7 @@ Common slash commands:
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
+| `/issue` | Add, query, or delete local project issues for the active pane repository. |
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
 | `/loop` | Re-run a prompt until an iteration completes without `apply_patch` actions or the loop limit is reached; pass `--fork` to use fresh parent-conversation forks, `--new` to use fresh empty conversations, or `--limit <int>` to override the loop limit for that command. |
 | `/new` | Start a fresh pane conversation. |

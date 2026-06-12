@@ -251,6 +251,14 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     Some(r#"{"state":"pending_runtime_memory"}"#.to_string()),
                 ))
             }
+            AgentActionPayload::IssueAdd { .. }
+            | AgentActionPayload::IssueQuery { .. }
+            | AgentActionPayload::IssueDelete { .. } => Ok(ActionResult::running(
+                turn,
+                action,
+                vec!["issue action accepted for runtime execution".to_string()],
+                Some(r#"{"state":"pending_runtime_issue"}"#.to_string()),
+            )),
             AgentActionPayload::ConfigChange {
                 setting_path,
                 operation,

@@ -66,6 +66,8 @@ pub enum AgentCapability {
     ConfigChange,
     /// Search or store persistent memory records.
     Memory,
+    /// Add, query, or delete local project issue records.
+    Issues,
 }
 
 impl AgentCapability {
@@ -80,6 +82,7 @@ impl AgentCapability {
             AgentCapability::Subagent => "subagent",
             AgentCapability::ConfigChange => "config_change",
             AgentCapability::Memory => "memory",
+            AgentCapability::Issues => "issues",
         }
     }
 
@@ -94,6 +97,7 @@ impl AgentCapability {
             "subagent" => Some(AgentCapability::Subagent),
             "config_change" => Some(AgentCapability::ConfigChange),
             "memory" => Some(AgentCapability::Memory),
+            "issues" => Some(AgentCapability::Issues),
             _ => None,
         }
     }
@@ -109,6 +113,7 @@ impl AgentCapability {
             "subagent",
             "config_change",
             "memory",
+            "issues",
         ]
     }
 }
@@ -144,6 +149,12 @@ pub enum AllowedAction {
     MemorySearch,
     /// Store one persistent memory record.
     MemoryStore,
+    /// Add one local project issue.
+    IssueAdd,
+    /// Query local project issues.
+    IssueQuery,
+    /// Delete one local project issue.
+    IssueDelete,
     /// Abort the turn.
     Abort,
 }
@@ -166,6 +177,9 @@ impl AllowedAction {
             AllowedAction::McpCall => "mcp_call",
             AllowedAction::MemorySearch => "memory_search",
             AllowedAction::MemoryStore => "memory_store",
+            AllowedAction::IssueAdd => "issue_add",
+            AllowedAction::IssueQuery => "issue_query",
+            AllowedAction::IssueDelete => "issue_delete",
             AllowedAction::Abort => "abort",
         }
     }
@@ -187,6 +201,9 @@ impl AllowedAction {
             "mcp_call" => Some(AllowedAction::McpCall),
             "memory_search" => Some(AllowedAction::MemorySearch),
             "memory_store" => Some(AllowedAction::MemoryStore),
+            "issue_add" => Some(AllowedAction::IssueAdd),
+            "issue_query" => Some(AllowedAction::IssueQuery),
+            "issue_delete" => Some(AllowedAction::IssueDelete),
             "abort" => Some(AllowedAction::Abort),
             _ => None,
         }
@@ -243,6 +260,11 @@ impl AllowedActionSet {
             AgentCapability::Memory => {
                 output.extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore])
             }
+            AgentCapability::Issues => output.extend([
+                AllowedAction::IssueAdd,
+                AllowedAction::IssueQuery,
+                AllowedAction::IssueDelete,
+            ]),
         }
         output
     }

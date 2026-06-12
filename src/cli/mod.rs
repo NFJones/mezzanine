@@ -107,6 +107,11 @@ mod dispatch;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod env;
+/// Exposes the issue module boundary.
+///
+/// The nested module keeps local issue tracking CLI behavior isolated while this
+/// declaration makes the boundary available to the dispatcher.
+mod issue;
 /// Exposes the json module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -148,6 +153,7 @@ use env::{
     registry_root, render_cli_help, render_cli_version, selected_socket_path,
     terminal_size_from_fd_or_environment,
 };
+use issue::run_issue;
 use json::{
     CliOutputFormat, current_unix_seconds, diagnostics_json, json_escape, json_optional,
     serialize_json, write_control_response, write_json_or_plain,

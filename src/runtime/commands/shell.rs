@@ -482,6 +482,13 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "issue"
+                {
+                    let issue_outcome =
+                        issues::execute_agent_shell_issue_command(self, &pane_id, input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "remember"
                 {
                     let remember_outcome =

@@ -362,6 +362,14 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `memory.archive_before_prune` | boolean | `true` | Archive non-expired over-limit records before destructive pruning. |
 | `memory.default_ttl_days` | integer | `180` | Default retention horizon for model-generated memory records when the model does not provide `expires_in_days`. Records store this as an expiration duration so selected-and-used memories refresh their expiry from wall-clock time. |
 
+### `issues`
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `issues.enabled` | boolean | `true` | Enable local SQLite project issue tracking through `mez issue`, `/issue`, and gated issue MAAP actions. |
+| `issues.storage` | string | `"sqlite"` | Local issue storage backend. Current builds support SQLite. |
+| `issues.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/issues.sqlite`. |
+
 ### `agents`
 
 | Field | Type | Default declaration | Description |

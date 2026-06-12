@@ -365,6 +365,16 @@ pub fn validate_config_text(
                             .to_string(),
                 }),
             }
+        } else if path == "issues.enabled" && !matches!(value.as_str(), "true" | "false") {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "issues.enabled must be true or false".to_string(),
+            });
+        } else if path == "issues.storage" && value != "sqlite" {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "unsupported issue storage backend; use sqlite".to_string(),
+            });
         } else if let Some(message) = validate_terminal_value(&path, &value) {
             diagnostics.push(ConfigDiagnostic { path, message });
         } else if let Some(message) = validate_frame_value(&path, &value) {

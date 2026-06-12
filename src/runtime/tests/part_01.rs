@@ -984,6 +984,11 @@ fn runtime_capability_for_response(
             crate::agent::AgentActionPayload::ConfigChange { .. } => {
                 Some(crate::agent::AgentCapability::ConfigChange)
             }
+            crate::agent::AgentActionPayload::IssueAdd { .. }
+            | crate::agent::AgentActionPayload::IssueQuery { .. }
+            | crate::agent::AgentActionPayload::IssueDelete { .. } => {
+                Some(crate::agent::AgentCapability::Issues)
+            }
             crate::agent::AgentActionPayload::Say { .. }
             | crate::agent::AgentActionPayload::RequestCapability { .. }
             | crate::agent::AgentActionPayload::RequestSkills

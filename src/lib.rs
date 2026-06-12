@@ -79,6 +79,11 @@ pub mod ids;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod instructions;
+/// Exposes the issues module boundary.
+///
+/// The nested module keeps local issue tracking isolated while this declaration
+/// makes the boundary available to CLI, runtime commands, and agent actions.
+pub mod issues;
 /// Exposes the layout module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
