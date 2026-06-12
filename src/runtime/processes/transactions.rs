@@ -2111,7 +2111,10 @@ impl RuntimeSessionService {
             transaction_ref.observed_output_bytes = transaction_ref.observed_output_preview.len();
             if exit_code == 0 {
                 let processed_output =
-                    postprocess_shell_action_success_output(&action, raw_output_preview)?;
+                    postprocess_shell_action_success_output(
+                        &action,
+                        transaction_ref.observed_output_preview.clone(),
+                    )?;
                 transaction_ref.observed_output_preview = processed_output;
                 transaction_ref.observed_output_bytes =
                     transaction_ref.observed_output_preview.len();

@@ -204,7 +204,9 @@ fn postprocess_semantic_shell_output(
     mut output: ShellExecutionOutput,
 ) -> Result<ShellExecutionOutput> {
     let decoded = decode_shell_output_transport_with_diagnostics(&output.stdout);
-    output.stdout = decoded.output;
+    if decoded.diagnostics.saw_begin_marker {
+        output.stdout = decoded.output;
+    }
     output.transport_diagnostics = decoded.diagnostics;
     if output.exit_code != Some(0) || output.timed_out || output.interrupted {
         return Ok(output);
