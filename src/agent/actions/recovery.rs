@@ -7,12 +7,11 @@
 #[cfg(test)]
 use super::super::ModelProvider;
 use super::super::{
-    ActionError, ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability,
+    ActionResult, AgentActionPayload, AgentCapability,
     AgentTurnRecord, AgentTurnState, AllowedAction, AllowedActionSet, AsyncModelProvider,
     ContextSourceKind, MaapBatch, McpPromptTool, MezError, ModelInteractionKind, ModelMessage,
     ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, ProviderErrorRetryClass,
-    Result, SayStatus, action_text_content_blocks, constrain_skill_actions_for_loaded_context,
-    json_escape, provider_error_retry_class,
+    Result, SayStatus, constrain_skill_actions_for_loaded_context, provider_error_retry_class,
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
@@ -210,89 +209,6 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
     }
 }
 
-/// Builds a failed execution for capability-negotiation failures that happen
-/// before executable actions are available.
-pub(super) fn failed_capability_request_execution(
-    request: ModelRequest,
-    mut response: ModelResponse,
-    latest_response_usage: ModelTokenUsage,
-    code: &str,
-    message: &str,
-) -> AgentTurnExecution {
-    let turn_id = request.turn_id.clone();
-    let agent_id = request.agent_id.clone();
-    let original_batch = response.action_batch.as_ref();
-    let mut actions = original_batch
-        .map(|batch| {
-            batch
-                .actions
-                .iter()
-                .filter(|action| {
-                    matches!(action.payload, AgentActionPayload::RequestCapability { .. })
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if actions.is_empty() {
-        actions.push(AgentAction {
-            id: "capability-request".to_string(),
-            rationale: message.to_string(),
-            payload: AgentActionPayload::RequestCapability {
-                capability: AgentCapability::Shell,
-                reason: message.to_string(),
-            },
-        });
-    }
-    let terminal_batch = MaapBatch {
-        protocol: original_batch
-            .map(|batch| batch.protocol.clone())
-            .unwrap_or_else(|| "maap/1".to_string()),
-        rationale: original_batch
-            .map(|batch| batch.rationale.clone())
-            .filter(|rationale| !rationale.trim().is_empty())
-            .unwrap_or_else(|| "capability request failed before execution".to_string()),
-        thought: original_batch.and_then(|batch| batch.thought.clone()),
-        turn_id: turn_id.clone(),
-        agent_id: agent_id.clone(),
-        actions,
-        final_turn: true,
-    };
-    let action_results = terminal_batch
-        .actions
-        .iter()
-        .map(|action| ActionResult {
-            protocol: "maap/1".to_string(),
-            turn_id: turn_id.clone(),
-            agent_id: agent_id.clone(),
-            action_id: action.id.clone(),
-            action_type: action.action_type(),
-            status: ActionStatus::Failed,
-            content: action_text_content_blocks(vec![message.to_string()]),
-            structured_content_json: Some(format!(
-                r#"{{"kind":"request_capability","status":"failed","code":"{}","message":"{}"}}"#,
-                json_escape(code),
-                json_escape(message)
-            )),
-            is_error: true,
-            error: Some(ActionError {
-                code: code.to_string(),
-                message: message.to_string(),
-                data_json: None,
-            }),
-        })
-        .collect();
-    response.action_batch = Some(terminal_batch);
-    AgentTurnExecution {
-        request,
-        response,
-        latest_response_usage,
-        routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results,
-        final_turn: true,
-        terminal_state: AgentTurnState::Failed,
-    }
-}
 
 /// Builds an ephemeral provider retry request that asks the model to repair its
 /// previous MAAP response without adding the repair instruction to transcript

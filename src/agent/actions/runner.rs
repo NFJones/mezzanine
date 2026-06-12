@@ -25,8 +25,7 @@ use super::execution::{
 };
 use super::recovery::{
     FailureSummaryInput, FailureSummaryScope, capability_continuation_request,
-    capability_requests_from_batch, failed_capability_request_execution,
-    failed_maap_validation_execution_with_summary_async, maap_provider_error_is_repairable,
+    capability_requests_from_batch, failed_maap_validation_execution_with_summary_async, maap_provider_error_is_repairable,
     maap_repair_request, provider_error_should_retry_without_summary,
     summarize_controller_failure_execution_async, summarize_provider_failure_execution_async,
     validate_batch_allowed_actions,
@@ -46,9 +45,6 @@ use crate::subagent::SubagentScopeDeclaration;
 /// durable transcripts and future model context when the corrected response is
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
-
-/// Maximum non-executing capability negotiations before a turn fails closed.
-const CAPABILITY_REQUEST_ATTEMPT_LIMIT: usize = 3;
 
 /// Exposes persistent-memory actions on the main model action surface when enabled.
 fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
@@ -133,7 +129,6 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         expose_default_memory_actions(&mut request, self.memory_actions_enabled);
         let mut repair_attempts = 0usize;
-        let mut capability_attempts = 0usize;
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
         let mut cumulative_usage = ModelTokenUsage::default();
@@ -301,20 +296,6 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 }
             };
             if let Some(capability_request) = capability_request {
-                if capability_attempts >= CAPABILITY_REQUEST_ATTEMPT_LIMIT {
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    let mut response = response;
-                    response.usage = cumulative_usage;
-                    response.quota_usage = latest_quota_usage;
-                    return Ok(failed_capability_request_execution(
-                        response_request,
-                        response,
-                        latest_response_usage,
-                        "capability_request_limit",
-                        "model exceeded capability request limit before emitting executable or user-facing output",
-                    ));
-                }
-                capability_attempts = capability_attempts.saturating_add(1);
                 request = capability_continuation_request(&response_request, &capability_request);
                 repair_attempts = 0;
                 continue;
@@ -502,7 +483,6 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         expose_default_memory_actions(&mut request, self.memory_actions_enabled);
         let mut repair_attempts = 0usize;
-        let mut capability_attempts = 0usize;
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
         let mut cumulative_usage = ModelTokenUsage::default();
@@ -677,20 +657,6 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 }
             };
             if let Some(capability_request) = capability_request {
-                if capability_attempts >= CAPABILITY_REQUEST_ATTEMPT_LIMIT {
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    let mut response = response;
-                    response.usage = cumulative_usage;
-                    response.quota_usage = latest_quota_usage;
-                    return Ok(failed_capability_request_execution(
-                        response_request,
-                        response,
-                        latest_response_usage,
-                        "capability_request_limit",
-                        "model exceeded capability request limit before emitting executable or user-facing output",
-                    ));
-                }
-                capability_attempts = capability_attempts.saturating_add(1);
                 request = capability_continuation_request(&response_request, &capability_request);
                 repair_attempts = 0;
                 continue;
