@@ -7,11 +7,11 @@
 #[cfg(test)]
 use super::super::ModelProvider;
 use super::super::{
-    ActionResult, AgentActionPayload, AgentCapability,
-    AgentTurnRecord, AgentTurnState, AllowedAction, AllowedActionSet, AsyncModelProvider,
-    ContextSourceKind, MaapBatch, McpPromptTool, MezError, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, ProviderErrorRetryClass,
-    Result, SayStatus, constrain_skill_actions_for_loaded_context, provider_error_retry_class,
+    ActionResult, AgentActionPayload, AgentCapability, AgentTurnRecord, AgentTurnState,
+    AllowedAction, AllowedActionSet, AsyncModelProvider, ContextSourceKind, MaapBatch,
+    McpPromptTool, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelResponse, ModelTokenUsage, ProviderErrorRetryClass, Result, SayStatus,
+    constrain_skill_actions_for_loaded_context, provider_error_retry_class,
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
@@ -208,7 +208,6 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
         },
     }
 }
-
 
 /// Builds an ephemeral provider retry request that asks the model to repair its
 /// previous MAAP response without adding the repair instruction to transcript
