@@ -4373,3 +4373,108 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
 
     let _ = fs::remove_dir_all(home);
 }
+
+/// Verifies issue cli honors the effective `issues.enabled` config gate before
+/// opening or mutating the local issue store.
+#[test]
+fn issue_cli_rejects_commands_when_issue_tracking_is_disabled() {
+    let (env, home) = test_env("issue-cli-disabled");
+    let config_root = home.join(".config").join("mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "[issues]\nenabled = false\n",
+    )
+    .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "query".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("issue commands require issues.enabled to be true"),
+        "{}",
+        error.message()
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+    assert!(!config_root.join("issues.sqlite").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies issue cli uses `issues.database_path` so scripts share the same
+/// configured store path as runtime slash commands and MAAP issue actions.
+#[test]
+fn issue_cli_uses_configured_database_path() {
+    let (env, home) = test_env("issue-cli-database-path");
+    let config_root = home.join(".config").join("mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "[issues]\ndatabase_path = \"custom/issues.sqlite\"\n",
+    )
+    .unwrap();
+    let mut stderr = Vec::new();
+
+    let mut add_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "add".to_string(),
+            "--title".to_string(),
+            "Use configured issue DB".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut add_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(config_root.join("custom").join("issues.sqlite").exists());
+    assert!(!config_root.join("issues.sqlite").exists());
+
+    let mut query_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "query".to_string(),
+            "--text".to_string(),
+            "configured".to_string(),
+        ],
+        env,
+        false,
+        &mut query_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(query_stdout)
+            .unwrap()
+            .contains("Use configured issue DB")
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}

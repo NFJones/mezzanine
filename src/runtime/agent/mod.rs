@@ -316,6 +316,7 @@ mod tests {
                 agent_id: "agent-1".to_string(),
                 available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
                 interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: crate::agent::AllowedActionSet::action_execution_base(),
                 messages: Vec::new(),

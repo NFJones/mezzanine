@@ -424,6 +424,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
         available_mcp_servers: vec!["fs".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
     let mut ledger = AgentTurnLedger::new(false);
     runner
@@ -563,6 +564,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -614,6 +616,121 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
         "{:?}",
         requests[1].messages
     );
+}
+
+/// Verifies disabled local issue tracking denies issue capability before the
+/// provider-visible issue action surface can be exposed.
+///
+/// This protects the action-surface contract documented in `SPEC.md`: when
+/// `issues.enabled` is false, models may ask for the capability but the
+/// controller must keep them on the non-effecting capability-decision surface
+/// instead of revealing `issue_add`, `issue_query`, or related actions.
+#[test]
+fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "request issues capability".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![capability_action("capability-1", AgentCapability::Issues)],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "finish after denied capability".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "issue tracking is disabled")],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default()
+        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: false,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "list project issues".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].interaction_kind,
+        crate::agent::ModelInteractionKind::CapabilityDecision
+    );
+    assert_eq!(
+        requests[1].allowed_actions.action_type_names(),
+        vec!["say", "request_capability"]
+    );
+    let capability_context = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.content.contains("[capability denied]"))
+        .expect("missing denied capability context");
+    assert!(
+        capability_context
+            .content
+            .contains("issues capability requires local issue tracking to be enabled"),
+        "{}",
+        capability_context.content
+    );
+    assert!(!requests[1]
+        .allowed_actions
+        .action_type_names()
+        .contains(&"issue_query"));
 }
 
 /// Verifies capability negotiation does not reintroduce skill lookup actions
@@ -686,6 +803,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -789,6 +907,7 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
         memory_actions_enabled: true,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -905,6 +1024,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1029,6 +1149,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1125,6 +1246,7 @@ fn turn_runner_accepts_say_with_capability_request() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1230,6 +1352,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1330,6 +1453,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1436,6 +1560,7 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let error = runner
@@ -1519,6 +1644,7 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let error = runner
@@ -1602,6 +1728,7 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let error = runner
@@ -1694,6 +1821,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1767,6 +1895,7 @@ fn turn_runner_fails_response_without_action_batch() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner

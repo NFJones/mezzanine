@@ -57,6 +57,11 @@ fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enab
         .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
 }
 
+/// Carries the live issue-tracking action gate into provider requests.
+fn expose_issue_actions_gate(request: &mut ModelRequest, issue_actions_enabled: bool) {
+    request.issue_actions_enabled = issue_actions_enabled;
+}
+
 /// Carries agent turn runner state for this subsystem.
 ///
 /// The fields are kept explicit so callers can inspect and move structured
@@ -80,6 +85,8 @@ pub struct AgentTurnRunner<'a, P> {
     pub available_mcp_tools: &'a [McpPromptTool],
     /// Whether persistent-memory MAAP actions may be exposed for this turn.
     pub memory_actions_enabled: bool,
+    /// Whether local issue-tracking MAAP actions may be exposed for this turn.
+    pub issue_actions_enabled: bool,
 }
 
 #[cfg(test)]
@@ -128,6 +135,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         expose_default_memory_actions(&mut request, self.memory_actions_enabled);
+        expose_issue_actions_gate(&mut request, self.issue_actions_enabled);
         let mut repair_attempts = 0usize;
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
@@ -482,6 +490,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         }
         request.available_mcp_tools = self.available_mcp_tools.to_vec();
         expose_default_memory_actions(&mut request, self.memory_actions_enabled);
+        expose_issue_actions_gate(&mut request, self.issue_actions_enabled);
         let mut repair_attempts = 0usize;
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();

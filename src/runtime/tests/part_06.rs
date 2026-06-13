@@ -3268,6 +3268,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             agent_id: "agent-%1".to_string(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::NetworkFetch,

@@ -282,6 +282,8 @@ pub struct RuntimeAgentProviderDispatch {
     /// memory gate must be carried with the dispatch instead of recomputed from
     /// unavailable actor-owned state.
     pub memory_actions_enabled: bool,
+    /// Whether local issue-tracking actions are enabled for this provider turn.
+    pub issue_actions_enabled: bool,
     /// Optional `/loop` controller metadata for this provider turn.
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
 }

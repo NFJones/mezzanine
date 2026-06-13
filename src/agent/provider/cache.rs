@@ -537,6 +537,7 @@ mod tests {
             agent_id: "agent-1".to_string(),
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
+            issue_actions_enabled: true,
             interaction_kind: ModelInteractionKind::CapabilityDecision,
             allowed_actions: AllowedActionSet::capability_decision(),
             messages: vec![

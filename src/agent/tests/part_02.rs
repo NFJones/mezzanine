@@ -799,6 +799,55 @@ fn maap_batch_accepts_issue_update_actions() {
     }
 }
 
+/// Verifies MAAP issue query validation matches the provider-advertised result
+/// bound instead of accepting schema-invalid limits that the store later clamps.
+#[test]
+fn maap_batch_validates_issue_query_limit_bounds() {
+    let accepted_text = serde_json::json!({
+        "rationale": "test issue query upper limit",
+        "actions": [
+            {
+                "type": "issue_query",
+                "kind": null,
+                "text": null,
+                "limit": 200
+            }
+        ]
+    })
+    .to_string();
+    let accepted = parse_maap_action_batch_json_for_turn(&accepted_text, "turn-1", "agent-1")
+        .unwrap();
+    accepted.validate(&turn(), &[], &[]).unwrap();
+
+    for limit in [0usize, 201usize] {
+        let rejected_text = serde_json::json!({
+            "rationale": "test issue query invalid limit",
+            "actions": [
+                {
+                    "type": "issue_query",
+                    "kind": null,
+                    "text": null,
+                    "limit": limit
+                }
+            ]
+        })
+        .to_string();
+        let rejected = parse_maap_action_batch_json_for_turn(
+            &rejected_text,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        let error = rejected.validate(&turn(), &[], &[]).unwrap_err();
+
+        assert!(
+            error.message().contains("issue query limit"),
+            "{}",
+            error.message()
+        );
+    }
+}
+
 /// Verifies MAAP validation rejects skill names that cannot map to local skill
 /// directories. This protects the runtime loader from path-like names while
 /// still keeping skills available as ordinary model-selected context actions.

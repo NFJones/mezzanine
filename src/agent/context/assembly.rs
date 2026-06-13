@@ -136,6 +136,10 @@ pub fn assemble_model_request_with_retained_tail_percent(
             .provider_options
             .get("memory_actions_enabled")
             .is_some_and(|value| value == "true"),
+        issue_actions_enabled: profile
+            .provider_options
+            .get("issue_actions_enabled")
+            .is_none_or(|value| value != "false"),
         interaction_kind: ModelInteractionKind::CapabilityDecision,
         allowed_actions: AllowedActionSet::capability_decision(),
         stop: if is_deepseek {

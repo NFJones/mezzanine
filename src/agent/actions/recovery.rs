@@ -201,6 +201,13 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
             reason: "memory capability requires persistent memory to be enabled in runtime config"
                 .to_string(),
         },
+        AgentCapability::Issues if !request.issue_actions_enabled => CapabilityDecision {
+            granted: false,
+            allowed_actions: AllowedActionSet::capability_decision(),
+            reason:
+                "issues capability requires local issue tracking to be enabled in runtime config"
+                    .to_string(),
+        },
         _ => CapabilityDecision {
             granted: true,
             allowed_actions: AllowedActionSet::for_capability(capability),

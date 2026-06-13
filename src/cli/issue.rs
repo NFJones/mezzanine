@@ -4,9 +4,12 @@
 //! parsing and JSON/plain output formatting close to the shared issue store so
 //! CLI behavior matches the runtime and agent action surfaces.
 
-use super::{Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write};
+use super::{
+    Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, load_runtime_config_layers,
+};
 use crate::issues::{
-    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, project_key_for_working_directory,
+    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, issue_database_path,
+    project_key_for_working_directory,
 };
 
 /// Runs one `mez issue` command against the configured local issue store.
@@ -17,7 +20,22 @@ pub(super) fn run_issue<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     let paths = env.config_paths()?;
-    let store = IssueStore::under_config_root(paths.root());
+    let root =
+        crate::runtime::runtime_effective_config_value(&load_runtime_config_layers(&paths)?)?;
+    let issues = root.get("issues").and_then(serde_json::Value::as_object);
+    let issues_enabled = issues
+        .and_then(|config| config.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    if !issues_enabled {
+        return Err(crate::error::MezError::invalid_state(
+            "issue commands require issues.enabled to be true",
+        ));
+    }
+    let configured_database_path = issues
+        .and_then(|config| config.get("database_path"))
+        .and_then(serde_json::Value::as_str);
+    let store = IssueStore::new(issue_database_path(paths.root(), configured_database_path));
     let project = parsed.project.unwrap_or_else(|| {
         let cwd = std::env::current_dir().unwrap_or_else(|_| paths.root().to_path_buf());
         project_key_for_working_directory(cwd)

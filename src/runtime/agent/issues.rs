@@ -210,7 +210,7 @@ impl RuntimeSessionService {
     }
 }
 
-fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
+pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
     runtime_effective_config_value(&service.config_layers)
         .ok()
         .and_then(|root| {

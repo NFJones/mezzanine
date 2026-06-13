@@ -1282,6 +1282,7 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1368,6 +1369,7 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1447,6 +1449,7 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1543,6 +1546,7 @@ fn turn_runner_accepts_memory_store_for_runtime_execution() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: true,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1631,6 +1635,7 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1718,6 +1723,7 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1810,6 +1816,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
         available_mcp_servers: vec!["fs".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1903,6 +1910,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
         available_mcp_servers: vec!["fs".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -1995,6 +2003,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
         available_mcp_servers: vec!["fs".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2086,6 +2095,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
         available_mcp_servers: vec!["state".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2175,6 +2185,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
         available_mcp_servers: vec!["state".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2310,6 +2321,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         available_mcp_servers: vec!["state".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2467,6 +2479,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2566,6 +2579,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2707,6 +2721,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         available_mcp_servers: vec!["state".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -2853,6 +2868,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
         available_mcp_servers: vec!["state".to_string()],
         available_mcp_tools: &tools,
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
     let mut executor = FakeMcpActionExecutor {
         plans: Vec::new(),
@@ -2944,6 +2960,7 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3021,6 +3038,7 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3121,6 +3139,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3212,6 +3231,7 @@ fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3314,6 +3334,7 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3389,6 +3410,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3472,6 +3494,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
 
     let execution = runner
@@ -3542,6 +3565,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
         available_mcp_servers: Vec::new(),
         available_mcp_tools: &[],
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
     };
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {

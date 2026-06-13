@@ -113,6 +113,7 @@ pub(super) fn runtime_model_remember_request(
         agent_id,
         available_mcp_tools: Vec::new(),
         memory_actions_enabled: false,
+                issue_actions_enabled: true,
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::say_only(),
         stop: None,

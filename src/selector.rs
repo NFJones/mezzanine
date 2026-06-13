@@ -613,18 +613,15 @@ fn selector_candidates(
         SelectorSurface::MezzanineCommand => mezzanine_candidates(context),
         SelectorSurface::AgentCommand => agent_candidates(context),
     };
+    if surface == SelectorSurface::AgentCommand && context.query.starts_with('$') {
+        candidates.extend(
+            extra_candidates
+                .iter()
+                .filter(|extra| extra.surface == surface && extra.command == "$")
+                .map(|extra| extra.candidate.clone()),
+        );
+    }
     let Some(command) = selector_context_command(surface, context) else {
-        if surface == SelectorSurface::AgentCommand
-            && context.tokens_before.is_empty()
-            && context.query.starts_with('$')
-        {
-            candidates.extend(
-                extra_candidates
-                    .iter()
-                    .filter(|extra| extra.surface == surface && extra.command == "$")
-                    .map(|extra| extra.candidate.clone()),
-            );
-        }
         return candidates;
     };
     candidates.extend(
@@ -1692,6 +1689,40 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.candidates[0].value, "$openai-docs");
+    }
+
+    /// Verifies explicit skill syntax can complete at any prompt position and
+    /// after earlier skill tokens.
+    #[test]
+    fn selector_plans_dynamic_agent_skill_candidates_anywhere_in_prompt() {
+        let extra = vec![SelectorExtraCandidate::new(
+            SelectorSurface::AgentCommand,
+            "$",
+            SelectorCandidate::new("$openai-docs", SelectorCandidateKind::Value, true),
+        )];
+
+        let middle_plan = plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "please use $open",
+            "please use $open".len(),
+            &extra,
+        )
+        .unwrap();
+        let repeated_plan = plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "$review first then $open",
+            "$review first then $open".len(),
+            &extra,
+        )
+        .unwrap();
+
+        assert_eq!(middle_plan.candidates[0].value, "$openai-docs");
+        assert_eq!(repeated_plan.candidates[0].value, "$openai-docs");
+
+        let (line, cursor) =
+            apply_selector_candidate("please use $open", &middle_plan, &middle_plan.candidates[0]);
+        assert_eq!(line, "please use $openai-docs ");
+        assert_eq!(cursor, line.len());
     }
 
     /// Verifies selector applies candidate to current segment only.

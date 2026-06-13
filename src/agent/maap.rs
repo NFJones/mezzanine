@@ -854,10 +854,18 @@ impl AgentAction {
                         "issue query text must not contain NUL bytes",
                     ));
                 }
-                if matches!(limit, Some(0)) {
-                    return Err(MezError::invalid_args(
-                        "issue query limit must be greater than zero",
-                    ));
+                if let Some(limit) = limit {
+                    if *limit == 0 {
+                        return Err(MezError::invalid_args(
+                            "issue query limit must be greater than zero",
+                        ));
+                    }
+                    if *limit > crate::issues::MAX_ISSUE_QUERY_LIMIT as u64 {
+                        return Err(MezError::invalid_args(format!(
+                            "issue query limit must be less than or equal to {}",
+                            crate::issues::MAX_ISSUE_QUERY_LIMIT
+                        )));
+                    }
                 }
                 Ok(())
             }

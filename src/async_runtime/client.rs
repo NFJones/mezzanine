@@ -1435,6 +1435,7 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_servers,
         available_mcp_tools,
         memory_actions_enabled,
+        issue_actions_enabled,
         loop_turn: _,
     } = dispatch;
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
@@ -1557,6 +1558,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
                 memory_actions_enabled,
+                issue_actions_enabled,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1582,6 +1584,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
                 memory_actions_enabled,
+                issue_actions_enabled,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -1607,6 +1610,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 available_mcp_servers,
                 available_mcp_tools: &available_mcp_tools,
                 memory_actions_enabled,
+                issue_actions_enabled,
             };
             let execution = runner
                 .run_turn_async_ref_with_allowed_actions(
@@ -2132,6 +2136,7 @@ mod tests {
             agent_id: "agent-%1".to_string(),
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
+            issue_actions_enabled: true,
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::say_only(),
             messages: Vec::new(),

@@ -207,6 +207,7 @@ impl RuntimeSessionService {
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
                 memory_actions_enabled: self.runtime_persistent_memory_enabled(),
+                issue_actions_enabled: super::issues::runtime_issues_enabled(self),
             };
             match runner.run_turn_ref_with_allowed_actions(
                 &mut provider_ledger,
@@ -470,6 +471,7 @@ impl RuntimeSessionService {
                 available_mcp_servers: available_mcp_servers.clone(),
                 available_mcp_tools: &mcp_summary.available_tools,
                 memory_actions_enabled: self.runtime_persistent_memory_enabled(),
+                issue_actions_enabled: super::issues::runtime_issues_enabled(self),
             };
             match runner.run_turn_ref_with_allowed_actions(
                 &mut provider_ledger,

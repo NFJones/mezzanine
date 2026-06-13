@@ -483,6 +483,12 @@ pub struct ModelRequest {
     /// Runtime sets this only when persistent memory is enabled so the main
     /// model can search or store durable records when the current task needs it.
     pub memory_actions_enabled: bool,
+    /// Whether local issue-tracking MAAP actions may be exposed for this request.
+    ///
+    /// Runtime sets this from the effective `issues.enabled` configuration so
+    /// disabled local tracking is rejected during capability negotiation before
+    /// issue actions can reach provider-visible action surfaces.
+    pub issue_actions_enabled: bool,
     /// Stores the interaction kind for this provider request.
     ///
     /// The field is part of the structured state exchanged across this module

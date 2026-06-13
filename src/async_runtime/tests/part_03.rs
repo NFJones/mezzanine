@@ -451,6 +451,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::Shell,
@@ -711,6 +712,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 agent_id: task.agent_id.clone(),
                 available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
                 interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: crate::agent::AllowedActionSet::for_capability(
                     crate::agent::AgentCapability::Shell,
@@ -853,6 +855,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 agent_id: next_task.agent_id.clone(),
                 available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
                 interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: crate::agent::AllowedActionSet::for_capability(
                     crate::agent::AgentCapability::Shell,
@@ -1032,6 +1035,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::Shell,
@@ -1209,6 +1213,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::NetworkFetch,
@@ -1338,6 +1343,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             agent_id: turn.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::NetworkFetch,

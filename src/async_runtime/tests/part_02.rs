@@ -3619,6 +3619,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::Shell,
@@ -3771,6 +3772,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::RespondOnly,
@@ -3945,6 +3947,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             agent_id: task.agent_id.clone(),
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
             interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::agent::AllowedActionSet::for_capability(
                 crate::agent::AgentCapability::RespondOnly,

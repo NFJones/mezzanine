@@ -1096,6 +1096,7 @@ fn runtime_model_request_fixture_for_agent(
         agent_id: agent_id.to_string(),
         available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
+                issue_actions_enabled: true,
         interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
         allowed_actions: crate::agent::AllowedActionSet::capability_decision(),
         messages: vec![crate::agent::ModelMessage {
