@@ -998,6 +998,15 @@ pub(super) fn markdown_table_alternate_row_foreground(ui_theme: &UiTheme) -> Ter
     }
 }
 
+/// Returns the foreground used for subdued markdown structural accents.
+pub(super) fn markdown_structural_foreground(ui_theme: &UiTheme) -> TerminalColor {
+    if markdown_surface_is_light(ui_theme) {
+        MARKDOWN_DARK_MUTED_FOREGROUND
+    } else {
+        ui_theme.colors.agent_transcript_status.foreground
+    }
+}
+
 /// Returns whether markdown should use dark neutral text accents.
 pub(super) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
     terminal_color_luminance(ui_theme.colors.agent_transcript_assistant.background)
@@ -1090,6 +1099,8 @@ pub(super) struct AgentMarkdownRenderer {
     image_stack: Vec<String>,
     table: Option<MarkdownTableState>,
     line_copy_prefix: Option<String>,
+    heading_foreground: TerminalColor,
+    structural_foreground: TerminalColor,
     link_foreground: TerminalColor,
     inline_code_foreground: TerminalColor,
     table_alternate_row_foreground: TerminalColor,
@@ -1165,7 +1176,10 @@ impl AgentMarkdownRenderer {
             Tag::Heading { level, .. } => {
                 self.start_block();
                 self.line_copy_prefix = Some(format!("{} ", "#".repeat(level as usize)));
+                let foreground = self.heading_foreground;
                 self.push_style(|style| {
+                    style.foreground = Some(foreground);
+                    style.background = None;
                     style.bold = true;
                     style.underline = true;
                 });
@@ -1179,7 +1193,12 @@ impl AgentMarkdownRenderer {
             }
             Tag::CodeBlock(_kind) => {
                 self.start_block();
-                self.push_style(|_style| {});
+                let foreground = self.inline_code_foreground;
+                self.push_style(|style| {
+                    style.foreground = Some(foreground);
+                    style.background = None;
+                    style.inverse = false;
+                });
             }
             Tag::HtmlBlock => self.start_block(),
             Tag::List(start) => self.list_stack.push(MarkdownListState {
@@ -1207,6 +1226,8 @@ impl AgentMarkdownRenderer {
                 self.table = Some(MarkdownTableState::new(
                     alignments,
                     self.table_display_width,
+                    self.heading_foreground,
+                    self.structural_foreground,
                     self.table_alternate_row_foreground,
                 ));
             }
@@ -1504,7 +1525,17 @@ impl AgentMarkdownRenderer {
 
     /// Appends an unstyled structural prefix.
     fn append_prefix(&mut self, prefix: &str) {
-        self.append_styled_text(prefix, GraphicRendition::default());
+        let rendition = if prefix.contains('>') {
+            GraphicRendition {
+                foreground: Some(self.structural_foreground),
+                background: None,
+                dim: true,
+                ..GraphicRendition::default()
+            }
+        } else {
+            GraphicRendition::default()
+        };
+        self.append_styled_text(prefix, rendition);
         self.current_prefix_only = true;
     }
 
@@ -1602,6 +1633,8 @@ impl AgentMarkdownRenderer {
             image_stack: Vec::new(),
             table: None,
             line_copy_prefix: None,
+            heading_foreground: ui_theme.colors.agent_transcript_user.foreground,
+            structural_foreground: markdown_structural_foreground(ui_theme),
             link_foreground: ui_theme.colors.agent_transcript_command.foreground,
             inline_code_foreground: markdown_inline_code_foreground(ui_theme),
             table_alternate_row_foreground: markdown_table_alternate_row_foreground(ui_theme),
@@ -1638,6 +1671,10 @@ pub(super) struct MarkdownTableState {
     in_head: bool,
     /// Optional maximum terminal width available for rendered table rows.
     display_width: Option<usize>,
+    /// Foreground used for table header rows.
+    header_foreground: TerminalColor,
+    /// Foreground used for table borders and separators.
+    border_foreground: TerminalColor,
     /// Foreground used for alternating body rows.
     alternate_row_foreground: TerminalColor,
 }
@@ -1647,6 +1684,8 @@ impl MarkdownTableState {
     fn new(
         alignments: Vec<Alignment>,
         display_width: Option<usize>,
+        header_foreground: TerminalColor,
+        border_foreground: TerminalColor,
         alternate_row_foreground: TerminalColor,
     ) -> Self {
         Self {
@@ -1657,6 +1696,8 @@ impl MarkdownTableState {
             header_rows: 0,
             in_head: false,
             display_width,
+            header_foreground,
+            border_foreground,
             alternate_row_foreground,
         }
     }
@@ -1727,7 +1768,16 @@ impl MarkdownTableState {
             if row_index + 1 == self.header_rows {
                 lines.push(AgentRenderedLine {
                     display: self.render_separator(&widths),
-                    style_spans: Vec::new(),
+                    style_spans: vec![TerminalStyleSpan {
+                        start: 0,
+                        length: agent_terminal_text_width(self.render_separator(&widths).as_str()),
+                        rendition: GraphicRendition {
+                            foreground: Some(self.border_foreground),
+                            background: None,
+                            dim: true,
+                            ..GraphicRendition::default()
+                        },
+                    }],
                     copy_text: None,
                     kind: AgentRenderedLineKind::MarkdownTableSeparator,
                 });
@@ -1905,6 +1955,8 @@ impl MarkdownTableState {
         }
         let rendition = if row_index < self.header_rows {
             GraphicRendition {
+                foreground: Some(self.header_foreground),
+                background: None,
                 bold: true,
                 ..GraphicRendition::default()
             }
@@ -1922,6 +1974,29 @@ impl MarkdownTableState {
             length,
             rendition,
         });
+        self.apply_border_style(line);
+    }
+
+    /// Applies subdued foreground styling to visible box-drawing table borders.
+    fn apply_border_style(&self, line: &mut AgentRenderedLine) {
+        for (start, grapheme) in UnicodeSegmentation::grapheme_indices(line.display.as_str(), true)
+        {
+            if matches!(grapheme, "│" | "├" | "┤" | "┼" | "─") {
+                push_or_extend_style_span(
+                    &mut line.style_spans,
+                    TerminalStyleSpan {
+                        start: agent_terminal_text_width(&line.display[..start]),
+                        length: agent_terminal_grapheme_width(grapheme),
+                        rendition: GraphicRendition {
+                            foreground: Some(self.border_foreground),
+                            background: None,
+                            dim: true,
+                            ..GraphicRendition::default()
+                        },
+                    },
+                );
+            }
+        }
     }
 
     /// Renders one box-drawing table separator row.

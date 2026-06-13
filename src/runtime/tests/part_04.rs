@@ -457,13 +457,22 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     );
     assert!(!heading.text.contains('#'), "{heading:?}");
     assert!(heading.style_spans.iter().any(|span| {
-        span.rendition.bold && span.rendition.underline && span.start >= "▐ mez> ".chars().count()
+        span.rendition.bold
+            && span.rendition.underline
+            && span.rendition.foreground == Some(service.ui_theme.colors.agent_transcript_user.foreground)
+            && span.rendition.background.is_none()
+            && span.start >= "▐ mez> ".chars().count()
     }));
 
     let quote = styled_lines
         .iter()
         .find(|line| line.text.contains("> quoted bold text"))
         .unwrap();
+    assert!(quote.style_spans.iter().any(|span| {
+        span.rendition.dim
+            && span.rendition.foreground
+                == Some(service.ui_theme.colors.agent_transcript_status.foreground)
+    }));
     assert!(quote.style_spans.iter().any(|span| span.rendition.bold));
     assert!(
         styled_lines
@@ -518,12 +527,30 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
             .any(|line| line.text.contains("│ Name") && line.text.contains("Count │")),
         "{styled_lines:?}"
     );
+    let table_header = styled_lines
+        .iter()
+        .find(|line| line.text.contains("│ Name") && line.text.contains("Count │"))
+        .unwrap();
+    assert!(table_header.style_spans.iter().any(|span| {
+        span.rendition.bold
+            && span.rendition.foreground == Some(service.ui_theme.colors.agent_transcript_user.foreground)
+            && span.rendition.background.is_none()
+    }));
     assert!(
         styled_lines
             .iter()
             .any(|line| line.text.contains("├") && line.text.contains("┼")),
         "{styled_lines:?}"
     );
+    let table_separator = styled_lines
+        .iter()
+        .find(|line| line.text.contains("├") && line.text.contains("┼"))
+        .unwrap();
+    assert!(table_separator.style_spans.iter().any(|span| {
+        span.rendition.dim
+            && span.rendition.foreground
+                == Some(service.ui_theme.colors.agent_transcript_status.foreground)
+    }));
     let table_row = styled_lines
         .iter()
         .find(|line| line.text.contains("│ alpha") && line.text.contains("2 │"))
@@ -539,7 +566,12 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         styled_lines
             .iter()
             .any(|line| line.text.contains("fn main() {}")
-                && line.style_spans.iter().all(|span| !span.rendition.dim)),
+                && line.style_spans.iter().any(|span| {
+                    !span.rendition.inverse
+                        && !span.rendition.dim
+                        && span.rendition.background.is_none()
+                        && span.rendition.foreground == Some(EXPECTED_MARKDOWN_INLINE_CODE_FOREGROUND)
+                })),
         "{styled_lines:?}"
     );
     assert!(
