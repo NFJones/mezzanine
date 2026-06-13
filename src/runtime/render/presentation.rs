@@ -3369,6 +3369,97 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             }
             header
         }
+        AgentActionPayload::IssueAdd {
+            kind,
+            title,
+            body,
+            notes,
+        } => {
+            let mut header = format!(
+                "issue add: kind={} title={}",
+                agent_action_display_preview(kind),
+                agent_action_display_preview(title)
+            );
+            if let Some(body) = body.as_deref().map(str::trim)
+                && !body.is_empty()
+            {
+                header.push_str(" body=");
+                header.push_str(&agent_action_display_preview(body));
+            }
+            if let Some(notes) = notes.as_deref().map(str::trim)
+                && !notes.is_empty()
+            {
+                header.push_str(" notes=");
+                header.push_str(&agent_action_display_preview(notes));
+            }
+            header
+        }
+        AgentActionPayload::IssueUpdate {
+            id,
+            kind,
+            title,
+            body,
+            clear_body,
+            notes,
+            clear_notes,
+        } => {
+            let mut header = format!("issue update: id={}", agent_action_display_preview(id));
+            if let Some(kind) = kind.as_deref().map(str::trim)
+                && !kind.is_empty()
+            {
+                header.push_str(" kind=");
+                header.push_str(&agent_action_display_preview(kind));
+            }
+            if let Some(title) = title.as_deref().map(str::trim)
+                && !title.is_empty()
+            {
+                header.push_str(" title=");
+                header.push_str(&agent_action_display_preview(title));
+            }
+            if let Some(body) = body.as_deref().map(str::trim)
+                && !body.is_empty()
+            {
+                header.push_str(" body=");
+                header.push_str(&agent_action_display_preview(body));
+            }
+            if *clear_body {
+                header.push_str(" clear_body=true");
+            }
+            if let Some(notes) = notes.as_deref().map(str::trim)
+                && !notes.is_empty()
+            {
+                header.push_str(" notes=");
+                header.push_str(&agent_action_display_preview(notes));
+            }
+            if *clear_notes {
+                header.push_str(" clear_notes=true");
+            }
+            header
+        }
+        AgentActionPayload::IssueQuery { kind, text, limit } => {
+            let mut header = match kind
+                .as_deref()
+                .map(str::trim)
+                .filter(|kind| !kind.is_empty())
+            {
+                Some(kind) => format!("issue query: kind={}", agent_action_display_preview(kind)),
+                None => "issue query: current project".to_string(),
+            };
+            if let Some(text) = text.as_deref().map(str::trim)
+                && !text.is_empty()
+            {
+                header.push_str(" text=");
+                header.push_str(&agent_action_display_preview(text));
+            }
+            if let Some(limit) = limit {
+                header.push_str(" limit=");
+                header.push_str(&limit.to_string());
+            }
+            header
+        }
+        AgentActionPayload::IssueDelete { id } => {
+            format!("issue delete: id={}", agent_action_display_preview(id))
+        }
         AgentActionPayload::McpCall {
             server,
             tool,

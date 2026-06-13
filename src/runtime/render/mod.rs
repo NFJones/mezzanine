@@ -244,6 +244,75 @@ mod tests {
         );
     }
 
+    /// Verifies issue actions render compact argument-aware execution headers.
+    ///
+    /// Local issue actions should use the same concise action-line grammar as
+    /// MCP and memory actions so users can see which issue operation and key
+    /// arguments are being submitted without expanding verbose protocol logs.
+    #[test]
+    fn agent_action_execution_header_summarizes_issue_actions() {
+        let add = AgentAction {
+            id: "issue-add".to_string(),
+            rationale: String::new(),
+            payload: AgentActionPayload::IssueAdd {
+                kind: "defect".to_string(),
+                title: "Fix issue rendering".to_string(),
+                body: Some("show useful issue arguments".to_string()),
+                notes: Some("progress notes".to_string()),
+            },
+        };
+        let update = AgentAction {
+            id: "issue-update".to_string(),
+            rationale: String::new(),
+            payload: AgentActionPayload::IssueUpdate {
+                id: "issue-123".to_string(),
+                kind: Some("task".to_string()),
+                title: Some("Update issue rendering".to_string()),
+                body: None,
+                clear_body: true,
+                notes: Some("validated".to_string()),
+                clear_notes: false,
+            },
+        };
+        let query = AgentAction {
+            id: "issue-query".to_string(),
+            rationale: String::new(),
+            payload: AgentActionPayload::IssueQuery {
+                kind: Some("task".to_string()),
+                text: Some("rendering".to_string()),
+                limit: Some(5),
+            },
+        };
+        let delete = AgentAction {
+            id: "issue-delete".to_string(),
+            rationale: String::new(),
+            payload: AgentActionPayload::IssueDelete {
+                id: "issue-123".to_string(),
+            },
+        };
+
+        assert_eq!(
+            agent_action_execution_display_header(&add).as_deref(),
+            Some(
+                "issue add: kind=defect title=Fix issue rendering body=show useful issue arguments notes=progress notes"
+            )
+        );
+        assert_eq!(
+            agent_action_execution_display_header(&update).as_deref(),
+            Some(
+                "issue update: id=issue-123 kind=task title=Update issue rendering clear_body=true notes=validated"
+            )
+        );
+        assert_eq!(
+            agent_action_execution_display_header(&query).as_deref(),
+            Some("issue query: kind=task text=rendering limit=5")
+        );
+        assert_eq!(
+            agent_action_execution_display_header(&delete).as_deref(),
+            Some("issue delete: id=issue-123")
+        );
+    }
+
     /// Verifies semantic action diff output is parsed into compact display rows
     /// while removing Mezzanine-owned prompt and wrapper lines. This protects
     /// normal agent logs from showing raw PTY transaction mechanics around a
