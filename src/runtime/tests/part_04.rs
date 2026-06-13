@@ -758,6 +758,48 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
     );
 }
 
+/// Verifies markdown thematic breaks expand to the capped prose width.
+///
+/// A source `***` line should render as a subdued box-drawing divider that
+/// fills the same width cap used for prose markdown rows instead of remaining a
+/// short fixed run of glyphs.
+#[test]
+fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
+    );
+    let markdown = "***";
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            markdown,
+            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    let styled_lines = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    let expected = format!(
+        "▐ mez> {}",
+        EXPECTED_MARKDOWN_BLOCK_DIVIDER_GLYPH
+            .to_string()
+            .repeat(120usize.saturating_sub("▐ mez> ".chars().count()))
+    );
+
+    assert!(
+        styled_lines.iter().any(|line| line.text == expected),
+        "{styled_lines:?}"
+    );
+}
+
 /// Verifies markdown tables keep their row layout on wide terminals.
 ///
 /// Prose markdown is capped at 120 cells for readability, but table rows need

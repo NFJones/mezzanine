@@ -49,6 +49,8 @@ pub(super) enum AgentRenderedLineKind {
     Normal,
     /// Synthetic frame row displayed above one rendered markdown block.
     MarkdownFrame,
+    /// Markdown thematic-break row rendered as a full-width divider.
+    MarkdownRule,
     /// First physical row for one source markdown table row.
     MarkdownTableRow,
     /// Continuation physical row for a wrapped source markdown table row.
@@ -83,6 +85,8 @@ impl AgentRenderedLineKind {
 
 /// Maximum display width used for agent-rendered transcript presentation.
 pub(super) const AGENT_TERMINAL_PRESENTATION_MAX_COLUMNS: usize = 120;
+/// Divider glyph used for markdown thematic breaks and framing.
+pub(super) const MARKDOWN_BLOCK_DIVIDER_GLYPH: char = '─';
 /// Light foreground-only color used for inline markdown on dark surfaces.
 pub(super) const MARKDOWN_LIGHT_NEUTRAL_FOREGROUND: TerminalColor =
     TerminalColor::Rgb(0xe6, 0xe6, 0xe6);
@@ -497,6 +501,13 @@ pub(super) fn wrap_agent_rendered_line_to_width(
     line: AgentRenderedLine,
     display_width: usize,
 ) -> Vec<AgentRenderedLine> {
+    let line = if line.kind == AgentRenderedLineKind::MarkdownRule
+        && agent_terminal_text_width(line.display.as_str()) <= display_width
+    {
+        expand_markdown_rule_line_to_width(line, display_width)
+    } else {
+        line
+    };
     if agent_terminal_text_width(line.display.as_str()) <= display_width {
         return vec![line];
     }
@@ -571,6 +582,40 @@ pub(super) fn wrap_agent_rendered_line_to_width(
     } else {
         wrapped
     }
+}
+
+/// Expands one markdown thematic break to the target display width.
+fn expand_markdown_rule_line_to_width(
+    mut line: AgentRenderedLine,
+    display_width: usize,
+) -> AgentRenderedLine {
+    let current_width = agent_terminal_text_width(line.display.as_str());
+    if current_width >= display_width {
+        return line;
+    }
+    let addition_width = display_width.saturating_sub(current_width);
+    let glyphs = MARKDOWN_BLOCK_DIVIDER_GLYPH
+        .to_string()
+        .repeat(addition_width);
+    let rendition = line
+        .style_spans
+        .last()
+        .map(|span| span.rendition)
+        .unwrap_or_default();
+    line.display.push_str(&glyphs);
+    if let Some(last_span) = line.style_spans.last_mut()
+        && last_span.start.saturating_add(last_span.length) == current_width
+        && last_span.rendition == rendition
+    {
+        last_span.length = last_span.length.saturating_add(addition_width);
+        return line;
+    }
+    line.style_spans.push(TerminalStyleSpan {
+        start: current_width,
+        length: addition_width,
+        rendition,
+    });
+    line
 }
 
 /// One display-cell-bounded segment from a rendered row.
@@ -1158,7 +1203,7 @@ impl AgentMarkdownRenderer {
             Event::SoftBreak | Event::HardBreak => self.finish_current_line(),
             Event::Rule => {
                 self.start_block();
-                self.append_text("────────");
+                self.append_thematic_break();
                 self.finish_current_line();
             }
             Event::TaskListMarker(checked) => self.replace_current_task_marker(checked),
@@ -1500,6 +1545,22 @@ impl AgentMarkdownRenderer {
         let mut style = self.active;
         style.dim = true;
         self.append_styled_text(text, style);
+    }
+
+    /// Appends one markdown thematic break using subdued structural styling.
+    fn append_thematic_break(&mut self) {
+        self.ensure_line_prefix();
+        self.current_prefix_only = false;
+        self.current.kind = AgentRenderedLineKind::MarkdownRule;
+        self.append_styled_text(
+            &MARKDOWN_BLOCK_DIVIDER_GLYPH.to_string(),
+            GraphicRendition {
+                foreground: Some(self.structural_foreground),
+                background: None,
+                dim: true,
+                ..GraphicRendition::default()
+            },
+        );
     }
 
     /// Replaces the leading unordered marker in a GitHub task list item.
