@@ -73,6 +73,8 @@ pub struct TerminalWindowStatusContext {
     pub template: String,
     /// Home-relative active pane working directory shown by `pane.pwd`.
     pub active_pane_working_directory: Option<String>,
+    /// Cached command-backed pill values keyed by configured pill name.
+    pub status_pills: BTreeMap<String, String>,
     /// Human-readable system uptime shown by `system.uptime`.
     pub system_uptime: String,
     /// Human-readable local datetime shown by `datetime.local`.

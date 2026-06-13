@@ -25,13 +25,13 @@ use super::{
     RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
     RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
     RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, ScopeRegistry, Session, SessionApprovalStore,
-    SessionMemoryStore, SessionRegistry, SnapshotRepository, TerminalScreen, ToolDiscoveryCache,
-    TrustDecision, Value, agent_shell_visibility_json_name, apply_registry_update,
-    builtin_subagent_profiles, compare_approval_policy_authority, compose_effective_config,
-    current_unix_seconds, discover_existing_overlays, discover_project_root,
-    discover_streamable_http_mcp_server_with_auth_token, ensure_absolute, ensure_no_mez_separator,
-    fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeStatusPillCache, ScopeRegistry,
+    Session, SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
+    TerminalScreen, ToolDiscoveryCache, TrustDecision, Value, agent_shell_visibility_json_name,
+    apply_registry_update, builtin_subagent_profiles, compare_approval_policy_authority,
+    compose_effective_config, current_unix_seconds, discover_existing_overlays,
+    discover_project_root, discover_streamable_http_mcp_server_with_auth_token, ensure_absolute,
+    ensure_no_mez_separator, fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
     runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config,
@@ -52,8 +52,9 @@ use super::{
     runtime_parse_approval_policy, runtime_permission_policy_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
-    runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
-    runtime_terminal_clipboard_from_config, runtime_terminal_cursor_blink_from_config,
+    runtime_status_pill_definitions_from_config, runtime_subagent_profiles_from_config,
+    runtime_subagent_wait_policy_from_config, runtime_terminal_clipboard_from_config,
+    runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_reduced_motion_from_config,
@@ -250,6 +251,8 @@ impl RuntimeSessionService {
             window_frame_template: crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
             window_frame_right_status_template:
                 crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
+            window_status_pill_definitions: BTreeMap::new(),
+            window_status_pill_cache: std::cell::RefCell::new(RuntimeStatusPillCache::default()),
             window_frame_position: crate::terminal::TerminalFramePosition::Bottom,
             window_frame_style: crate::terminal::TerminalFrameStyle::Default,
             window_frame_visible_fields: crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
@@ -728,6 +731,8 @@ impl RuntimeSessionService {
         let window_frame_template = runtime_window_frame_template_from_config(&structured)?;
         let window_frame_right_status_template =
             runtime_window_frame_right_status_template_from_config(&structured)?;
+        let window_status_pill_definitions =
+            runtime_status_pill_definitions_from_config(&structured)?;
         let window_frame_position = runtime_window_frame_position_from_config(&structured)?;
         let window_frame_style = runtime_window_frame_style_from_config(&structured)?;
         let window_frame_visible_fields =
@@ -769,6 +774,7 @@ impl RuntimeSessionService {
         self.window_frames_enabled = window_frames_enabled;
         self.window_frame_template = window_frame_template;
         self.window_frame_right_status_template = window_frame_right_status_template;
+        self.window_status_pill_definitions = window_status_pill_definitions;
         self.window_frame_position = window_frame_position;
         self.window_frame_style = window_frame_style;
         self.window_frame_visible_fields = window_frame_visible_fields;

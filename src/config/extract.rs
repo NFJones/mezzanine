@@ -423,6 +423,33 @@ pub(super) fn validate_frames_path(segments: &[&str]) -> Option<String> {
     if !frame_keys.contains(&key) {
         return Some("unknown frame configuration key".to_string());
     }
+    if target == "window" && key == "pills" {
+        if segments.len() < 4 {
+            return None;
+        }
+        if segments.len() == 4 {
+            return None;
+        }
+        if segments.len() == 5 {
+            let setting = segments[4];
+            if matches!(
+                setting,
+                "label"
+                    | "command"
+                    | "interval_seconds"
+                    | "initial"
+                    | "timeout_ms"
+                    | "empty_behavior"
+                    | "error_behavior"
+                    | "max_output_chars"
+                    | "style"
+            ) {
+                return None;
+            }
+            return Some("unknown status pill configuration key".to_string());
+        }
+        return Some("status pill setting must not contain nested keys".to_string());
+    }
     if segments.len() > 3 {
         return Some("scalar frame setting must not contain nested keys".to_string());
     }

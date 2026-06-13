@@ -25,10 +25,11 @@ use super::{
     McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
     ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
     PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, Result, ScopeRegistry, Session, SessionApprovalStore,
-    SessionMemoryStore, SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection,
-    SubagentProfile, SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition,
-    TerminalFrameStyle, TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
+    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeStatusPillCache,
+    RuntimeStatusPillDefinition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
+    SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
+    SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
+    TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
     execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
@@ -1657,6 +1658,10 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) window_frame_right_status_template: String,
+    /// Stores configured command-backed window status pill definitions.
+    pub(super) window_status_pill_definitions: BTreeMap<String, RuntimeStatusPillDefinition>,
+    /// Stores cached command-backed window status pill output state.
+    pub(super) window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
     /// Stores the window frame position value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

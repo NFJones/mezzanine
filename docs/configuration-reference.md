@@ -182,6 +182,7 @@ The prefix key table remains available even when direct bindings are omitted.
 | `frames.window.position` | string | `"bottom"` | `top`, `bottom`, or `border`. |
 | `frames.window.template` | string | `"#{window.list}"` | Left/main window frame template. |
 | `frames.window.right_status` | string | `"#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|terminal|split-window} #{button:□|terminal|new-window} #{button:⊕|terminal|new-group} #{button:λ|terminal|agent-shell} #{system.uptime} #{datetime.local}"` | Right-aligned status and command buttons; the built-in `pane.pwd` display is home-relative when possible and collapses deep paths to the last three segments. |
+| `frames.window.pills` | table | `{}` | Named command-backed status pills referenced from `frames.window.right_status` as `#{pill.<name>}`. |
 | `frames.window.style` | string | `"default"` | Frame text style: `default`, `bold`, `underline`, `inverse`, or `reverse`. |
 | `frames.window.visible_fields` | string array | `[...]` | Allowed template fields for window frames. |
 
@@ -189,6 +190,28 @@ Default `frames.window.visible_fields`:
 
 ```toml
 ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local"]
+```
+
+Command-backed status pills are configured under `frames.window.pills.<name>`
+and render only when the active right-status template references
+`#{pill.<name>}`. A pill definition requires `command` and `interval_seconds`;
+it may also set `label`, `initial`, `timeout_ms`, `empty_behavior`,
+`error_behavior`, `max_output_chars`, and `style`. Command output uses stdout,
+is trimmed to the first line, is bounded by `max_output_chars`, and is cached
+between refresh intervals. Empty output behavior is `hide`, `show_empty`, or
+`keep_previous`; error behavior is `hide`, `show_error`, or `keep_previous`.
+Configured pills whose names are not present in `frames.window.right_status` are
+not executed.
+
+```toml
+[frames.window.pills.cpu]
+label = "CPU"
+command = "printf '42%'"
+interval_seconds = 1
+timeout_ms = 750
+empty_behavior = "hide"
+error_behavior = "keep_previous"
+max_output_chars = 32
 ```
 
 ### `frames.pane`
@@ -212,8 +235,9 @@ Default `frames.pane.visible_fields`:
 Window templates support `session.id`, `window.list`, `window.id`,
 `window.index`, `window.title`, `window.active`, `window.pane_count`,
 `window.buttons`, `window.actions`, `system.uptime`, `datetime.local`,
-`layout.name`, `agent.active_count`, and `message.unread_count`. They may also
-use active-pane fields such as `pane.index`, `pane.id`, and `pane.title`.
+`layout.name`, `agent.active_count`, `message.unread_count`, and configured
+command-backed status pill fields named `pill.<name>`. They may also use
+active-pane fields such as `pane.index`, `pane.id`, and `pane.title`.
 
 Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.index`, `pane.title`, `pane.active`, `pane.size`, `pane.primary_pid`,

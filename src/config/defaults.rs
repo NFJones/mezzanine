@@ -76,6 +76,8 @@ right_status = "#{pane.pwd} #{button:-|terminal|split-window -h} #{button:+|term
 style = "default"
 visible_fields = ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local"]
 
+[frames.window.pills]
+
 [frames.pane]
 enabled = true
 position = "border"

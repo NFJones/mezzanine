@@ -3669,6 +3669,7 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
         window_status: Some(TerminalWindowStatusContext {
             template: DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
             active_pane_working_directory: Some("~/repo".to_string()),
+            status_pills: BTreeMap::new(),
             system_uptime: "1h".to_string(),
             datetime_local: "2026-05-09 12:00:00".to_string(),
         }),
@@ -3831,6 +3832,7 @@ fn render_window_status_uses_right_aligned_themed_segments() {
         window_status: Some(TerminalWindowStatusContext {
             template: DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
             active_pane_working_directory: Some("~/repo".to_string()),
+            status_pills: BTreeMap::new(),
             system_uptime: "2d 03h 04m".to_string(),
             datetime_local: "2026-05-05 10:11:12".to_string(),
         }),
@@ -3880,6 +3882,60 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     }));
 }
 
+/// Verifies that cached command-backed window status pills render through the
+/// normal status template pill path. This keeps shell command execution out of
+/// terminal rendering while preserving themed, padded status segments for
+/// `#{pill.<name>}` fields.
+#[test]
+fn render_window_status_uses_cached_command_status_pills() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 1, "work", Size::new(50, 3).unwrap());
+    let frame_context = TerminalFrameContext {
+        windows: vec![TerminalWindowFrameContext {
+            id: "@2".to_string(),
+            index: 1,
+            title: "work".to_string(),
+            active: true,
+            subagent: false,
+        }],
+        window_status: Some(TerminalWindowStatusContext {
+            template: "#{pill.cpu} #{datetime.local}".to_string(),
+            active_pane_working_directory: None,
+            status_pills: BTreeMap::from([("cpu".to_string(), "CPU 42%".to_string())]),
+            system_uptime: String::new(),
+            datetime_local: "2026-05-05 10:11:12".to_string(),
+        }),
+        ..TerminalFrameContext::default()
+    };
+    let config = TerminalClientLoopConfig {
+        frame_context,
+        window_frame_template: DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
+        window_frames_enabled: true,
+        pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+        pane_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(view.lines[2].contains(" CPU 42% "), "{}", view.lines[2]);
+    let pill_start_bytes = view.lines[2].find(" CPU 42% ").unwrap();
+    let pill_start = UnicodeWidthStr::width(&view.lines[2][..pill_start_bytes]);
+    assert!(view.line_style_spans[2].iter().any(|span| {
+        span.start == pill_start
+            && span.length == " CPU 42% ".len()
+            && span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+    }));
+}
+
 /// Verifies that the pane working-directory field used by window status and
 /// explicit pane frame templates is compacted to the final three path segments.
 ///
@@ -3910,6 +3966,7 @@ fn render_pane_pwd_fields_compact_deep_paths_to_three_segments() {
         window_status: Some(TerminalWindowStatusContext {
             template: DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
             active_pane_working_directory: Some("~/Documents/a/b/c/d".to_string()),
+            status_pills: BTreeMap::new(),
             system_uptime: "2d 03h 04m".to_string(),
             datetime_local: "2026-05-05 10:11:12".to_string(),
         }),

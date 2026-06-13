@@ -1382,6 +1382,8 @@ pub(super) enum WindowStatusSegmentKind {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     DateTime,
+    /// Represents a configured command-backed status pill.
+    StatusPill,
 }
 
 impl WindowStatusSegmentKind {
@@ -1389,7 +1391,7 @@ impl WindowStatusSegmentKind {
     fn action(&self) -> Option<&WindowFrameAction> {
         match self {
             Self::Action { action, .. } => Some(action),
-            Self::Uptime | Self::DateTime => None,
+            Self::Uptime | Self::DateTime | Self::StatusPill => None,
         }
     }
 }
@@ -1668,6 +1670,16 @@ pub(super) fn window_status_field_value(
     status: &TerminalWindowStatusContext,
     field: &str,
 ) -> (String, Option<WindowStatusSegmentKind>) {
+    if let Some(name) = field.strip_prefix("pill.") {
+        return (
+            status
+                .status_pills
+                .get(name)
+                .map(|value| sanitize_frame_text(value))
+                .unwrap_or_default(),
+            Some(WindowStatusSegmentKind::StatusPill),
+        );
+    }
     match field {
         "system.uptime" => (
             sanitize_frame_text(&status.system_uptime),
@@ -1712,6 +1724,9 @@ pub(super) fn window_status_style_spans(
                 WindowStatusSegmentKind::Uptime => ui_theme.colors.window_status_uptime.rendition(),
                 WindowStatusSegmentKind::DateTime => {
                     ui_theme.colors.window_status_datetime.rendition()
+                }
+                WindowStatusSegmentKind::StatusPill => {
+                    ui_theme.colors.window_status_uptime.rendition()
                 }
             },
         })

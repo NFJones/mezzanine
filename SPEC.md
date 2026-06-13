@@ -2440,7 +2440,21 @@ The `layout` table MUST support `default`, `resize_policy`, `close_policy`,
 The `frames` table MUST contain `window` and `pane` subtables. Each frame
 subtable MUST support `enabled`, `position`, `template`, `style`, and
 `visible_fields`. `frames.window` MUST also support `right_status` for the
-configurable right-aligned window status template.
+configurable right-aligned window status template and `pills` for named
+command-backed right-status pill definitions. `frames.window.pills` MUST be a
+map keyed by pill name. Each pill definition MUST support `command` and
+`interval_seconds`, and MAY support `label`, `initial`, `timeout_ms`,
+`empty_behavior`, `error_behavior`, `max_output_chars`, and `style`. The
+right-status template field `#{pill.<name>}` MUST render the cached output for
+that configured pill as a status pill. Implementations MUST execute a configured
+pill command only while `#{pill.<name>}` appears in the effective
+`frames.window.right_status` template, MUST respect the configured refresh
+interval, MUST bound command execution by timeout, and MUST not execute status
+pill commands from the terminal frame renderer. Command stdout MUST be trimmed
+to the first line before display and bounded by the configured maximum output
+length. Empty output behavior MUST be one of `hide`, `show_empty`, or
+`keep_previous`; error behavior MUST be one of `hide`, `show_error`, or
+`keep_previous`.
 
 The `theme` table MUST support `active`, `aliases`, and `colors`. `theme.active`
 MUST select the active named theme and MUST default to `kanagawa`.

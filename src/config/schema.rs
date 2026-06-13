@@ -443,6 +443,7 @@ pub(super) const WINDOW_FRAME_KEYS: &[&str] = &[
     "position",
     "template",
     "right_status",
+    "pills",
     "style",
     "visible_fields",
 ];

@@ -987,9 +987,14 @@ impl RuntimeSessionService {
         } else {
             String::new()
         };
+        let status_pills = self
+            .window_status_pill_cache
+            .borrow_mut()
+            .refresh_active(&self.window_status_pill_definitions, &template);
         Some(TerminalWindowStatusContext {
             template,
             active_pane_working_directory,
+            status_pills,
             system_uptime,
             datetime_local,
         })

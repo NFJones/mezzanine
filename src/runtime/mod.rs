@@ -286,6 +286,11 @@ mod service_state;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod sockets;
+/// Exposes command-backed window status pill scheduling.
+///
+/// The nested module keeps status-polling configuration and cache state out of
+/// the central runtime service state.
+mod status_pills;
 
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
@@ -349,6 +354,10 @@ pub use sockets::{
     ensure_private_socket_directory, pane_environment, pane_environment_with_term,
     prune_stale_socket_files_in_directory, remove_stale_socket_file_if_unserved,
     socket_path_for_name,
+};
+use status_pills::{
+    RuntimeStatusPillCache, RuntimeStatusPillDefinition,
+    runtime_status_pill_definitions_from_config,
 };
 
 #[cfg(test)]
