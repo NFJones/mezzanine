@@ -168,12 +168,12 @@ mod tests {
         RuntimeDisplayOverlaySelectionKind,
     };
     use super::{
-        AgentRenderedLine, AgentRenderedLineKind, agent_action_result_uses_diff_preview,
-        agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
-        readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
-        render_command_markdown_body_lines, rendered_line_rendition_at,
-        runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
-        runtime_display_overlay_rendered_line_style_spans,
+        AgentRenderedLine, AgentRenderedLineKind, agent_action_execution_display_header,
+        agent_action_result_uses_diff_preview, agent_thinking_display_lines_for_width,
+        command_preview_terminal_rendered_lines, readable_agent_diff_display_lines,
+        readable_agent_diff_display_lines_for_width, render_command_markdown_body_lines,
+        rendered_line_rendition_at, runtime_agent_shell_markdown_overlay_content,
+        runtime_command_display_overlay_content, runtime_display_overlay_rendered_line_style_spans,
         runtime_display_overlay_rendered_selection_start,
         runtime_display_overlay_selection_prefix_columns, runtime_human_readable_display_lines,
         wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
@@ -202,6 +202,46 @@ mod tests {
         };
 
         assert!(agent_action_result_uses_diff_preview(&patch));
+    }
+
+    /// Verifies memory actions render a concise one-line execution header.
+    ///
+    /// Memory search/store actions should retain the compact thinking-log feel
+    /// while still showing enough bounded context to understand the query or
+    /// stored record without opening verbose logs.
+    #[test]
+    fn agent_action_execution_header_summarizes_memory_actions() {
+        let search = AgentAction {
+            id: "memory-search".to_string(),
+            rationale: String::new(),
+            payload: AgentActionPayload::MemorySearch {
+                query: "prompt cache details".to_string(),
+                limit: Some(3),
+            },
+        };
+        let store = AgentAction {
+            id: "memory-store".to_string(),
+            rationale: String::new(),
+            payload: AgentActionPayload::MemoryStore {
+                kind: "preference".to_string(),
+                priority: Some(80),
+                scope: Some("project".to_string()),
+                keywords: vec!["prompt".to_string(), "cache".to_string()],
+                content: "remember prompt cache details for future sessions".to_string(),
+                expires_in_days: Some(7),
+            },
+        };
+
+        assert_eq!(
+            agent_action_execution_display_header(&search).as_deref(),
+            Some("memory search: prompt cache details limit=3")
+        );
+        assert_eq!(
+            agent_action_execution_display_header(&store).as_deref(),
+            Some(
+                "memory store: kind=preference keywords=2 content=remember prompt cache details for future sessions scope=project priority=80 ttl_days=7"
+            )
+        );
     }
 
     /// Verifies semantic action diff output is parsed into compact display rows

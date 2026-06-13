@@ -336,6 +336,19 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 `kanagawa`, `everforest_dark`, `everforest_light`, `ayu`, `ayu_dark`,
 `ayu_light`, `ayu_mirage`, `high_contrast_dark`, and `high_contrast_light`.
 
+Built-ins fall into three fidelity groups. `nord`, `tokyo_night`,
+`catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`,
+`catppuccin_mocha`, `rose_pine`, `rose_pine_moon`, `rose_pine_dawn`,
+`kanagawa`, `everforest_dark`, `everforest_light`, `dracula`, `monokai`,
+`one_half_dark`, `one_half_light`, `onedark`, `ayu`, `ayu_dark`, `ayu_light`,
+and `ayu_mirage` are upstream-family adaptations whose core base, foreground,
+accent, muted, and danger anchors are expected to remain recognizable against
+the named family. `gruvbox_dark`, `gruvbox_light`, `solarized_dark`, and
+`solarized_light` are interpretive family adaptations that intentionally choose
+Mezzanine UI anchors from canonical families rather than strict editor-theme
+semantic slots. `deepforest`, `high_contrast_dark`, and `high_contrast_light`
+are Mezzanine-native themes.
+
 ### `history`
 
 | Field | Type | Default declaration | Description |
@@ -368,7 +381,7 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | --- | --- | --- | --- |
 | `issues.enabled` | boolean | `true` | Enable local SQLite project issue tracking through `mez issue`, `/issue`, and gated issue MAAP actions. |
 | `issues.storage` | string | `"sqlite"` | Local issue storage backend. Current builds support SQLite. |
-| `issues.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/issues.sqlite`. |
+| `issues.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/issues.sqlite`. Relative paths are created privately under `<config_root>`; absolute paths are opened as caller-owned locations without creating or chmodding the parent directory. |
 
 Issue records include a required single-line title, optional body text for the
 stable issue description, and optional mutable notes for working progress,

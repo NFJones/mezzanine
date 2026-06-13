@@ -110,7 +110,10 @@ impl RuntimeSessionService {
                 "issue actions require a configured config root".to_string(),
             );
         };
-        let store = crate::issues::IssueStore::new(runtime_issue_database_path(self, &config_root));
+        let store = crate::issues::IssueStore::from_database_path(runtime_issue_database_path(
+            self,
+            &config_root,
+        ));
         let project = issue_action_project(self, turn, &config_root);
         match &action.payload {
             AgentActionPayload::IssueAdd {
@@ -221,7 +224,10 @@ pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
         .unwrap_or(true)
 }
 
-fn runtime_issue_database_path(service: &RuntimeSessionService, config_root: &PathBuf) -> PathBuf {
+fn runtime_issue_database_path(
+    service: &RuntimeSessionService,
+    config_root: &PathBuf,
+) -> crate::issues::IssueDatabasePath {
     let configured = runtime_effective_config_value(&service.config_layers)
         .ok()
         .and_then(|root| {
@@ -230,7 +236,7 @@ fn runtime_issue_database_path(service: &RuntimeSessionService, config_root: &Pa
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         });
-    crate::issues::issue_database_path(config_root, configured.as_deref())
+    crate::issues::issue_database_location(config_root, configured.as_deref())
 }
 
 fn issue_action_project(

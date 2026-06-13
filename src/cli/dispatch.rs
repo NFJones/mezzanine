@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, OsString, PathBuf,
-    Result, RuntimeEnv, Write, cli_idempotency_key, io, json_escape,
+    CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
+    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, io, json_escape,
     prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
     run_issue, run_list, run_mcp, run_memory, run_new, run_serve, run_snapshot,
 };
@@ -255,7 +255,21 @@ pub async fn run_with<W: Write, E: Write>(
 fn cleanup_startup_stale_socket_files(invocation: &CliInvocation, owner_uid: u32) -> Result<()> {
     match &invocation.socket_selection {
         super::SocketSelection::Default(_) | super::SocketSelection::Named(_) => {
-            let root = super::registry_root(&invocation.socket_selection)?;
+            let root = match &invocation.socket_selection {
+                super::SocketSelection::Default(socket_path) => {
+                    socket_path.parent().map(PathBuf::from).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "default control socket path must have a parent directory",
+                        )
+                    })?
+                }
+                super::SocketSelection::Named(_) => {
+                    super::registry_root(&invocation.socket_selection)?
+                }
+                super::SocketSelection::Explicit(_) | super::SocketSelection::InPane(_) => {
+                    unreachable!("explicit and in-pane selections are handled by the outer match")
+                }
+            };
             let _ = prune_stale_socket_files_in_directory(&root, owner_uid)?;
             Ok(())
         }

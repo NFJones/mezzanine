@@ -28,21 +28,66 @@ pub fn default_issue_database_path(config_root: impl AsRef<Path>) -> PathBuf {
     config_root.as_ref().join("issues.sqlite")
 }
 
+/// Resolved issue database location and whether Mezzanine owns its parent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueDatabasePath {
+    path: PathBuf,
+    manage_private_parent: bool,
+}
+
+impl IssueDatabasePath {
+    /// Builds a resolved issue database path with its parent-management policy.
+    fn new(path: PathBuf, manage_private_parent: bool) -> Self {
+        Self {
+            path,
+            manage_private_parent,
+        }
+    }
+
+    /// Returns the SQLite database path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns whether Mezzanine should create/chmod the database parent.
+    pub fn manages_private_parent(&self) -> bool {
+        self.manage_private_parent
+    }
+
+    /// Consumes this value and returns the SQLite database path.
+    pub fn into_path(self) -> PathBuf {
+        self.path
+    }
+}
+
+/// Resolves an optional configured database path and parent ownership policy.
+///
+/// Empty and relative paths are stored below the Mezzanine config root, so the
+/// issue store owns and privatizes their parent directories. Absolute
+/// configured paths are caller-owned locations; Mezzanine opens the database
+/// file there but does not create or chmod the surrounding directory.
+pub fn issue_database_location(
+    config_root: impl AsRef<Path>,
+    configured: Option<&str>,
+) -> IssueDatabasePath {
+    let Some(configured) = configured.map(str::trim).filter(|value| !value.is_empty()) else {
+        return IssueDatabasePath::new(default_issue_database_path(config_root), true);
+    };
+    let path = PathBuf::from(configured);
+    if path.is_absolute() {
+        IssueDatabasePath::new(path, false)
+    } else {
+        IssueDatabasePath::new(config_root.as_ref().join(path), true)
+    }
+}
+
 /// Resolves an optional configured database path against the config root.
 ///
 /// Empty paths use the standard `issues.sqlite` sibling under the config root.
 /// Relative configured paths are resolved under the same root so local state
 /// stays inside Mezzanine's private configuration directory by default.
 pub fn issue_database_path(config_root: impl AsRef<Path>, configured: Option<&str>) -> PathBuf {
-    let Some(configured) = configured.map(str::trim).filter(|value| !value.is_empty()) else {
-        return default_issue_database_path(config_root);
-    };
-    let path = PathBuf::from(configured);
-    if path.is_absolute() {
-        path
-    } else {
-        config_root.as_ref().join(path)
-    }
+    issue_database_location(config_root, configured).into_path()
 }
 
 /// Returns a stable project key for a current working directory.

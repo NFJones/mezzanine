@@ -789,15 +789,33 @@ struct UiThemePalette<'a> {
 fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
     let muted = contrast_managed_palette_hex(palette.muted, palette.surface);
     let thinking = visible_thinking_palette_hex(palette.thinking, palette.surface);
+    let primary_foreground = contrast_managed_palette_hex(palette.primary, palette.surface);
+    let secondary_foreground = contrast_managed_palette_hex(palette.secondary, palette.surface);
+    let tertiary_foreground = contrast_managed_palette_hex(palette.tertiary, palette.surface);
+    let danger_foreground = contrast_managed_palette_hex(palette.danger, palette.surface);
+    let primary_text = contrasting_binary_hex_for_background(palette.primary);
+    let secondary_text = contrasting_binary_hex_for_background(palette.secondary);
+    let tertiary_text = contrasting_binary_hex_for_background(palette.tertiary);
+    let muted_text = contrasting_binary_hex_for_background(&muted);
+    let danger_text = contrasting_binary_hex_for_background(palette.danger);
     let aliases = [
         ("primary", palette.primary.to_string()),
+        ("primary_foreground", primary_foreground),
+        ("primary_text", primary_text.to_string()),
         ("secondary", palette.secondary.to_string()),
+        ("secondary_foreground", secondary_foreground),
+        ("secondary_text", secondary_text.to_string()),
         ("tertiary", palette.tertiary.to_string()),
+        ("tertiary_foreground", tertiary_foreground),
+        ("tertiary_text", tertiary_text.to_string()),
         ("surface", palette.surface.to_string()),
         ("foreground", palette.foreground.to_string()),
+        ("muted_text", muted_text.to_string()),
         ("muted", muted),
         ("thinking", thinking),
         ("danger", palette.danger.to_string()),
+        ("danger_foreground", danger_foreground),
+        ("danger_text", danger_text.to_string()),
     ]
     .into_iter()
     .map(|(key, value)| (key.to_string(), value))
@@ -805,74 +823,74 @@ fn definition_from_palette(palette: UiThemePalette<'_>) -> UiThemeDefinition {
     let agent_prompt_foreground =
         contrasting_binary_hex_for_background(palette.agent_prompt_background);
     let mut colors: BTreeMap<String, String> = [
-        ("window_frame_fg", "primary"),
+        ("window_frame_fg", "primary_foreground"),
         ("window_frame_bg", "surface"),
-        ("window_active_fg", "surface"),
+        ("window_active_fg", "primary_text"),
         ("window_active_bg", "primary"),
-        ("window_inactive_fg", "foreground"),
+        ("window_inactive_fg", "secondary_text"),
         ("window_inactive_bg", "secondary"),
-        ("pane_frame_active_fg", "foreground"),
+        ("pane_frame_active_fg", "secondary_text"),
         ("pane_frame_active_bg", "secondary"),
         ("pane_frame_inactive_fg", "muted"),
         ("pane_frame_inactive_bg", "surface"),
-        ("pane_border_active_fg", "primary"),
+        ("pane_border_active_fg", "primary_foreground"),
         ("pane_border_active_bg", "surface"),
         ("pane_border_inactive_fg", "muted"),
         ("pane_border_inactive_bg", "surface"),
-        ("pane_divider_fg", "tertiary"),
+        ("pane_divider_fg", "tertiary_foreground"),
         ("pane_divider_bg", "surface"),
         ("frame_fill_fg", "foreground"),
         ("frame_fill_bg", "surface"),
-        ("scroll_indicator_fg", "surface"),
+        ("scroll_indicator_fg", "tertiary_text"),
         ("scroll_indicator_bg", "tertiary"),
-        ("pane_pwd_fg", "surface"),
+        ("pane_pwd_fg", "muted_text"),
         ("pane_pwd_bg", "muted"),
-        ("window_status_uptime_fg", "surface"),
+        ("window_status_uptime_fg", "secondary_text"),
         ("window_status_uptime_bg", "secondary"),
-        ("window_status_datetime_fg", "surface"),
+        ("window_status_datetime_fg", "tertiary_text"),
         ("window_status_datetime_bg", "tertiary"),
-        ("prompt_fg", "primary"),
+        ("prompt_fg", "primary_foreground"),
         ("prompt_bg", "surface"),
         ("agent_prompt_bg", palette.agent_prompt_background),
-        ("agent_transcript_user_fg", "primary"),
+        ("agent_transcript_user_fg", "primary_foreground"),
         ("agent_transcript_user_bg", "surface"),
-        ("agent_transcript_assistant_fg", "secondary"),
+        ("agent_transcript_assistant_fg", "secondary_foreground"),
         ("agent_transcript_assistant_bg", "surface"),
         ("agent_transcript_status_fg", "thinking"),
         ("agent_transcript_status_bg", "surface"),
-        ("agent_transcript_error_fg", "danger"),
+        ("agent_transcript_error_fg", "danger_foreground"),
         ("agent_transcript_error_bg", "surface"),
-        ("agent_transcript_command_fg", "tertiary"),
+        ("agent_transcript_command_fg", "tertiary_foreground"),
         ("agent_transcript_command_bg", "surface"),
-        ("agent_model_fg", "surface"),
+        ("agent_model_fg", "secondary_text"),
         ("agent_model_bg", "secondary"),
-        ("agent_reasoning_fg", "surface"),
+        ("agent_reasoning_fg", "tertiary_text"),
         ("agent_reasoning_bg", "tertiary"),
-        ("agent_status_idle_fg", "surface"),
+        ("agent_status_idle_fg", "muted_text"),
         ("agent_status_idle_bg", "muted"),
-        ("agent_status_running_fg", "surface"),
+        ("agent_status_running_fg", "primary_text"),
         ("agent_status_running_bg", "primary"),
-        ("agent_status_blocked_fg", "surface"),
+        ("agent_status_blocked_fg", "tertiary_text"),
         ("agent_status_blocked_bg", "tertiary"),
-        ("agent_status_failed_fg", "surface"),
+        ("agent_status_failed_fg", "danger_text"),
         ("agent_status_failed_bg", "danger"),
-        ("display_overlay_fg", "secondary"),
+        ("display_overlay_fg", "secondary_foreground"),
         ("display_overlay_bg", "surface"),
-        ("copy_selection_fg", "surface"),
+        ("copy_selection_fg", "tertiary_text"),
         ("copy_selection_bg", "tertiary"),
         ("syntax_plain_fg", "foreground"),
         ("syntax_plain_bg", "surface"),
-        ("syntax_keyword_fg", "primary"),
+        ("syntax_keyword_fg", "primary_foreground"),
         ("syntax_keyword_bg", "surface"),
-        ("syntax_string_fg", "tertiary"),
+        ("syntax_string_fg", "tertiary_foreground"),
         ("syntax_string_bg", "surface"),
         ("syntax_comment_fg", "thinking"),
         ("syntax_comment_bg", "surface"),
-        ("syntax_type_fg", "secondary"),
+        ("syntax_type_fg", "secondary_foreground"),
         ("syntax_type_bg", "surface"),
-        ("syntax_function_fg", "primary"),
+        ("syntax_function_fg", "primary_foreground"),
         ("syntax_function_bg", "surface"),
-        ("syntax_number_fg", "tertiary"),
+        ("syntax_number_fg", "tertiary_foreground"),
         ("syntax_number_bg", "surface"),
         ("syntax_operator_fg", "muted"),
         ("syntax_operator_bg", "surface"),
@@ -892,8 +910,12 @@ fn contrasting_binary_hex_for_background(background: &str) -> &'static str {
     let Some(TerminalColor::Rgb(red, green, blue)) = parse_hex_color(background) else {
         return "#ffffff";
     };
-    let luminance = (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000;
-    if luminance >= 140 {
+    let background = TerminalColor::Rgb(red, green, blue);
+    let black = TerminalColor::Rgb(0, 0, 0);
+    let white = TerminalColor::Rgb(255, 255, 255);
+    let black_contrast = terminal_color_contrast_ratio(black, background).unwrap_or(0.0);
+    let white_contrast = terminal_color_contrast_ratio(white, background).unwrap_or(0.0);
+    if black_contrast >= white_contrast {
         "#000000"
     } else {
         "#ffffff"

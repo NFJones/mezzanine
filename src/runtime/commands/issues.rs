@@ -29,7 +29,10 @@ pub(super) fn execute_agent_shell_issue_command(
         .pane_current_working_directory(pane_id)
         .unwrap_or_else(|| config_root.clone());
     let project = crate::issues::project_key_for_working_directory(working_directory);
-    let store = crate::issues::IssueStore::new(runtime_issue_database_path(service, &config_root));
+    let store = crate::issues::IssueStore::from_database_path(runtime_issue_database_path(
+        service,
+        &config_root,
+    ));
     let args = parse_issue_args(slash.args.trim())?;
     match args {
         RuntimeIssueArgs::Add {
@@ -350,7 +353,10 @@ fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
         .unwrap_or(true)
 }
 
-fn runtime_issue_database_path(service: &RuntimeSessionService, config_root: &PathBuf) -> PathBuf {
+fn runtime_issue_database_path(
+    service: &RuntimeSessionService,
+    config_root: &PathBuf,
+) -> crate::issues::IssueDatabasePath {
     let configured = runtime_effective_config_value(&service.config_layers)
         .ok()
         .and_then(|root| {
@@ -359,7 +365,7 @@ fn runtime_issue_database_path(service: &RuntimeSessionService, config_root: &Pa
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         });
-    crate::issues::issue_database_path(config_root, configured.as_deref())
+    crate::issues::issue_database_location(config_root, configured.as_deref())
 }
 
 #[cfg(test)]

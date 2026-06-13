@@ -242,3 +242,84 @@ fn issue_store_migrates_old_schema_to_notes_column() {
 
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies relative configured issue database paths remain Mezzanine-owned so
+/// their parent directories are created and privatized under the config root.
+#[test]
+fn relative_configured_issue_database_path_manages_private_parent() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-issue-store-relative-parent-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let database_path = issue_database_location(&root, Some("nested/issues.sqlite"));
+    assert!(database_path.manages_private_parent());
+    let store = IssueStore::from_database_path(database_path);
+
+    store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "Create owned parent".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+
+    let parent = root.join("nested");
+    assert!(parent.is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies absolute configured issue database paths do not cause Mezzanine to
+/// chmod or create caller-owned parent directories outside the config root.
+#[test]
+fn absolute_configured_issue_database_path_preserves_parent_permissions() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-issue-store-absolute-parent-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let parent = root.join("external-parent");
+    fs::create_dir_all(&parent).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let configured = parent.join("issues.sqlite");
+    let configured = configured.to_str().unwrap();
+    let database_path = issue_database_location(root.join("config"), Some(configured));
+    assert!(!database_path.manages_private_parent());
+    let store = IssueStore::from_database_path(database_path);
+
+    store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Defect,
+            "Preserve caller parent".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}

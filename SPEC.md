@@ -959,6 +959,12 @@ Built-in themes MUST include common terminal and editor color schemes:
 `rose_pine`, `rose_pine_moon`, `rose_pine_dawn`, `kanagawa`,
 `everforest_dark`, `everforest_light`, `ayu`, `ayu_dark`, `ayu_light`,
 `ayu_mirage`, `high_contrast_dark`, and `high_contrast_light`.
+Built-in theme names MUST have documented fidelity targets. `deepforest`,
+`high_contrast_dark`, and `high_contrast_light` are Mezzanine-native themes.
+`gruvbox_dark`, `gruvbox_light`, `solarized_dark`, and `solarized_light` are
+interpretive family adaptations. The remaining named family themes are
+upstream-family adaptations whose palette anchors MUST remain recognizable as
+the named theme family while still satisfying Mezzanine UI contrast rules.
 
 ### 6.5 History Buffering
 

@@ -3331,6 +3331,44 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             agent_action_display_preview(operation),
             agent_action_display_preview(setting_path)
         ),
+        AgentActionPayload::MemorySearch { query, limit } => {
+            let mut header = format!("memory search: {}", agent_action_display_preview(query));
+            if let Some(limit) = limit {
+                header.push_str(" limit=");
+                header.push_str(&limit.to_string());
+            }
+            header
+        }
+        AgentActionPayload::MemoryStore {
+            kind,
+            priority,
+            scope,
+            keywords,
+            content,
+            expires_in_days,
+        } => {
+            let mut header = format!(
+                "memory store: kind={} keywords={} content={}",
+                agent_action_display_preview(kind),
+                keywords.len(),
+                agent_action_display_preview(content)
+            );
+            if let Some(scope) = scope.as_deref().map(str::trim)
+                && !scope.is_empty()
+            {
+                header.push_str(" scope=");
+                header.push_str(&agent_action_display_preview(scope));
+            }
+            if let Some(priority) = priority {
+                header.push_str(" priority=");
+                header.push_str(&priority.to_string());
+            }
+            if let Some(expires_in_days) = expires_in_days {
+                header.push_str(" ttl_days=");
+                header.push_str(&expires_in_days.to_string());
+            }
+            header
+        }
         AgentActionPayload::McpCall {
             server,
             tool,

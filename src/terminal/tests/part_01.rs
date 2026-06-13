@@ -384,6 +384,69 @@ fn builtin_themes_keep_low_emphasis_text_pairs_readable() {
     }
 }
 
+/// Verifies built-in themes keep every text-bearing derived UI surface readable.
+///
+/// Accent-backed frame, status, command, and selection surfaces are derived from
+/// compact built-in palettes rather than hand-authored per-theme slots. This
+/// guards that derivation against pairing bright or saturated accents with a
+/// foreground that preserves theme identity but cannot be read reliably.
+#[test]
+fn builtin_themes_keep_text_bearing_pairs_readable() {
+    for name in BUILTIN_UI_THEME_NAMES {
+        let definition =
+            builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
+        let theme = resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+        let pairs = [
+            ("window_active", theme.colors.window_active),
+            ("window_inactive", theme.colors.window_inactive),
+            ("pane_frame_active", theme.colors.pane_frame_active),
+            ("frame_fill", theme.colors.frame_fill),
+            ("scroll_indicator", theme.colors.scroll_indicator),
+            ("pane_pwd", theme.colors.pane_pwd),
+            ("window_status_uptime", theme.colors.window_status_uptime),
+            ("window_status_datetime", theme.colors.window_status_datetime),
+            ("prompt", theme.colors.prompt),
+            ("agent_prompt", theme.colors.agent_prompt),
+            ("agent_transcript_user", theme.colors.agent_transcript_user),
+            (
+                "agent_transcript_assistant",
+                theme.colors.agent_transcript_assistant,
+            ),
+            ("agent_transcript_status", theme.colors.agent_transcript_status),
+            ("agent_transcript_error", theme.colors.agent_transcript_error),
+            (
+                "agent_transcript_command",
+                theme.colors.agent_transcript_command,
+            ),
+            ("agent_model", theme.colors.agent_model),
+            ("agent_reasoning", theme.colors.agent_reasoning),
+            ("agent_status_idle", theme.colors.agent_status_idle),
+            ("agent_status_running", theme.colors.agent_status_running),
+            ("agent_status_blocked", theme.colors.agent_status_blocked),
+            ("agent_status_failed", theme.colors.agent_status_failed),
+            ("display_overlay", theme.colors.display_overlay),
+            ("copy_selection", theme.colors.copy_selection),
+            ("syntax_plain", theme.colors.syntax_plain),
+            ("syntax_keyword", theme.colors.syntax_keyword),
+            ("syntax_string", theme.colors.syntax_string),
+            ("syntax_comment", theme.colors.syntax_comment),
+            ("syntax_type", theme.colors.syntax_type),
+            ("syntax_function", theme.colors.syntax_function),
+            ("syntax_number", theme.colors.syntax_number),
+            ("syntax_operator", theme.colors.syntax_operator),
+        ];
+
+        for (slot, pair) in pairs {
+            assert!(
+                test_contrast_ratio(pair.foreground, pair.background) >= 4.5,
+                "{name} {slot} should have readable contrast: {:?} on {:?}",
+                pair.foreground,
+                pair.background
+            );
+        }
+    }
+}
+
 /// Verifies the built-in registry contains the common theme families that the
 /// command selector, `list-themes`, and `set-theme` all expose by name. This
 /// guards against adding a palette implementation without making it discoverable
@@ -430,6 +493,211 @@ fn builtin_theme_registry_includes_common_variants_without_duplicates() {
         let definition =
             builtin_ui_theme_definition(name).unwrap_or_else(|| panic!("missing theme {name}"));
         resolve_ui_theme(name, definition).expect("built-in theme must resolve");
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThemeFidelityCategory {
+    UpstreamFamily,
+    InterpretiveFamily,
+    Native,
+}
+
+struct ThemeFidelityTarget {
+    name: &'static str,
+    category: ThemeFidelityCategory,
+    anchors: &'static [(&'static str, &'static str)],
+}
+
+fn builtin_theme_fidelity_targets() -> &'static [ThemeFidelityTarget] {
+    &[
+        ThemeFidelityTarget {
+            name: "deepforest",
+            category: ThemeFidelityCategory::Native,
+            anchors: &[],
+        },
+        ThemeFidelityTarget {
+            name: "gruvbox_dark",
+            category: ThemeFidelityCategory::InterpretiveFamily,
+            anchors: &[("primary", "#fabd2f"), ("surface", "#282828"), ("danger", "#fb4934")],
+        },
+        ThemeFidelityTarget {
+            name: "gruvbox_light",
+            category: ThemeFidelityCategory::InterpretiveFamily,
+            anchors: &[("primary", "#b57614"), ("surface", "#fbf1c7"), ("danger", "#cc241d")],
+        },
+        ThemeFidelityTarget {
+            name: "solarized_dark",
+            category: ThemeFidelityCategory::InterpretiveFamily,
+            anchors: &[("primary", "#268bd2"), ("surface", "#002b36"), ("danger", "#dc322f")],
+        },
+        ThemeFidelityTarget {
+            name: "solarized_light",
+            category: ThemeFidelityCategory::InterpretiveFamily,
+            anchors: &[("primary", "#268bd2"), ("surface", "#fdf6e3"), ("danger", "#dc322f")],
+        },
+        ThemeFidelityTarget {
+            name: "monokai",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#a6e22e"), ("surface", "#272822"), ("danger", "#f92672")],
+        },
+        ThemeFidelityTarget {
+            name: "dracula",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#bd93f9"), ("surface", "#282a36"), ("danger", "#ff5555")],
+        },
+        ThemeFidelityTarget {
+            name: "nord",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#88c0d0"), ("surface", "#2e3440"), ("danger", "#bf616a")],
+        },
+        ThemeFidelityTarget {
+            name: "tokyo_night",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#7aa2f7"), ("surface", "#1a1b26"), ("danger", "#f7768e")],
+        },
+        ThemeFidelityTarget {
+            name: "catppuccin_latte",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#1e66f5"), ("surface", "#eff1f5"), ("danger", "#d20f39")],
+        },
+        ThemeFidelityTarget {
+            name: "catppuccin_frappe",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#8caaee"), ("surface", "#303446"), ("danger", "#e78284")],
+        },
+        ThemeFidelityTarget {
+            name: "catppuccin_macchiato",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#8aadf4"), ("surface", "#24273a"), ("danger", "#ed8796")],
+        },
+        ThemeFidelityTarget {
+            name: "catppuccin_mocha",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#cba6f7"), ("surface", "#1e1e2e"), ("danger", "#f38ba8")],
+        },
+        ThemeFidelityTarget {
+            name: "one_half_dark",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#61afef"), ("surface", "#282c34"), ("danger", "#e06c75")],
+        },
+        ThemeFidelityTarget {
+            name: "one_half_light",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#0184bc"), ("surface", "#fafafa"), ("danger", "#e45649")],
+        },
+        ThemeFidelityTarget {
+            name: "onedark",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#61afef"), ("surface", "#282c34"), ("danger", "#e06c75")],
+        },
+        ThemeFidelityTarget {
+            name: "rose_pine",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#c4a7e7"), ("surface", "#191724"), ("danger", "#eb6f92")],
+        },
+        ThemeFidelityTarget {
+            name: "rose_pine_moon",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#c4a7e7"), ("surface", "#232136"), ("danger", "#eb6f92")],
+        },
+        ThemeFidelityTarget {
+            name: "rose_pine_dawn",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#907aa9"), ("surface", "#faf4ed"), ("danger", "#b4637a")],
+        },
+        ThemeFidelityTarget {
+            name: "kanagawa",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#7e9cd8"), ("surface", "#1f1f28"), ("danger", "#e82424")],
+        },
+        ThemeFidelityTarget {
+            name: "everforest_dark",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#a7c080"), ("surface", "#2d353b"), ("danger", "#e67e80")],
+        },
+        ThemeFidelityTarget {
+            name: "everforest_light",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#8da101"), ("surface", "#fff9e8"), ("danger", "#f85552")],
+        },
+        ThemeFidelityTarget {
+            name: "ayu",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#59c2ff"), ("surface", "#0a0e14"), ("danger", "#f07178")],
+        },
+        ThemeFidelityTarget {
+            name: "ayu_dark",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#59c2ff"), ("surface", "#0a0e14"), ("danger", "#f07178")],
+        },
+        ThemeFidelityTarget {
+            name: "ayu_light",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#55b4d4"), ("surface", "#fafafa"), ("danger", "#f07178")],
+        },
+        ThemeFidelityTarget {
+            name: "ayu_mirage",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[("primary", "#73d0ff"), ("surface", "#1f2430"), ("danger", "#f28779")],
+        },
+        ThemeFidelityTarget {
+            name: "high_contrast_dark",
+            category: ThemeFidelityCategory::Native,
+            anchors: &[],
+        },
+        ThemeFidelityTarget {
+            name: "high_contrast_light",
+            category: ThemeFidelityCategory::Native,
+            anchors: &[],
+        },
+    ]
+}
+
+/// Verifies each built-in theme has an explicit fidelity target.
+///
+/// Theme names can be exact upstream-family adaptations, interpretive family
+/// adaptations, or Mezzanine-native palettes. Keeping the target table complete
+/// makes future palette additions document whether they are intended to track an
+/// external product family or define an original Mezzanine accessibility style.
+#[test]
+fn builtin_theme_fidelity_targets_cover_registry() {
+    let targets = builtin_theme_fidelity_targets();
+    let target_names = targets.iter().map(|target| target.name).collect::<BTreeSet<_>>();
+    let registry_names = BUILTIN_UI_THEME_NAMES
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        target_names, registry_names,
+        "every built-in theme should have a documented fidelity target"
+    );
+}
+
+/// Verifies upstream-family and interpretive built-ins retain expected anchors.
+///
+/// The derivation layer may contrast-manage secondary foreground aliases, but
+/// the raw named anchors should stay pinned to the family colors documented for
+/// each built-in. This guards future readability work from silently replacing a
+/// familiar external palette with unrelated Mezzanine colors.
+#[test]
+fn builtin_theme_family_targets_keep_expected_palette_anchors() {
+    for target in builtin_theme_fidelity_targets() {
+        if target.category == ThemeFidelityCategory::Native {
+            continue;
+        }
+
+        let definition = builtin_ui_theme_definition(target.name)
+            .unwrap_or_else(|| panic!("missing theme {}", target.name));
+        for &(alias, expected) in target.anchors {
+            assert_eq!(
+                definition.aliases.get(alias).map(String::as_str),
+                Some(expected),
+                "{} should keep {alias} anchored to its documented family color",
+                target.name
+            );
+        }
     }
 }
 

@@ -4038,7 +4038,7 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
         view.line_style_spans[merged_row].iter().any(|span| {
             span.start == title_span.start
                 && span.length >= frame_text.len()
-                && span.rendition.foreground == Some(TerminalColor::Rgb(0xdc, 0xd7, 0xba))
+                && span.rendition.foreground == Some(TerminalColor::Rgb(0x00, 0x00, 0x00))
                 && span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
         }),
         "{:?}",

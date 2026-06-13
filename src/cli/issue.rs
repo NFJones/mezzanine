@@ -8,7 +8,7 @@ use super::{
     Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, load_runtime_config_layers,
 };
 use crate::issues::{
-    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, issue_database_path,
+    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, issue_database_location,
     project_key_for_working_directory,
 };
 
@@ -35,7 +35,10 @@ pub(super) fn run_issue<W: Write>(
     let configured_database_path = issues
         .and_then(|config| config.get("database_path"))
         .and_then(serde_json::Value::as_str);
-    let store = IssueStore::new(issue_database_path(paths.root(), configured_database_path));
+    let store = IssueStore::from_database_path(issue_database_location(
+        paths.root(),
+        configured_database_path,
+    ));
     let project = parsed.project.unwrap_or_else(|| {
         let cwd = std::env::current_dir().unwrap_or_else(|_| paths.root().to_path_buf());
         project_key_for_working_directory(cwd)

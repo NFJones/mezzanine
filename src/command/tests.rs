@@ -1013,7 +1013,7 @@ fn config_store_commands_mutate_primary_config_and_apply_source_file() {
     assert!(set_theme.contains("changed=true"), "{set_theme}");
     assert!(set_theme.contains("reload_required=true"), "{set_theme}");
     assert!(set_theme.contains("source=config-store"), "{set_theme}");
-    assert!(set_theme.contains("aliases=8"), "{set_theme}");
+    assert!(set_theme.contains("aliases=17"), "{set_theme}");
     let text = fs::read_to_string(&config_path).unwrap();
     assert!(text.contains("active = \"nord\""));
     assert!(text.contains("primary = \"#88c0d0\""));

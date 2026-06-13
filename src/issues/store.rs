@@ -7,8 +7,8 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
-    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueUpdate, MezError, Path, PathBuf,
-    Result, UpdateIssueResult, ensure_private_parent, generate_issue_id,
+    DeleteIssueResult, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord, IssueUpdate,
+    MezError, Path, PathBuf, Result, UpdateIssueResult, ensure_private_parent, generate_issue_id,
     set_private_issue_file_permissions,
 };
 
@@ -16,6 +16,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueStore {
     path: PathBuf,
+    manage_private_parent: bool,
 }
 
 impl IssueStore {
@@ -23,12 +24,24 @@ impl IssueStore {
     pub fn under_config_root(config_root: impl Into<PathBuf>) -> Self {
         Self {
             path: super::default_issue_database_path(config_root.into()),
+            manage_private_parent: true,
         }
     }
 
     /// Builds an issue store at an explicit SQLite database path.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            manage_private_parent: true,
+        }
+    }
+
+    /// Builds an issue store from a resolved database location.
+    pub fn from_database_path(database_path: IssueDatabasePath) -> Self {
+        Self {
+            manage_private_parent: database_path.manages_private_parent(),
+            path: database_path.into_path(),
+        }
     }
 
     /// Returns the SQLite database path used by this store.
@@ -191,7 +204,9 @@ impl IssueStore {
     }
 
     fn open(&self) -> Result<Connection> {
-        ensure_private_parent(&self.path)?;
+        if self.manage_private_parent {
+            ensure_private_parent(&self.path)?;
+        }
         let connection = Connection::open(&self.path)?;
         initialize_schema(&connection)?;
         set_private_issue_file_permissions(&self.path)?;
