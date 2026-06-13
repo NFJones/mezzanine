@@ -4094,18 +4094,18 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     );
     assert!(response.contains("| Context | 6 blocks"), "{response}");
     assert!(
-        response.contains("| Provider tokens | 2 models; see Provider Token Usage |"),
+        response.contains("| Pane agent tokens | 2 models; see Pane Agent Token Usage |"),
         "{response}"
     );
     assert!(
-        response.contains("### Provider Token Usage"),
+        response.contains("### Pane Agent Token Usage"),
         "{response}"
     );
     let session_heading = response
-        .find("### Provider Token Usage")
+        .find("### Pane Agent Token Usage")
         .expect("session token usage heading should be present");
     let instance_heading = response
-        .find("### Instance Provider Token Usage")
+        .find("### Mez Session Token Usage")
         .expect("instance token usage heading should be present");
     assert!(
         session_heading < instance_heading,

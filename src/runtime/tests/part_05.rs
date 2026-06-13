@@ -532,11 +532,11 @@ reasoning_profile = "high"
         &primary,
     );
     assert!(
-        status.contains("| Provider tokens | 2 models; see Provider Token Usage |"),
+        status.contains("| Pane agent tokens | 2 models; see Pane Agent Token Usage |"),
         "{status}"
     );
     assert!(
-        status.contains("### Instance Provider Token Usage"),
+        status.contains("### Mez Session Token Usage"),
         "{status}"
     );
     assert!(
@@ -4099,7 +4099,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
 
     assert!(
         status.contains(
-            "| Provider tokens | gpt-saved via openai: input=450 (+ 450 cached best-effort) cache_hit=50.00% output=80 reasoning=33 total=980 |"
+            "| Pane agent tokens | gpt-saved via openai: input=450 (+ 450 cached) cache_hit=50.00% output=80 reasoning=33 total=980 |"
         ),
         "{status}"
     );
