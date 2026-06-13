@@ -463,6 +463,12 @@ pub(super) fn attach_session_display(session: &Session) -> String {
 /// Returns the user-facing command guide rendered by the in-pane `help`
 /// command.
 pub(super) fn command_help_display() -> String {
+    command_help_display_with_key_bindings(&list_default_key_bindings())
+}
+
+/// Returns the user-facing command guide rendered by the in-pane `help`
+/// command with a caller-supplied key binding table.
+pub(crate) fn command_help_display_with_key_bindings(key_bindings: &str) -> String {
     let mut rows = terminal_help_command_rows();
     rows.sort_by(|left, right| {
         terminal_command_category(left.0)
@@ -493,7 +499,7 @@ pub(super) fn command_help_display() -> String {
     lines.push("## Key bindings".to_string());
     lines.push(String::new());
     lines.push("```text".to_string());
-    lines.extend(list_default_key_bindings().lines().map(str::to_string));
+    lines.extend(key_bindings.lines().map(str::to_string));
     lines.push("```".to_string());
     lines.join("\n")
 }

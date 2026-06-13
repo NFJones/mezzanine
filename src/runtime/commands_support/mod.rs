@@ -223,6 +223,10 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_metrics_display(service),
         })),
+        "help" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_command_help_display(service)?,
+        })),
         "list-keys" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_list_key_bindings_display(service)?,

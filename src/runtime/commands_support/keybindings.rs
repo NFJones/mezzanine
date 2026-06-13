@@ -6,6 +6,18 @@
 //! command names.
 
 use super::*;
+use crate::command::command_help_display_with_key_bindings;
+
+/// Runs the runtime help display operation for this subsystem.
+///
+/// The function reuses the baseline help prose while substituting the effective
+/// runtime key binding table so `help` matches the configured live bindings.
+pub(in crate::runtime) fn runtime_command_help_display(
+    service: &RuntimeSessionService,
+) -> Result<String> {
+    let key_bindings = runtime_list_key_bindings_display(service)?;
+    Ok(command_help_display_with_key_bindings(&key_bindings))
+}
 
 /// on duplicated control-flow logic.
 pub(in crate::runtime) fn runtime_list_key_bindings_display(

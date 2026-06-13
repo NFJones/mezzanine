@@ -110,8 +110,8 @@ pub use dispatch::{
     execute_mark_pane_ready_command,
 };
 pub(crate) use display::{
-    bind_key_args, binding_config_key, key_chord_notation, new_window_name,
-    new_window_shell_command, split_window_shell_command,
+    bind_key_args, binding_config_key, command_help_display_with_key_bindings, key_chord_notation,
+    new_window_name, new_window_shell_command, split_window_shell_command,
 };
 pub use parser::parse_command_sequence;
 pub(crate) use plans::{resize_spec_from_invocation, split_window_selects_new_pane};

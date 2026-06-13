@@ -1251,6 +1251,21 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(last_binding.contains("show-messages"), "{help}");
 }
 
+/// Verifies that help rendering can substitute a caller-provided key binding
+/// table so runtime `help` output stays aligned with the effective configured
+/// bindings instead of falling back to the static defaults.
+#[test]
+fn command_help_display_uses_supplied_key_bindings() {
+    let help = super::display::command_help_display_with_key_bindings(
+        "key   source   command\nF5    project  list-keys\nF6    runtime  split-window -h",
+    );
+
+    assert!(help.contains("\n## Key bindings\n"), "{help}");
+    assert!(help.contains("F5    project  list-keys"), "{help}");
+    assert!(help.contains("F6    runtime  split-window -h"), "{help}");
+    assert!(!help.contains("C-a ?"), "{help}");
+}
+
 /// Verifies that `synchronize-panes` accepts all documented modes and stores
 /// active-window state without affecting the command parser's normal sequence
 /// execution rules. The command is intentionally window-scoped, so status must
