@@ -1608,6 +1608,7 @@ pub(super) fn runtime_agent_action_rationale_repeats_visible_summary(action: &Ag
         | AgentActionPayload::MemorySearch { .. }
         | AgentActionPayload::MemoryStore { .. }
         | AgentActionPayload::IssueAdd { .. }
+        | AgentActionPayload::IssueUpdate { .. }
         | AgentActionPayload::IssueQuery { .. }
         | AgentActionPayload::IssueDelete { .. }
         | AgentActionPayload::RequestSkills
@@ -1768,6 +1769,9 @@ pub(super) fn runtime_agent_user_action_phrase(
         }
         AgentActionPayload::IssueAdd { title, .. } => {
             Some(("issue add", runtime_agent_terminal_preview(title)))
+        }
+        AgentActionPayload::IssueUpdate { id, .. } => {
+            Some(("issue update", runtime_agent_terminal_preview(id)))
         }
         AgentActionPayload::IssueQuery { text, .. } => Some((
             "issue query",

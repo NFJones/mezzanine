@@ -7,8 +7,9 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
-    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, MezError, Path, PathBuf, Result,
-    ensure_private_parent, generate_issue_id, set_private_issue_file_permissions,
+    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueUpdate, MezError, Path, PathBuf,
+    Result, UpdateIssueResult, ensure_private_parent, generate_issue_id,
+    set_private_issue_file_permissions,
 };
 
 /// SQLite-backed local issue store.
@@ -42,6 +43,7 @@ impl IssueStore {
         kind: IssueKind,
         title: String,
         body: Option<String>,
+        notes: Option<String>,
         now_unix_seconds: u64,
     ) -> Result<IssueRecord> {
         let record = IssueRecord::new(
@@ -50,6 +52,7 @@ impl IssueStore {
             kind,
             title,
             body,
+            notes,
             now_unix_seconds,
         )?;
         let connection = self.open()?;
@@ -61,7 +64,7 @@ impl IssueStore {
     pub fn query_issues(&self, query: &IssueQuery) -> Result<Vec<IssueRecord>> {
         let connection = self.open()?;
         let mut sql = String::from(
-            "SELECT id, project, kind, title, body, created_at, updated_at FROM issues WHERE project = ?1",
+            "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1",
         );
         let kind_name = query.kind.map(IssueKind::as_str);
         if kind_name.is_some() {
@@ -128,6 +131,65 @@ impl IssueStore {
         })
     }
 
+    /// Returns one issue by project and id when it exists.
+    pub fn get_issue(&self, project: String, id: String) -> Result<Option<IssueRecord>> {
+        super::validate_project_key(&project)?;
+        if id.trim().is_empty() {
+            return Err(MezError::invalid_args("issue id must not be empty"));
+        }
+        let connection = self.open()?;
+        select_issue(&connection, &project, &id)
+    }
+
+    /// Updates one issue by project and id and returns the updated record.
+    pub fn update_issue(
+        &self,
+        project: String,
+        id: String,
+        update: IssueUpdate,
+        now_unix_seconds: u64,
+    ) -> Result<UpdateIssueResult> {
+        super::validate_project_key(&project)?;
+        if id.trim().is_empty() {
+            return Err(MezError::invalid_args("issue id must not be empty"));
+        }
+        update.validate()?;
+        let connection = self.open()?;
+        let Some(mut record) = select_issue(&connection, &project, &id)? else {
+            return Ok(UpdateIssueResult {
+                project,
+                id,
+                updated: false,
+                record: None,
+            });
+        };
+        if let Some(kind) = update.kind {
+            record.kind = kind;
+        }
+        if let Some(title) = update.title {
+            record.title = title;
+        }
+        if update.clear_body {
+            record.body = None;
+        } else if let Some(body) = update.body {
+            record.body = Some(body);
+        }
+        if update.clear_notes {
+            record.notes = None;
+        } else if let Some(notes) = update.notes {
+            record.notes = Some(notes);
+        }
+        record.updated_at_unix_seconds = now_unix_seconds;
+        record.validate()?;
+        update_issue_row(&connection, &record)?;
+        Ok(UpdateIssueResult {
+            project,
+            id,
+            updated: true,
+            record: Some(record),
+        })
+    }
+
     fn open(&self) -> Result<Connection> {
         ensure_private_parent(&self.path)?;
         let connection = Connection::open(&self.path)?;
@@ -147,6 +209,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
              title TEXT NOT NULL,
              body TEXT,
+             notes TEXT,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL
          );
@@ -155,20 +218,34 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS issues_project_updated_idx
              ON issues(project, updated_at DESC, id ASC);",
     )?;
+    ensure_notes_column(connection)?;
+    Ok(())
+}
+
+fn ensure_notes_column(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA table_info(issues)")?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "notes" {
+            return Ok(());
+        }
+    }
+    connection.execute("ALTER TABLE issues ADD COLUMN notes TEXT", [])?;
     Ok(())
 }
 
 fn insert_issue(connection: &Connection, record: &IssueRecord) -> Result<()> {
     record.validate()?;
     connection.execute(
-        "INSERT INTO issues (id, project, kind, title, body, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO issues (id, project, kind, title, body, notes, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             record.id,
             record.project,
             record.kind.as_str(),
             record.title,
             record.body,
+            record.notes,
             sqlite_i64_from_u64(record.created_at_unix_seconds)?,
             sqlite_i64_from_u64(record.updated_at_unix_seconds)?,
         ],
@@ -184,9 +261,38 @@ fn row_to_issue_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueRecord>
         kind: IssueKind::parse(&kind).map_err(rusqlite_from_mez_error)?,
         title: row.get(3)?,
         body: row.get(4)?,
-        created_at_unix_seconds: row_u64(row, 5)?,
-        updated_at_unix_seconds: row_u64(row, 6)?,
+        notes: row.get(5)?,
+        created_at_unix_seconds: row_u64(row, 6)?,
+        updated_at_unix_seconds: row_u64(row, 7)?,
     })
+}
+
+fn update_issue_row(connection: &Connection, record: &IssueRecord) -> Result<()> {
+    connection.execute(
+        "UPDATE issues SET kind = ?3, title = ?4, body = ?5, notes = ?6, updated_at = ?7
+         WHERE project = ?1 AND id = ?2",
+        params![
+            record.project,
+            record.id,
+            record.kind.as_str(),
+            record.title,
+            record.body,
+            record.notes,
+            sqlite_i64_from_u64(record.updated_at_unix_seconds)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn select_issue(connection: &Connection, project: &str, id: &str) -> Result<Option<IssueRecord>> {
+    connection
+        .query_row(
+            "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1 AND id = ?2",
+            params![project, id],
+            row_to_issue_record,
+        )
+        .optional()
+        .map_err(MezError::from)
 }
 
 fn escape_like(value: &str) -> String {
@@ -220,7 +326,7 @@ fn rusqlite_from_mez_error(error: MezError) -> rusqlite::Error {
 fn inspect_issue(connection: &Connection, id: &str) -> Result<Option<IssueRecord>> {
     connection
         .query_row(
-            "SELECT id, project, kind, title, body, created_at, updated_at FROM issues WHERE id = ?1",
+            "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE id = ?1",
             params![id],
             row_to_issue_record,
         )

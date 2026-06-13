@@ -223,6 +223,25 @@ pub enum AgentActionPayload {
         title: String,
         /// Optional issue detail text.
         body: Option<String>,
+        /// Optional mutable progress or handoff notes.
+        notes: Option<String>,
+    },
+    /// Updates one local project issue through the runtime-owned issue store.
+    IssueUpdate {
+        /// Issue id to update.
+        id: String,
+        /// Optional replacement issue kind: defect or task.
+        kind: Option<String>,
+        /// Optional replacement single-line issue title.
+        title: Option<String>,
+        /// Optional replacement issue detail text.
+        body: Option<String>,
+        /// Clear existing issue detail text.
+        clear_body: bool,
+        /// Optional replacement mutable progress or handoff notes.
+        notes: Option<String>,
+        /// Clear existing mutable progress or handoff notes.
+        clear_notes: bool,
     },
     /// Queries local project issues through the runtime-owned issue store.
     IssueQuery {
@@ -684,6 +703,7 @@ impl AgentAction {
             AgentActionPayload::MemorySearch { .. } => "memory_search",
             AgentActionPayload::MemoryStore { .. } => "memory_store",
             AgentActionPayload::IssueAdd { .. } => "issue_add",
+            AgentActionPayload::IssueUpdate { .. } => "issue_update",
             AgentActionPayload::IssueQuery { .. } => "issue_query",
             AgentActionPayload::IssueDelete { .. } => "issue_delete",
             AgentActionPayload::SendMessage { .. } => "send_message",
@@ -788,11 +808,40 @@ impl AgentAction {
                 }
                 Ok(())
             }
-            AgentActionPayload::IssueAdd { kind, title, body } => {
+            AgentActionPayload::IssueAdd {
+                kind,
+                title,
+                body,
+                notes,
+            } => {
                 validate_non_empty("issue kind", kind)?;
                 crate::issues::IssueKind::parse(kind)?;
                 crate::issues::validate_issue_title(title)?;
-                crate::issues::validate_issue_body(body.as_deref())
+                crate::issues::validate_issue_body(body.as_deref())?;
+                crate::issues::validate_issue_notes(notes.as_deref())
+            }
+            AgentActionPayload::IssueUpdate {
+                id,
+                kind,
+                title,
+                body,
+                clear_body,
+                notes,
+                clear_notes,
+            } => {
+                validate_non_empty("issue id", id)?;
+                crate::issues::IssueUpdate {
+                    kind: kind
+                        .as_deref()
+                        .map(crate::issues::IssueKind::parse)
+                        .transpose()?,
+                    title: title.clone(),
+                    body: body.clone(),
+                    clear_body: *clear_body,
+                    notes: notes.clone(),
+                    clear_notes: *clear_notes,
+                }
+                .validate()
             }
             AgentActionPayload::IssueQuery { kind, text, limit } => {
                 if let Some(kind) = kind {
@@ -1164,6 +1213,16 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
             kind: required_string(object, "kind")?.to_string(),
             title: required_string(object, "title")?.to_string(),
             body: optional_string(object, "body")?.map(str::to_string),
+            notes: optional_string(object, "notes")?.map(str::to_string),
+        },
+        "issue_update" => AgentActionPayload::IssueUpdate {
+            id: required_string(object, "id")?.to_string(),
+            kind: optional_string(object, "kind")?.map(str::to_string),
+            title: optional_string(object, "title")?.map(str::to_string),
+            body: optional_string(object, "body")?.map(str::to_string),
+            clear_body: optional_bool(object, "clear_body")?.unwrap_or(false),
+            notes: optional_string(object, "notes")?.map(str::to_string),
+            clear_notes: optional_bool(object, "clear_notes")?.unwrap_or(false),
         },
         "issue_query" => AgentActionPayload::IssueQuery {
             kind: optional_string(object, "kind")?.map(str::to_string),

@@ -760,6 +760,45 @@ fn maap_batch_accepts_skill_actions() {
     }
 }
 
+/// Verifies MAAP issue update actions preserve mutable progress notes at the
+/// parse boundary and validate through the shared issue-update rules.
+#[test]
+fn maap_batch_accepts_issue_update_actions() {
+    let raw_text = serde_json::json!({
+        "rationale": "test issue update action",
+        "actions": [
+            {
+                "type": "issue_update",
+                "id": "issue-1",
+                "kind": null,
+                "title": null,
+                "body": null,
+                "clear_body": false,
+                "notes": "documented the next step",
+                "clear_notes": false
+            }
+        ]
+    })
+    .to_string();
+
+    let batch = parse_maap_action_batch_json_for_turn(&raw_text, "turn-1", "agent-1").unwrap();
+    batch.validate(&turn(), &[], &[]).unwrap();
+
+    match &batch.actions[0].payload {
+        AgentActionPayload::IssueUpdate {
+            id,
+            notes,
+            clear_notes,
+            ..
+        } => {
+            assert_eq!(id, "issue-1");
+            assert_eq!(notes.as_deref(), Some("documented the next step"));
+            assert!(!clear_notes);
+        }
+        payload => panic!("expected issue_update payload, got {payload:?}"),
+    }
+}
+
 /// Verifies MAAP validation rejects skill names that cannot map to local skill
 /// directories. This protects the runtime loader from path-like names while
 /// still keeping skills available as ordinary model-selected context actions.

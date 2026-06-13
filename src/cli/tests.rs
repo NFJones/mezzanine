@@ -4262,6 +4262,8 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
             "Fix renderer panic".to_string(),
             "--body".to_string(),
             "panic while drawing borders".to_string(),
+            "--notes".to_string(),
+            "initial investigation started".to_string(),
         ],
         env.clone(),
         false,
@@ -4273,6 +4275,7 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
     assert!(add_output.contains(r#""project":"/work/repo""#));
     assert!(add_output.contains(r#""kind":"defect""#));
     assert!(add_output.contains(r#""title":"Fix renderer panic""#));
+    assert!(add_output.contains(r#""notes":"initial investigation started""#));
     let id = add_output
         .split(r#""id":""#)
         .nth(1)
@@ -4300,6 +4303,50 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
     )
     .unwrap();
     assert!(String::from_utf8(query_stdout).unwrap().contains(&id));
+
+    let mut update_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "update".to_string(),
+            id.clone(),
+            "--notes".to_string(),
+            "reproduced in narrow pane".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut update_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let update_output = String::from_utf8(update_stdout).unwrap();
+    assert!(update_output.contains(r#""updated":true"#));
+    assert!(update_output.contains(r#""notes":"reproduced in narrow pane""#));
+
+    let mut show_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "show".to_string(),
+            id.clone(),
+        ],
+        env.clone(),
+        false,
+        &mut show_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(show_stdout)
+            .unwrap()
+            .contains(r#""notes":"reproduced in narrow pane""#)
+    );
 
     let mut delete_stdout = Vec::new();
     run_with(

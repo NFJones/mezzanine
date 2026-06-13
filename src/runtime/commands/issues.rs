@@ -32,8 +32,14 @@ pub(super) fn execute_agent_shell_issue_command(
     let store = crate::issues::IssueStore::new(runtime_issue_database_path(service, &config_root));
     let args = parse_issue_args(slash.args.trim())?;
     match args {
-        RuntimeIssueArgs::Add { kind, title, body } => {
-            let record = store.add_issue(project, kind, title, body, current_unix_seconds())?;
+        RuntimeIssueArgs::Add {
+            kind,
+            title,
+            body,
+            notes,
+        } => {
+            let record =
+                store.add_issue(project, kind, title, body, notes, current_unix_seconds())?;
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "issue".to_string(),
                 body: format!(
@@ -42,6 +48,26 @@ pub(super) fn execute_agent_shell_issue_command(
                     json_escape(&record.project),
                     record.kind.as_str(),
                     json_escape(&record.title)
+                ),
+                visibility,
+            })
+        }
+        RuntimeIssueArgs::Show { id } => {
+            let record = store.get_issue(project, id)?;
+            Ok(AgentShellCommandOutcome::Display {
+                command: "issue".to_string(),
+                body: runtime_issue_record_detail_display(record.as_ref()),
+            })
+        }
+        RuntimeIssueArgs::Update { id, update } => {
+            let result = store.update_issue(project, id, update, current_unix_seconds())?;
+            Ok(AgentShellCommandOutcome::Mutated {
+                command: "issue".to_string(),
+                body: format!(
+                    "issue update id={} project={} updated={}",
+                    result.id,
+                    json_escape(&result.project),
+                    result.updated
                 ),
                 visibility,
             })
@@ -70,11 +96,20 @@ pub(super) fn execute_agent_shell_issue_command(
     }
 }
 
+#[derive(Debug)]
 enum RuntimeIssueArgs {
     Add {
         kind: crate::issues::IssueKind,
         title: String,
         body: Option<String>,
+        notes: Option<String>,
+    },
+    Show {
+        id: String,
+    },
+    Update {
+        id: String,
+        update: crate::issues::IssueUpdate,
     },
     Query {
         kind: Option<crate::issues::IssueKind>,
@@ -94,15 +129,17 @@ fn parse_issue_args(args: &str) -> Result<RuntimeIssueArgs> {
     };
     let Some(command) = tokens.first().map(String::as_str) else {
         return Err(MezError::invalid_args(
-            "/issue expects add, query, or delete",
+            "/issue expects add, show, update, query, or delete",
         ));
     };
     match command {
         "add" => parse_issue_add_args(&tokens[1..]),
+        "show" => parse_issue_show_args(&tokens[1..]),
+        "update" => parse_issue_update_args(&tokens[1..]),
         "query" | "list" => parse_issue_query_args(&tokens[1..]),
         "delete" | "remove" => parse_issue_delete_args(&tokens[1..]),
         _ => Err(MezError::invalid_args(
-            "/issue expects add, query, or delete",
+            "/issue expects add, show, update, query, or delete",
         )),
     }
 }
@@ -111,6 +148,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     let mut kind = crate::issues::IssueKind::Defect;
     let mut title = None;
     let mut body = None;
+    let mut notes = None;
     let mut index = 0usize;
     while index < tokens.len() {
         match tokens[index].as_str() {
@@ -127,9 +165,13 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                 index = index.saturating_add(1);
                 body = Some(required_issue_value(tokens, index, "body")?.to_string());
             }
+            "--notes" => {
+                index = index.saturating_add(1);
+                notes = Some(required_issue_value(tokens, index, "notes")?.to_string());
+            }
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue add accepts --kind, --title, and --body",
+                    "issue add accepts --kind, --title, --body, and --notes",
                 ));
             }
         }
@@ -139,6 +181,59 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
         kind,
         title: title.ok_or_else(|| MezError::invalid_args("issue add requires --title"))?,
         body,
+        notes,
+    })
+}
+
+fn parse_issue_show_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
+    if tokens.len() != 1 {
+        return Err(MezError::invalid_args("issue show expects one issue id"));
+    }
+    Ok(RuntimeIssueArgs::Show {
+        id: tokens[0].clone(),
+    })
+}
+
+fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
+    let Some(id) = tokens.first() else {
+        return Err(MezError::invalid_args("issue update expects one issue id"));
+    };
+    let mut update = crate::issues::IssueUpdate::default();
+    let mut index = 1usize;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--kind" => {
+                index = index.saturating_add(1);
+                update.kind = Some(crate::issues::IssueKind::parse(required_issue_value(
+                    tokens, index, "kind",
+                )?)?);
+            }
+            "--title" => {
+                index = index.saturating_add(1);
+                update.title = Some(required_issue_value(tokens, index, "title")?.to_string());
+            }
+            "--body" => {
+                index = index.saturating_add(1);
+                update.body = Some(required_issue_value(tokens, index, "body")?.to_string());
+            }
+            "--clear-body" => update.clear_body = true,
+            "--notes" => {
+                index = index.saturating_add(1);
+                update.notes = Some(required_issue_value(tokens, index, "notes")?.to_string());
+            }
+            "--clear-notes" => update.clear_notes = true,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "issue update accepts --kind, --title, --body, --clear-body, --notes, and --clear-notes",
+                ));
+            }
+        }
+        index = index.saturating_add(1);
+    }
+    update.validate()?;
+    Ok(RuntimeIssueArgs::Update {
+        id: id.clone(),
+        update,
     })
 }
 
@@ -190,10 +285,41 @@ fn parse_issue_delete_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
 }
 
 fn required_issue_value<'a>(tokens: &'a [String], index: usize, name: &str) -> Result<&'a str> {
-    tokens
+    let value = tokens
         .get(index)
         .map(String::as_str)
-        .ok_or_else(|| MezError::invalid_args(format!("issue option --{name} requires a value")))
+        .ok_or_else(|| MezError::invalid_args(format!("issue option --{name} requires a value")))?;
+    if value.starts_with("--") {
+        return Err(MezError::invalid_args(format!(
+            "issue option --{name} requires a value"
+        )));
+    }
+    Ok(value)
+}
+
+fn runtime_issue_record_detail_display(record: Option<&crate::issues::IssueRecord>) -> String {
+    let Some(record) = record else {
+        return "issue found=false".to_string();
+    };
+    format!(
+        "issue found=true\nid={}\nproject={}\nkind={}\ntitle={}\nbody={}\nnotes={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
+        record.id,
+        json_escape(&record.project),
+        record.kind.as_str(),
+        json_escape(&record.title),
+        record
+            .body
+            .as_deref()
+            .map(json_escape)
+            .unwrap_or_else(|| "null".to_string()),
+        record
+            .notes
+            .as_deref()
+            .map(json_escape)
+            .unwrap_or_else(|| "null".to_string()),
+        record.created_at_unix_seconds,
+        record.updated_at_unix_seconds
+    )
 }
 
 fn runtime_issue_records_display(records: &[crate::issues::IssueRecord]) -> String {
@@ -234,4 +360,55 @@ fn runtime_issue_database_path(service: &RuntimeSessionService, config_root: &Pa
                 .map(str::to_string)
         });
     crate::issues::issue_database_path(config_root, configured.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies `/issue` parsing accepts notes on add, update, and show commands
+    /// so runtime users can store progress separately from issue descriptions.
+    #[test]
+    fn issue_parser_accepts_notes_update_and_show() {
+        match parse_issue_args("add --title Work --notes progress").unwrap() {
+            RuntimeIssueArgs::Add { title, notes, .. } => {
+                assert_eq!(title, "Work");
+                assert_eq!(notes.as_deref(), Some("progress"));
+            }
+            other => panic!("expected add args, got {other:?}"),
+        }
+        match parse_issue_args("update issue-1 --notes progressed").unwrap() {
+            RuntimeIssueArgs::Update { id, update } => {
+                assert_eq!(id, "issue-1");
+                assert_eq!(update.notes.as_deref(), Some("progressed"));
+                assert!(!update.clear_notes);
+            }
+            other => panic!("expected update args, got {other:?}"),
+        }
+        match parse_issue_args("show issue-1").unwrap() {
+            RuntimeIssueArgs::Show { id } => assert_eq!(id, "issue-1"),
+            other => panic!("expected show args, got {other:?}"),
+        }
+    }
+
+    /// Verifies malformed `/issue` values fail before execution, including the
+    /// option-as-value edge case and conflicting note update directives.
+    #[test]
+    fn issue_parser_rejects_missing_values_and_conflicting_notes() {
+        let missing = parse_issue_args("add --title --body details").unwrap_err();
+        assert!(
+            missing
+                .message()
+                .contains("issue option --title requires a value"),
+            "{}",
+            missing.message()
+        );
+        let conflict =
+            parse_issue_args("update issue-1 --notes progress --clear-notes").unwrap_err();
+        assert!(
+            conflict.message().contains("set and clear notes"),
+            "{}",
+            conflict.message()
+        );
+    }
 }

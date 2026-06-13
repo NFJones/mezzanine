@@ -370,6 +370,11 @@ Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
 | `issues.storage` | string | `"sqlite"` | Local issue storage backend. Current builds support SQLite. |
 | `issues.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/issues.sqlite`. |
 
+Issue records include a required single-line title, optional body text for the
+stable issue description, and optional mutable notes for working progress,
+handoff context, and next steps. The `mez issue`, `/issue`, and gated MAAP
+issue surfaces can update notes without rewriting the issue description.
+
 ### `agents`
 
 | Field | Type | Default declaration | Description |

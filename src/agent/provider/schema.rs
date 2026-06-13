@@ -49,7 +49,7 @@ impl OpenAiMaapToolSurface {
     /// MAAP function tool is available.
     const FUNCTION_CALL_DISCIPLINE: &str = "Return a function call, not prose.";
     /// Shared capability map for provider-local MAAP tool descriptions.
-    const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; issues=issue_add, issue_query, or issue_delete; respond_only=final text only.";
+    const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; issues=issue_add, issue_update, issue_query, or issue_delete; respond_only=final text only.";
     /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
     const ANTI_EXAMPLES: &str = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
 
@@ -142,7 +142,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Issues => format!(
-                "Submit one MAAP batch for local project issue tracking. {} Use only issue_add, issue_query, or issue_delete for issue records. If another action family is needed, emit request_capability instead. {} {}",
+                "Submit one MAAP batch for local project issue tracking. {} Use only issue_add, issue_update, issue_query, or issue_delete for issue records. If another action family is needed, emit request_capability instead. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -327,6 +327,7 @@ fn maap_action_schema(
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
             AllowedAction::IssueAdd => action_schemas.push(maap_issue_add_action_schema()),
+            AllowedAction::IssueUpdate => action_schemas.push(maap_issue_update_action_schema()),
             AllowedAction::IssueQuery => action_schemas.push(maap_issue_query_action_schema()),
             AllowedAction::IssueDelete => action_schemas.push(maap_issue_delete_action_schema()),
             AllowedAction::McpCall => action_schemas.extend(
@@ -604,8 +605,77 @@ fn maap_issue_add_action_schema() -> serde_json::Value {
                     "description": "Optional issue details. Use null when no body is needed."
                 }),
             ),
+            (
+                "notes",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional mutable progress or handoff notes. Use null when no notes are needed."
+                }),
+            ),
         ],
-        &["kind", "title", "body"],
+        &["kind", "title", "body", "notes"],
+    )
+}
+
+/// Runs the maap issue update action schema operation for this subsystem.
+fn maap_issue_update_action_schema() -> serde_json::Value {
+    maap_action_object_schema(
+        "issue_update",
+        [
+            described_string_property("id", "Issue id to update in the current project."),
+            (
+                "kind",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["defect", "task", null],
+                    "description": "Optional replacement issue kind. Use null to leave unchanged."
+                }),
+            ),
+            (
+                "title",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional replacement single-line title. Use null to leave unchanged."
+                }),
+            ),
+            (
+                "body",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional replacement issue details. Use null to leave unchanged."
+                }),
+            ),
+            (
+                "clear_body",
+                serde_json::json!({
+                    "type": "boolean",
+                    "description": "Whether to clear existing issue details. Cannot be true when body is set."
+                }),
+            ),
+            (
+                "notes",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "description": "Optional replacement progress or handoff notes. Use null to leave unchanged."
+                }),
+            ),
+            (
+                "clear_notes",
+                serde_json::json!({
+                    "type": "boolean",
+                    "description": "Whether to clear existing progress or handoff notes. Cannot be true when notes is set."
+                }),
+            ),
+        ],
+        &[
+            "id",
+            "kind",
+            "title",
+            "body",
+            "clear_body",
+            "notes",
+            "clear_notes",
+        ],
     )
 }
 

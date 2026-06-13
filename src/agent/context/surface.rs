@@ -151,6 +151,8 @@ pub enum AllowedAction {
     MemoryStore,
     /// Add one local project issue.
     IssueAdd,
+    /// Update one local project issue.
+    IssueUpdate,
     /// Query local project issues.
     IssueQuery,
     /// Delete one local project issue.
@@ -178,6 +180,7 @@ impl AllowedAction {
             AllowedAction::MemorySearch => "memory_search",
             AllowedAction::MemoryStore => "memory_store",
             AllowedAction::IssueAdd => "issue_add",
+            AllowedAction::IssueUpdate => "issue_update",
             AllowedAction::IssueQuery => "issue_query",
             AllowedAction::IssueDelete => "issue_delete",
             AllowedAction::Abort => "abort",
@@ -202,6 +205,7 @@ impl AllowedAction {
             "memory_search" => Some(AllowedAction::MemorySearch),
             "memory_store" => Some(AllowedAction::MemoryStore),
             "issue_add" => Some(AllowedAction::IssueAdd),
+            "issue_update" => Some(AllowedAction::IssueUpdate),
             "issue_query" => Some(AllowedAction::IssueQuery),
             "issue_delete" => Some(AllowedAction::IssueDelete),
             "abort" => Some(AllowedAction::Abort),
@@ -262,6 +266,7 @@ impl AllowedActionSet {
             }
             AgentCapability::Issues => output.extend([
                 AllowedAction::IssueAdd,
+                AllowedAction::IssueUpdate,
                 AllowedAction::IssueQuery,
                 AllowedAction::IssueDelete,
             ]),

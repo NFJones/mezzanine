@@ -110,6 +110,7 @@ impl RuntimeSessionService {
                 | AgentActionPayload::MemorySearch { .. }
                 | AgentActionPayload::MemoryStore { .. }
                 | AgentActionPayload::IssueAdd { .. }
+                | AgentActionPayload::IssueUpdate { .. }
                 | AgentActionPayload::IssueQuery { .. }
                 | AgentActionPayload::IssueDelete { .. } => {
                     pending_runtime_visible_action = true;

@@ -14,7 +14,9 @@ mod store;
 mod types;
 
 pub use store::IssueStore;
-pub use types::{DeleteIssueResult, IssueKind, IssueQuery, IssueRecord};
+pub use types::{
+    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueUpdate, UpdateIssueResult,
+};
 
 /// Default maximum issue records returned by one query.
 pub const DEFAULT_ISSUE_QUERY_LIMIT: usize = 50;
@@ -72,6 +74,18 @@ pub fn validate_issue_body(body: Option<&str>) -> Result<()> {
     {
         return Err(MezError::invalid_args(
             "issue body must not contain NUL bytes",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates optional mutable issue notes text.
+pub fn validate_issue_notes(notes: Option<&str>) -> Result<()> {
+    if let Some(notes) = notes
+        && notes.bytes().any(|byte| byte == 0)
+    {
+        return Err(MezError::invalid_args(
+            "issue notes must not contain NUL bytes",
         ));
     }
     Ok(())

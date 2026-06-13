@@ -252,6 +252,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                 ))
             }
             AgentActionPayload::IssueAdd { .. }
+            | AgentActionPayload::IssueUpdate { .. }
             | AgentActionPayload::IssueQuery { .. }
             | AgentActionPayload::IssueDelete { .. } => Ok(ActionResult::running(
                 turn,

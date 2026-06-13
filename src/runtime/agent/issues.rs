@@ -1,7 +1,8 @@
 //! Runtime agent local issue action helpers.
 //!
-//! This module owns provider-produced `issue_add`, `issue_query`, and
-//! `issue_delete` execution after the issues capability exposes those actions.
+//! This module owns provider-produced `issue_add`, `issue_update`,
+//! `issue_query`, and `issue_delete` execution after the issues capability
+//! exposes those actions.
 //! It keeps project resolution and SQLite persistence behind the runtime
 //! service so provider turns receive compact structured action results.
 
@@ -27,7 +28,7 @@ impl RuntimeSessionService {
             if execution.action_results[index].status != ActionStatus::Running
                 || !matches!(
                     execution.action_results[index].action_type,
-                    "issue_add" | "issue_query" | "issue_delete"
+                    "issue_add" | "issue_update" | "issue_query" | "issue_delete"
                 )
             {
                 continue;
@@ -65,7 +66,7 @@ impl RuntimeSessionService {
             for result in execution.action_results.iter().filter(|result| {
                 matches!(
                     result.action_type,
-                    "issue_add" | "issue_query" | "issue_delete"
+                    "issue_add" | "issue_update" | "issue_query" | "issue_delete"
                 )
             }) {
                 self.agent_turn_contexts
@@ -112,16 +113,58 @@ impl RuntimeSessionService {
         let store = crate::issues::IssueStore::new(runtime_issue_database_path(self, &config_root));
         let project = issue_action_project(self, turn, &config_root);
         match &action.payload {
-            AgentActionPayload::IssueAdd { kind, title, body } => {
+            AgentActionPayload::IssueAdd {
+                kind,
+                title,
+                body,
+                notes,
+            } => {
                 let result = store.add_issue(
                     project,
                     crate::issues::IssueKind::parse(kind)?,
                     title.clone(),
                     body.clone(),
+                    notes.clone(),
                     current_unix_seconds(),
                 );
                 match result {
                     Ok(record) => Ok(issue_record_action_result(turn, action, "added", &record)),
+                    Err(error) => ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Failed,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    ),
+                }
+            }
+            AgentActionPayload::IssueUpdate {
+                id,
+                kind,
+                title,
+                body,
+                clear_body,
+                notes,
+                clear_notes,
+            } => {
+                let result = store.update_issue(
+                    project,
+                    id.clone(),
+                    crate::issues::IssueUpdate {
+                        kind: kind
+                            .as_deref()
+                            .map(crate::issues::IssueKind::parse)
+                            .transpose()?,
+                        title: title.clone(),
+                        body: body.clone(),
+                        clear_body: *clear_body,
+                        notes: notes.clone(),
+                        clear_notes: *clear_notes,
+                    },
+                    current_unix_seconds(),
+                );
+                match result {
+                    Ok(result) => Ok(issue_update_action_result(turn, action, &result)),
                     Err(error) => ActionResult::failed(
                         turn,
                         action,
@@ -234,6 +277,30 @@ fn issue_query_action_result(
     )
 }
 
+fn issue_update_action_result(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    result: &crate::issues::UpdateIssueResult,
+) -> ActionResult {
+    ActionResult::succeeded(
+        turn,
+        action,
+        vec![format!(
+            "issue_update {} updated={}",
+            result.id, result.updated
+        )],
+        Some(
+            serde_json::json!({
+                "id": result.id,
+                "project": result.project,
+                "updated": result.updated,
+                "record": result.record.as_ref().map(issue_record_json),
+            })
+            .to_string(),
+        ),
+    )
+}
+
 fn issue_delete_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
@@ -264,6 +331,7 @@ fn issue_record_json(record: &crate::issues::IssueRecord) -> serde_json::Value {
         "kind": record.kind.as_str(),
         "title": record.title,
         "body": record.body,
+        "notes": record.notes,
         "created_at_unix_seconds": record.created_at_unix_seconds,
         "updated_at_unix_seconds": record.updated_at_unix_seconds,
     })

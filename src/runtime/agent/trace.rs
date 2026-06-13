@@ -654,7 +654,12 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 serde_json::json!(expires_in_days),
             );
         }
-        AgentActionPayload::IssueAdd { kind, title, body } => {
+        AgentActionPayload::IssueAdd {
+            kind,
+            title,
+            body,
+            notes,
+        } => {
             data.insert("kind".to_string(), serde_json::json!(kind));
             data.insert(
                 "title".to_string(),
@@ -666,6 +671,47 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                     .map(runtime_bounded_trace_string_value)
                     .unwrap_or(serde_json::Value::Null),
             );
+            data.insert(
+                "notes".to_string(),
+                notes
+                    .as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+        AgentActionPayload::IssueUpdate {
+            id,
+            kind,
+            title,
+            body,
+            clear_body,
+            notes,
+            clear_notes,
+        } => {
+            data.insert("id".to_string(), runtime_bounded_trace_string_value(id));
+            data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert(
+                "title".to_string(),
+                title
+                    .as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            data.insert(
+                "body".to_string(),
+                body.as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            data.insert("clear_body".to_string(), serde_json::json!(clear_body));
+            data.insert(
+                "notes".to_string(),
+                notes
+                    .as_deref()
+                    .map(runtime_bounded_trace_string_value)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            data.insert("clear_notes".to_string(), serde_json::json!(clear_notes));
         }
         AgentActionPayload::IssueQuery { kind, text, limit } => {
             data.insert("kind".to_string(), serde_json::json!(kind));

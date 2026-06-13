@@ -6,8 +6,8 @@
 use crate::error::{MezError, Result};
 
 use super::{
-    DEFAULT_ISSUE_QUERY_LIMIT, MAX_ISSUE_QUERY_LIMIT, validate_issue_body, validate_issue_title,
-    validate_project_key,
+    DEFAULT_ISSUE_QUERY_LIMIT, MAX_ISSUE_QUERY_LIMIT, validate_issue_body, validate_issue_notes,
+    validate_issue_title, validate_project_key,
 };
 
 /// Classification for one locally tracked issue.
@@ -51,6 +51,8 @@ pub struct IssueRecord {
     pub title: String,
     /// Optional issue detail text.
     pub body: Option<String>,
+    /// Optional mutable progress or handoff notes.
+    pub notes: Option<String>,
     /// Creation time as Unix seconds.
     pub created_at_unix_seconds: u64,
     /// Last update time as Unix seconds.
@@ -65,6 +67,7 @@ impl IssueRecord {
         kind: IssueKind,
         title: String,
         body: Option<String>,
+        notes: Option<String>,
         now_unix_seconds: u64,
     ) -> Result<Self> {
         let record = Self {
@@ -73,6 +76,7 @@ impl IssueRecord {
             kind,
             title,
             body,
+            notes,
             created_at_unix_seconds: now_unix_seconds,
             updated_at_unix_seconds: now_unix_seconds,
         };
@@ -85,6 +89,7 @@ impl IssueRecord {
         validate_project_key(&self.project)?;
         validate_issue_title(&self.title)?;
         validate_issue_body(self.body.as_deref())?;
+        validate_issue_notes(self.notes.as_deref())?;
         if self.id.trim().is_empty() || self.id.bytes().any(|byte| byte == 0) {
             return Err(MezError::invalid_args("issue id must not be empty"));
         }
@@ -95,6 +100,77 @@ impl IssueRecord {
         }
         Ok(())
     }
+}
+
+/// Requested mutable issue field updates.
+///
+/// Optional fields distinguish unchanged values from explicit replacements.
+/// `clear_body` and `clear_notes` remove optional text fields, while `body`
+/// and `notes` replace them with new content.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IssueUpdate {
+    /// Optional replacement defect/task classification.
+    pub kind: Option<IssueKind>,
+    /// Optional replacement single-line title.
+    pub title: Option<String>,
+    /// Optional replacement issue description.
+    pub body: Option<String>,
+    /// Whether to clear the issue description.
+    pub clear_body: bool,
+    /// Optional replacement mutable progress or handoff notes.
+    pub notes: Option<String>,
+    /// Whether to clear mutable progress or handoff notes.
+    pub clear_notes: bool,
+}
+
+impl IssueUpdate {
+    /// Returns whether the patch requests at least one field mutation.
+    pub fn has_changes(&self) -> bool {
+        self.kind.is_some()
+            || self.title.is_some()
+            || self.body.is_some()
+            || self.clear_body
+            || self.notes.is_some()
+            || self.clear_notes
+    }
+
+    /// Validates update fields before they are applied to a record.
+    pub fn validate(&self) -> Result<()> {
+        if !self.has_changes() {
+            return Err(MezError::invalid_args(
+                "issue update requires at least one field to change",
+            ));
+        }
+        if self.body.is_some() && self.clear_body {
+            return Err(MezError::invalid_args(
+                "issue update cannot set and clear body",
+            ));
+        }
+        if self.notes.is_some() && self.clear_notes {
+            return Err(MezError::invalid_args(
+                "issue update cannot set and clear notes",
+            ));
+        }
+        if let Some(title) = self.title.as_deref() {
+            validate_issue_title(title)?;
+        }
+        validate_issue_body(self.body.as_deref())?;
+        validate_issue_notes(self.notes.as_deref())?;
+        Ok(())
+    }
+}
+
+/// Result of updating one issue record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateIssueResult {
+    /// Project key used for the update.
+    pub project: String,
+    /// Issue id targeted by the update.
+    pub id: String,
+    /// Whether a row was updated.
+    pub updated: bool,
+    /// Updated record when the issue existed in the project.
+    pub record: Option<IssueRecord>,
 }
 
 /// Query filters for issue lookup.

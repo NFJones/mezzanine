@@ -416,11 +416,32 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             content.len(),
             keywords.len()
         ),
-        AgentActionPayload::IssueAdd { kind, title, body } => format!(
-            "issue_add kind={} title={} body_bytes={}",
+        AgentActionPayload::IssueAdd {
+            kind,
+            title,
+            body,
+            notes,
+        } => format!(
+            "issue_add kind={} title={} body_bytes={} notes_bytes={}",
             bounded_transcript_field(kind),
             bounded_transcript_field(title),
-            body.as_deref().map(str::len).unwrap_or(0)
+            body.as_deref().map(str::len).unwrap_or(0),
+            notes.as_deref().map(str::len).unwrap_or(0)
+        ),
+        AgentActionPayload::IssueUpdate {
+            id,
+            body,
+            notes,
+            clear_body,
+            clear_notes,
+            ..
+        } => format!(
+            "issue_update id={} body_bytes={} notes_bytes={} clear_body={} clear_notes={}",
+            bounded_transcript_field(id),
+            body.as_deref().map(str::len).unwrap_or(0),
+            notes.as_deref().map(str::len).unwrap_or(0),
+            clear_body,
+            clear_notes
         ),
         AgentActionPayload::IssueQuery { kind, text, limit } => format!(
             "issue_query kind={} text_bytes={} limit={}",

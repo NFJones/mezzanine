@@ -911,6 +911,7 @@ fn runtime_capability_for_response(
                 Some(crate::agent::AgentCapability::ConfigChange)
             }
             crate::agent::AgentActionPayload::IssueAdd { .. }
+            | crate::agent::AgentActionPayload::IssueUpdate { .. }
             | crate::agent::AgentActionPayload::IssueQuery { .. }
             | crate::agent::AgentActionPayload::IssueDelete { .. } => {
                 Some(crate::agent::AgentCapability::Issues)
