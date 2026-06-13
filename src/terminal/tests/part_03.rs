@@ -304,7 +304,8 @@ fn terminal_screen_colored_check_mark_wraps_as_double_width() {
     assert_eq!(screen.visible_lines()[1], "d");
 }
 
-/// Verifies emoji-variation status glyphs use the wide presentation width.
+/// Verifies explicit emoji-variation status glyphs use the wide presentation
+/// width while bare status symbols keep their text width.
 ///
 /// Models often emit colored status symbols such as `✔️` despite prompt
 /// guidance. When those symbols appear in agent transcript rows, Mezzanine must
@@ -312,8 +313,8 @@ fn terminal_screen_colored_check_mark_wraps_as_double_width() {
 /// phantom blank row with no gutter.
 #[test]
 fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
-    assert_eq!(terminal_char_width('✔'), 2);
-    assert_eq!(terminal_text_width("✔"), 2);
+    assert_eq!(terminal_char_width('✔'), 1);
+    assert_eq!(terminal_text_width("✔"), 1);
     assert_eq!(terminal_text_width("✔️"), 2);
     assert_eq!(terminal_text_width("✔︎"), 1);
     assert_eq!(terminal_text_width("1️⃣"), 2);

@@ -535,9 +535,11 @@ environment, but not the executable path.
 ### Why do status glyphs shift pane text?
 
 Some host terminals render emoji-presentation status glyphs through one-cell
-text fallback fonts instead of two-cell emoji fonts. Set
-`terminal.emoji_width = "narrow"` when your terminal/font stack uses that
-fallback; keep the default `"wide"` for terminals that render those glyphs as
+text fallback fonts instead of two-cell emoji fonts. Bare text symbols such as
+`↗` keep their one-cell text width by default; set
+`terminal.emoji_width = "narrow"` when your terminal/font stack also renders
+explicit emoji-presentation status glyphs through text fallback fonts. Keep the
+default `"wide"` for terminals that render those explicit emoji sequences as
 two-cell emoji.
 
 ### How do project instructions work?

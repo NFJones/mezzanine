@@ -1119,12 +1119,14 @@ next-input cell.
 The active terminal compatibility settings MUST select a single emoji
 status-glyph width policy shared by terminal screen storage, pane/window
 composition, attached-client differential redraws, prompt fitting, and copy-mode
-coordinate calculation. The default policy MUST measure emoji-presentation
-status glyphs with the Unicode terminal width expected by two-cell emoji
-renderers. A documented narrow policy MUST be available for host terminals or
-font stacks that render simple emoji/text status glyphs such as `✅`, `⚠️`, and
-`✔️` through one-cell monochrome text fallback fonts. The narrow policy MUST
-measure simple text-fallback status glyph scalars and their text/emoji
+coordinate calculation. The default policy MUST measure explicit
+emoji-presentation status-glyph sequences with the Unicode terminal width
+expected by two-cell emoji renderers, but it MUST NOT widen bare text symbols
+solely because an emoji-presentation variation sequence exists for the scalar.
+A documented narrow policy MUST be available for host terminals or font stacks
+that render simple emoji/text status glyphs such as `✅`, `⚠️`, and `✔️`
+through one-cell monochrome text fallback fonts. The narrow policy MUST measure
+simple text-fallback status glyph scalars and their text/emoji
 variation-selector sequences as one display cell while preserving the normal
 two-cell width of complex emoji clusters such as regional-indicator flags,
 skin-tone modifier sequences, and ZWJ emoji.

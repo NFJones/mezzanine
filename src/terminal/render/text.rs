@@ -20,12 +20,12 @@ const TERMINAL_EMOJI_WIDTH_NARROW: u8 = 1;
 
 static TERMINAL_EMOJI_WIDTH: AtomicU8 = AtomicU8::new(TERMINAL_EMOJI_WIDTH_WIDE);
 
-/// Selects how emoji-presentation status symbols are measured in terminal
-/// display cells.
+/// Selects how explicit emoji-presentation status symbols are measured in
+/// terminal display cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalEmojiWidth {
-    /// Measure emoji-presentation symbols with the Unicode terminal width used
-    /// by terminals that render these glyphs as two-cell emoji.
+    /// Measure explicit emoji-presentation symbols with the Unicode terminal
+    /// width used by terminals that render these glyphs as two-cell emoji.
     Wide,
     /// Measure text-fallback emoji status symbols as one cell for host
     /// terminals that render them through a monochrome/text font fallback.
@@ -577,9 +577,6 @@ fn terminal_char_width_for_emoji_width(ch: char, emoji_width: TerminalEmojiWidth
     if emoji_width == TerminalEmojiWidth::Narrow && terminal_scalar_has_text_fallback_width(ch) {
         return 1;
     }
-    if emoji_width == TerminalEmojiWidth::Wide && terminal_scalar_has_emoji_presentation_width(ch) {
-        return 2;
-    }
     UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
@@ -621,27 +618,6 @@ pub(crate) fn terminal_text_width(value: &str) -> usize {
 /// - `value`: The terminal text to segment.
 pub(crate) fn terminal_graphemes(value: &str) -> impl Iterator<Item = &str> {
     UnicodeSegmentation::graphemes(value, true)
-}
-
-/// Returns whether a non-ASCII scalar has emoji presentation when followed by a
-/// variation selector.
-///
-/// This is the conservative fallback for terminal parser paths that receive one
-/// scalar at a time and cannot see the full grapheme cluster before deciding
-/// whether the cursor should advance. Full-string rendering paths should use
-/// [`terminal_grapheme_width`] instead so text-presentation sequences such as
-/// `✔︎` retain their one-cell width.
-///
-/// # Parameters
-/// - `ch`: The Unicode scalar whose terminal-cell width is being normalized.
-fn terminal_scalar_has_emoji_presentation_width(ch: char) -> bool {
-    if ch.is_ascii() || UnicodeWidthChar::width(ch).unwrap_or(0) != 1 {
-        return false;
-    }
-    let mut emoji_presentation = String::new();
-    emoji_presentation.push(ch);
-    emoji_presentation.push('\u{FE0F}');
-    UnicodeWidthStr::width(emoji_presentation.as_str()) == 2
 }
 
 /// Returns whether a scalar has a one-cell text fallback presentation.
@@ -775,6 +751,37 @@ mod tests {
     #[test]
     fn terminal_text_width_counts_mixed_fullwidth_text_and_emoji_clusters() {
         assert_eq!(terminal_text_width("ｓ 👍🏻 🇪🇺"), 8);
+    }
+
+    /// Verifies the wide terminal emoji-width compatibility policy does not
+    /// widen bare emoji-capable text symbols unless the rendered cluster asks
+    /// for emoji presentation. This protects subsequent table separators and
+    /// pane dividers from one-cell cursor drift on text-fallback terminals.
+    #[test]
+    fn terminal_text_width_wide_policy_keeps_bare_status_symbols_narrow() {
+        for grapheme in ["↗", "✔", "⚠"] {
+            assert_eq!(
+                terminal_grapheme_width_for_emoji_width(grapheme, TerminalEmojiWidth::Wide),
+                grapheme.chars().count(),
+                "{grapheme}"
+            );
+        }
+
+        assert_eq!(terminal_text_width("↗ Positive  │"), 13);
+    }
+
+    /// Verifies the wide terminal emoji-width compatibility policy still
+    /// measures explicit emoji-presentation status glyphs with the Unicode
+    /// two-cell width used by emoji-capable terminal renderers.
+    #[test]
+    fn terminal_text_width_wide_policy_counts_explicit_status_emoji_as_two_cells() {
+        for grapheme in ["↗️", "✔️", "⚠️"] {
+            assert_eq!(
+                terminal_grapheme_width_for_emoji_width(grapheme, TerminalEmojiWidth::Wide),
+                2,
+                "{grapheme}"
+            );
+        }
     }
 
     /// Verifies the narrow terminal emoji-width compatibility policy measures
