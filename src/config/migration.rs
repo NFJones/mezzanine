@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 15;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 16;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +112,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             14 => {
                 current_text = migrate_v14_to_v15(format, &current_text)?;
                 current_version = 15;
+            }
+            15 => {
+                current_text = migrate_v15_to_v16(format, &current_text)?;
+                current_version = 16;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -1096,6 +1100,63 @@ fn migrate_json_compatible_v14_to_v15(format: ConfigFormat, text: &str) -> Resul
     }
 }
 
+/// Applies the version 15 to version 16 migration.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v15_to_v16(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v15_to_v16(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v15_to_v16(format, text),
+    }
+}
+
+/// Applies the version 15 to version 16 migration to TOML while preserving
+/// comments and formatting where `toml_edit` can retain them.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v15_to_v16(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    for path in removed_v16_paths() {
+        remove_toml_path(&mut document, path)?;
+    }
+    set_toml_path_item(&mut document, "version", toml_edit::value(16))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 15 to version 16 migration to JSON and YAML config
+/// files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v15_to_v16(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    for path in removed_v16_paths() {
+        remove_json_path(&mut document, path);
+    }
+    set_json_path_value(&mut document, "version", serde_json::json!(16))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
 /// Parses a JSON or YAML config file into a JSON value tree.
 ///
 /// # Parameters
@@ -1145,6 +1206,63 @@ fn removed_v14_paths() -> &'static [&'static str] {
         "auth.auth_file",
         "auth.credential_store",
         "auth.default_profile",
+    ]
+}
+
+/// Returns config paths removed from the current schema during v16 migration.
+fn removed_v16_paths() -> &'static [&'static str] {
+    &[
+        "session",
+        "shell",
+        "layout",
+        "session.detach_behavior",
+        "session.reattach_behavior",
+        "session.empty_session_behavior",
+        "session.restore_strategy",
+        "shell.login",
+        "shell.interactive",
+        "shell.integration",
+        "shell.integration_mode",
+        "shell.default_working_directory",
+        "shell.env",
+        "shell.tool_discovery",
+        "shell.tool_cache",
+        "shell.fallback_behavior",
+        "layout.default",
+        "layout.resize_policy",
+        "layout.close_policy",
+        "layout.min_pane_columns",
+        "layout.min_pane_rows",
+        "history.search_mode",
+        "memory.storage",
+        "memory.database_path",
+        "memory.max_injected_records",
+        "memory.max_injected_bytes",
+        "memory.candidate_limit",
+        "issues.storage",
+        "agents.prompt_profile",
+        "agents.default_agent_role",
+        "message_protocol",
+        "control",
+        "snapshots",
+        "message_protocol.enabled",
+        "message_protocol.endpoint",
+        "message_protocol.retention_messages",
+        "message_protocol.retention_bytes",
+        "message_protocol.allow_remote_bridges",
+        "control.endpoint",
+        "control.socket_path",
+        "control.tcp_bind",
+        "control.tcp_enabled",
+        "control.auth_token_file",
+        "control.observer_policy",
+        "snapshots.enabled",
+        "snapshots.path",
+        "snapshots.on_detach",
+        "snapshots.on_interval_seconds",
+        "snapshots.on_agent_turn",
+        "snapshots.retention_count",
+        "audit.redact_secrets",
     ]
 }
 

@@ -529,8 +529,8 @@ secret material in config files.
 ### Can I configure a different shell executable?
 
 No. Mezzanine resolves the shell from `$SHELL` when it is absolute and
-executable, otherwise from `/bin/sh`. Config may adjust shell mode and
-environment, but not the executable path.
+executable, otherwise from `/bin/sh`. The shell executable, mode, and startup
+environment are not configurable through Mezzanine config.
 
 ### Why do status glyphs shift pane text?
 

@@ -19,11 +19,8 @@ pub const PRIMARY_CONFIG_FILENAMES: &[&str] =
 /// boundary and avoids relying on call-site inference.
 pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "version",
-    "session",
     "terminal",
-    "shell",
     "keys",
-    "layout",
     "frames",
     "theme",
     "themes",
@@ -37,13 +34,10 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "providers",
     "subagents",
     "personalities",
-    "message_protocol",
-    "control",
     "mcp_servers",
     "auth",
     "instructions",
     "hooks",
-    "snapshots",
     "audit",
     "extensions",
 ];
@@ -141,23 +135,23 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
         },
         ConfigChangePathAnnotation {
             pattern: "history.<key>",
-            purpose: "Adjust scrollback retention and history behavior.",
-            value_type: "integer, boolean, or string",
-            format: "lines/rotate_lines/saved_sessions_limit are integers, persist is boolean, search_mode is a string enum.",
+            purpose: "Adjust scrollback retention and history persistence.",
+            value_type: "integer or boolean",
+            format: "lines/rotate_lines/saved_sessions_limit are integers; persist is boolean.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
             pattern: "memory.<key>",
-            purpose: "Adjust persistent memory storage, retrieval, injection, and retention limits.",
-            value_type: "string, integer, or boolean",
-            format: "storage/database_path are strings, counts/timeouts are integers, flags are booleans.",
+            purpose: "Adjust persistent memory enablement, pruning limits, FTS behavior, and default retention.",
+            value_type: "integer or boolean",
+            format: "enabled/fts_enabled/archive_before_prune are booleans; max_records, max_bytes, and default_ttl_days are integers.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
             pattern: "issues.<key>",
-            purpose: "Adjust local SQLite issue tracking storage and enablement.",
+            purpose: "Adjust local SQLite issue tracking enablement and database path.",
             value_type: "string or boolean",
-            format: "enabled is boolean; storage/database_path are strings.",
+            format: "enabled is boolean; database_path is a string.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -169,7 +163,7 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
         },
         ConfigChangePathAnnotation {
             pattern: "<static-section>.<key>",
-            purpose: "Adjust supported scalar settings in session, terminal, shell, keys, layout, frames, message protocol, control, auth, instructions, hooks, snapshots, or audit sections.",
+            purpose: "Adjust supported scalar settings in terminal, keys, frames, auth, instructions, hooks, or audit sections.",
             value_type: "string, integer, boolean, or string array",
             format: "Use only documented keys from the supported-pattern list; inspect current config for dynamic names.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
@@ -226,12 +220,9 @@ pub fn config_change_setting_path_annotations_markdown() -> String {
 /// model profile name, provider name, MCP server name, hook name, or theme alias.
 pub fn config_change_setting_path_description() -> String {
     format!(
-        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); session.<key> where key is one of [{}] except default_command; terminal.<key> where key is one of [{}]; shell.<key> where key is one of [{}] except path/executable/command, plus shell.env.<name>; keys.<key> where key is one of [{}]; layout.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; message_protocol.<key> where key is one of [{}]; control.<key> where key is one of [{}]; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; snapshots.<key> where key is one of [{}]; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
-        config_keys_except(SESSION_KEYS, &["default_command"]),
+        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
         TERMINAL_KEYS.join(", "),
-        config_keys_except(SHELL_KEYS, &["path", "executable", "command"]),
         KEY_BINDING_KEYS.join(", "),
-        LAYOUT_KEYS.join(", "),
         WINDOW_FRAME_KEYS.join(", "),
         PANE_FRAME_KEYS.join(", "),
         HISTORY_KEYS.join(", "),
@@ -251,8 +242,6 @@ pub fn config_change_setting_path_description() -> String {
                 "global_command_rules",
             ],
         ),
-        MESSAGE_PROTOCOL_KEYS.join(", "),
-        CONTROL_KEYS.join(", "),
         config_keys_except(
             MCP_SERVER_KEYS,
             &[
@@ -265,7 +254,6 @@ pub fn config_change_setting_path_description() -> String {
         AUTH_KEYS.join(", "),
         INSTRUCTION_KEYS.join(", "),
         config_keys_except(HOOK_KEYS, &["env", "match", "matches"]),
-        SNAPSHOT_KEYS.join(", "),
         AUDIT_KEYS.join(", "),
         config_change_setting_path_annotations_text(),
     )
@@ -346,13 +334,7 @@ pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const SESSION_KEYS: &[&str] = &[
-    "detach_behavior",
-    "reattach_behavior",
-    "empty_session_behavior",
-    "restore_strategy",
-    "default_command",
-];
+pub(super) const SESSION_KEYS: &[&str] = &["default_command"];
 
 /// Defines the TERMINAL KEYS const used by this subsystem.
 ///
@@ -385,20 +367,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const SHELL_KEYS: &[&str] = &[
-    "login",
-    "interactive",
-    "integration",
-    "integration_mode",
-    "default_working_directory",
-    "env",
-    "tool_discovery",
-    "tool_cache",
-    "fallback_behavior",
-    "path",
-    "executable",
-    "command",
-];
+pub(super) const SHELL_KEYS: &[&str] = &["path", "executable", "command"];
 
 /// Defines the KEY BINDING KEYS const used by this subsystem.
 ///
@@ -426,13 +395,7 @@ pub(super) const KEY_BINDING_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const LAYOUT_KEYS: &[&str] = &[
-    "default",
-    "resize_policy",
-    "close_policy",
-    "min_pane_columns",
-    "min_pane_rows",
-];
+pub(super) const LAYOUT_KEYS: &[&str] = &[];
 
 /// Defines the WINDOW FRAME KEYS const used by this subsystem.
 ///
@@ -465,13 +428,8 @@ pub(super) const THEME_KEYS: &[&str] = &["active", "aliases", "colors"];
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const HISTORY_KEYS: &[&str] = &[
-    "lines",
-    "rotate_lines",
-    "saved_sessions_limit",
-    "persist",
-    "search_mode",
-];
+pub(super) const HISTORY_KEYS: &[&str] =
+    &["lines", "rotate_lines", "saved_sessions_limit", "persist"];
 
 /// Defines the MEMORY KEYS const used by this subsystem.
 ///
@@ -479,13 +437,8 @@ pub(super) const HISTORY_KEYS: &[&str] = &[
 /// boundary and avoids relying on call-site inference.
 pub(super) const MEMORY_KEYS: &[&str] = &[
     "enabled",
-    "storage",
-    "database_path",
     "max_records",
     "max_bytes",
-    "max_injected_records",
-    "max_injected_bytes",
-    "candidate_limit",
     "fts_enabled",
     "archive_before_prune",
     "default_ttl_days",
@@ -495,7 +448,7 @@ pub(super) const MEMORY_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const ISSUE_KEYS: &[&str] = &["enabled", "storage", "database_path"];
+pub(super) const ISSUE_KEYS: &[&str] = &["enabled", "database_path"];
 
 /// Defines the AGENT KEYS const used by this subsystem.
 ///
@@ -520,8 +473,6 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "max_subagent_panes_per_window",
     "subagent_wait_policy",
     "max_depth",
-    "prompt_profile",
-    "default_agent_role",
 ];
 
 /// Defines the AGENT AUTO SIZING KEYS const used by this subsystem.
@@ -629,26 +580,13 @@ pub(super) const PERSONALITY_PROFILE_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const MESSAGE_PROTOCOL_KEYS: &[&str] = &[
-    "enabled",
-    "endpoint",
-    "retention_messages",
-    "retention_bytes",
-    "allow_remote_bridges",
-];
+pub(super) const MESSAGE_PROTOCOL_KEYS: &[&str] = &[];
 
 /// Defines the CONTROL KEYS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const CONTROL_KEYS: &[&str] = &[
-    "endpoint",
-    "socket_path",
-    "tcp_bind",
-    "tcp_enabled",
-    "auth_token_file",
-    "observer_policy",
-];
+pub(super) const CONTROL_KEYS: &[&str] = &[];
 
 /// Defines the AUTH KEYS const used by this subsystem.
 ///
@@ -672,14 +610,7 @@ pub(super) const INSTRUCTION_KEYS: &[&str] = &[
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(super) const SNAPSHOT_KEYS: &[&str] = &[
-    "enabled",
-    "path",
-    "on_detach",
-    "on_interval_seconds",
-    "on_agent_turn",
-    "retention_count",
-];
+pub(super) const SNAPSHOT_KEYS: &[&str] = &[];
 
 /// Defines the AUDIT KEYS const used by this subsystem.
 ///
@@ -690,7 +621,6 @@ pub(super) const AUDIT_KEYS: &[&str] = &[
     "path",
     "format",
     "retention_days",
-    "redact_secrets",
     "hash_chain",
     "required",
 ];

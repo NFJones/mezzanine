@@ -715,13 +715,76 @@ nested_muxxer = "disabled"
 
 [session]
 default_command = "vim"
+detach_behavior = "exit"
+reattach_behavior = "new-session"
+empty_session_behavior = "close"
+restore_strategy = "snapshot-first"
 
 [shell]
 path = "/bin/bash"
+login = true
+interactive = false
+integration = false
+integration_mode = "active"
+default_working_directory = "/tmp"
+tool_discovery = false
+tool_cache = false
+fallback_behavior = "error"
+
+[layout]
+default = "even-horizontal"
+resize_policy = "absolute"
+close_policy = "preserve"
+min_pane_columns = 1
+min_pane_rows = 1
+
+[history]
+search_mode = "regex"
+
+[memory]
+storage = "sqlite"
+database_path = "memory.sqlite"
+max_records = 1
+max_bytes = 2
+max_injected_records = 3
+max_injected_bytes = 4
+candidate_limit = 5
+archive_before_prune = false
+
+[issues]
+storage = "sqlite"
+
+[message_protocol]
+enabled = false
+endpoint = "remote"
+retention_messages = 1
+retention_bytes = 2
+allow_remote_bridges = true
+
+[control]
+endpoint = "tcp"
+socket_path = "control.sock"
+tcp_bind = "127.0.0.1:1234"
+tcp_enabled = true
+auth_token_file = "token"
+observer_policy = "open"
+
+[snapshots]
+enabled = false
+path = "snapshots"
+on_detach = true
+on_interval_seconds = 60
+on_agent_turn = true
+retention_count = 1
+
+[audit]
+redact_secrets = false
 
 [frames.pane]
 visible_fields = ["pane.index", "agent.auto_reasoning", "agent.model"]
 [agents]
+prompt_profile = "legacy"
+default_agent_role = "worker"
 auto_reasoning = true
 auto_compact = true
 auto_compact_threshold = 0.5
@@ -735,8 +798,17 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 15"));
+    assert!(plan.text.contains("version = 16"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
+    assert!(!plan.text.contains("detach_behavior"));
+    assert!(!plan.text.contains("integration_mode"));
+    assert!(!plan.text.contains("search_mode"));
+    assert!(!plan.text.contains("max_injected_records"));
+    assert!(!plan.text.contains("prompt_profile"));
+    assert!(!plan.text.contains("message_protocol"));
+    assert!(!plan.text.contains("tcp_bind"));
+    assert!(!plan.text.contains("on_agent_turn"));
+    assert!(!plan.text.contains("redact_secrets"));
     assert!(
         plan.text
             .contains("provider_refresh_leeway_seconds = 86400")
@@ -804,7 +876,7 @@ approval = "legacy-fast-approval"
     assert_eq!(plan.from_version, 13);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert_eq!(values.get("version"), Some(&"15".to_string()));
+    assert_eq!(values.get("version"), Some(&"16".to_string()));
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"3600".to_string())
@@ -923,7 +995,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"15".to_string()));
+    assert_eq!(values.get("version"), Some(&"16".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1001,7 +1073,7 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"15".to_string()));
+    assert_eq!(values.get("version"), Some(&"16".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1049,7 +1121,7 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"15".to_string()));
+    assert_eq!(values.get("version"), Some(&"16".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1080,7 +1152,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"15".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"16".to_string()));
     assert_eq!(
         missing_values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1092,7 +1164,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"15".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"16".to_string()));
     assert_eq!(
         explicit_values.get("terminal.emoji_width"),
         Some(&"narrow".to_string())
@@ -1329,7 +1401,7 @@ fn rejects_invalid_frame_display_values() {
 fn allows_declared_dynamic_config_maps() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[shell.env]\nFOO = \"bar\"\n[keys.command_bindings]\nrefresh = \"refresh-client\"\n[providers.openai.options]\nreasoning_effort = \"medium\"\n[hooks.notify.env]\nLOG_LEVEL = \"debug\"\n[extensions.example]\nenabled = true\n",
+        "[keys.command_bindings]\nrefresh = \"refresh-client\"\n[providers.openai.options]\nreasoning_effort = \"medium\"\n[hooks.notify.env]\nLOG_LEVEL = \"debug\"\n[extensions.example]\nenabled = true\n",
         ConfigScope::Primary,
     );
 
@@ -1350,7 +1422,12 @@ fn rejects_forbidden_session_default_command() {
     );
 
     assert!(!validation.valid);
-    assert_eq!(validation.diagnostics[0].path, "session.default_command");
+    assert!(
+        validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path == "session.default_command")
+    );
 }
 
 /// Verifies rejects shell path override.
@@ -1367,7 +1444,12 @@ fn rejects_shell_path_override() {
     );
 
     assert!(!validation.valid);
-    assert_eq!(validation.diagnostics[0].path, "shell.path");
+    assert!(
+        validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path == "shell.path")
+    );
 }
 
 /// Verifies rejects auth secrets in json config.

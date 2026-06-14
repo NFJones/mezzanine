@@ -11,13 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 15
-
-[session]
-detach_behavior = "keep-running"
-reattach_behavior = "default-session"
-empty_session_behavior = "keep-open"
-restore_strategy = "live-first"
+version = 16
 
 [terminal]
 profile = "xterm-compatible"
@@ -43,30 +37,12 @@ cursor_style = "block"
 cursor_blink = false
 cursor_blink_interval_ms = 500
 
-[shell]
-login = false
-interactive = true
-integration = true
-integration_mode = "passive"
-default_working_directory = "."
-env = {}
-tool_discovery = true
-tool_cache = true
-fallback_behavior = "bin-sh"
-
 # `escape` is the prefix key. Optional direct key settings below cover actions
 # without generated default prefix equivalents.
 [keys]
 escape = "C-a"
 
 [keys.command_bindings]
-
-[layout]
-default = "tiled"
-resize_policy = "relative"
-close_policy = "rebalance"
-min_pane_columns = 8
-min_pane_rows = 3
 
 [frames.window]
 enabled = true
@@ -174,24 +150,17 @@ lines = 10000
 rotate_lines = 1000
 saved_sessions_limit = 100
 persist = true
-search_mode = "literal"
 
 [memory]
 enabled = true
-storage = "sqlite"
-database_path = ""
 max_records = 5000
 max_bytes = 10485760
-max_injected_records = 12
-max_injected_bytes = 24576
-candidate_limit = 100
 fts_enabled = true
 archive_before_prune = true
 default_ttl_days = 180
 
 [issues]
 enabled = true
-storage = "sqlite"
 database_path = ""
 
 [agents]
@@ -212,8 +181,6 @@ max_subagents_per_subagent = 2
 max_subagent_panes_per_window = 4
 subagent_wait_policy = "join"
 max_depth = 2
-prompt_profile = "default"
-default_agent_role = "default"
 
 [agents.auto_sizing]
 router_model_profile = "auto-size-router"
@@ -454,21 +421,6 @@ network_policy = "prompt"
 destructive_action_policy = "prompt"
 bypass_mode = false
 
-[message_protocol]
-enabled = true
-endpoint = "local"
-retention_messages = 1000
-retention_bytes = 1048576
-allow_remote_bridges = false
-
-[control]
-endpoint = "unix"
-socket_path = ""
-tcp_bind = "127.0.0.1:0"
-tcp_enabled = false
-auth_token_file = ""
-observer_policy = "primary-approval"
-
 [mcp_servers]
 # Example per-server model-visible MCP guidance:
 # [mcp_servers.example.external_capability]
@@ -487,20 +439,11 @@ on_truncation = "summarize"
 
 [hooks]
 
-[snapshots]
-enabled = true
-path = "snapshots"
-on_detach = false
-on_interval_seconds = 0
-on_agent_turn = false
-retention_count = 10
-
 [audit]
 enabled = true
 path = "audit.jsonl"
 format = "jsonl"
 retention_days = 30
-redact_secrets = true
 hash_chain = false
 required = false
 

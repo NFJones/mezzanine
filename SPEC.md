@@ -2171,11 +2171,9 @@ Configuration parsing MUST be deterministic. If multiple configuration files
 define the same setting, Mezzanine MUST apply a documented precedence rule.
 
 Configuration MUST include key bindings, frame settings, history buffer size
-and rotation count,
-shell settings, agent settings, permission settings, model provider settings,
-message passing settings, control endpoint settings, MCP server settings,
-terminal compatibility settings, instruction discovery settings, hook settings,
-snapshot settings, audit settings, and extension settings.
+and rotation count, agent settings, permission settings, model provider settings,
+MCP server settings, terminal compatibility settings, instruction discovery
+settings, hook settings, audit settings, and extension settings.
 
 Mezzanine MUST support live configuration mutation through the configuration
 shell.
@@ -2325,33 +2323,29 @@ MUST be treated as the project root.
 The top-level configuration object MUST support the following keys:
 
 - `version`
-- `session`
 - `terminal`
-- `shell`
 - `keys`
-- `layout`
 - `frames`
 - `theme`
 - `themes`
 - `history`
+- `memory`
+- `issues`
 - `agents`
 - `model_profiles`
 - `model_presets`
 - `permissions`
 - `providers`
 - `subagents`
-- `message_protocol`
-- `control`
 - `mcp_servers`
 - `auth`
 - `instructions`
 - `hooks`
-- `snapshots`
 - `audit`
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 14 is the current configuration schema version for this
+schema version 16 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2365,9 +2359,6 @@ renamed or moved settings to their canonical current paths, and MUST remove
 settings that no longer exist in the current schema. Project overlay files are
 not durable user-primary configuration and MUST instead be validated against the
 current schema after the primary file has been migrated.
-
-The `session` table MUST support `detach_behavior`, `reattach_behavior`,
-`empty_session_behavior`, and `restore_strategy`.
 
 Mezzanine schema version 2 MUST NOT support `session.default_command`. The
 version 1 to version 2 primary-config migration MUST remove
@@ -2412,19 +2403,19 @@ be removed before layer composition.
 The version 9 to version 10 primary-config migration MUST add
 `terminal.emoji_width = "wide"` when absent.
 
+The version 15 to version 16 primary-config migration MUST remove inert
+configuration keys that had no runtime effect, including the former `session`,
+`shell`, `layout`, `message_protocol`, `control`, and `snapshots` settings,
+plus obsolete no-op fields such as `history.search_mode`, memory storage path
+and injection placeholders, `issues.storage`, `agents.prompt_profile`,
+`agents.default_agent_role`, and `audit.redact_secrets`.
+
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with
 shell-like quoting rules or an array of command tokens. The copy command MUST
 receive clipboard contents on stdin. The paste command MUST write clipboard
 contents to stdout. If either direction is omitted, Mezzanine MUST retain the
 default best-effort host clipboard command list for that direction.
-
-The `shell` table MUST support `login`, `interactive`, `integration`,
-`integration_mode`, `default_working_directory`, `env`, `tool_discovery`,
-`tool_cache`, and `fallback_behavior`.
-
-The `shell` table MUST NOT override the shell executable path. The shell path
-MUST be the resolved shell path.
 
 The `keys` table MUST support `escape`, `split_vertical`, `split_horizontal`,
 `new_window`, `new_group`, `agent_shell`, `focus_up`, `focus_down`, `focus_left`,
@@ -2433,9 +2424,6 @@ The `keys` table MUST support `escape`, `split_vertical`, `split_horizontal`,
 map. The `escape` setting defines the prefix table entry point. Direct key
 settings in this table are convenience accelerators and MUST NOT replace the
 default prefix table.
-
-The `layout` table MUST support `default`, `resize_policy`, `close_policy`,
-`min_pane_columns`, and `min_pane_rows`.
 
 The `frames` table MUST contain `window` and `pane` subtables. Each frame
 subtable MUST support `enabled`, `position`, `template`, `style`, and
@@ -2488,10 +2476,15 @@ live configuration mutation for immediate rendering, but it is not required to
 persist the selected theme to disk.
 
 The `history` table MUST support `lines`, `rotate_lines`,
-`saved_sessions_limit`, `persist`, and `search_mode`.
+`saved_sessions_limit`, and `persist`.
 `history.lines` MUST default to `10000`.
 `history.rotate_lines` MUST default to `1000`.
 `history.saved_sessions_limit` MUST default to `100`.
+
+The `memory` table MUST support `enabled`, `max_records`, `max_bytes`,
+`fts_enabled`, `archive_before_prune`, and `default_ttl_days`.
+
+The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `shell_only`, `compaction_raw_retention_percent`, `routing`,
@@ -2499,8 +2492,7 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
-`max_subagent_panes_per_window`, `subagent_wait_policy`, `max_depth`,
-`prompt_profile`, and `default_agent_role`.
+`max_subagent_panes_per_window`, `subagent_wait_policy`, and `max_depth`.
 `agents.compaction_raw_retention_percent` MUST be an integer from `1` to `100`,
 MUST default to `10`, and MUST apply to manual compaction and provider
 context-limit recovery rather than proactive threshold compaction.
@@ -2750,15 +2742,6 @@ startup, live provider catalog refresh MUST be explicit through a user or
 control action such as `refresh-provider-info`; pane creation, pane selection,
 and model selector rendering MUST NOT independently prefetch provider catalogs.
 
-The `message_protocol` table MUST support `enabled`, `endpoint`,
-`retention_messages`, `retention_bytes`, and `allow_remote_bridges`.
-
-The `control` table MUST support `endpoint`, `socket_path`, `tcp_bind`,
-`tcp_enabled`, `auth_token_file`, and `observer_policy`. `observer_policy`
-MUST configure how observer requests are presented and approved; it MUST NOT
-remove Mezzanine's baseline support for pending and approved read-only
-observers.
-
 The `mcp_servers` table MUST be a map keyed by MCP server identity. Each MCP
 server entry MUST support `name`, `command`, and `args` for stdio servers,
 `url` for streamable HTTP servers, `env`, `env_vars`, `cwd`, `http_headers`,
@@ -2779,11 +2762,8 @@ The `instructions` table MUST support `global_files`, `project_filenames`,
 The `hooks` table MUST support lifecycle events, matcher groups, command hooks,
 and shell hooks.
 
-The `snapshots` table MUST support `enabled`, `path`, `on_detach`,
-`on_interval_seconds`, `on_agent_turn`, and `retention_count`.
-
 The `audit` table MUST support `enabled`, `path`, `format`, `retention_days`,
-`redact_secrets`, `hash_chain`, and `required`.
+`hash_chain`, and `required`.
 
 The `extensions` table MUST be a map keyed by extension identity.
 
