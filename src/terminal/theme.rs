@@ -92,6 +92,7 @@ pub const UI_COLOR_SLOT_NAMES: &[&str] = &[
 /// Built-in theme names accepted by `theme.active`.
 pub const BUILTIN_UI_THEME_NAMES: &[&str] = &[
     "deepforest",
+    "apprentice",
     "gruvbox_dark",
     "gruvbox_light",
     "solarized_dark",
@@ -275,6 +276,17 @@ pub fn builtin_ui_theme_definition(name: &str) -> Option<UiThemeDefinition> {
             thinking: "#9aa69e",
             danger: "#c05f5f",
             agent_prompt_background: "#252827",
+        })),
+        "apprentice" => Some(definition_from_palette(UiThemePalette {
+            primary: "#5f875f",
+            secondary: "#5f87af",
+            tertiary: "#87875f",
+            surface: "#262626",
+            foreground: "#bcbcbc",
+            muted: "#6c6c6c",
+            thinking: "#87af87",
+            danger: "#af5f5f",
+            agent_prompt_background: "#303030",
         })),
         "gruvbox_dark" => Some(definition_from_palette(UiThemePalette {
             primary: "#fabd2f",

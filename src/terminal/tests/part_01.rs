@@ -464,6 +464,7 @@ fn builtin_theme_registry_includes_common_variants_without_duplicates() {
     );
 
     for expected in [
+        "apprentice",
         "catppuccin_latte",
         "catppuccin_frappe",
         "catppuccin_macchiato",
@@ -515,6 +516,15 @@ fn builtin_theme_fidelity_targets() -> &'static [ThemeFidelityTarget] {
             name: "deepforest",
             category: ThemeFidelityCategory::Native,
             anchors: &[],
+        },
+        ThemeFidelityTarget {
+            name: "apprentice",
+            category: ThemeFidelityCategory::UpstreamFamily,
+            anchors: &[
+                ("primary", "#5f875f"),
+                ("surface", "#262626"),
+                ("danger", "#af5f5f"),
+            ],
         },
         ThemeFidelityTarget {
             name: "gruvbox_dark",

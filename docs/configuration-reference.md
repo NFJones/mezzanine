@@ -352,15 +352,15 @@ Default color slots:
 Custom named themes may omit aliases and slots. Omitted values inherit from the
 documented built-in base for custom themes.
 
-Built-in theme names include `deepforest`, `gruvbox_dark`, `gruvbox_light`,
-`solarized_dark`, `solarized_light`, `monokai`, `dracula`, `nord`,
+Built-in theme names include `deepforest`, `apprentice`, `gruvbox_dark`,
+`gruvbox_light`, `solarized_dark`, `solarized_light`, `monokai`, `dracula`, `nord`,
 `tokyo_night`, `catppuccin_latte`, `catppuccin_frappe`,
 `catppuccin_macchiato`, `catppuccin_mocha`, `one_half_dark`,
 `one_half_light`, `onedark`, `rose_pine`, `rose_pine_moon`, `rose_pine_dawn`,
 `kanagawa`, `everforest_dark`, `everforest_light`, `ayu`, `ayu_dark`,
 `ayu_light`, `ayu_mirage`, `high_contrast_dark`, and `high_contrast_light`.
 
-Built-ins fall into three fidelity groups. `nord`, `tokyo_night`,
+Built-ins fall into three fidelity groups. `apprentice`, `nord`, `tokyo_night`,
 `catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`,
 `catppuccin_mocha`, `rose_pine`, `rose_pine_moon`, `rose_pine_dawn`,
 `kanagawa`, `everforest_dark`, `everforest_light`, `dracula`, `monokai`,

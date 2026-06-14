@@ -952,7 +952,7 @@ theme-relative grey-equivalent colors that remain readable against the theme
 surface while reading as lower emphasis than active titles, user transcript
 labels, and assistant transcript labels.
 Built-in themes MUST include common terminal and editor color schemes:
-`deepforest`, `gruvbox_dark`, `gruvbox_light`, `solarized_dark`,
+`deepforest`, `apprentice`, `gruvbox_dark`, `gruvbox_light`, `solarized_dark`,
 `solarized_light`, `monokai`, `dracula`, `nord`, `tokyo_night`,
 `catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`,
 `catppuccin_mocha`, `one_half_dark`, `one_half_light`, `onedark`,
