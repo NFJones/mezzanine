@@ -3042,18 +3042,18 @@ async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
                 parsed.get("id").and_then(serde_json::Value::as_str),
                 Some(expected_id)
             );
-            server_stream
-                .write_all(&encode_control_body(&format!(
-                    r#"{{"jsonrpc":"2.0","id":"{expected_id}","result":{{"view":{{"lines":["{response_lines}"],"line_style_spans":[[]],"cursor":{{"row":0,"column":12,"visible":true,"style":"bar","blink":false}},"output_modes":{{"application_keypad":false}}}}}}}}"#
-                )))
-                .unwrap();
-            server_stream.flush().unwrap();
             if expected_id == "cli-terminal-view-0" {
                 event_server_stream
                     .write_all(&event_notification_frame("pane_changed"))
                     .unwrap();
                 event_server_stream.flush().unwrap();
             }
+            server_stream
+                .write_all(&encode_control_body(&format!(
+                    r#"{{"jsonrpc":"2.0","id":"{expected_id}","result":{{"view":{{"lines":["{response_lines}"],"line_style_spans":[[]],"cursor":{{"row":0,"column":12,"visible":true,"style":"bar","blink":false}},"output_modes":{{"application_keypad":false}}}}}}}}"#
+                )))
+                .unwrap();
+            server_stream.flush().unwrap();
         }
     });
     let mut io = AsyncFakeAttachedTerminalIo::default();
