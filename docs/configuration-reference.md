@@ -352,6 +352,15 @@ Default color slots:
 Custom named themes may omit aliases and slots. Omitted values inherit from the
 documented built-in base for custom themes.
 
+Contributor tooling includes `tools/alacritty-to-mez-theme.py`, which converts
+an Alacritty TOML palette into either a Rust `UiThemePalette` candidate for a
+built-in theme or a partial `[themes.<name>]` fragment for local config testing.
+The helper maps `colors.primary.background` to the Mez surface,
+`colors.primary.foreground` to readable text, normal green/blue/yellow/red to
+primary/secondary/tertiary/danger accents, and neutral palette entries to muted
+and agent-thinking text. Generated output is a starting point; built-in themes
+still need fidelity-target tests and the required contrast validation.
+
 Built-in theme names include `deepforest`, `apprentice`, `gruvbox_dark`,
 `gruvbox_light`, `solarized_dark`, `solarized_light`, `monokai`, `dracula`, `nord`,
 `tokyo_night`, `catppuccin_latte`, `catppuccin_frappe`,
