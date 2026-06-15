@@ -7,7 +7,8 @@
 //! input dispatch and frame composition.
 
 use super::*;
-use unicode_width::UnicodeWidthStr;
+use crate::terminal::parse_hex_color;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Render placement for an open pane agent status selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,6 +476,8 @@ pub(super) struct RuntimeDisplayLine {
     pub(super) text: String,
     /// Interactive choices rendered inside `text`.
     pub(super) choices: Vec<RuntimeDisplayChoicePlacement>,
+    /// Visible terminal styles applied to `text`.
+    pub(super) style_spans: Vec<TerminalStyleSpan>,
 }
 
 /// One selectable choice and its location in a display line.
@@ -681,6 +684,7 @@ pub(super) fn runtime_human_readable_display_line_with_choices(
             vec![RuntimeDisplayLine {
                 text,
                 choices: Vec::new(),
+                style_spans: Vec::new(),
             }]
         } else {
             vec![record.into_display_line()]
@@ -689,6 +693,7 @@ pub(super) fn runtime_human_readable_display_line_with_choices(
         vec![RuntimeDisplayLine {
             text: line.to_string(),
             choices: Vec::new(),
+            style_spans: Vec::new(),
         }]
     }
 }
@@ -867,7 +872,7 @@ impl RuntimeCommandDisplayOverlayContent {
             for display_line in runtime_human_readable_display_line_with_choices(line) {
                 let line_index = self.lines.len();
                 self.lines.push(display_line.text);
-                self.line_style_spans.push(Vec::new());
+                self.line_style_spans.push(display_line.style_spans);
                 for choice in display_line.choices {
                     self.selections.push(RuntimeDisplayOverlaySelection {
                         line_index,
@@ -948,6 +953,7 @@ impl RuntimeDisplayRecord {
         let has_choices = !choices.is_empty();
         let mut text = String::new();
         let mut placements = Vec::new();
+        let mut style_spans = Vec::new();
         if has_choices {
             text.push_str("actions: ");
             for choice in choices {
@@ -971,7 +977,9 @@ impl RuntimeDisplayRecord {
             if !text.is_empty() {
                 text.push_str(" | ");
             }
+            let start = UnicodeWidthStr::width(text.as_str());
             text.push_str(&part);
+            start
         };
         if !self.prefix.is_empty() {
             append_part(self.prefix.join(" "));
@@ -980,15 +988,21 @@ impl RuntimeDisplayRecord {
             if self.choice_field_is_consumed(key, value, has_choices) {
                 continue;
             }
-            append_part(format!(
-                "{}: {}",
-                runtime_display_field_label(key),
-                runtime_display_field_value(value)
-            ));
+            let label = format!("{}: ", runtime_display_field_label(key));
+            let display_value = runtime_display_field_value(value);
+            let part_start = append_part(format!("{label}{display_value}"));
+            if key == "preview" {
+                style_spans.extend(runtime_theme_preview_style_spans(
+                    part_start.saturating_add(UnicodeWidthStr::width(label.as_str())),
+                    display_value.as_str(),
+                    self.field_value("preview_colors"),
+                ));
+            }
         }
         RuntimeDisplayLine {
             text,
             choices: placements,
+            style_spans,
         }
     }
 
@@ -1033,6 +1047,7 @@ impl RuntimeDisplayRecord {
             "commands" | "select_command" | "command_action" => has_choices,
             "actions" => has_choices,
             "action" => runtime_display_executable_choice(value).is_some(),
+            "preview_colors" => self.field_value("preview").is_some(),
             _ => false,
         }
     }
@@ -1154,6 +1169,45 @@ pub(super) fn runtime_display_field_value(value: &str) -> String {
         "none" => "none".to_string(),
         _ => value.to_string(),
     }
+}
+
+/// Returns per-block color spans for one theme preview field.
+fn runtime_theme_preview_style_spans(
+    start_column: usize,
+    preview: &str,
+    preview_colors: Option<&str>,
+) -> Vec<TerminalStyleSpan> {
+    let colors = preview_colors
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| parse_hex_color(value.trim()))
+        .collect::<Vec<_>>();
+    let mut spans = Vec::new();
+    let mut column = start_column;
+    for (index, ch) in preview.chars().enumerate() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+        if ch.is_whitespace() {
+            column = column.saturating_add(width);
+            continue;
+        }
+        let Some(color) = colors.get(index) else {
+            column = column.saturating_add(width);
+            continue;
+        };
+        push_or_extend_style_span(
+            &mut spans,
+            TerminalStyleSpan {
+                start: column,
+                length: width,
+                rendition: GraphicRendition {
+                    foreground: Some(*color),
+                    ..GraphicRendition::default()
+                },
+            },
+        );
+        column = column.saturating_add(width);
+    }
+    spans
 }
 
 /// Returns the rendered line index for the active overlay selection.

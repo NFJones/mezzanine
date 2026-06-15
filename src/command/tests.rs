@@ -1356,7 +1356,9 @@ fn list_themes_reports_builtin_defaults_without_runtime_config() {
     )
     .unwrap();
     let body = display_body(outcome);
-    assert!(body.contains("theme=kanagawa:source=builtin:active=true:action=set-theme kanagawa"));
+    assert!(
+        body.contains("theme=kanagawa:source=builtin:active=true:preview=█████:preview_colors=",)
+    );
     assert!(body.contains("theme=deepforest:source=builtin:active=false"));
     assert!(body.contains("theme=gruvbox_dark:source=builtin:active=false"));
     assert!(body.contains("theme=catppuccin_latte:source=builtin:active=false"));

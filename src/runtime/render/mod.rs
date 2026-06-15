@@ -57,7 +57,6 @@ use crate::terminal::{
 };
 use crate::transcript::AgentPresentationEntry;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use unicode_width::UnicodeWidthChar;
 
 mod attached_step;
 mod client_view;
@@ -1550,13 +1549,13 @@ mod tests {
     #[test]
     fn human_readable_display_lines_format_colon_delimited_records() {
         let lines = runtime_human_readable_display_lines(
-            "theme=kanagawa:source=builtin:active=true\nkey=C-a x:source=runtime-config:command=split-window -h",
+            "theme=kanagawa:source=builtin:active=true:preview=█████:preview_colors=#111111,#222222,#333333,#444444,#555555\nkey=C-a x:source=runtime-config:command=split-window -h",
         );
 
         assert_eq!(
             lines,
             vec![
-                "theme: kanagawa | source: builtin | active: yes",
+                "theme: kanagawa | source: builtin | active: yes | preview: █████",
                 "key: C-a x | source: runtime-config | command: split-window -h",
             ]
         );

@@ -555,25 +555,29 @@ pub(in crate::runtime) fn runtime_list_themes_command(
     custom_theme_names.sort();
     custom_theme_names.dedup();
 
-    let mut lines = BUILTIN_UI_THEME_NAMES
-        .iter()
-        .map(|theme| {
-            format!(
-                "theme={theme}:source=builtin:active={}:action=set-theme {theme}",
-                *theme == service.ui_theme.name
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    for theme in BUILTIN_UI_THEME_NAMES {
+        let definition = builtin_ui_theme_definition(theme)
+            .ok_or_else(|| MezError::config(format!("built-in theme `{theme}` is unavailable")))?;
+        let (preview, preview_colors) = crate::terminal::ui_theme_preview_fields(&definition);
+        lines.push(format!(
+            "theme={theme}:source=builtin:active={}:preview={preview}:preview_colors={preview_colors}:action=set-theme {theme}",
+            *theme == service.ui_theme.name
+        ));
+    }
     lines.extend(
         custom_theme_names
             .iter()
             .filter(|theme| !BUILTIN_UI_THEME_NAMES.contains(&theme.as_str()))
             .map(|theme| {
-                format!(
-                    "theme={theme}:source=config:active={}:action=set-theme {theme}",
+                let definition = runtime_theme_definition_for_selection(service, theme)?;
+                let (preview, preview_colors) = crate::terminal::ui_theme_preview_fields(&definition);
+                Ok(format!(
+                    "theme={theme}:source=config:active={}:preview={preview}:preview_colors={preview_colors}:action=set-theme {theme}",
                     theme == &service.ui_theme.name
-                )
-            }),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
     );
     Ok(lines.join("\n"))
 }

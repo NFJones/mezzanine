@@ -167,7 +167,7 @@ pub use theme::{
     BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
     UiThemeColors, UiThemeDefinition, builtin_ui_theme_definition, deepforest_ui_theme,
     default_ui_theme, is_builtin_ui_theme, parse_hex_color, resolve_ui_theme,
-    valid_color_alias_name,
+    ui_theme_preview_fields, valid_color_alias_name,
 };
 
 use client_loop::borrow_raw_fd;

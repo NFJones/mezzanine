@@ -669,9 +669,17 @@ pub(super) fn list_default_themes() -> String {
     crate::terminal::BUILTIN_UI_THEME_NAMES
         .iter()
         .map(|theme| {
+            let preview_fields = crate::terminal::builtin_ui_theme_definition(theme)
+                .map(|definition| {
+                    let (preview, preview_colors) =
+                        crate::terminal::ui_theme_preview_fields(&definition);
+                    format!(":preview={preview}:preview_colors={preview_colors}")
+                })
+                .unwrap_or_default();
             format!(
-                "theme={theme}:source=builtin:active={}:action=set-theme {theme}",
-                *theme == crate::terminal::DEFAULT_UI_THEME_NAME
+                "theme={theme}:source=builtin:active={}{}:action=set-theme {theme}",
+                *theme == crate::terminal::DEFAULT_UI_THEME_NAME,
+                preview_fields,
             )
         })
         .collect::<Vec<_>>()

@@ -68,7 +68,7 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 | `delete-buffer` | Delete a paste buffer. |
 | `show-messages` | Show diagnostics, pending approvals, and observer requests. |
 | `list-keys` | Show effective key bindings. |
-| `list-themes` | Show built-in and configured UI themes. |
+| `list-themes` | Show built-in and configured UI themes with short palette previews. |
 | `set-theme` | Switch the active UI theme by name. |
 | `bind-key` | Add or replace a live key binding. |
 | `unbind-key` | Remove a live key binding. |

@@ -125,6 +125,9 @@ pub const BUILTIN_UI_THEME_NAMES: &[&str] = &[
 /// Built-in theme selected when no explicit `theme.active` setting is present.
 pub const DEFAULT_UI_THEME_NAME: &str = "kanagawa";
 
+const THEME_PREVIEW_ALIAS_NAMES: &[&str] = &["primary", "secondary", "tertiary", "muted", "danger"];
+const THEME_PREVIEW_BLOCK: char = '█';
+
 const MIN_BUILTIN_LOW_EMPHASIS_CONTRAST_RATIO: f64 = 4.5;
 
 /// Foreground/background color pair for a UI element.
@@ -134,6 +137,18 @@ pub struct UiColorPair {
     pub foreground: TerminalColor,
     /// Full-row or component background color.
     pub background: TerminalColor,
+}
+
+/// Returns compact preview fields for one theme definition.
+pub fn ui_theme_preview_fields(definition: &UiThemeDefinition) -> (String, String) {
+    let colors = THEME_PREVIEW_ALIAS_NAMES
+        .iter()
+        .filter_map(|alias| definition.aliases.get(*alias))
+        .filter(|value| parse_hex_color(value).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    let preview = std::iter::repeat_n(THEME_PREVIEW_BLOCK, colors.len()).collect::<String>();
+    (preview, colors.join(","))
 }
 
 impl UiColorPair {
