@@ -117,6 +117,9 @@ pub(crate) fn provider_error_retry_class_from_parts(
     if provider_error_is_output_limit_exceeded(message, provider_failure_json) {
         return ProviderErrorRetryClass::OutputLimit;
     }
+    if provider_error_is_transient_overload_or_unavailable(message, provider_failure_json) {
+        return ProviderErrorRetryClass::RetryableTransport;
+    }
     if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
         if status_code == 400
             && (message.contains("Unsupported") || message.contains("unsupported"))
@@ -222,6 +225,38 @@ pub(crate) fn provider_error_invites_retry(
     .any(provider_error_text_invites_retry)
 }
 
+/// Reports whether provider diagnostics indicate a transient overload or
+/// temporary unavailability.
+///
+/// # Parameters
+/// - `message`: Primary provider error message attached to the runtime error.
+/// - `provider_failure_json`: Optional sanitized provider failure payload.
+pub(crate) fn provider_error_is_transient_overload_or_unavailable(
+    message: &str,
+    provider_failure_json: Option<&str>,
+) -> bool {
+    if provider_error_text_is_transient_overload_or_unavailable(message) {
+        return true;
+    }
+    let Some(provider_failure_json) = provider_failure_json else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(provider_failure_json) else {
+        return false;
+    };
+    [
+        "/error/message",
+        "/message",
+        "/body/error/message",
+        "/body/message",
+        "/response/error/message",
+    ]
+    .into_iter()
+    .filter_map(|pointer| value.pointer(pointer))
+    .filter_map(serde_json::Value::as_str)
+    .any(provider_error_text_is_transient_overload_or_unavailable)
+}
+
 /// Reports whether provider diagnostics indicate the request exceeded the
 /// model's input context limit.
 ///
@@ -310,6 +345,21 @@ fn provider_error_text_invites_retry(text: &str) -> bool {
         || lower.contains("you can retry the request")
         || (lower.contains("an error occurred while processing your request")
             && lower.contains("retry"))
+}
+
+/// Reports whether one provider error field indicates transient overload or
+/// temporary unavailability.
+///
+/// # Parameters
+/// - `text`: Provider diagnostic text to classify.
+fn provider_error_text_is_transient_overload_or_unavailable(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("api overloaded")
+        || lower.contains("server overloaded")
+        || lower.contains("server is overloaded")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("service unavailable")
+        || (lower.contains("overloaded") && lower.contains("try again"))
 }
 
 /// Reports whether one provider error field indicates an input context limit.

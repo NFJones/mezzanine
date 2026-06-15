@@ -3295,6 +3295,100 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies transient provider-authored overload failures still enter the
+/// runtime retry scheduler even when the provider surfaces them as 400-class
+/// invalid-state errors.
+///
+/// Some OpenAI Responses-compatible backends report overload conditions through
+/// provider-authored error payloads instead of 429 or 5xx statuses. This
+/// regression proves the actor still classifies those failures as retryable
+/// transport so the existing exponential backoff path owns recovery.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_retries_provider_overload_message_without_rate_limit_status() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "summarize the pane")
+        .unwrap();
+    assert!(start.contains(r#"state":"running""#) || start.contains(r#""state":"running""#), "{start}");
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let expected_agent = AgentId::opaque(pending[0].agent_id.clone()).unwrap();
+    let expected_turn = pending[0].turn_id.clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+
+    let client = async {
+        let mut failure = RuntimeEventBatch::new();
+        failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id: expected_agent.clone(),
+            turn_id: expected_turn.clone(),
+            kind: "invalid_state".to_string(),
+            message:
+                "OpenAI Responses API returned status 400: API overloaded, please try again later."
+                    .to_string(),
+            provider_failure_json: Some(
+                r#"{"status_code":400,"error":{"message":"API overloaded, please try again later."}}"#
+                    .to_string(),
+            ),
+            provider_raw_text: None,
+        }));
+        let failure_report = handle.submit_runtime_events(failure).await.unwrap();
+        assert_eq!(failure_report.accepted, 1);
+        assert_eq!(failure_report.applied, 1);
+
+        let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
+        let (retry_key, retry_delay_ms) = timer_effects
+            .iter()
+            .find_map(|effect| match effect {
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::ProviderRetry =>
+                {
+                    Some((key.clone(), *delay_ms))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
+        assert_eq!(retry_key.owner_id, expected_turn);
+        assert_eq!(retry_key.generation, 1);
+        assert_eq!(retry_delay_ms, 1_000);
+
+        let mut retry = RuntimeEventBatch::new();
+        retry.push(RuntimeEvent::Timer(TimerEvent {
+            key: retry_key,
+            now_ms: retry_delay_ms,
+        }));
+        let retry_report = handle.submit_runtime_events(retry).await.unwrap();
+        assert_eq!(retry_report.accepted, 1);
+        assert_eq!(retry_report.applied, 1);
+
+        let dispatches = handle
+            .drain_agent_provider_dispatch_side_effects(8)
+            .await
+            .unwrap();
+        assert_eq!(
+            dispatches,
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: expected_agent,
+                turn_id: expected_turn,
+            }]
+        );
+        assert_eq!(handle.shutdown().await.unwrap(), RuntimeLifecycleState::Running);
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(exit.metrics.runtime_side_effects_queued >= 2);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies provider output-limit failures use the retry timer path after
 /// mutating only active-turn retry guidance and the model profile output cap.
 ///
