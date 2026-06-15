@@ -1968,11 +1968,11 @@ readline-style input semantics for line editing, history navigation, cursor
 movement, deletion, and submission. Submitted command-prompt entries MUST be
 retained across command-prompt openings using the same bounded retention and
 lookup semantics as agent prompt history, including Up/Down navigation and
-fzf-style `Ctrl+R` incremental reverse search. While incremental reverse
+`Ctrl+R` incremental reverse search. While incremental reverse
 search is active, the prompt MUST render in the form
 `(reverse-i-search'<substring>'): <item>`, where `<substring>` is the typed
 search query and `<item>` is the nearest history entry that matches the query
-as a case-insensitive substring or ordered-character fuzzy match. Repeated
+as a case-insensitive substring. Repeated
 `Ctrl+R` MUST search backward toward older matching entries, and the prompt MUST
 provide a forward search binding for cycling toward newer matching entries.
 Enter and Right arrow MUST accept the displayed match into the editable buffer
@@ -2010,9 +2010,9 @@ the prompt surface so embedded newlines in the pasted payload do not submit the
 prompt unless the user presses the normal submission key after the paste.
 
 The agent prompt MUST support Up/Down arrow navigation through submitted prompt
-history and fzf-style `Ctrl+R` incremental reverse search through that history
-using the same `(reverse-i-search'<substring>'): <item>` prompt format and
-case-insensitive substring or ordered-character matching as the primary command
+history and `Ctrl+R` incremental reverse search through that history using the
+same `(reverse-i-search'<substring>'): <item>` prompt format and
+case-insensitive substring matching as the primary command
 prompt, including the same accept and cancel bindings.
 `Ctrl+L`
 MUST scroll the active pane's used visible rows into retained history and clear

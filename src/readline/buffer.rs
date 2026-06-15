@@ -597,7 +597,8 @@ impl ReadlineBuffer {
         true
     }
 
-    /// Search backward through submitted history using the current draft as the query.
+    /// Search backward through submitted history using the current draft as a
+    /// case-insensitive substring query.
     pub fn history_search_backward(&mut self) -> bool {
         if self.history.is_empty() {
             return false;
@@ -617,7 +618,7 @@ impl ReadlineBuffer {
         let mut index = self.history_cursor.unwrap_or(self.history.len());
         while index > 0 {
             index -= 1;
-            if history_entry_fuzzy_matches_query(&self.history[index], &query) {
+            if history_entry_contains_query_substring(&self.history[index], &query) {
                 self.load_history_index(index);
                 return true;
             }
@@ -625,31 +626,37 @@ impl ReadlineBuffer {
         false
     }
 
-    /// Returns the nearest earlier history entry that fuzzy-matches `query`.
+    /// Returns the nearest earlier history entry that contains `query` as a
+    /// case-insensitive substring.
     ///
     /// # Parameters
     /// - `query`: Search text to match. Empty queries match any history entry.
     /// - `before`: Exclusive upper-bound index for the search.
-    pub(super) fn history_fuzzy_match_before(&self, query: &str, before: usize) -> Option<usize> {
+    pub(super) fn history_substring_match_before(
+        &self,
+        query: &str,
+        before: usize,
+    ) -> Option<usize> {
         let mut index = before.min(self.history.len());
         while index > 0 {
             index -= 1;
-            if history_entry_fuzzy_matches_query(&self.history[index], query) {
+            if history_entry_contains_query_substring(&self.history[index], query) {
                 return Some(index);
             }
         }
         None
     }
 
-    /// Returns the nearest later history entry that fuzzy-matches `query`.
+    /// Returns the nearest later history entry that contains `query` as a
+    /// case-insensitive substring.
     ///
     /// # Parameters
     /// - `query`: Search text to match. Empty queries match any history entry.
     /// - `after`: Exclusive lower-bound index for the search.
-    pub(super) fn history_fuzzy_match_after(&self, query: &str, after: usize) -> Option<usize> {
+    pub(super) fn history_substring_match_after(&self, query: &str, after: usize) -> Option<usize> {
         let start = after.saturating_add(1);
         (start..self.history.len())
-            .find(|index| history_entry_fuzzy_matches_query(&self.history[*index], query))
+            .find(|index| history_entry_contains_query_substring(&self.history[*index], query))
     }
 
     /// Loads one history entry as an incremental search match.
@@ -822,24 +829,13 @@ impl ReadlineBuffer {
 /// Returns whether one history entry should appear for an incremental search
 /// query.
 ///
-/// Reverse search keeps readline's recency-oriented traversal, but matching is
-/// fzf-like: case-insensitive contiguous substrings match anywhere in the entry,
-/// and non-contiguous ordered character matches are accepted as a fallback.
-fn history_entry_fuzzy_matches_query(entry: &str, query: &str) -> bool {
+/// Reverse search keeps readline's recency-oriented traversal and requires a
+/// case-insensitive substring match anywhere in the history entry.
+fn history_entry_contains_query_substring(entry: &str, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
-    let entry = entry.to_lowercase();
-    let query = query.to_lowercase();
-    entry.contains(&query) || history_entry_contains_ordered_query_chars(&entry, &query)
-}
-
-/// Returns whether `entry` contains all query characters in order.
-fn history_entry_contains_ordered_query_chars(entry: &str, query: &str) -> bool {
-    let mut entry_chars = entry.chars();
-    query
-        .chars()
-        .all(|query_ch| entry_chars.any(|entry_ch| entry_ch == query_ch))
+    entry.to_lowercase().contains(&query.to_lowercase())
 }
 
 /// Selects whether pasted block markers render as labels or exact content.

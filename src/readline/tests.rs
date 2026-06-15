@@ -400,20 +400,20 @@ fn readline_history_search_backward_matches_internal_substrings() {
     assert_eq!(buffer.line(), "show list-buffers");
 }
 
-/// Verifies reverse search accepts ordered-character fuzzy matches so compact
-/// fzf-style queries can find command names without typing contiguous text.
+/// Verifies reverse search rejects entries that only satisfy an ordered-character
+/// fuzzy match and lack the typed substring.
 #[test]
-fn readline_history_search_backward_matches_ordered_query_characters() {
+fn readline_history_search_backward_requires_contiguous_substrings() {
     let mut buffer = ReadlineBuffer::new();
-    buffer.insert_text("list-buffers");
-    assert_eq!(buffer.submit(), "list-buffers");
-    buffer.insert_text("show sessions");
-    assert_eq!(buffer.submit(), "show sessions");
-    buffer.insert_text("lb");
+    buffer.insert_text("show /loop status");
+    assert_eq!(buffer.submit(), "show /loop status");
+    buffer.insert_text("show /long/output");
+    assert_eq!(buffer.submit(), "show /long/output");
+    buffer.insert_text("/loop");
 
     assert!(buffer.history_search_backward());
 
-    assert_eq!(buffer.line(), "list-buffers");
+    assert_eq!(buffer.line(), "show /loop status");
 }
 
 /// Verifies readline editing history entry exits history navigation.
@@ -910,6 +910,29 @@ fn readline_reverse_i_search_updates_query_from_typed_input() {
     assert_eq!(prompt.render(), "(reverse-i-search'proj'): project status");
 }
 
+/// Verifies Ctrl+R skips newer fuzzy-only candidates and lands on the nearest
+/// history entry that contains the typed substring.
+#[test]
+fn readline_reverse_i_search_requires_substring_matches() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.buffer.set_history(vec![
+        "show /loop status".to_string(),
+        "show /long/output".to_string(),
+    ]);
+    prompt.buffer.set_line("/loop");
+
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x12").unwrap(),
+        ReadlineOutcome::Edited
+    );
+
+    assert_eq!(prompt.buffer.line(), "show /loop status");
+    assert_eq!(
+        prompt.render(),
+        "(reverse-i-search'/loop'): show /loop status"
+    );
+}
+
 /// Verifies repeated Ctrl+R walks backward, Tab walks forward, and Shift-Tab
 /// walks backward through matching reverse-search history entries.
 #[test]
@@ -1136,7 +1159,7 @@ fn readline_terminal_input_maps_ctrl_r_history_search() {
 }
 
 /// Verifies that encoded Ctrl+R key sequences from modern terminals map to the
-/// same reverse fuzzy history search as the legacy ASCII control byte.
+/// same reverse history search as the legacy ASCII control byte.
 ///
 /// Some terminals emit CSI-u or xterm modifyOtherKeys sequences for modified
 /// printable keys. The attached agent and command prompts still need those

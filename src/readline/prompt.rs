@@ -223,10 +223,10 @@ impl ReadlinePrompt {
         let next = if forward {
             search
                 .matched_index
-                .and_then(|index| self.buffer.history_fuzzy_match_after(&query, index))
+                .and_then(|index| self.buffer.history_substring_match_after(&query, index))
         } else {
             let before = search.matched_index.unwrap_or(self.buffer.history().len());
-            self.buffer.history_fuzzy_match_before(&query, before)
+            self.buffer.history_substring_match_before(&query, before)
         };
         self.set_reverse_search_match(next)
     }
@@ -281,7 +281,7 @@ impl ReadlinePrompt {
         let query = search.query.clone();
         let next = self
             .buffer
-            .history_fuzzy_match_before(&query, self.buffer.history().len());
+            .history_substring_match_before(&query, self.buffer.history().len());
         let _ = self.set_reverse_search_match(next);
     }
 
