@@ -2528,6 +2528,130 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
     assert!(repair_message.contains("apply_patch"), "{repair_message}");
 }
 
+/// Verifies mixed capability-routing batches defer heredoc shell validation.
+/// 
+/// When a provider combines `request_capability` with a shell command that
+/// would otherwise fail MAAP validation, the runner must treat the response as
+/// mixed capability routing first, avoid executing or validating the deferred
+/// shell payload, and ask the model to re-emit work on the expanded surface.
+#[test]
+fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
+    let turn = turn();
+    let mut deferred_heredoc = shell_action("shell-heredoc");
+    if let AgentActionPayload::ShellCommand {
+        command, summary, ..
+    } = &mut deferred_heredoc.payload
+    {
+        *summary = "Write a Rust file with a heredoc".to_string();
+        *command = "cat > hello.rs <<'EOF'\nfn main() {}\nEOF".to_string();
+    }
+    let provider = SequencedProvider::new(vec![
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "request shell and write file".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![
+                    capability_action("capability-1", AgentCapability::Shell),
+                    deferred_heredoc,
+                ],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "ready".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "Ready.")],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default()
+        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+                memory_actions_enabled: false,
+                issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "write a short Rust program".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.response.raw_text, "ready");
+    assert!(execution
+        .action_results
+        .iter()
+        .all(|result| result.action_type != "shell_command"));
+    assert!(execution
+        .request
+        .messages
+        .iter()
+        .all(|message| !message.content.contains("ephemeral maap repair")));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].interaction_kind,
+        crate::agent::ModelInteractionKind::ActionExecution
+    );
+    let recovery_context = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.content.contains("[mixed capability batch recovery]"))
+        .expect("missing mixed capability recovery context");
+    assert!(recovery_context.content.contains("shell_command"));
+    assert!(!recovery_context
+        .content
+        .contains("heredoc redirection is disabled"));
+}
+
 /// Verifies that malformed provider-native MAAP output can also be repaired
 /// without surfacing the malformed output as a durable turn when the retry
 /// returns a valid action batch.
