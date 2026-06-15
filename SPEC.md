@@ -3484,11 +3484,14 @@ The harness MUST decide deterministically whether that capability may be exposed
 for the current turn and MUST feed the decision back to the model as context.
 The model MAY include `say` in the same capability-decision batch as one or more
 `request_capability` actions; the harness MUST treat the batch as one combined
-capability request. A capability-decision batch MUST reject `request_capability`
-combined with executable, blocking, mutation, MCP, subagent, or configuration
-actions. When any requested capability is granted, the next action-execution
-request MUST expose the union of action subsets associated with granted
-capabilities, the non-executing `request_capability` action, and
+capability request. If a batch combines `request_capability` with executable,
+blocking, mutation, MCP, subagent, or configuration actions, the harness MUST
+NOT execute any action from that mixed batch. It MUST handle the
+`request_capability` actions as a capability request and feed the model
+corrective context to re-emit any deferred work on the resulting action surface.
+When any requested capability is granted, the next action-execution request
+MUST expose the union of action subsets associated with granted capabilities,
+the non-executing `request_capability` action, and
 visible responses such as `say`. If
 `request_capability` is emitted during action execution, the next
 action-execution request MUST retain the already granted action surface and add

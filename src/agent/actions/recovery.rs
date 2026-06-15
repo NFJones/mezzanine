@@ -53,16 +53,10 @@ pub(super) struct CapabilityRequest {
     pub(super) reason: String,
 }
 
-/// Extracts capability requests from a non-executing capability negotiation.
-///
-/// A provider schema may allow the model to include a visible `say` alongside
-/// one or more `request_capability` actions during the initial capability
-/// decision or later action execution. Treat the batch as one combined
-/// capability decision, but reject mixed executable or blocking work so the
-/// controller can update the action surface before any effects run.
-pub(super) fn capability_requests_from_batch(
+/// Splits one MAAP batch into capability requests and non-say actions.
+fn capability_requests_and_incompatible_actions(
     batch: &MaapBatch,
-) -> Result<Option<Vec<CapabilityRequest>>> {
+) -> (Vec<CapabilityRequest>, Vec<String>) {
     let mut requests = Vec::new();
     let mut incompatible_actions = Vec::new();
     for action in &batch.actions {
@@ -77,6 +71,20 @@ pub(super) fn capability_requests_from_batch(
             _ => incompatible_actions.push(action.action_type().to_string()),
         }
     }
+    (requests, incompatible_actions)
+}
+
+/// Extracts capability requests from a non-executing capability negotiation.
+///
+/// A provider schema may allow the model to include a visible `say` alongside
+/// one or more `request_capability` actions during the initial capability
+/// decision or later action execution. Treat the batch as one combined
+/// capability decision, but reject mixed executable or blocking work so the
+/// controller can update the action surface before any effects run.
+pub(super) fn capability_requests_from_batch(
+    batch: &MaapBatch,
+) -> Result<Option<Vec<CapabilityRequest>>> {
+    let (requests, incompatible_actions) = capability_requests_and_incompatible_actions(batch);
     if requests.is_empty() {
         return Ok(None);
     }
@@ -87,6 +95,31 @@ pub(super) fn capability_requests_from_batch(
         )));
     }
     Ok(Some(requests))
+}
+
+/// Builds a recovery continuation for mixed capability and execution batches.
+pub(super) fn mixed_capability_continuation_request(
+    previous_request: &ModelRequest,
+    batch: &MaapBatch,
+) -> Option<ModelRequest> {
+    let (requests, incompatible_actions) = capability_requests_and_incompatible_actions(batch);
+    if requests.is_empty() || incompatible_actions.is_empty() {
+        return None;
+    }
+    let mut request = capability_continuation_request(previous_request, &requests);
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Developer,
+        source: ContextSourceKind::DeveloperInstruction,
+        content: format!(
+            "[mixed capability batch recovery]\n\
+             The previous provider response combined request_capability with non-say actions: {}. \
+             Mezzanine treated that response as a capability request and did not execute any action from the mixed batch. \
+             Re-emit the deferred work as one valid action batch on the current allowed action surface; \
+             if a deferred action is now allowed and still useful, emit it again as a fresh action.",
+            incompatible_actions.join(",")
+        ),
+    });
+    Some(request)
 }
 
 /// Builds the next provider request after a non-executing capability request.

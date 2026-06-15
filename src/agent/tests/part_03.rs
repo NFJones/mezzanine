@@ -618,6 +618,117 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     );
 }
 
+/// Verifies mixed capability-routing and executable batches recover without effects.
+///
+/// A model may request a missing capability and optimistically include the
+/// action that needs it in the same response. The controller must not execute
+/// that invalid mixed batch, but it should still honor the capability request
+/// and ask the model to re-emit deferred work on the expanded action surface.
+#[test]
+fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "request shell and run it".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![
+                    capability_action("capability-1", AgentCapability::Shell),
+                    shell_action("shell-1"),
+                ],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "ready".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "Ready.")],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default()
+        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "inspect the repository".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert!(execution
+        .action_results
+        .iter()
+        .all(|result| result.action_type != "shell_command"));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].interaction_kind,
+        crate::agent::ModelInteractionKind::ActionExecution
+    );
+    let execution_actions = requests[1].allowed_actions.action_type_names();
+    assert!(execution_actions.contains(&"shell_command"));
+    assert!(execution_actions.contains(&"apply_patch"));
+    assert!(execution_actions.contains(&"request_capability"));
+    let recovery_context = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.content.contains("[mixed capability batch recovery]"))
+        .expect("missing mixed capability recovery context");
+    assert!(recovery_context.content.contains("shell_command"));
+}
+
 /// Verifies disabled local issue tracking denies issue capability before the
 /// provider-visible issue action surface can be exposed.
 ///

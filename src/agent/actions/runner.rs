@@ -26,7 +26,7 @@ use super::execution::{
 use super::recovery::{
     FailureSummaryInput, FailureSummaryScope, capability_continuation_request,
     capability_requests_from_batch, failed_maap_validation_execution_with_summary_async,
-    maap_provider_error_is_repairable, maap_repair_request,
+    maap_provider_error_is_repairable, maap_repair_request, mixed_capability_continuation_request,
     provider_error_should_retry_without_summary, summarize_controller_failure_execution_async,
     summarize_provider_failure_execution_async, validate_batch_allowed_actions,
 };
@@ -211,6 +211,13 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             let Some(batch) = &response.action_batch else {
                 break response;
             };
+            if let Some(next_request) =
+                mixed_capability_continuation_request(&response_request, batch)
+            {
+                request = next_request;
+                repair_attempts = 0;
+                continue;
+            }
             if let Err(error) = validate_batch_allowed_actions(batch, &request) {
                 if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
                     repair_attempts = repair_attempts.saturating_add(1);
@@ -570,6 +577,13 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             let Some(batch) = &response.action_batch else {
                 break response;
             };
+            if let Some(next_request) =
+                mixed_capability_continuation_request(&response_request, batch)
+            {
+                request = next_request;
+                repair_attempts = 0;
+                continue;
+            }
             if let Err(error) = validate_batch_allowed_actions(batch, &request) {
                 if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
                     repair_attempts = repair_attempts.saturating_add(1);
