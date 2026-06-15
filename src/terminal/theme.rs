@@ -151,6 +151,28 @@ pub fn ui_theme_preview_fields(definition: &UiThemeDefinition) -> (String, Strin
     (preview, colors.join(","))
 }
 
+/// Returns the fixed-column header used by theme listing commands.
+pub fn ui_theme_list_table_header() -> String {
+    format!(
+        "{:<9}  {:<22}  {:<7}  {:<7}  {:<46}  {}",
+        "active", "theme", "preview", "source", "preview colors", "action"
+    )
+}
+
+/// Returns one fixed-column row for a theme listing command.
+pub fn ui_theme_list_table_row(
+    theme: &str,
+    source: &str,
+    active: bool,
+    definition: &UiThemeDefinition,
+) -> String {
+    let (preview, preview_colors) = ui_theme_preview_fields(definition);
+    let active_marker = if active { "★ active" } else { "—" };
+    format!(
+        "{active_marker:<9}  {theme:<22}  {preview:<7}  {source:<7}  {preview_colors:<46}  set-theme {theme}"
+    )
+}
+
 impl UiColorPair {
     /// Converts the pair into terminal rendition attributes.
     pub fn rendition(self) -> GraphicRendition {

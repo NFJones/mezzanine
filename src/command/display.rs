@@ -666,24 +666,18 @@ pub(super) fn list_baseline_commands() -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn list_default_themes() -> String {
-    crate::terminal::BUILTIN_UI_THEME_NAMES
-        .iter()
-        .map(|theme| {
-            let preview_fields = crate::terminal::builtin_ui_theme_definition(theme)
-                .map(|definition| {
-                    let (preview, preview_colors) =
-                        crate::terminal::ui_theme_preview_fields(&definition);
-                    format!(":preview={preview}:preview_colors={preview_colors}")
-                })
-                .unwrap_or_default();
-            format!(
-                "theme={theme}:source=builtin:active={}{}:action=set-theme {theme}",
-                *theme == crate::terminal::DEFAULT_UI_THEME_NAME,
-                preview_fields,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = vec![crate::terminal::ui_theme_list_table_header()];
+    lines.extend(crate::terminal::BUILTIN_UI_THEME_NAMES.iter().map(|theme| {
+        let definition = crate::terminal::builtin_ui_theme_definition(theme)
+            .expect("built-in theme names must resolve to definitions for list-themes output");
+        crate::terminal::ui_theme_list_table_row(
+            theme,
+            "builtin",
+            *theme == crate::terminal::DEFAULT_UI_THEME_NAME,
+            &definition,
+        )
+    }));
+    lines.join("\n")
 }
 
 /// Runs the mutated pane command outcome operation for this subsystem.
