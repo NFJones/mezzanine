@@ -2821,6 +2821,18 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
         "{response}"
     );
     assert!(
+        response.contains(
+            "| `$add-issues` | builtin | Use when recent findings should be turned into Mezzanine project issue tracker entries. |"
+        ),
+        "{response}"
+    );
+    assert!(
+        response.contains(
+            "| `$fix-issues` | builtin | Use when you need to query the current project's Mez issue tracker, fix the returned issues, keep progress notes current, and remove verified fixed issues from the tracker. |"
+        ),
+        "{response}"
+    );
+    assert!(
         response.contains("| `$review` | user | Review workflow |"),
         "{response}"
     );
@@ -2848,6 +2860,18 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
     assert!(
         response
             .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
+        "{response}"
+    );
+    assert!(
+        response.contains(
+            "| `$add-issues` | builtin | Use when recent findings should be turned into Mezzanine project issue tracker entries. |"
+        ),
+        "{response}"
+    );
+    assert!(
+        response.contains(
+            "| `$fix-issues` | builtin | Use when you need to query the current project's Mez issue tracker, fix the returned issues, keep progress notes current, and remove verified fixed issues from the tracker. |"
+        ),
         "{response}"
     );
     assert!(

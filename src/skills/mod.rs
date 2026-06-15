@@ -27,6 +27,10 @@ pub const SKILL_FILE_NAME: &str = "SKILL.md";
 pub const SKILL_ADDITIONAL_CONTEXT_HEADING: &str = "## Additional context";
 /// Stable name for the built-in skill-authoring workflow.
 pub const BUILTIN_CREATE_SKILL_NAME: &str = "create-skill";
+/// Stable name for the built-in issue filing workflow.
+pub const BUILTIN_ADD_ISSUES_SKILL_NAME: &str = "add-issues";
+/// Stable name for the built-in issue fixing workflow.
+pub const BUILTIN_FIX_ISSUES_SKILL_NAME: &str = "fix-issues";
 /// Stable name for the built-in Mezzanine reference workflow.
 pub const BUILTIN_MEZ_REFERENCE_SKILL_NAME: &str = "mez-reference";
 /// Virtual path prefix used for built-in skills that do not live on disk.
@@ -34,6 +38,11 @@ pub const BUILTIN_SKILL_PATH_PREFIX: &str = "<builtin>";
 
 const BUILTIN_CREATE_SKILL_DESCRIPTION: &str = "Create or modify concise Mezzanine skills in user or project scope. Use when the user asks to add, update, refactor, or repair a skill, SKILL.md, or skill resources.";
 const BUILTIN_CREATE_SKILL_TEXT: &str = include_str!("builtin/create-skill/SKILL.md");
+const BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION: &str =
+    "Use when recent findings should be turned into Mezzanine project issue tracker entries.";
+const BUILTIN_ADD_ISSUES_SKILL_TEXT: &str = include_str!("builtin/add-issues/SKILL.md");
+const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, fix the returned issues, keep progress notes current, and remove verified fixed issues from the tracker.";
+const BUILTIN_FIX_ISSUES_SKILL_TEXT: &str = include_str!("builtin/fix-issues/SKILL.md");
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
 const BUILTIN_MEZ_REFERENCE_SKILL_TEXT: &str = include_str!("builtin/mez-reference/SKILL.md");
 
@@ -284,6 +293,14 @@ fn builtin_skill_summaries() -> Vec<SkillSummary> {
     [
         (BUILTIN_CREATE_SKILL_NAME, BUILTIN_CREATE_SKILL_DESCRIPTION),
         (
+            BUILTIN_ADD_ISSUES_SKILL_NAME,
+            BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION,
+        ),
+        (
+            BUILTIN_FIX_ISSUES_SKILL_NAME,
+            BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION,
+        ),
+        (
             BUILTIN_MEZ_REFERENCE_SKILL_NAME,
             BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION,
         ),
@@ -315,6 +332,8 @@ fn builtin_skill_path(name: &str) -> PathBuf {
 fn builtin_skill_text(name: &str) -> Option<String> {
     match name {
         BUILTIN_CREATE_SKILL_NAME => Some(BUILTIN_CREATE_SKILL_TEXT.to_string()),
+        BUILTIN_ADD_ISSUES_SKILL_NAME => Some(BUILTIN_ADD_ISSUES_SKILL_TEXT.to_string()),
+        BUILTIN_FIX_ISSUES_SKILL_NAME => Some(BUILTIN_FIX_ISSUES_SKILL_TEXT.to_string()),
         BUILTIN_MEZ_REFERENCE_SKILL_NAME => Some(format_builtin_mez_reference_skill()),
         _ => None,
     }
@@ -574,8 +593,9 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILTIN_CREATE_SKILL_NAME, BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX,
-        SkillSource, discover_skill_catalog, is_valid_skill_name, load_skill_document,
+        BUILTIN_ADD_ISSUES_SKILL_NAME, BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME,
+        BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, SkillSource,
+        discover_skill_catalog, is_valid_skill_name, load_skill_document,
         parse_skill_prompt_invocation, skill_context_text, split_skill_front_matter,
     };
     use std::fs;
@@ -646,7 +666,14 @@ mod tests {
 
         assert_eq!(
             catalog.names(),
-            vec!["audit", "create-skill", "mez-reference", "ship-it"]
+            vec![
+                "add-issues",
+                "audit",
+                "create-skill",
+                "fix-issues",
+                "mez-reference",
+                "ship-it",
+            ]
         );
         let overridden = catalog.get("ship-it").unwrap();
         assert_eq!(overridden.description, "Project workflow");
@@ -697,6 +724,16 @@ mod tests {
                 .path
                 .starts_with(PathBuf::from(BUILTIN_SKILL_PATH_PREFIX))
         );
+        assert!(
+            catalog
+                .model_catalog_text()
+                .contains("- add-issues (builtin)")
+        );
+        assert!(
+            catalog
+                .model_catalog_text()
+                .contains("- fix-issues (builtin)")
+        );
 
         let document = load_skill_document(summary).unwrap();
         let (front_matter, body) = split_skill_front_matter(&document.text).unwrap();
@@ -710,6 +747,34 @@ mod tests {
                 .summary
                 .description
                 .contains("Create or modify concise Mezzanine skills")
+        );
+
+        let add_issues_document =
+            load_skill_document(catalog.get(BUILTIN_ADD_ISSUES_SKILL_NAME).unwrap()).unwrap();
+        assert!(add_issues_document.text.contains("name: add-issues"));
+        assert!(
+            add_issues_document
+                .text
+                .contains("Use the local issue-tracker MAAP actions directly")
+        );
+        assert!(
+            add_issues_document
+                .text
+                .contains("request the `issues` capability before proceeding")
+        );
+
+        let fix_issues_document =
+            load_skill_document(catalog.get(BUILTIN_FIX_ISSUES_SKILL_NAME).unwrap()).unwrap();
+        assert!(fix_issues_document.text.contains("name: fix-issues"));
+        assert!(
+            fix_issues_document
+                .text
+                .contains("Store the plan in the issue notes field")
+        );
+        assert!(
+            fix_issues_document.text.contains(
+                "Do not delete an issue until implementation and verification are complete"
+            )
         );
 
         let reference_document =
