@@ -474,6 +474,8 @@ fn builtin_theme_registry_includes_common_variants_without_duplicates() {
 
     for expected in [
         "acid_grapefruit",
+        "acid_lemon",
+        "acid_tangerine",
         "acid_lime",
         "apprentice",
         "catppuccin_latte",
@@ -735,11 +737,241 @@ fn acid_grapefruit_builtin_theme_matches_documented_reference_palette() {
     assert_eq!(definition.colors, expected_colors);
 }
 
+/// Verifies the built-in acid_lemon theme preserves the derived lemon
+/// reference alias palette and full color-slot mapping.
+///
+/// The acid-family themes are exact snapshot-style built-ins. Keeping this full
+/// mapping in test coverage makes the yellow hue-shift reproducible for users
+/// and for later acid-family siblings.
+#[test]
+fn acid_lemon_builtin_theme_matches_documented_reference_palette() {
+    let definition = builtin_ui_theme_definition("acid_lemon").expect("missing acid_lemon theme");
+    let expected_aliases = [
+        ("primary", "#ffe600"),
+        ("secondary", "#bfa83f"),
+        ("tertiary", "#fff25f"),
+        ("thinking", "#d8cf9a"),
+        ("danger", "#ff5c57"),
+        ("foreground", "#fff8d8"),
+        ("muted", "#7f743c"),
+        ("surface", "#1f1b0a"),
+        ("danger_foreground", "#ff7b74"),
+        ("danger_text", "#140200"),
+        ("muted_text", "#121006"),
+        ("primary_foreground", "#fff45a"),
+        ("primary_text", "#141200"),
+        ("secondary_foreground", "#e8ce5a"),
+        ("secondary_text", "#141200"),
+        ("tertiary_foreground", "#fff68a"),
+        ("tertiary_text", "#141200"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect::<BTreeMap<_, _>>();
+    let expected_colors = [
+        ("window_frame_fg", "primary_foreground"),
+        ("window_frame_bg", "surface"),
+        ("window_active_fg", "primary_text"),
+        ("window_active_bg", "primary"),
+        ("window_inactive_fg", "secondary_text"),
+        ("window_inactive_bg", "secondary"),
+        ("pane_frame_active_fg", "secondary_text"),
+        ("pane_frame_active_bg", "secondary"),
+        ("pane_frame_inactive_fg", "muted"),
+        ("pane_frame_inactive_bg", "surface"),
+        ("pane_border_active_fg", "primary_foreground"),
+        ("pane_border_active_bg", "surface"),
+        ("pane_border_inactive_fg", "muted"),
+        ("pane_border_inactive_bg", "surface"),
+        ("pane_divider_fg", "tertiary_foreground"),
+        ("pane_divider_bg", "surface"),
+        ("frame_fill_fg", "foreground"),
+        ("frame_fill_bg", "surface"),
+        ("scroll_indicator_fg", "tertiary_text"),
+        ("scroll_indicator_bg", "tertiary"),
+        ("pane_pwd_fg", "muted_text"),
+        ("pane_pwd_bg", "muted"),
+        ("window_status_uptime_fg", "secondary_text"),
+        ("window_status_uptime_bg", "secondary"),
+        ("window_status_datetime_fg", "tertiary_text"),
+        ("window_status_datetime_bg", "tertiary"),
+        ("prompt_fg", "primary_foreground"),
+        ("prompt_bg", "surface"),
+        ("agent_prompt_fg", "#fffbe2"),
+        ("agent_prompt_bg", "#25210c"),
+        ("agent_transcript_user_fg", "primary_foreground"),
+        ("agent_transcript_user_bg", "surface"),
+        ("agent_transcript_assistant_fg", "secondary_foreground"),
+        ("agent_transcript_assistant_bg", "surface"),
+        ("agent_transcript_status_fg", "thinking"),
+        ("agent_transcript_status_bg", "surface"),
+        ("agent_transcript_error_fg", "danger_foreground"),
+        ("agent_transcript_error_bg", "surface"),
+        ("agent_transcript_command_fg", "tertiary_foreground"),
+        ("agent_transcript_command_bg", "surface"),
+        ("agent_model_fg", "secondary_text"),
+        ("agent_model_bg", "secondary"),
+        ("agent_reasoning_fg", "tertiary_text"),
+        ("agent_reasoning_bg", "tertiary"),
+        ("agent_status_idle_fg", "muted_text"),
+        ("agent_status_idle_bg", "muted"),
+        ("agent_status_running_fg", "primary_text"),
+        ("agent_status_running_bg", "primary"),
+        ("agent_status_blocked_fg", "tertiary_text"),
+        ("agent_status_blocked_bg", "tertiary"),
+        ("agent_status_failed_fg", "danger_text"),
+        ("agent_status_failed_bg", "danger"),
+        ("display_overlay_fg", "secondary_foreground"),
+        ("display_overlay_bg", "surface"),
+        ("copy_selection_fg", "tertiary_text"),
+        ("copy_selection_bg", "tertiary"),
+        ("syntax_plain_fg", "foreground"),
+        ("syntax_plain_bg", "surface"),
+        ("syntax_keyword_fg", "primary_foreground"),
+        ("syntax_keyword_bg", "surface"),
+        ("syntax_string_fg", "tertiary_foreground"),
+        ("syntax_string_bg", "surface"),
+        ("syntax_comment_fg", "thinking"),
+        ("syntax_comment_bg", "surface"),
+        ("syntax_type_fg", "secondary_foreground"),
+        ("syntax_type_bg", "surface"),
+        ("syntax_function_fg", "primary_foreground"),
+        ("syntax_function_bg", "surface"),
+        ("syntax_number_fg", "tertiary_foreground"),
+        ("syntax_number_bg", "surface"),
+        ("syntax_operator_fg", "muted"),
+        ("syntax_operator_bg", "surface"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(definition.aliases, expected_aliases);
+    assert_eq!(definition.colors, expected_colors);
+}
+
+/// Verifies the built-in acid_tangerine theme preserves the derived tangerine
+/// reference alias palette and full color-slot mapping.
+///
+/// The acid-family themes are exact snapshot-style built-ins. Keeping this full
+/// mapping in test coverage makes the orange hue-shift reproducible for users
+/// and for later acid-family siblings.
+#[test]
+fn acid_tangerine_builtin_theme_matches_documented_reference_palette() {
+    let definition = builtin_ui_theme_definition("acid_tangerine")
+        .expect("missing acid_tangerine theme");
+    let expected_aliases = [
+        ("primary", "#ff8a00"),
+        ("secondary", "#bf6f3f"),
+        ("tertiary", "#ffb15f"),
+        ("thinking", "#d8b69a"),
+        ("danger", "#ff5c57"),
+        ("foreground", "#ffe8d8"),
+        ("muted", "#7f5a3c"),
+        ("surface", "#1f120a"),
+        ("danger_foreground", "#ff8a74"),
+        ("danger_text", "#140200"),
+        ("muted_text", "#120a06"),
+        ("primary_foreground", "#ffb45a"),
+        ("primary_text", "#140800"),
+        ("secondary_foreground", "#e8975a"),
+        ("secondary_text", "#140800"),
+        ("tertiary_foreground", "#ffc98a"),
+        ("tertiary_text", "#140900"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect::<BTreeMap<_, _>>();
+    let expected_colors = [
+        ("window_frame_fg", "primary_foreground"),
+        ("window_frame_bg", "surface"),
+        ("window_active_fg", "primary_text"),
+        ("window_active_bg", "primary"),
+        ("window_inactive_fg", "secondary_text"),
+        ("window_inactive_bg", "secondary"),
+        ("pane_frame_active_fg", "secondary_text"),
+        ("pane_frame_active_bg", "secondary"),
+        ("pane_frame_inactive_fg", "muted"),
+        ("pane_frame_inactive_bg", "surface"),
+        ("pane_border_active_fg", "primary_foreground"),
+        ("pane_border_active_bg", "surface"),
+        ("pane_border_inactive_fg", "muted"),
+        ("pane_border_inactive_bg", "surface"),
+        ("pane_divider_fg", "tertiary_foreground"),
+        ("pane_divider_bg", "surface"),
+        ("frame_fill_fg", "foreground"),
+        ("frame_fill_bg", "surface"),
+        ("scroll_indicator_fg", "tertiary_text"),
+        ("scroll_indicator_bg", "tertiary"),
+        ("pane_pwd_fg", "muted_text"),
+        ("pane_pwd_bg", "muted"),
+        ("window_status_uptime_fg", "secondary_text"),
+        ("window_status_uptime_bg", "secondary"),
+        ("window_status_datetime_fg", "tertiary_text"),
+        ("window_status_datetime_bg", "tertiary"),
+        ("prompt_fg", "primary_foreground"),
+        ("prompt_bg", "surface"),
+        ("agent_prompt_fg", "#fff0e2"),
+        ("agent_prompt_bg", "#25160c"),
+        ("agent_transcript_user_fg", "primary_foreground"),
+        ("agent_transcript_user_bg", "surface"),
+        ("agent_transcript_assistant_fg", "secondary_foreground"),
+        ("agent_transcript_assistant_bg", "surface"),
+        ("agent_transcript_status_fg", "thinking"),
+        ("agent_transcript_status_bg", "surface"),
+        ("agent_transcript_error_fg", "danger_foreground"),
+        ("agent_transcript_error_bg", "surface"),
+        ("agent_transcript_command_fg", "tertiary_foreground"),
+        ("agent_transcript_command_bg", "surface"),
+        ("agent_model_fg", "secondary_text"),
+        ("agent_model_bg", "secondary"),
+        ("agent_reasoning_fg", "tertiary_text"),
+        ("agent_reasoning_bg", "tertiary"),
+        ("agent_status_idle_fg", "muted_text"),
+        ("agent_status_idle_bg", "muted"),
+        ("agent_status_running_fg", "primary_text"),
+        ("agent_status_running_bg", "primary"),
+        ("agent_status_blocked_fg", "tertiary_text"),
+        ("agent_status_blocked_bg", "tertiary"),
+        ("agent_status_failed_fg", "danger_text"),
+        ("agent_status_failed_bg", "danger"),
+        ("display_overlay_fg", "secondary_foreground"),
+        ("display_overlay_bg", "surface"),
+        ("copy_selection_fg", "tertiary_text"),
+        ("copy_selection_bg", "tertiary"),
+        ("syntax_plain_fg", "foreground"),
+        ("syntax_plain_bg", "surface"),
+        ("syntax_keyword_fg", "primary_foreground"),
+        ("syntax_keyword_bg", "surface"),
+        ("syntax_string_fg", "tertiary_foreground"),
+        ("syntax_string_bg", "surface"),
+        ("syntax_comment_fg", "thinking"),
+        ("syntax_comment_bg", "surface"),
+        ("syntax_type_fg", "secondary_foreground"),
+        ("syntax_type_bg", "surface"),
+        ("syntax_function_fg", "primary_foreground"),
+        ("syntax_function_bg", "surface"),
+        ("syntax_number_fg", "tertiary_foreground"),
+        ("syntax_number_bg", "surface"),
+        ("syntax_operator_fg", "muted"),
+        ("syntax_operator_bg", "surface"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(definition.aliases, expected_aliases);
+    assert_eq!(definition.colors, expected_colors);
+}
+
 /// Returns whether a built-in theme intentionally preserves a full captured
 /// user-configuration snapshot instead of the compact contrast-managed palette
 /// invariants used by the derived built-ins.
 fn builtin_theme_preserves_exact_snapshot(name: &str) -> bool {
-    matches!(name, "acid_grapefruit" | "acid_lime")
+    matches!(
+        name,
+        "acid_grapefruit" | "acid_lemon" | "acid_tangerine" | "acid_lime"
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -898,6 +1130,16 @@ fn builtin_theme_fidelity_targets() -> &'static [ThemeFidelityTarget] {
         },
         ThemeFidelityTarget {
             name: "acid_grapefruit",
+            category: ThemeFidelityCategory::Native,
+            anchors: &[],
+        },
+        ThemeFidelityTarget {
+            name: "acid_lemon",
+            category: ThemeFidelityCategory::Native,
+            anchors: &[],
+        },
+        ThemeFidelityTarget {
+            name: "acid_tangerine",
             category: ThemeFidelityCategory::Native,
             anchors: &[],
         },
