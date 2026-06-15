@@ -90,7 +90,8 @@ fn runtime_layout_save_command(
         json_escape(&layout_name),
         json_escape(&idempotency_key)
     );
-    dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)
+    dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)?;
+    Ok(format!("saved layout {layout_name}"))
 }
 
 /// Resumes a live session snapshot through the runtime snapshot resume control path.
@@ -107,7 +108,16 @@ fn runtime_layout_load_command(
         json_escape(&snapshot_id),
         json_escape(&idempotency_key)
     );
-    dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)
+    dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)?;
+    Ok(runtime_layout_load_status_message(selector))
+}
+
+/// Formats the concise status line shown after a successful `load-layout`.
+fn runtime_layout_load_status_message(selector: &LayoutLoadSelector) -> String {
+    match selector {
+        LayoutLoadSelector::Name(name) => format!("loaded layout {name}"),
+        LayoutLoadSelector::Latest => "loaded latest layout".to_string(),
+    }
 }
 
 /// Dispatches a snapshot control request and tracks a re-bound primary client after resume.
