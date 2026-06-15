@@ -1357,15 +1357,17 @@ fn list_themes_reports_builtin_defaults_without_runtime_config() {
     .unwrap();
     let body = display_body(outcome);
     assert!(
-        body.starts_with("active     theme                   preview  source   preview colors")
+        body.starts_with(
+            "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |"
+        )
     );
-    assert!(body.contains("★ active   kanagawa                █████    builtin"));
-    assert!(body.contains("—          deepforest              █████    builtin"));
-    assert!(body.contains("—          gruvbox_dark            █████    builtin"));
-    assert!(body.contains("—          catppuccin_latte        █████    builtin"));
-    assert!(body.contains("—          high_contrast_dark      █████    builtin"));
-    assert!(body.contains("—          dracula                 █████    builtin"));
-    assert!(body.contains("set-theme kanagawa"));
+    assert!(body.contains("| ★ active | kanagawa | █████ | builtin |"));
+    assert!(body.contains("| — | deepforest | █████ | builtin |"));
+    assert!(body.contains("| — | gruvbox_dark | █████ | builtin |"));
+    assert!(body.contains("| — | catppuccin_latte | █████ | builtin |"));
+    assert!(body.contains("| — | high_contrast_dark | █████ | builtin |"));
+    assert!(body.contains("| — | dracula | █████ | builtin |"));
+    assert!(body.contains("[`set-theme kanagawa`](mez-agent:/set-theme%20kanagawa)"));
 }
 
 /// Verifies that the baseline command registry reports a known support level

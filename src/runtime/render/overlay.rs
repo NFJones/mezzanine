@@ -259,10 +259,56 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
                 );
             }
         }
+        style_spans.extend(runtime_list_themes_markdown_preview_style_spans(
+            content.command.as_deref(),
+            copy_text.as_deref(),
+            &display,
+        ));
         content.line_style_spans.push(style_spans);
         content.lines.push(display);
     }
     content
+}
+
+/// Returns preview swatch styling for Markdown-rendered `list-themes` rows.
+fn runtime_list_themes_markdown_preview_style_spans(
+    command: Option<&str>,
+    source_line: Option<&str>,
+    display: &str,
+) -> Vec<TerminalStyleSpan> {
+    if !matches!(command, Some("list-themes")) {
+        return Vec::new();
+    }
+    let Some(source_line) = source_line else {
+        return Vec::new();
+    };
+    let cells = runtime_markdown_table_cells(source_line);
+    if cells.len() < 5 {
+        return Vec::new();
+    }
+    let preview = cells[2];
+    let preview_colors = cells[4];
+    let Some(preview_start) = display.find(preview) else {
+        return Vec::new();
+    };
+    runtime_theme_preview_style_spans(
+        UnicodeWidthStr::width(&display[..preview_start]),
+        preview,
+        Some(preview_colors),
+    )
+}
+
+/// Splits one Markdown table line into trimmed cell contents.
+fn runtime_markdown_table_cells(line: &str) -> Vec<&str> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return Vec::new();
+    }
+    trimmed
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect()
 }
 
 /// Runs the runtime agent shell visibility operation for this subsystem.
@@ -556,7 +602,70 @@ pub(super) fn runtime_command_display_overlay_content(
 
 /// Returns true when a terminal command display body is authored as Markdown.
 fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
-    matches!(command, Some("help")) && body.trim_start().starts_with('#')
+    match command {
+        Some("help") => body.trim_start().starts_with('#'),
+        Some("list-themes") => body.trim_start().starts_with('|'),
+        _ => false,
+    }
+}
+
+/// Verifies `list-themes` bodies authored as Markdown tables take the command
+/// overlay Markdown path rather than the legacy plain-text display path.
+#[cfg(test)]
+#[test]
+fn list_themes_command_display_detects_markdown_tables() {
+    assert!(terminal_command_display_body_is_markdown(
+        Some("list-themes"),
+        "| active | theme | preview | source | preview colors | action |"
+    ));
+    assert!(!terminal_command_display_body_is_markdown(
+        Some("list-themes"),
+        "active     theme                   preview"
+    ));
+}
+
+/// Verifies Markdown-rendered `list-themes` rows keep clickable theme actions
+/// and apply per-block preview colors through the shared overlay renderer.
+#[cfg(test)]
+#[test]
+fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
+    let ui_theme = crate::terminal::deepforest_ui_theme();
+    let content = runtime_agent_shell_markdown_overlay_content(
+        Some("list-themes".to_string()),
+        "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |\n| ★ active | kanagawa | █████ | builtin | #111111,#222222,#333333,#444444,#555555 | [`set-theme kanagawa`](mez-agent:/set-theme%20kanagawa) |",
+        &ui_theme,
+    );
+
+    assert!(
+        content
+            .selections
+            .iter()
+            .any(|selection| selection.command == "/set-theme kanagawa"),
+        "{content:?}"
+    );
+    let line_index = content
+        .lines
+        .iter()
+        .position(|line| line.contains("kanagawa") && line.contains("█████"))
+        .unwrap();
+    let preview_start = content.lines[line_index].find("█████").unwrap();
+    let preview_column = UnicodeWidthStr::width(&content.lines[line_index][..preview_start]);
+    let preview_spans = content.line_style_spans[line_index]
+        .iter()
+        .filter(|span| {
+            span.start >= preview_column && span.start < preview_column.saturating_add(5)
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(preview_spans.len(), 5, "{content:?}");
+    assert_eq!(
+        preview_spans[0].rendition.foreground,
+        Some(crate::terminal::TerminalColor::Rgb(0x11, 0x11, 0x11))
+    );
+    assert_eq!(
+        preview_spans[4].rendition.foreground,
+        Some(crate::terminal::TerminalColor::Rgb(0x55, 0x55, 0x55))
+    );
 }
 
 /// Returns whether a terminal command response needs the modal display overlay.

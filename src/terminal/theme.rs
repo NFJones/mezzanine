@@ -118,6 +118,8 @@ pub const BUILTIN_UI_THEME_NAMES: &[&str] = &[
     "ayu_dark",
     "ayu_light",
     "ayu_mirage",
+    "acid_lime",
+    "acid_grapefruit",
     "high_contrast_dark",
     "high_contrast_light",
 ];
@@ -151,15 +153,16 @@ pub fn ui_theme_preview_fields(definition: &UiThemeDefinition) -> (String, Strin
     (preview, colors.join(","))
 }
 
-/// Returns the fixed-column header used by theme listing commands.
+/// Returns the Markdown table header used by theme listing commands.
 pub fn ui_theme_list_table_header() -> String {
-    format!(
-        "{:<9}  {:<22}  {:<7}  {:<7}  {:<46}  {}",
-        "active", "theme", "preview", "source", "preview colors", "action"
-    )
+    [
+        "| active | theme | preview | source | preview colors | action |".to_string(),
+        "| --- | --- | --- | --- | --- | --- |".to_string(),
+    ]
+    .join("\n")
 }
 
-/// Returns one fixed-column row for a theme listing command.
+/// Returns one Markdown row for a theme listing command.
 pub fn ui_theme_list_table_row(
     theme: &str,
     source: &str,
@@ -168,9 +171,36 @@ pub fn ui_theme_list_table_row(
 ) -> String {
     let (preview, preview_colors) = ui_theme_preview_fields(definition);
     let active_marker = if active { "★ active" } else { "—" };
+    let action_label = format!("set-theme {theme}");
     format!(
-        "{active_marker:<9}  {theme:<22}  {preview:<7}  {source:<7}  {preview_colors:<46}  set-theme {theme}"
+        "| {} | {} | {} | {} | {} | [`{}`]({}) |",
+        ui_theme_list_table_markdown_cell(active_marker),
+        ui_theme_list_table_markdown_cell(theme),
+        ui_theme_list_table_markdown_cell(&preview),
+        ui_theme_list_table_markdown_cell(source),
+        ui_theme_list_table_markdown_cell(&preview_colors),
+        ui_theme_list_table_markdown_cell(&action_label),
+        ui_theme_list_table_action_destination(theme),
     )
+}
+
+/// Escapes one theme-listing field for Markdown table output.
+fn ui_theme_list_table_markdown_cell(value: &str) -> String {
+    value.replace('|', r"\|").replace('\n', "<br>")
+}
+
+/// Returns the internal command destination for one theme action link.
+fn ui_theme_list_table_action_destination(theme: &str) -> String {
+    let mut encoded = String::from("mez-agent:");
+    for byte in format!("/set-theme {theme}").bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 impl UiColorPair {
@@ -589,6 +619,8 @@ pub fn builtin_ui_theme_definition(name: &str) -> Option<UiThemeDefinition> {
             danger: "#f28779",
             agent_prompt_background: "#252b38",
         })),
+        "acid_lime" => Some(acid_lime_ui_theme_definition()),
+        "acid_grapefruit" => Some(acid_grapefruit_ui_theme_definition()),
         "high_contrast_dark" => Some(definition_from_palette(UiThemePalette {
             primary: "#00ffff",
             secondary: "#00ff00",
@@ -810,6 +842,214 @@ pub fn deepforest_ui_theme() -> UiTheme {
             syntax_operator: pair("#8fa99a", "#0b1f17"),
         },
     }
+}
+
+/// Returns the exact built-in acid_lime theme definition.
+fn acid_lime_ui_theme_definition() -> UiThemeDefinition {
+    let aliases = [
+        ("primary", "#bfff00"),
+        ("secondary", "#7fbf3f"),
+        ("tertiary", "#d7ff5f"),
+        ("thinking", "#c9d89a"),
+        ("danger", "#ff5c57"),
+        ("foreground", "#eef7d0"),
+        ("muted", "#6f7f3c"),
+        ("surface", "#1b1f0a"),
+        ("danger_foreground", "#ff7b74"),
+        ("danger_text", "#140200"),
+        ("muted_text", "#0f1206"),
+        ("primary_foreground", "#d8ff5a"),
+        ("primary_text", "#111400"),
+        ("secondary_foreground", "#a8e85a"),
+        ("secondary_text", "#111400"),
+        ("tertiary_foreground", "#e6ff8a"),
+        ("tertiary_text", "#111400"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect();
+    let colors = [
+        ("window_frame_fg", "primary_foreground"),
+        ("window_frame_bg", "surface"),
+        ("window_active_fg", "primary_text"),
+        ("window_active_bg", "primary"),
+        ("window_inactive_fg", "secondary_text"),
+        ("window_inactive_bg", "secondary"),
+        ("pane_frame_active_fg", "secondary_text"),
+        ("pane_frame_active_bg", "secondary"),
+        ("pane_frame_inactive_fg", "muted"),
+        ("pane_frame_inactive_bg", "surface"),
+        ("pane_border_active_fg", "primary_foreground"),
+        ("pane_border_active_bg", "surface"),
+        ("pane_border_inactive_fg", "muted"),
+        ("pane_border_inactive_bg", "surface"),
+        ("pane_divider_fg", "tertiary_foreground"),
+        ("pane_divider_bg", "surface"),
+        ("frame_fill_fg", "foreground"),
+        ("frame_fill_bg", "surface"),
+        ("scroll_indicator_fg", "tertiary_text"),
+        ("scroll_indicator_bg", "tertiary"),
+        ("pane_pwd_fg", "muted_text"),
+        ("pane_pwd_bg", "muted"),
+        ("window_status_uptime_fg", "secondary_text"),
+        ("window_status_uptime_bg", "secondary"),
+        ("window_status_datetime_fg", "tertiary_text"),
+        ("window_status_datetime_bg", "tertiary"),
+        ("prompt_fg", "primary_foreground"),
+        ("prompt_bg", "surface"),
+        ("agent_prompt_fg", "#f8ffe0"),
+        ("agent_prompt_bg", "#20250c"),
+        ("agent_transcript_user_fg", "primary_foreground"),
+        ("agent_transcript_user_bg", "surface"),
+        ("agent_transcript_assistant_fg", "secondary_foreground"),
+        ("agent_transcript_assistant_bg", "surface"),
+        ("agent_transcript_status_fg", "thinking"),
+        ("agent_transcript_status_bg", "surface"),
+        ("agent_transcript_error_fg", "danger_foreground"),
+        ("agent_transcript_error_bg", "surface"),
+        ("agent_transcript_command_fg", "tertiary_foreground"),
+        ("agent_transcript_command_bg", "surface"),
+        ("agent_model_fg", "secondary_text"),
+        ("agent_model_bg", "secondary"),
+        ("agent_reasoning_fg", "tertiary_text"),
+        ("agent_reasoning_bg", "tertiary"),
+        ("agent_status_idle_fg", "muted_text"),
+        ("agent_status_idle_bg", "muted"),
+        ("agent_status_running_fg", "primary_text"),
+        ("agent_status_running_bg", "primary"),
+        ("agent_status_blocked_fg", "tertiary_text"),
+        ("agent_status_blocked_bg", "tertiary"),
+        ("agent_status_failed_fg", "danger_text"),
+        ("agent_status_failed_bg", "danger"),
+        ("display_overlay_fg", "secondary_foreground"),
+        ("display_overlay_bg", "surface"),
+        ("copy_selection_fg", "tertiary_text"),
+        ("copy_selection_bg", "tertiary"),
+        ("syntax_plain_fg", "foreground"),
+        ("syntax_plain_bg", "surface"),
+        ("syntax_keyword_fg", "primary_foreground"),
+        ("syntax_keyword_bg", "surface"),
+        ("syntax_string_fg", "tertiary_foreground"),
+        ("syntax_string_bg", "surface"),
+        ("syntax_comment_fg", "thinking"),
+        ("syntax_comment_bg", "surface"),
+        ("syntax_type_fg", "secondary_foreground"),
+        ("syntax_type_bg", "surface"),
+        ("syntax_function_fg", "primary_foreground"),
+        ("syntax_function_bg", "surface"),
+        ("syntax_number_fg", "tertiary_foreground"),
+        ("syntax_number_bg", "surface"),
+        ("syntax_operator_fg", "muted"),
+        ("syntax_operator_bg", "surface"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect();
+    UiThemeDefinition { aliases, colors }
+}
+
+/// Returns the exact built-in acid_grapefruit theme definition.
+fn acid_grapefruit_ui_theme_definition() -> UiThemeDefinition {
+    let aliases = [
+        ("primary", "#ff3f57"),
+        ("secondary", "#bf3f5f"),
+        ("tertiary", "#ff7a5f"),
+        ("thinking", "#d89a9a"),
+        ("danger", "#ff1f3d"),
+        ("foreground", "#ffe0d8"),
+        ("muted", "#7f3c42"),
+        ("surface", "#1f0a0d"),
+        ("danger_foreground", "#ff7b8a"),
+        ("danger_text", "#140002"),
+        ("muted_text", "#120608"),
+        ("primary_foreground", "#ff8a98"),
+        ("primary_text", "#140002"),
+        ("secondary_foreground", "#e85a76"),
+        ("secondary_text", "#140002"),
+        ("tertiary_foreground", "#ff9a84"),
+        ("tertiary_text", "#140402"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect();
+    let colors = [
+        ("window_frame_fg", "primary_foreground"),
+        ("window_frame_bg", "surface"),
+        ("window_active_fg", "primary_text"),
+        ("window_active_bg", "primary"),
+        ("window_inactive_fg", "secondary_text"),
+        ("window_inactive_bg", "secondary"),
+        ("pane_frame_active_fg", "secondary_text"),
+        ("pane_frame_active_bg", "secondary"),
+        ("pane_frame_inactive_fg", "muted"),
+        ("pane_frame_inactive_bg", "surface"),
+        ("pane_border_active_fg", "primary_foreground"),
+        ("pane_border_active_bg", "surface"),
+        ("pane_border_inactive_fg", "muted"),
+        ("pane_border_inactive_bg", "surface"),
+        ("pane_divider_fg", "tertiary_foreground"),
+        ("pane_divider_bg", "surface"),
+        ("frame_fill_fg", "foreground"),
+        ("frame_fill_bg", "surface"),
+        ("scroll_indicator_fg", "tertiary_text"),
+        ("scroll_indicator_bg", "tertiary"),
+        ("pane_pwd_fg", "muted_text"),
+        ("pane_pwd_bg", "muted"),
+        ("window_status_uptime_fg", "secondary_text"),
+        ("window_status_uptime_bg", "secondary"),
+        ("window_status_datetime_fg", "tertiary_text"),
+        ("window_status_datetime_bg", "tertiary"),
+        ("prompt_fg", "primary_foreground"),
+        ("prompt_bg", "surface"),
+        ("agent_prompt_fg", "#ffe8e2"),
+        ("agent_prompt_bg", "#250c10"),
+        ("agent_transcript_user_fg", "primary_foreground"),
+        ("agent_transcript_user_bg", "surface"),
+        ("agent_transcript_assistant_fg", "secondary_foreground"),
+        ("agent_transcript_assistant_bg", "surface"),
+        ("agent_transcript_status_fg", "thinking"),
+        ("agent_transcript_status_bg", "surface"),
+        ("agent_transcript_error_fg", "danger_foreground"),
+        ("agent_transcript_error_bg", "surface"),
+        ("agent_transcript_command_fg", "tertiary_foreground"),
+        ("agent_transcript_command_bg", "surface"),
+        ("agent_model_fg", "secondary_text"),
+        ("agent_model_bg", "secondary"),
+        ("agent_reasoning_fg", "tertiary_text"),
+        ("agent_reasoning_bg", "tertiary"),
+        ("agent_status_idle_fg", "muted_text"),
+        ("agent_status_idle_bg", "muted"),
+        ("agent_status_running_fg", "primary_text"),
+        ("agent_status_running_bg", "primary"),
+        ("agent_status_blocked_fg", "tertiary_text"),
+        ("agent_status_blocked_bg", "tertiary"),
+        ("agent_status_failed_fg", "danger_text"),
+        ("agent_status_failed_bg", "danger"),
+        ("display_overlay_fg", "secondary_foreground"),
+        ("display_overlay_bg", "surface"),
+        ("copy_selection_fg", "tertiary_text"),
+        ("copy_selection_bg", "tertiary"),
+        ("syntax_plain_fg", "foreground"),
+        ("syntax_plain_bg", "surface"),
+        ("syntax_keyword_fg", "primary_foreground"),
+        ("syntax_keyword_bg", "surface"),
+        ("syntax_string_fg", "tertiary_foreground"),
+        ("syntax_string_bg", "surface"),
+        ("syntax_comment_fg", "thinking"),
+        ("syntax_comment_bg", "surface"),
+        ("syntax_type_fg", "secondary_foreground"),
+        ("syntax_type_bg", "surface"),
+        ("syntax_function_fg", "primary_foreground"),
+        ("syntax_function_bg", "surface"),
+        ("syntax_number_fg", "tertiary_foreground"),
+        ("syntax_number_bg", "surface"),
+        ("syntax_operator_fg", "muted"),
+        ("syntax_operator_bg", "surface"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect();
+    UiThemeDefinition { aliases, colors }
 }
 
 /// Named palette inputs used to derive a complete built-in UI theme.
