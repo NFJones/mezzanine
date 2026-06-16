@@ -194,7 +194,7 @@ fn ui_theme_list_table_markdown_cell(value: &str) -> String {
 /// Returns the internal command destination for one theme action link.
 fn ui_theme_list_table_action_destination(theme: &str) -> String {
     let mut encoded = String::from("mez-agent:");
-    for byte in format!("/set-theme {theme}").bytes() {
+    for byte in format!("set-theme {theme}").bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
             encoded.push(byte as char);
         } else {
@@ -955,22 +955,22 @@ fn acid_lime_ui_theme_definition() -> UiThemeDefinition {
 /// Returns the exact built-in acid_grapefruit theme definition.
 fn acid_grapefruit_ui_theme_definition() -> UiThemeDefinition {
     let aliases = [
-        ("primary", "#ff3f57"),
-        ("secondary", "#bf3f5f"),
-        ("tertiary", "#ff7a5f"),
-        ("thinking", "#d89a9a"),
-        ("danger", "#ff1f3d"),
-        ("foreground", "#ffe0d8"),
-        ("muted", "#7f3c42"),
-        ("surface", "#1f0a0d"),
-        ("danger_foreground", "#ff7b8a"),
+        ("primary", "#ff5f73"),
+        ("secondary", "#d74f71"),
+        ("tertiary", "#ff9a7a"),
+        ("thinking", "#e6b3b3"),
+        ("danger", "#ff3350"),
+        ("foreground", "#fff0ea"),
+        ("muted", "#96606a"),
+        ("surface", "#2a1116"),
+        ("danger_foreground", "#ff9aa6"),
         ("danger_text", "#140002"),
-        ("muted_text", "#120608"),
-        ("primary_foreground", "#ff8a98"),
+        ("muted_text", "#171012"),
+        ("primary_foreground", "#ffb0bb"),
         ("primary_text", "#140002"),
-        ("secondary_foreground", "#e85a76"),
+        ("secondary_foreground", "#f07a94"),
         ("secondary_text", "#140002"),
-        ("tertiary_foreground", "#ff9a84"),
+        ("tertiary_foreground", "#ffb39d"),
         ("tertiary_text", "#140402"),
     ]
     .into_iter()
@@ -1005,8 +1005,8 @@ fn acid_grapefruit_ui_theme_definition() -> UiThemeDefinition {
         ("window_status_datetime_bg", "tertiary"),
         ("prompt_fg", "primary_foreground"),
         ("prompt_bg", "surface"),
-        ("agent_prompt_fg", "#ffe8e2"),
-        ("agent_prompt_bg", "#250c10"),
+        ("agent_prompt_fg", "#fff2ee"),
+        ("agent_prompt_bg", "#301219"),
         ("agent_transcript_user_fg", "primary_foreground"),
         ("agent_transcript_user_bg", "surface"),
         ("agent_transcript_assistant_fg", "secondary_foreground"),
@@ -1059,22 +1059,22 @@ fn acid_grapefruit_ui_theme_definition() -> UiThemeDefinition {
 /// Returns the exact built-in acid_lemon theme definition.
 fn acid_lemon_ui_theme_definition() -> UiThemeDefinition {
     let aliases = [
-        ("primary", "#ffe600"),
-        ("secondary", "#bfa83f"),
-        ("tertiary", "#fff25f"),
-        ("thinking", "#d8cf9a"),
+        ("primary", "#fff066"),
+        ("secondary", "#d8bf52"),
+        ("tertiary", "#fff799"),
+        ("thinking", "#e6ddb0"),
         ("danger", "#ff5c57"),
-        ("foreground", "#fff8d8"),
-        ("muted", "#7f743c"),
-        ("surface", "#1f1b0a"),
+        ("foreground", "#fffced"),
+        ("muted", "#9a8f52"),
+        ("surface", "#2a250f"),
         ("danger_foreground", "#ff7b74"),
         ("danger_text", "#140200"),
-        ("muted_text", "#121006"),
-        ("primary_foreground", "#fff45a"),
+        ("muted_text", "#171407"),
+        ("primary_foreground", "#fff7a8"),
         ("primary_text", "#141200"),
-        ("secondary_foreground", "#e8ce5a"),
+        ("secondary_foreground", "#f3dd7a"),
         ("secondary_text", "#141200"),
-        ("tertiary_foreground", "#fff68a"),
+        ("tertiary_foreground", "#fffabc"),
         ("tertiary_text", "#141200"),
     ]
     .into_iter()
@@ -1109,8 +1109,8 @@ fn acid_lemon_ui_theme_definition() -> UiThemeDefinition {
         ("window_status_datetime_bg", "tertiary"),
         ("prompt_fg", "primary_foreground"),
         ("prompt_bg", "surface"),
-        ("agent_prompt_fg", "#fffbe2"),
-        ("agent_prompt_bg", "#25210c"),
+        ("agent_prompt_fg", "#fffef2"),
+        ("agent_prompt_bg", "#302b12"),
         ("agent_transcript_user_fg", "primary_foreground"),
         ("agent_transcript_user_bg", "surface"),
         ("agent_transcript_assistant_fg", "secondary_foreground"),
@@ -1163,22 +1163,22 @@ fn acid_lemon_ui_theme_definition() -> UiThemeDefinition {
 /// Returns the exact built-in acid_tangerine theme definition.
 fn acid_tangerine_ui_theme_definition() -> UiThemeDefinition {
     let aliases = [
-        ("primary", "#ff8a00"),
-        ("secondary", "#bf6f3f"),
-        ("tertiary", "#ffb15f"),
-        ("thinking", "#d8b69a"),
+        ("primary", "#ffab3d"),
+        ("secondary", "#d88a52"),
+        ("tertiary", "#ffca8e"),
+        ("thinking", "#e6c5b0"),
         ("danger", "#ff5c57"),
-        ("foreground", "#ffe8d8"),
-        ("muted", "#7f5a3c"),
-        ("surface", "#1f120a"),
-        ("danger_foreground", "#ff8a74"),
+        ("foreground", "#fff2ea"),
+        ("muted", "#966c52"),
+        ("surface", "#2a180f"),
+        ("danger_foreground", "#ff9f88"),
         ("danger_text", "#140200"),
-        ("muted_text", "#120a06"),
-        ("primary_foreground", "#ffb45a"),
+        ("muted_text", "#17100b"),
+        ("primary_foreground", "#ffd08a"),
         ("primary_text", "#140800"),
-        ("secondary_foreground", "#e8975a"),
+        ("secondary_foreground", "#f2b27e"),
         ("secondary_text", "#140800"),
-        ("tertiary_foreground", "#ffc98a"),
+        ("tertiary_foreground", "#ffd9ad"),
         ("tertiary_text", "#140900"),
     ]
     .into_iter()
@@ -1213,8 +1213,8 @@ fn acid_tangerine_ui_theme_definition() -> UiThemeDefinition {
         ("window_status_datetime_bg", "tertiary"),
         ("prompt_fg", "primary_foreground"),
         ("prompt_bg", "surface"),
-        ("agent_prompt_fg", "#fff0e2"),
-        ("agent_prompt_bg", "#25160c"),
+        ("agent_prompt_fg", "#fff5f0"),
+        ("agent_prompt_bg", "#301b12"),
         ("agent_transcript_user_fg", "primary_foreground"),
         ("agent_transcript_user_bg", "surface"),
         ("agent_transcript_assistant_fg", "secondary_foreground"),

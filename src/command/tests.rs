@@ -1367,7 +1367,7 @@ fn list_themes_reports_builtin_defaults_without_runtime_config() {
     assert!(body.contains("| — | catppuccin_latte | █████ | builtin |"));
     assert!(body.contains("| — | high_contrast_dark | █████ | builtin |"));
     assert!(body.contains("| — | dracula | █████ | builtin |"));
-    assert!(body.contains("[`set-theme kanagawa`](mez-agent:/set-theme%20kanagawa)"));
+    assert!(body.contains("[`set-theme kanagawa`](mez-agent:set-theme%20kanagawa)"));
 }
 
 /// Verifies that the baseline command registry reports a known support level

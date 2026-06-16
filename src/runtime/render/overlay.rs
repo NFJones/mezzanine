@@ -381,10 +381,6 @@ pub(super) fn agent_command_links_in_line(line: &str) -> Vec<(usize, usize, Stri
             search_start = encoded_end;
             continue;
         };
-        if !command.starts_with('/') {
-            search_start = encoded_end;
-            continue;
-        }
         let destination_start_column = UnicodeWidthStr::width(&line[..scheme_start]);
         let destination_end_column = UnicodeWidthStr::width(&line[..encoded_end]);
         let label_clicked = command
@@ -470,7 +466,7 @@ pub(super) fn agent_command_hidden_link_ranges_for_rendered_line(
 pub(super) fn agent_command_link_destination(destination: &str) -> Option<String> {
     let encoded = destination.strip_prefix("mez-agent:")?;
     let command = percent_decode_agent_command(encoded)?;
-    command.starts_with('/').then_some(command)
+    (!command.is_empty()).then_some(command)
 }
 
 /// Percent-decodes a markdown command link destination.
@@ -632,7 +628,7 @@ fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
     let ui_theme = crate::terminal::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("list-themes".to_string()),
-        "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |\n| ★ active | kanagawa | █████ | builtin | #111111,#222222,#333333,#444444,#555555 | [`set-theme kanagawa`](mez-agent:/set-theme%20kanagawa) |",
+        "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |\n| ★ active | kanagawa | █████ | builtin | #111111,#222222,#333333,#444444,#555555 | [`set-theme kanagawa`](mez-agent:set-theme%20kanagawa) |",
         &ui_theme,
     );
 
@@ -640,7 +636,7 @@ fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
         content
             .selections
             .iter()
-            .any(|selection| selection.command == "/set-theme kanagawa"),
+            .any(|selection| selection.command == "set-theme kanagawa"),
         "{content:?}"
     );
     let line_index = content
@@ -665,6 +661,51 @@ fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
     assert_eq!(
         preview_spans[4].rendition.foreground,
         Some(crate::terminal::TerminalColor::Rgb(0x55, 0x55, 0x55))
+    );
+}
+
+/// Verifies rendered `list-themes` overlay headers reserve the same selector
+/// gutter width as selectable body rows.
+#[cfg(test)]
+#[test]
+fn list_themes_rendered_overlay_lines_align_headers_with_selectable_rows() {
+    let overlay = RuntimeDisplayOverlay {
+        lines: vec![
+            "| active | theme |".to_string(),
+            "| --- | --- |".to_string(),
+            "| ★ active | kanagawa |".to_string(),
+        ],
+        line_style_spans: vec![Vec::new(); 3],
+        scroll_offset: 0,
+        selections: vec![RuntimeDisplayOverlaySelection {
+            line_index: 2,
+            start_column: 13,
+            width: 8,
+            command: "set-theme kanagawa".to_string(),
+            kind: RuntimeDisplayOverlaySelectionKind::Primary,
+        }],
+        active_selection_index: Some(0),
+        dismiss_on_any_input: false,
+        search_input: None,
+        search_query: None,
+        search_match: None,
+        search_status: None,
+        mouse_selection: None,
+    };
+
+    let rendered = runtime_display_overlay_render_lines(&overlay);
+
+    assert_eq!(
+        rendered[0],
+        format!("{DISPLAY_OVERLAY_INACTIVE_SELECTOR}| active | theme |")
+    );
+    assert_eq!(
+        rendered[1],
+        format!("{DISPLAY_OVERLAY_INACTIVE_SELECTOR}| --- | --- |")
+    );
+    assert_eq!(
+        rendered[2],
+        format!("{DISPLAY_OVERLAY_ACTIVE_SELECTOR}| ★ active | kanagawa |")
     );
 }
 
@@ -1361,6 +1402,8 @@ pub(super) fn runtime_clamp_display_overlay_scroll(
 /// Returns display overlay lines with selector markers on actionable rows.
 pub(super) fn runtime_display_overlay_render_lines(overlay: &RuntimeDisplayOverlay) -> Vec<String> {
     let active_line = runtime_display_overlay_active_line_index(overlay);
+    let inactive_prefix =
+        (!overlay.selections.is_empty()).then_some(DISPLAY_OVERLAY_INACTIVE_SELECTOR);
     overlay
         .lines
         .iter()
@@ -1368,28 +1411,13 @@ pub(super) fn runtime_display_overlay_render_lines(overlay: &RuntimeDisplayOverl
         .map(|(line_index, line)| {
             if active_line == Some(line_index) {
                 format!("{DISPLAY_OVERLAY_ACTIVE_SELECTOR}{line}")
-            } else if overlay
-                .selections
-                .iter()
-                .any(|selection| selection.line_index == line_index)
-            {
-                format!("{DISPLAY_OVERLAY_INACTIVE_SELECTOR}{line}")
+            } else if let Some(prefix) = inactive_prefix {
+                format!("{prefix}{line}")
             } else {
                 line.to_string()
             }
         })
         .collect()
-}
-
-/// Returns true when a display overlay line owns at least one choice.
-pub(super) fn runtime_display_overlay_line_has_selection(
-    overlay: &RuntimeDisplayOverlay,
-    line_index: usize,
-) -> bool {
-    overlay
-        .selections
-        .iter()
-        .any(|selection| selection.line_index == line_index)
 }
 
 /// Returns the rendered start column after selector gutters are added.
@@ -1404,11 +1432,9 @@ pub(super) fn runtime_display_overlay_rendered_selection_start(
 /// Returns the terminal-cell width occupied by one rendered overlay row gutter.
 pub(super) fn runtime_display_overlay_line_prefix_columns(
     overlay: &RuntimeDisplayOverlay,
-    line_index: usize,
+    _line_index: usize,
 ) -> usize {
-    usize::from(runtime_display_overlay_line_has_selection(
-        overlay, line_index,
-    )) * runtime_display_overlay_selection_prefix_columns()
+    usize::from(!overlay.selections.is_empty()) * runtime_display_overlay_selection_prefix_columns()
 }
 
 /// Returns the terminal-cell width occupied by selectable overlay row gutters.
