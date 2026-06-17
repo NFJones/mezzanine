@@ -489,8 +489,8 @@ fn agent_turn_ledger_rejects_duplicate_terminal_finish() {
 
 /// Verifies that executable action surfaces are only exposed after the model
 /// asks for a coarse capability. This protects the state-machine boundary that
-/// keeps a greeting or other simple request from starting with shell, network,
-/// or MCP actions.
+/// keeps a greeting or other simple request from starting with shell or
+/// network actions before the model opts into those broader capabilities.
 #[test]
 fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     let turn = turn();
@@ -1038,6 +1038,92 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
     let allowed_actions = requests[0].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"memory_search"));
     assert!(allowed_actions.contains(&"memory_store"));
+    assert!(allowed_actions.contains(&"request_capability"));
+    assert!(!allowed_actions.contains(&"shell_command"));
+}
+
+/// Verifies available MCP tools are exposed on the main model's initial
+/// action surface instead of requiring a separate capability request.
+///
+/// MCP-backed integrations should be callable immediately when the runtime has
+/// already surfaced concrete tools for the turn. This regression ensures the
+/// first provider request can emit `mcp_call` directly while still retaining
+/// `request_capability` for shell, network, and other coarse effects.
+#[test]
+fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![Ok(ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "done".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "finish after checking MCP tools".to_string(),
+            thought: None,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            actions: vec![say_action("say-1", "done")],
+            final_turn: true,
+        }),
+        provider_transcript_events: Vec::new(),
+    })]);
+    let tools = vec![McpPromptTool {
+        server_id: "fs".to_string(),
+        tool_name: "read_file".to_string(),
+        description: "Read file".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
+            .to_string(),
+    }];
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: vec!["fs".to_string()],
+        available_mcp_tools: &tools,
+        memory_actions_enabled: false,
+                issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "use any helpful MCP integration before answering".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].interaction_kind,
+        crate::agent::ModelInteractionKind::CapabilityDecision
+    );
+    let allowed_actions = requests[0].allowed_actions.action_type_names();
+    assert!(allowed_actions.contains(&"mcp_call"));
     assert!(allowed_actions.contains(&"request_capability"));
     assert!(!allowed_actions.contains(&"shell_command"));
 }

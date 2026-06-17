@@ -57,6 +57,15 @@ fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enab
         .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
 }
 
+/// Exposes MCP tool calls on the main model action surface when tools are available.
+fn expose_default_mcp_actions(request: &mut ModelRequest, available_mcp_tools: &[McpPromptTool]) {
+    request.available_mcp_tools = available_mcp_tools.to_vec();
+    if available_mcp_tools.is_empty() {
+        return;
+    }
+    request.allowed_actions.extend([AllowedAction::McpCall]);
+}
+
 /// Carries the live issue-tracking action gate into provider requests.
 fn expose_issue_actions_gate(request: &mut ModelRequest, issue_actions_enabled: bool) {
     request.issue_actions_enabled = issue_actions_enabled;
@@ -133,7 +142,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             request.interaction_kind = ModelInteractionKind::ActionExecution;
             request.allowed_actions = allowed_actions;
         }
-        request.available_mcp_tools = self.available_mcp_tools.to_vec();
+        expose_default_mcp_actions(&mut request, self.available_mcp_tools);
         expose_default_memory_actions(&mut request, self.memory_actions_enabled);
         expose_issue_actions_gate(&mut request, self.issue_actions_enabled);
         let mut repair_attempts = 0usize;
@@ -495,7 +504,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             request.interaction_kind = ModelInteractionKind::ActionExecution;
             request.allowed_actions = allowed_actions;
         }
-        request.available_mcp_tools = self.available_mcp_tools.to_vec();
+        expose_default_mcp_actions(&mut request, self.available_mcp_tools);
         expose_default_memory_actions(&mut request, self.memory_actions_enabled);
         expose_issue_actions_gate(&mut request, self.issue_actions_enabled);
         let mut repair_attempts = 0usize;

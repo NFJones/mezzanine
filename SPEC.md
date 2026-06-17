@@ -5807,6 +5807,10 @@ unavailable or omit it from available tools and MUST prohibit attempts to use
 that server for the remainder of the session unless the user explicitly retries
 or re-enables it.
 
+When one or more MCP tools are available for an agent turn, Mezzanine SHOULD
+expose `mcp_call` on the main model's default action surface so the model can
+use those tools without first routing through `request_capability`.
+
 The `/list-mcp` command and configuration shell MUST show session-blacklisted MCP
 servers, their failure reason, and whether the server may be retried.
 
