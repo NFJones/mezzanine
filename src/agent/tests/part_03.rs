@@ -946,13 +946,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
     );
     assert_eq!(
         requests[1].allowed_actions.action_type_names(),
-        vec![
-            "say",
-            "request_capability",
-            "shell_command",
-            "apply_patch",
-            "abort"
-        ]
+        vec!["say", "request_capability", "shell_command", "apply_patch"]
     );
     let capability_context = requests[1]
         .messages
@@ -962,7 +956,7 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
     assert!(
         capability_context
             .content
-            .contains("allowed_actions=say,request_capability,shell_command,apply_patch,abort"),
+            .contains("allowed_actions=say,request_capability,shell_command,apply_patch"),
         "{}",
         capability_context.content
     );
@@ -1165,11 +1159,11 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             .find(|message| {
                 message
                     .content
-                    .contains("abort is not allowed during capability_decision interaction")
+                    .contains("abort is not part of the provider action surface")
             })
             .unwrap()
             .content
-            .contains("abort is not allowed during capability_decision interaction"),
+            .contains("abort is not part of the provider action surface"),
         "{:?}",
         requests[1].messages
     );
@@ -1602,7 +1596,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].allowed_actions.action_type_names(),
-        vec!["say", "abort"]
+        vec!["say"]
     );
     assert!(
         requests[1]
@@ -3931,7 +3925,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     let removed_user_input_action = ["request", "user_input"].join("_");
     assert!(!action_types.contains(&removed_user_input_action));
     assert!(action_types.contains(&"request_capability".to_string()));
-    assert!(action_types.contains(&"abort".to_string()));
+    assert!(!action_types.contains(&"abort".to_string()));
     assert!(!action_types.contains(&"fetch_url".to_string()));
     assert!(!action_types.contains(&"web_search".to_string()));
     assert!(
@@ -3942,8 +3936,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
         .as_str()
         .unwrap();
     assert!(
-        allowed_surface
-            .contains("allowed_actions=say,request_capability,shell_command,apply_patch,abort")
+        allowed_surface.contains("allowed_actions=say,request_capability,shell_command,apply_patch")
     );
     assert!(allowed_surface.contains("cache-stable list"));
     assert!(allowed_surface.contains("active_function_tool=submit_maap_shell_actions"));
@@ -4109,7 +4102,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
 
-    assert_eq!(action_schemas.len(), 5);
+    assert_eq!(action_schemas.len(), 4);
     let action_types = openai_tool_action_types(mcp_tool);
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));

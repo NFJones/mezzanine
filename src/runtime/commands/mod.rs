@@ -1215,7 +1215,7 @@ mod tests {
             request.interaction_kind,
             ModelInteractionKind::ActionExecution
         );
-        assert_eq!(request.allowed_actions.actions.len(), 2);
+        assert_eq!(request.allowed_actions.actions.len(), 1);
         assert!(
             request
                 .messages

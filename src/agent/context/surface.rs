@@ -157,8 +157,6 @@ pub enum AllowedAction {
     IssueQuery,
     /// Delete one local project issue.
     IssueDelete,
-    /// Abort the turn.
-    Abort,
 }
 
 impl AllowedAction {
@@ -183,7 +181,6 @@ impl AllowedAction {
             AllowedAction::IssueUpdate => "issue_update",
             AllowedAction::IssueQuery => "issue_query",
             AllowedAction::IssueDelete => "issue_delete",
-            AllowedAction::Abort => "abort",
         }
     }
 
@@ -208,7 +205,6 @@ impl AllowedAction {
             "issue_update" => Some(AllowedAction::IssueUpdate),
             "issue_query" => Some(AllowedAction::IssueQuery),
             "issue_delete" => Some(AllowedAction::IssueDelete),
-            "abort" => Some(AllowedAction::Abort),
             _ => None,
         }
     }
@@ -229,21 +225,17 @@ impl AllowedActionSet {
 
     /// Builds a response-only action surface.
     pub fn respond_only() -> Self {
-        Self::from_actions([AllowedAction::Say, AllowedAction::Abort])
+        Self::from_actions([AllowedAction::Say])
     }
 
     /// Builds the non-effecting base surface for action-execution requests.
     pub fn action_execution_base() -> Self {
-        Self::from_actions([
-            AllowedAction::Say,
-            AllowedAction::RequestCapability,
-            AllowedAction::Abort,
-        ])
+        Self::from_actions([AllowedAction::Say, AllowedAction::RequestCapability])
     }
 
     /// Builds an action surface that can only emit user-facing text.
     pub fn say_only() -> Self {
-        Self::from_actions([AllowedAction::Say, AllowedAction::Abort])
+        Self::from_actions([AllowedAction::Say])
     }
 
     /// Builds the executable action surface exposed after a capability grant.

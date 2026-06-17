@@ -335,7 +335,6 @@ fn maap_action_schema(
                     .into_iter()
                     .map(maap_mcp_call_action_schema_for_tool),
             ),
-            AllowedAction::Abort => action_schemas.push(maap_abort_action_schema()),
         }
     }
     if action_schemas.is_empty() {
@@ -1012,22 +1011,4 @@ pub(super) fn normalize_openai_strict_schema(mut value: serde_json::Value) -> se
     }
 
     value
-}
-
-/// Runs the maap abort action schema operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn maap_abort_action_schema() -> serde_json::Value {
-    maap_action_object_schema(
-        "abort",
-        [(
-            "reason",
-            serde_json::json!({
-                "type": "string"
-            }),
-        )],
-        &["reason"],
-    )
 }

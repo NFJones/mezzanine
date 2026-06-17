@@ -166,7 +166,7 @@ enum DeepSeekMaapShimKind {
 impl DeepSeekMaapShimKind {
     /// Selects the DeepSeek-facing shim surface for the active request.
     fn for_request(request: &ModelRequest) -> Self {
-        if request.allowed_actions == AllowedActionSet::capability_decision() {
+        if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
             return Self::CapabilityDecision;
         }
         if request.allowed_actions == AllowedActionSet::say_only()
