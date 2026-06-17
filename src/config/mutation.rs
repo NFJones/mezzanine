@@ -42,9 +42,13 @@ pub(super) fn parse_mutation_path(path: &str) -> Result<Vec<String>> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()> {
-    if segments.len() > 3 {
+    let allow_nested_mcp_usage_instructions = segments.len() == 4
+        && segments.first().map(String::as_str) == Some("mcp_servers")
+        && segments.get(2).map(String::as_str) == Some("external_capability")
+        && segments.get(3).map(String::as_str) == Some("usage_instructions");
+    if segments.len() > 3 && !allow_nested_mcp_usage_instructions {
         return Err(MezError::config(
-            "configuration mutation supports only scalar paths up to three segments",
+            "configuration mutation supports only scalar paths up to three segments except mcp_servers.<name>.external_capability.usage_instructions",
         ));
     }
     if segments.first().map(String::as_str) == Some("permissions")

@@ -449,6 +449,33 @@ fn config_mutation_sets_string_array_values() {
     );
 }
 
+/// Verifies config mutation sets nested MCP usage instructions.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn config_mutation_sets_mcp_usage_instructions_nested_scalar() {
+    let plan = plan_config_mutation(
+        ConfigFormat::Toml,
+        "[mcp_servers.fs]\ncommand = \"mcp-fs\"\n",
+        ConfigScope::Primary,
+        set_string(
+            "mcp_servers.fs.external_capability.usage_instructions",
+            "Use read_file only when the task needs file contents.",
+        ),
+    )
+    .unwrap();
+
+    assert!(plan.changed);
+    assert!(plan.validation.valid);
+    assert_eq!(
+        extract_config_values(ConfigFormat::Toml, &plan.text)
+            .get("mcp_servers.fs.external_capability.usage_instructions"),
+        Some(&"Use read_file only when the task needs file contents.".to_string())
+    );
+}
+
 /// Verifies config mutation unsets yaml scalar.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -1495,7 +1522,7 @@ fn rejects_project_overlay_secret_material() {
 fn validates_known_mcp_server_keys() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[mcp_servers.fs]\ncommand = \"mcp-fs\"\nargs = [\"--root\", \".\"]\nenv_vars = [\"MCP_TOKEN\"]\ncwd = \".\"\nenabled_tools = [\"read_file\"]\ndisabled_tools = [\"delete_file\"]\nstartup_timeout_sec = 10\ntool_timeout_sec = 60\nenabled = true\napproval = \"prompt\"\n[mcp_servers.fs.env]\nLOG_LEVEL = \"debug\"\n[mcp_servers.fs.http_headers]\nX_Client = \"mez\"\n[mcp_servers.fs.tool_approvals]\nread_file = \"prompt\"\n",
+        "[mcp_servers.fs]\ncommand = \"mcp-fs\"\nargs = [\"--root\", \".\"]\nenv_vars = [\"MCP_TOKEN\"]\ncwd = \".\"\nenabled_tools = [\"read_file\"]\ndisabled_tools = [\"delete_file\"]\nstartup_timeout_sec = 10\ntool_timeout_sec = 60\nenabled = true\napproval = \"prompt\"\n[mcp_servers.fs.env]\nLOG_LEVEL = \"debug\"\n[mcp_servers.fs.http_headers]\nX_Client = \"mez\"\n[mcp_servers.fs.tool_approvals]\nread_file = \"prompt\"\n[mcp_servers.fs.external_capability]\npurpose = \"File reads and project tree inspection\"\nusage_instructions = \"Use read_file only when the task needs file contents.\"\n",
         ConfigScope::Primary,
     );
 

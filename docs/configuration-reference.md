@@ -758,6 +758,9 @@ model-visible guidance for how agents should use the server. Keep it concise,
 non-secret, and focused on usage rules such as preferred workflows, constraints,
 or when to avoid the server.
 
+This nested scalar path is also supported by the live `config_change` mutation
+surface.
+
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser
 authorization-code PKCE. When authorization-server metadata advertises an RFC
