@@ -95,11 +95,20 @@ pub(super) fn append_visible_mez_wrapper_text_segment(
     segment: &[u8],
     command_lines: &[String],
 ) {
-    if segment.is_empty() || mez_wrapper_echo_line_is_hidden(segment, command_lines) {
+    let normalized = String::from_utf8_lossy(segment);
+    let trimmed = normalized.trim_matches(['\r', '\n']).trim();
+    if segment.is_empty()
+        || mez_wrapper_echo_line_is_hidden(segment, command_lines)
+        || trimmed.starts_with("__mez_tx_")
+        || trimmed.starts_with("MEZ_STTY_STATE=")
+        || trimmed.starts_with("stty -echo")
+        || trimmed.starts_with("stty \"")
+        || trimmed.starts_with("unset -f __mez_tx_")
+    {
         return;
     }
-    let text = String::from_utf8_lossy(segment);
-    visible.extend_from_slice(mez_wrapper_echo_text_without_leading_prompts(&text).as_bytes());
+    visible
+        .extend_from_slice(mez_wrapper_echo_text_without_leading_prompts(&normalized).as_bytes());
 }
 
 /// Runs the terminal escape sequence end operation for this subsystem.
@@ -680,6 +689,23 @@ pub(super) fn latest_agent_shell_transaction_output_lines(
     lines
 }
 
+/// Returns terminal-renderable bytes for Mezzanine-owned shell transaction
+/// output.
+///
+/// Shell wrappers encode command stdout/stderr between transport markers so the
+/// runtime can recover output even when shell echo or prompt repaint surrounds
+/// it. Visible terminal rendering should show the decoded command output, not
+/// the private transport frame.
+pub(super) fn renderable_shell_transaction_bytes(bytes: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(bytes);
+    let decoded = decode_shell_output_transport_with_diagnostics(&text);
+    if decoded.diagnostics.saw_begin_marker {
+        decoded.output.into_bytes()
+    } else {
+        bytes.to_vec()
+    }
+}
+
 /// Sanitizes one transient shell-output status line for pane rendering.
 pub(super) fn sanitized_shell_output_status_line(line: &str) -> String {
     line.chars()
@@ -979,7 +1005,7 @@ impl RuntimeSessionService {
         match self.pane_output_render_mode(pane_id) {
             PaneOutputRenderMode::Normal
             | PaneOutputRenderMode::VerboseAgentAction
-            | PaneOutputRenderMode::Trace => transaction_bytes.to_vec(),
+            | PaneOutputRenderMode::Trace => renderable_shell_transaction_bytes(transaction_bytes),
             PaneOutputRenderMode::HiddenLiveAgentShell => {
                 if !transaction_bytes.is_empty() {
                     self.remember_hidden_shell_render_suppression(pane_id);
