@@ -97,13 +97,24 @@ pub(super) fn append_visible_mez_wrapper_text_segment(
 ) {
     let normalized = String::from_utf8_lossy(segment);
     let trimmed = normalized.trim_matches(['\r', '\n']).trim();
+    let promptless = mez_wrapper_echo_text_without_inline_prompts(trimmed);
+    let wrapped_transport_printf = trimmed.contains("__MEZ_SHELL_OUTPUT_BASE64_")
+        && !trimmed.starts_with("__MEZ_SHELL_OUTPUT_BASE64_")
+        && (trimmed.contains("printf") || promptless.contains("printf"));
     if segment.is_empty()
         || mez_wrapper_echo_line_is_hidden(segment, command_lines)
+        || promptless.starts_with("if [ -n \"$MEZ_STTY_STATE\"")
+        || wrapped_transport_printf
         || trimmed.starts_with("__mez_tx_")
         || trimmed.starts_with("MEZ_STTY_STATE=")
         || trimmed.starts_with("stty -echo")
         || trimmed.starts_with("stty \"")
+        || promptless.starts_with("__mez_tx_")
+        || promptless.starts_with("stty -echo")
+        || promptless.starts_with("stty \"")
+        || promptless == "done"
         || trimmed.starts_with("unset -f __mez_tx_")
+        || promptless.starts_with("unset -f __mez_tx_")
     {
         return;
     }
@@ -1627,6 +1638,47 @@ mod tests {
                 "line should be visible: {line}"
             );
         }
+    }
+
+    /// Verifies wrapper-only cleanup and transport lines stay hidden even when
+    /// the shell wraps them with prompt fragments.
+    #[test]
+    fn wrapper_echo_text_filtering_hides_wrapped_cleanup_fragments() {
+        let empty_commands: Vec<String> = Vec::new();
+        let hidden_lines = [
+            "if [ -n \"$MEZ_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi",
+            "printf>  '\\n%s\\n' '__MEZ_SHELL_OUTPUT_BASE64_BEGIN__'",
+            "__mez_t> x_1766e8c197025c5c",
+            "done",
+        ];
+        for line in &hidden_lines {
+            let visible = mez_wrapper_echo_line_visible_bytes(line.as_bytes(), &empty_commands);
+            assert!(visible.is_empty(), "line should be hidden: {line}");
+        }
+    }
+
+    /// Verifies raw transport marker lines remain available so the visible
+    /// renderer can decode command output instead of showing base64 payloads.
+    #[test]
+    fn wrapper_echo_text_filtering_preserves_transport_marker_lines_for_decode() {
+        let empty_commands: Vec<String> = Vec::new();
+        let begin = mez_wrapper_echo_line_visible_bytes(
+            b"__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n",
+            &empty_commands,
+        );
+        let end = mez_wrapper_echo_line_visible_bytes(
+            b"__MEZ_SHELL_OUTPUT_BASE64_END__\n",
+            &empty_commands,
+        );
+
+        assert_eq!(
+            String::from_utf8_lossy(&begin),
+            "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&end),
+            "__MEZ_SHELL_OUTPUT_BASE64_END__\n"
+        );
     }
 
     /// Verifies command echo is only hidden on the first occurrence, not

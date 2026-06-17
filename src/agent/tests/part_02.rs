@@ -8,6 +8,21 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     let prompt =
         build_agent_system_prompt(&AgentPromptProfile::default_for("agent-1", "%1")).unwrap();
 
+    assert!(prompt.contains(
+        "This section covers choosing the next action family and the immediate execution move"
+    ));
+    assert!(prompt.contains(
+        "Keep completion criteria in Validation, user-facing wording in Communication"
+    ));
+    assert!(prompt.contains(
+        "This section covers user-facing wording, rationale updates, and progress/final style after the next action family is chosen"
+    ));
+    assert!(prompt.contains(
+        "This section defines completion criteria and verification after the chosen work lands"
+    ));
+    assert!(prompt.contains(
+        "This section defines the MAAP response envelope and completion handoff, not per-tool mechanics or next-step routing"
+    ));
     assert!(prompt.contains("pane shell"));
     assert!(prompt.contains("careful, pragmatic engineering collaborator"));
     assert!(prompt.contains("Do not flatter, praise, validate, or agree with the user by default"));
