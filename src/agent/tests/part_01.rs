@@ -4352,7 +4352,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(!prompt.contains("Mezzanine pane agent agent-1"));
     assert!(prompt.contains("MCP integrations exist through Mezzanine's external-integration path"));
     assert!(prompt.contains("Current availability: servers=1 tools=1."));
-    assert!(prompt.contains("Use MCP only when the user task matches a listed MCP server purpose"));
+    assert!(prompt.contains("Prefer MCP when the user task matches a listed MCP server purpose"));
+    assert!(prompt.contains("usage instructions, an exposed MCP tool description"));
     assert!(prompt.contains("Do not infer an MCP server's use case from its name alone"));
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));
@@ -4432,8 +4433,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("separate observed facts backed by current action results"));
     assert!(prompt.contains("from source-backed inference, assumptions, and unresolved uncertainty"));
     assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
-    assert!(prompt.contains("When memory actions are available for a non-trivial task, almost always perform one focused memory search near the start of the turn"));
-    assert!(prompt.contains("Skip that early search only when the task is clearly self-contained and durable prior context is very unlikely to help"));
+    assert!(prompt.contains("When memory actions are available for a non-trivial task, usually perform one focused memory search near the start of the turn"));
+    assert!(prompt.contains("or the request clearly matches an available MCP or other external integration that should be tried first"));
+    assert!(prompt.contains("Do not use memory_search as a substitute for MCP, web, shell, or other action families"));
     assert!(prompt.contains("strongly consider storing it with memory_store if it is likely to help future turns"));
     assert!(prompt.contains("prefer repository patterns"));
     assert!(prompt.contains("preserve unrelated user worktree changes"));
