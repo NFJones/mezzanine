@@ -844,6 +844,148 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
         .contains(&"issue_query"));
 }
 
+/// Verifies memory capability requests are redirected to MCP when the active
+/// task matches available MCP metadata and the user did not ask for memory.
+///
+/// This protects MCP-backed workflows from a model routing around the default
+/// memory shadowing rule by requesting the memory capability first. The
+/// continuation keeps a visible denial reason while exposing `mcp_call` as the
+/// deterministic next action surface.
+#[test]
+fn turn_runner_denies_memory_capability_for_mcp_matched_task_and_exposes_mcp() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "request memory capability".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![capability_action("capability-1", AgentCapability::Memory)],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "finish after memory denial".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "use the MCP tool")],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let tools = vec![McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object"}"#.to_string(),
+    }];
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: vec!["gitlab".to_string()],
+        available_mcp_tools: &tools,
+        memory_actions_enabled: true,
+        issue_actions_enabled: true,
+    };
+    let context = append_mcp_context(
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "GitLab issue and merge request operations".to_string(),
+        }])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "gitlab".to_string(),
+                display_name: "GitLab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: tools.clone(),
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let execution = runner.run_turn(&mut ledger, turn, context).unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].allowed_actions.action_type_names(),
+        vec!["say", "request_capability", "mcp_call"]
+    );
+    assert_eq!(
+        requests[1].interaction_kind,
+        crate::agent::ModelInteractionKind::ActionExecution
+    );
+    assert_eq!(
+        requests[1].allowed_actions.action_type_names(),
+        vec!["say", "request_capability", "mcp_call"]
+    );
+    let capability_context = requests[1]
+        .messages
+        .iter()
+        .find(|message| message.content.contains("[capability denied]"))
+        .expect("missing denied capability context");
+    assert!(
+        capability_context
+            .content
+            .contains("current task matches available MCP metadata"),
+        "{}",
+        capability_context.content
+    );
+    assert!(
+        capability_context
+            .content
+            .contains("allowed_actions=say,request_capability,mcp_call"),
+        "{}",
+        capability_context.content
+    );
+    assert!(!requests[1]
+        .allowed_actions
+        .action_type_names()
+        .contains(&"memory_search"));
+}
+
 /// Verifies capability negotiation does not reintroduce skill lookup actions
 /// after an explicit `$skill` prompt has already loaded the workflow.
 ///
@@ -1282,6 +1424,127 @@ fn default_action_gates_expose_mcp_and_memory_for_diagnostic_request_shapes() {
     assert_eq!(request.available_mcp_tools, tools);
     assert!(request.memory_actions_enabled);
     assert!(!request.issue_actions_enabled);
+}
+
+/// Verifies default action gates hide memory actions when the active user task
+/// matches available MCP metadata.
+///
+/// Prompt guidance alone was not strong enough to stop models from using
+/// `memory_search` and `memory_store` before a verbatim MCP-backed task. The
+/// selected-model surface should make the direct MCP path executable while
+/// keeping memory available only through an explicit memory request.
+#[test]
+fn default_action_gates_shadow_memory_when_task_matches_mcp_metadata() {
+    let tools = vec![McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object"}"#.to_string(),
+    }];
+    let context = append_mcp_context(
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "GitLab issue and merge request operations".to_string(),
+        }])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "gitlab".to_string(),
+                display_name: "GitLab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: tools.clone(),
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &context,
+    )
+    .unwrap();
+
+    super::apply_default_action_gates(&mut request, &tools, true, true);
+
+    let allowed_actions = request.allowed_actions.action_type_names();
+    assert!(allowed_actions.contains(&"mcp_call"));
+    assert!(allowed_actions.contains(&"request_capability"));
+    assert!(!allowed_actions.contains(&"memory_search"));
+    assert!(!allowed_actions.contains(&"memory_store"));
+    assert!(request.memory_actions_enabled);
+}
+
+/// Verifies explicit persistent-memory intent keeps memory actions available
+/// even when the same prompt also mentions MCP metadata.
+///
+/// The MCP shadowing rule is targeted at MCP-backed work, not at user requests
+/// to recall or save durable memory.
+#[test]
+fn default_action_gates_keep_memory_when_user_explicitly_requests_memory() {
+    let tools = vec![McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object"}"#.to_string(),
+    }];
+    let context = append_mcp_context(
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "remember my preference for GitLab issue and merge request operations"
+                .to_string(),
+        }])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "gitlab".to_string(),
+                display_name: "GitLab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: tools.clone(),
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &context,
+    )
+    .unwrap();
+
+    super::apply_default_action_gates(&mut request, &tools, true, true);
+
+    let allowed_actions = request.allowed_actions.action_type_names();
+    assert!(allowed_actions.contains(&"mcp_call"));
+    assert!(allowed_actions.contains(&"memory_search"));
+    assert!(allowed_actions.contains(&"memory_store"));
 }
 
 

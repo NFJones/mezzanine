@@ -6328,6 +6328,11 @@ current runtime context. When runtime MCP context is present, all model-visible
 MCP availability surfaces, including the system prompt and structured action
 schema, MUST agree on whether MCP servers and tools are available and MUST NOT
 report zero available MCP tools while concrete `mcp_call` variants are exposed.
+When the active user request matches available MCP server or tool metadata and
+the user did not explicitly ask to recall or save persistent memory, the default
+selected-model action surface MUST expose `mcp_call` without exposing
+`memory_search` or `memory_store`, and memory capability requests SHOULD be
+denied with controller feedback directing the model to use `mcp_call`.
 
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.
