@@ -9,7 +9,7 @@ use super::{AgentContext, ContextBlock, ContextSourceKind};
 use crate::agent::validate_non_empty;
 use crate::error::Result;
 use crate::instructions::DiscoveredInstructionFile;
-use crate::mcp::{McpPromptServer, McpPromptSummary, McpPromptTool};
+use crate::mcp::{McpPromptServer, McpPromptSummary};
 use crate::memory::{MemoryRecord, MemoryScope};
 use crate::permissions::PermissionPolicy;
 use crate::scheduler::{AgentScheduler, runnable_agent_ids};
@@ -94,15 +94,14 @@ pub fn append_mcp_context(
     for server in &available_servers {
         lines.push(mcp_available_server_line(server));
     }
-    if mcp_context_should_include_tool_details(&context, &available_tools) {
-        for tool in &available_tools {
-            lines.push(format!(
-                "available_tool={}/{} approval_required={}",
-                tool.server_id, tool.tool_name, tool.approval_required
-            ));
-        }
-    } else if !available_tools.is_empty() {
-        lines.push("available_tool_inventory=deferred_until_explicit_mcp_relevance".to_string());
+    for tool in &available_tools {
+        lines.push(format!(
+            "available_tool={}/{} description={} approval_required={}",
+            tool.server_id,
+            tool.tool_name,
+            mcp_context_quoted_value(&tool.description),
+            tool.approval_required
+        ));
     }
     for server in &unavailable_servers {
         lines.push(format!(
@@ -147,36 +146,6 @@ fn mcp_available_server_line(server: &McpPromptServer) -> String {
 fn mcp_context_quoted_value(value: &str) -> String {
     let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     format!("{:?}", collapsed)
-}
-
-/// Returns whether MCP prompt context should include per-tool details.
-fn mcp_context_should_include_tool_details(
-    context: &AgentContext,
-    available_tools: &[McpPromptTool],
-) -> bool {
-    context.blocks.iter().any(|block| {
-        matches!(
-            block.source,
-            ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage
-        ) && mcp_context_text_requests_details(&block.content, available_tools)
-    })
-}
-
-/// Returns whether text is explicitly about MCP or one available MCP tool.
-fn mcp_context_text_requests_details(content: &str, available_tools: &[McpPromptTool]) -> bool {
-    let normalized = content.to_ascii_lowercase();
-    if normalized.contains("/list-mcp")
-        || normalized.contains("mcp")
-        || normalized.contains("integration")
-    {
-        return true;
-    }
-    available_tools.iter().any(|tool| {
-        let server = tool.server_id.to_ascii_lowercase();
-        let name = tool.tool_name.to_ascii_lowercase();
-        (!server.is_empty() && normalized.contains(&server))
-            || (!name.is_empty() && normalized.contains(&name))
-    })
 }
 
 /// Inserts project guidance context before the first non-guidance block.

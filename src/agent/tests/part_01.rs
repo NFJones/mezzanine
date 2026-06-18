@@ -2951,9 +2951,9 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
     assert_eq!(context.blocks[1].content, "api_key = sk-secret");
 }
 
-/// Verifies that MCP prompt context keeps availability visible while deferring
-/// per-tool details until the task is explicitly MCP-related. This avoids
-/// replaying a large unrelated tool catalog into every ordinary provider turn.
+/// Verifies that MCP prompt context always exposes available MCP tools before
+/// the user prompt so the model can route to configured integrations on the
+/// first turn without relying on MCP-specific discovery language.
 #[test]
 fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt() {
     let context = AgentContext::new(vec![ContextBlock {
@@ -3001,12 +3001,12 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert!(
         context.blocks[0]
             .content
-            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance")
+            .contains("available_tool=fs/read_file")
     );
     assert!(
-        !context.blocks[0]
+        context.blocks[0]
             .content
-            .contains("available_tool=fs/read_file")
+            .contains("description=\"Read files\"")
     );
     assert!(
         !context.blocks[0].content.contains("input_schema"),
@@ -3014,7 +3014,9 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
         context.blocks[0].content
     );
     assert!(
-        !context.blocks[0].content.contains("description="),
+        !context.blocks[0]
+            .content
+            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance"),
         "{}",
         context.blocks[0].content
     );
@@ -3031,15 +3033,14 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
 }
 
-/// Verifies that MCP prompt context expands per-tool details when the active
-/// task explicitly references MCP. Tool schemas remain available through the
-/// action schema, but this summary helps the model decide that MCP is relevant.
+/// Verifies that MCP tool descriptions are quoted and whitespace-normalized in
+/// the prompt context so model-visible metadata stays readable and stable.
 #[test]
-fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
+fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
-        content: "use MCP to call read_file".to_string(),
+        content: "call a tool".to_string(),
     }])
     .unwrap();
     let context = append_mcp_context(
@@ -3056,7 +3057,7 @@ fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
             available_tools: vec![crate::mcp::McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
-                description: "Read files".to_string(),
+                description: "Read files\nfrom MCP".to_string(),
                 approval_required: true,
                 input_schema_json: r#"{"type":"object"}"#.to_string(),
             }],
@@ -3071,9 +3072,9 @@ fn mcp_context_expands_available_tools_when_task_mentions_mcp() {
             .contains("available_tool=fs/read_file")
     );
     assert!(
-        !context.blocks[0]
+        context.blocks[0]
             .content
-            .contains("available_tool_inventory=deferred")
+            .contains("description=\"Read files from MCP\"")
     );
 }
 
@@ -3138,12 +3139,17 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     assert!(
         mcp_blocks[0]
             .content
-            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance")
+            .contains("available_tool=git/status")
     );
     assert!(
         !mcp_blocks[0]
             .content
             .contains("available_tool=fs/read_file")
+    );
+    assert!(
+        mcp_blocks[0]
+            .content
+            .contains("description=\"Read status\"")
     );
 }
 
