@@ -4297,15 +4297,43 @@ fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_s
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
-/// Verifies OpenAI's composite current-request tool keeps both MCP and memory
-/// available while explicitly describing the MCP routing-match hint.
+/// Verifies MCP routing matches select the dedicated MCP surface before memory.
 ///
-/// This protects the intended non-restrictive behavior: the model still sees
-/// the full composite action surface, but the selected tool description carries
-/// enough current-turn context to choose `mcp_call` before generic memory
-/// actions when MCP metadata already matches the task.
+/// An explicit MCP route must be deterministic rather than advisory: if memory
+/// actions remain visible in the first provider request, models can satisfy the
+/// turn with repeated durable-memory lookups instead of trying the named MCP
+/// integration.
 #[test]
-fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_actions() {
+fn openai_routing_matched_mcp_uses_dedicated_surface_before_memory() {
+    let mcp_tool = McpPromptTool {
+        server_id: "githubcopilot".to_string(),
+        tool_name: "list_ci_results".to_string(),
+        description: "Read GitHub CI check results for a repository".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#
+            .to_string(),
+    };
+    let context = crate::agent::append_mcp_context(
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use the githubcopilot mcp server to pull the latest CI results".to_string(),
+        }])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "githubcopilot".to_string(),
+                display_name: "GitHub Copilot".to_string(),
+                purpose: "GitHub repository and CI operations".to_string(),
+                usage_instructions: String::new(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![mcp_tool.clone()],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -4317,50 +4345,31 @@ fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_act
             safety_tier: None,
         },
         &turn(),
-        &AgentContext::new(vec![ContextBlock {
-            source: ContextSourceKind::UserInstruction,
-            label: "user".to_string(),
-            content: "GitLab issue and merge request operations".to_string(),
-        }])
-        .unwrap(),
+        &context,
     )
     .unwrap();
-    request
-        .allowed_actions
-        .extend([
-            crate::agent::AllowedAction::McpCall,
-            crate::agent::AllowedAction::MemorySearch,
-            crate::agent::AllowedAction::MemoryStore,
-        ]);
-    request.available_mcp_tools = vec![McpPromptTool {
-        server_id: "gitlab".to_string(),
-        tool_name: "get_issue".to_string(),
-        description: "Read one GitLab issue".to_string(),
-        approval_required: false,
-        input_schema_json: r#"{"type":"object","properties":{"iid":{"type":"integer"}}}"#
-            .to_string(),
-    }];
+    crate::agent::apply_default_action_gates(&mut request, &[mcp_tool], true, false);
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let current_tool = openai_function_tool(&value, "submit_maap_current_actions");
-    let description = current_tool["description"].as_str().unwrap();
-    let action_types = openai_tool_action_types(current_tool);
+    let mcp_tool_schema = openai_function_tool(&value, "submit_maap_mcp_actions");
+    let description = mcp_tool_schema["description"].as_str().unwrap();
+    let action_types = openai_tool_action_types(mcp_tool_schema);
 
-    assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_mcp_actions");
     assert!(action_types.contains(&"mcp_call".to_string()));
-    assert!(action_types.contains(&"memory_search".to_string()));
-    assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(!action_types.contains(&"memory_search".to_string()));
+    assert!(!action_types.contains(&"memory_store".to_string()));
     assert!(
-        description.contains("routing_match=available_mcp"),
+        description.contains("Available MCP tools callable with mcp_call: githubcopilot/list_ci_results"),
         "{description}"
     );
     assert!(
-        description.contains("mcp_call is the sane first action"),
+        description.contains("call the matching MCP tool as the first useful action"),
         "{description}"
     );
     assert!(
-        description.contains("shell preflight, or request_capability for shell/network first"),
+        description.contains("shell preflight, shell/network capability requests"),
         "{description}"
     );
     assert!(
@@ -4371,11 +4380,79 @@ fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_act
         description.contains("put that action in this function call now"),
         "{description}"
     );
-    assert!(
-        description
-            .contains("Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."),
-        "{description}"
-    );
+}
+
+/// Verifies memory actions return after the turn has an MCP action result.
+///
+/// The MCP-first restriction is a first-attempt rule. Once MCP has produced an
+/// action result, fallback capability routing can expose memory again for a
+/// concrete durable-context gap.
+#[test]
+fn openai_routing_matched_mcp_releases_memory_after_mcp_result() {
+    let mcp_tool = McpPromptTool {
+        server_id: "githubcopilot".to_string(),
+        tool_name: "list_ci_results".to_string(),
+        description: "Read GitHub CI check results for a repository".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#
+            .to_string(),
+    };
+    let context = crate::agent::append_mcp_context(
+        AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "use the githubcopilot mcp server to pull the latest CI results"
+                    .to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result m1".to_string(),
+                content:
+                    "[action_result m1 mcp_call failed]\nerror: mcp_tool_error missing repo"
+                        .to_string(),
+            },
+        ])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "githubcopilot".to_string(),
+                display_name: "GitHub Copilot".to_string(),
+                purpose: "GitHub repository and CI operations".to_string(),
+                usage_instructions: String::new(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![mcp_tool.clone()],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &context,
+    )
+    .unwrap();
+    crate::agent::apply_default_action_gates(&mut request, &[mcp_tool], true, false);
+
+    let body = openai_responses_request_body(&request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let current_tool = openai_function_tool(&value, "submit_maap_current_actions");
+    let action_types = openai_tool_action_types(current_tool);
+
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
+    assert!(action_types.contains(&"mcp_call".to_string()));
+    assert!(action_types.contains(&"memory_search".to_string()));
+    assert!(action_types.contains(&"memory_store".to_string()));
 }
 
 /// Verifies openai responses request body uses mcp tool argument schemas.

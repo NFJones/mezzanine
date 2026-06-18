@@ -3118,6 +3118,51 @@ fn mcp_context_marks_routing_match_for_verbatim_server_purpose() {
     );
 }
 
+/// Verifies MCP context matches compact user spellings of spaced server names.
+///
+/// Users often type a configured integration name as one shell-like token.
+/// Routing must still recognize that `githubcopilot` names the same server as
+/// `GitHub Copilot`; otherwise the MCP-first action surface is never selected.
+#[test]
+fn mcp_context_marks_routing_match_for_compacted_server_name() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use the githubcopilot mcp server to pull latest CI".to_string(),
+    }])
+    .unwrap();
+    let context = append_mcp_context(
+        context,
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "github-copilot".to_string(),
+                display_name: "GitHub Copilot".to_string(),
+                purpose: "GitHub repository and CI operations".to_string(),
+                usage_instructions: String::new(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![crate::mcp::McpPromptTool {
+                server_id: "github-copilot".to_string(),
+                tool_name: "list_ci_results".to_string(),
+                description: "Read GitHub CI results".to_string(),
+                approval_required: false,
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            }],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("routing_match=available_mcp server=github-copilot match=server_name"),
+        "{}",
+        context.blocks[0].content
+    );
+}
+
 /// Verifies MCP context adds a routing hint when the current user request
 /// matches a distinctive server metadata token without repeating the whole
 /// configured description.
@@ -4563,7 +4608,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v24"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v25"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4584,6 +4629,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("prefer that server as the first concrete execution path"));
     assert!(prompt.contains("do not start with memory_search, memory_store, shell_command"));
     assert!(prompt.contains("request_capability for shell/network"));
+    assert!(prompt.contains("runtime may narrow the first action surface to MCP"));
     assert!(prompt.contains("Do not infer an MCP server's use case from its name alone"));
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));

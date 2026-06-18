@@ -124,7 +124,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Mcp => format!(
-                "Submit one MAAP batch for MCP tool work. {} {} Use only the action objects in this function schema. If the user named this MCP server or runtime context shows routing_match=available_mcp, call the matching MCP tool as the first useful action; do not use shell preflight, memory actions, or another placeholder step before it. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
+                "Submit one MAAP batch for MCP tool work. {} {} Use only the action objects in this function schema. If the user named this MCP server or runtime context shows routing_match=available_mcp, call the matching MCP tool as the first useful action; do not use shell preflight, shell/network capability requests, memory actions, or another placeholder step before it. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::ACTION_BATCH_ENVELOPE_RULE,
                 mcp_tool_manifest_for_description(&request.available_mcp_tools),

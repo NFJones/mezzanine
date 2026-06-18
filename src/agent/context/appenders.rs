@@ -207,6 +207,11 @@ fn mcp_context_metadata_matches_task(normalized_task: &str, metadata: &str) -> b
     {
         return true;
     }
+    if metadata_tokens.len() <= 18
+        && mcp_context_normalized_task_contains_compacted_phrase(normalized_task, &metadata)
+    {
+        return true;
+    }
     metadata_tokens
         .into_iter()
         .filter(|token| mcp_context_salient_metadata_token(token))
@@ -218,6 +223,20 @@ fn mcp_context_normalized_task_contains_phrase(normalized_task: &str, metadata: 
     let task = format!(" {normalized_task} ");
     let phrase = format!(" {metadata} ");
     task.contains(&phrase)
+}
+
+/// Reports whether task text contains metadata when both are compacted.
+fn mcp_context_normalized_task_contains_compacted_phrase(
+    normalized_task: &str,
+    metadata: &str,
+) -> bool {
+    let compacted_metadata = metadata.replace(' ', "");
+    if compacted_metadata.len() < 4 {
+        return false;
+    }
+    normalized_task
+        .replace(' ', "")
+        .contains(&compacted_metadata)
 }
 
 /// Reports whether normalized task text contains a whole metadata token.

@@ -6350,6 +6350,12 @@ memory actions, unless the user explicitly asked to recall or save persistent
 memory. The prompt and provider action descriptions MUST prohibit placeholder
 `memory_search` or `memory_store` calls whose only purpose is to satisfy the
 current action wrapper before a real MCP call.
+When the active user request matches an available MCP server or tool and the
+turn has not yet produced an `mcp_call` action result, the runtime SHOULD
+narrow the default model action surface to the MCP capability surface before
+adding generic persistent-memory actions. This makes an explicit MCP route a
+deterministic first execution path while preserving normal fallback capability
+routing after an MCP result proves that another action family is required.
 
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.
