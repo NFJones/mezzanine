@@ -136,7 +136,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store when the current task needs durable memory lookup or storage. For many non-trivial tasks, when memory actions are available, perform one focused memory search near the start of the turn. Skip that early search when the task is clearly self-contained, durable prior context is very unlikely to help, or the request clearly matches an available MCP or other external integration that should be tried first. Keep the search focused, usually limit yourself to a single early memory search, and do not treat memory results as primary evidence. Do not use memory_search as a substitute for MCP, web, shell, or other action families that can directly inspect the requested artifact. When salient stable information is uncovered, strongly consider one focused memory_store action so future turns can reuse it. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store when the current task needs durable memory lookup or storage. For many non-trivial tasks, when memory actions are available, perform one focused memory search near the start of the turn. Skip that early search when the task is clearly self-contained, durable prior context is very unlikely to help, or the request clearly matches an available MCP or other external integration that should be tried first. Keep the search focused, usually limit yourself to a single early memory search, and do not treat memory results as primary evidence. Do not use memory_search as a substitute for MCP, web, shell, or other action families that can directly inspect the requested artifact. Do not use memory_store before the first concrete inspection, implementation, or validation action unless the user explicitly asks to save something or a stable reusable preference, fact, or procedure is already known. When salient stable information is uncovered, strongly consider one focused memory_store action so future turns can reuse it, but do not store prompt-specific, one-off, or transient current-turn notes. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -757,7 +757,7 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": ["preference", "fact", "procedure", "episode", "warning", "scratch"],
-                    "description": "Durable memory kind. When salient stable information would help future turns, store it as a focused reusable memory."
+                    "description": "Durable memory kind. Use memory_store only for stable reusable information that would help future turns, not for prompt-specific or transient current-turn notes."
                 }),
             ),
             (

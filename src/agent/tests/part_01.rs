@@ -4436,7 +4436,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("When memory actions are available for a non-trivial task, usually perform one focused memory search near the start of the turn"));
     assert!(prompt.contains("or the request clearly matches an available MCP or other external integration that should be tried first"));
     assert!(prompt.contains("Do not use memory_search as a substitute for MCP, web, shell, or other action families"));
+    assert!(prompt.contains("Do not use memory_store before the first concrete inspection, implementation, or validation action"));
     assert!(prompt.contains("strongly consider storing it with memory_store if it is likely to help future turns"));
+    assert!(prompt.contains("do not store prompt-specific, one-off, or transient notes from the current turn"));
     assert!(prompt.contains("prefer repository patterns"));
     assert!(prompt.contains("preserve unrelated user worktree changes"));
     assert!(prompt.contains("Terminal work MUST be an executable action"));
