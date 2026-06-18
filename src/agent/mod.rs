@@ -84,6 +84,7 @@ mod slash;
 /// declaration makes the boundary available to the crate.
 mod turn;
 
+pub(crate) use actions::apply_default_action_gates;
 pub use actions::{
     AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, McpActionExecutor,
     PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest, ShellReadObservation,

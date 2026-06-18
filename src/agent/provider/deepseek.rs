@@ -11,7 +11,7 @@ use super::chat_completions::{
 use super::errors::provider_maap_parse_error;
 use super::schema::maap_action_batch_schema;
 use super::{
-    AgentCapability, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
+    AgentCapability, AllowedAction, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_MODELS_ENDPOINT,
     DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpPromptTool, MezError,
     ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
@@ -166,7 +166,9 @@ enum DeepSeekMaapShimKind {
 impl DeepSeekMaapShimKind {
     /// Selects the DeepSeek-facing shim surface for the active request.
     fn for_request(request: &ModelRequest) -> Self {
-        if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
+        if request.interaction_kind == ModelInteractionKind::CapabilityDecision
+            && request.allowed_actions == AllowedActionSet::capability_decision()
+        {
             return Self::CapabilityDecision;
         }
         if request.allowed_actions == AllowedActionSet::say_only()
@@ -504,10 +506,23 @@ fn chat_completions_maap_tool_description(
             "Submit one user-facing response through this function. Return a function call, not prose. The arguments are translated into one internal MAAP/1 say action. Only progress, final, or blocked say text is valid; do not request tools or capabilities from this response-only surface.".to_string()
         }
         DeepSeekMaapShimKind::ActionDispatch => format!(
-            "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
+            "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {} {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
             request.allowed_actions.action_type_names().join(","),
+            deepseek_mcp_memory_routing_guidance(request),
         ),
     }
+}
+
+/// Builds MCP-specific routing guidance for composite DeepSeek action surfaces.
+fn deepseek_mcp_memory_routing_guidance(request: &ModelRequest) -> &'static str {
+    if !request
+        .allowed_actions
+        .actions
+        .contains(&AllowedAction::McpCall)
+    {
+        return "";
+    }
+    "If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch."
 }
 
 /// Builds the DeepSeek shim argument schema for the selected function.

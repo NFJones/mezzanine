@@ -16,6 +16,7 @@ use super::{
     ModelMessageRole, ModelProfile, ModelRequest, model_context_block_header,
 };
 use crate::error::Result;
+use crate::mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 
 /// Runs the assemble model request operation for this subsystem.
 ///
@@ -68,7 +69,8 @@ pub fn assemble_model_request_with_retained_tail_percent(
         source: ContextSourceKind::System,
         content: build_agent_system_prompt_with_repository_instructions(
             &AgentPromptProfile::default_for(&turn.agent_id, &turn.pane_id)
-                .with_provider(&profile.provider),
+                .with_provider(&profile.provider)
+                .with_mcp_summary(mcp_prompt_summary_from_context_blocks(&blocks)),
             &repo_instructions_for_prompt,
         )?,
     });
@@ -151,6 +153,131 @@ pub fn assemble_model_request_with_retained_tail_percent(
     };
     constrain_skill_actions_for_loaded_context(&mut request);
     Ok(request)
+}
+
+/// Recovers the MCP prompt summary from the canonical runtime context block.
+///
+/// Runtime appends a compact, sanitized `[mcp integrations]` block before
+/// request assembly. The system prompt also needs those availability counts so
+/// it does not contradict the integration manifest with a stale zero-tool
+/// default.
+fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptSummary {
+    let Some(block) = blocks.iter().find(|block| {
+        block.source == ContextSourceKind::Configuration && block.label == "mcp integrations"
+    }) else {
+        return empty_mcp_prompt_summary();
+    };
+    let mut available_server_count = 0usize;
+    let mut available_tool_count = 0usize;
+    let mut unavailable_servers = Vec::new();
+    for line in block.content.lines() {
+        if let Some(counts) = mcp_availability_counts_from_line(line) {
+            available_server_count = counts.0;
+            available_tool_count = counts.1;
+            continue;
+        }
+        if let Some(server) = mcp_unavailable_server_from_line(line) {
+            unavailable_servers.push(server);
+        }
+    }
+    McpPromptSummary {
+        available_servers: placeholder_mcp_servers(available_server_count),
+        available_tools: placeholder_mcp_tools(available_tool_count),
+        unavailable_servers,
+    }
+}
+
+/// Returns an empty MCP prompt summary.
+fn empty_mcp_prompt_summary() -> McpPromptSummary {
+    McpPromptSummary {
+        available_servers: Vec::new(),
+        available_tools: Vec::new(),
+        unavailable_servers: Vec::new(),
+    }
+}
+
+/// Parses the MCP availability count line emitted by `append_mcp_context`.
+fn mcp_availability_counts_from_line(line: &str) -> Option<(usize, usize)> {
+    Some((
+        mcp_usize_field(line, "available_servers=")?,
+        mcp_usize_field(line, "available_tools=")?,
+    ))
+}
+
+/// Parses one unsigned integer field from an MCP context line.
+fn mcp_usize_field(line: &str, prefix: &str) -> Option<usize> {
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix(prefix))
+        .and_then(|value| value.parse::<usize>().ok())
+}
+
+/// Parses one unavailable-server line emitted by `append_mcp_context`.
+fn mcp_unavailable_server_from_line(line: &str) -> Option<McpPromptUnavailableServer> {
+    line.strip_prefix("unavailable_server=")?;
+    Some(McpPromptUnavailableServer {
+        server_id: mcp_raw_field(line, "unavailable_server=")?.to_string(),
+        purpose: mcp_quoted_field(line, "purpose=").unwrap_or_default(),
+        usage_instructions: mcp_quoted_field(line, "usage_instructions=").unwrap_or_default(),
+        reason: mcp_quoted_field(line, "reason=").unwrap_or_default(),
+        retryable: mcp_raw_field(line, "retryable=").is_some_and(|value| value == "true"),
+    })
+}
+
+/// Parses one whitespace-delimited raw MCP context field.
+fn mcp_raw_field<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix(prefix))
+        .filter(|value| !value.is_empty())
+}
+
+/// Parses one debug-quoted MCP context field.
+fn mcp_quoted_field(line: &str, prefix: &str) -> Option<String> {
+    let start = line.find(prefix)? + prefix.len();
+    let quoted = line.get(start..)?.trim_start();
+    let quoted = quoted.strip_prefix('"')?;
+    let mut escaped = false;
+    for (index, character) in quoted.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character == '"' {
+            let literal = format!("\"{}\"", &quoted[..index]);
+            return serde_json::from_str::<String>(&literal).ok();
+        }
+    }
+    None
+}
+
+/// Builds placeholder available-server entries for prompt count rendering.
+fn placeholder_mcp_servers(count: usize) -> Vec<McpPromptServer> {
+    (0..count)
+        .map(|_| McpPromptServer {
+            server_id: String::new(),
+            display_name: String::new(),
+            purpose: String::new(),
+            usage_instructions: String::new(),
+            tool_count: 0,
+            approval_required_tool_count: 0,
+        })
+        .collect()
+}
+
+/// Builds placeholder available-tool entries for prompt count rendering.
+fn placeholder_mcp_tools(count: usize) -> Vec<McpPromptTool> {
+    (0..count)
+        .map(|_| McpPromptTool {
+            server_id: String::new(),
+            tool_name: String::new(),
+            description: String::new(),
+            approval_required: false,
+            input_schema_json: "{}".to_string(),
+        })
+        .collect()
 }
 
 /// Extracts the live Mezzanine session UUID from runtime identity context.

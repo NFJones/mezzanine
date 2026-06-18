@@ -9,8 +9,8 @@ use super::{runtime_action_status_name, runtime_mezzanine_error_code};
 use crate::agent::{
     ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnRecord, AgentTurnState,
     ContextSourceKind, MaapBatch, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
-    OpenAiPromptCacheDiagnostics, assemble_model_request_with_retained_tail_percent,
-    openai_prompt_cache_diagnostics_for_request,
+    OpenAiPromptCacheDiagnostics, apply_default_action_gates,
+    assemble_model_request_with_retained_tail_percent, openai_prompt_cache_diagnostics_for_request,
 };
 use crate::error::{MezError, Result};
 use crate::runtime::{RuntimeSessionService, runtime_agent_turn_state_name};
@@ -165,6 +165,8 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         context: &AgentContext,
         available_mcp_tools: &[crate::mcp::McpPromptTool],
+        memory_actions_enabled: bool,
+        issue_actions_enabled: bool,
     ) {
         let Ok(mut request) = assemble_model_request_with_retained_tail_percent(
             model_profile,
@@ -174,7 +176,12 @@ impl RuntimeSessionService {
         ) else {
             return;
         };
-        request.available_mcp_tools = available_mcp_tools.to_vec();
+        apply_default_action_gates(
+            &mut request,
+            available_mcp_tools,
+            memory_actions_enabled,
+            issue_actions_enabled,
+        );
         let (diagnostics, diagnostics_failed) = if request.provider == "openai" {
             match openai_prompt_cache_diagnostics_for_request(&request) {
                 Ok(diagnostics) => (Some(diagnostics), false),

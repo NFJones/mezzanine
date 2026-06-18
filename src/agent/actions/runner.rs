@@ -71,6 +71,23 @@ fn expose_issue_actions_gate(request: &mut ModelRequest, issue_actions_enabled: 
     request.issue_actions_enabled = issue_actions_enabled;
 }
 
+/// Applies runtime-owned default action gates to a model request.
+///
+/// The main selected-model surface starts as a capability-decision request and
+/// is then widened with concrete MCP, memory, and issue-tracking availability
+/// owned by the runtime. Keeping this mutation in one helper prevents provider
+/// diagnostics from drifting away from the live runner surface.
+pub(crate) fn apply_default_action_gates(
+    request: &mut ModelRequest,
+    available_mcp_tools: &[McpPromptTool],
+    memory_actions_enabled: bool,
+    issue_actions_enabled: bool,
+) {
+    expose_default_mcp_actions(request, available_mcp_tools);
+    expose_default_memory_actions(request, memory_actions_enabled);
+    expose_issue_actions_gate(request, issue_actions_enabled);
+}
+
 /// Carries agent turn runner state for this subsystem.
 ///
 /// The fields are kept explicit so callers can inspect and move structured
@@ -142,9 +159,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             request.interaction_kind = ModelInteractionKind::ActionExecution;
             request.allowed_actions = allowed_actions;
         }
-        expose_default_mcp_actions(&mut request, self.available_mcp_tools);
-        expose_default_memory_actions(&mut request, self.memory_actions_enabled);
-        expose_issue_actions_gate(&mut request, self.issue_actions_enabled);
+        apply_default_action_gates(
+            &mut request,
+            self.available_mcp_tools,
+            self.memory_actions_enabled,
+            self.issue_actions_enabled,
+        );
         let mut repair_attempts = 0usize;
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
@@ -504,9 +524,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             request.interaction_kind = ModelInteractionKind::ActionExecution;
             request.allowed_actions = allowed_actions;
         }
-        expose_default_mcp_actions(&mut request, self.available_mcp_tools);
-        expose_default_memory_actions(&mut request, self.memory_actions_enabled);
-        expose_issue_actions_gate(&mut request, self.issue_actions_enabled);
+        apply_default_action_gates(
+            &mut request,
+            self.available_mcp_tools,
+            self.memory_actions_enabled,
+            self.issue_actions_enabled,
+        );
         let mut repair_attempts = 0usize;
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();

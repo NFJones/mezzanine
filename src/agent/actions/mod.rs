@@ -31,6 +31,7 @@ pub use read_observation::{
 pub use result_context::action_result_context_content;
 pub(super) use result_context::action_result_transcript_content;
 pub use runner::AgentTurnRunner;
+pub(crate) use runner::apply_default_action_gates;
 pub use shell_transport::{
     ShellTransportDecodeResult, ShellTransportDiagnostics, decode_shell_output_transport,
     decode_shell_output_transport_with_diagnostics,

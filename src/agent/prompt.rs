@@ -89,6 +89,12 @@ impl AgentPromptProfile {
         self.provider = Some(provider.into());
         self
     }
+
+    /// Sets the MCP prompt summary on this profile.
+    pub fn with_mcp_summary(mut self, summary: McpPromptSummary) -> Self {
+        self.mcp_summary = summary;
+        self
+    }
 }
 
 /// Runs the build agent system prompt operation for this subsystem.

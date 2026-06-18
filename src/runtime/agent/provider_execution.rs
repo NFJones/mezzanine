@@ -151,6 +151,8 @@ impl RuntimeSessionService {
             &turn,
             &context,
             &mcp_summary.available_tools,
+            self.runtime_persistent_memory_enabled(),
+            super::issues::runtime_issues_enabled(self),
         );
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request_with_retained_tail_percent(
@@ -160,7 +162,12 @@ impl RuntimeSessionService {
                 self.agent_compaction_raw_retention_percent,
             ) {
                 Ok(mut request) => {
-                    request.available_mcp_tools = mcp_summary.available_tools.clone();
+                    crate::agent::apply_default_action_gates(
+                        &mut request,
+                        &mcp_summary.available_tools,
+                        self.runtime_persistent_memory_enabled(),
+                        super::issues::runtime_issues_enabled(self),
+                    );
                     self.append_agent_trace_maap_request(&turn, &request)?;
                 }
                 Err(error) => {
@@ -447,6 +454,8 @@ impl RuntimeSessionService {
             &turn,
             &context,
             &mcp_summary.available_tools,
+            self.runtime_persistent_memory_enabled(),
+            super::issues::runtime_issues_enabled(self),
         );
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let path_scopes = if subagent_scope.is_some() {

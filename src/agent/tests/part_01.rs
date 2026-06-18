@@ -3043,6 +3043,80 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
 }
 
+/// Verifies provider request assembly carries runtime MCP availability into
+/// the system prompt instead of leaving the prompt profile at its empty
+/// defaults.
+///
+/// The selected model reads both the system prompt and the `[mcp integrations]`
+/// context block. If these disagree, the model can treat MCP as unavailable
+/// even though concrete `mcp_call` schemas are exposed later by the runner.
+#[test]
+fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use the GitLab MCP server to inspect an issue".to_string(),
+    }])
+    .unwrap();
+    let context = append_mcp_context(
+        context,
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "gitlab".to_string(),
+                display_name: "GitLab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![crate::mcp::McpPromptTool {
+                server_id: "gitlab".to_string(),
+                tool_name: "get_issue".to_string(),
+                description: "Read one GitLab issue".to_string(),
+                approval_required: false,
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            }],
+            unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
+                server_id: "jira".to_string(),
+                purpose: "Jira issue operations".to_string(),
+                usage_instructions: "Use for Jira issue tasks.".to_string(),
+                reason: "startup failed".to_string(),
+                retryable: true,
+            }],
+        },
+    )
+    .unwrap();
+
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &context,
+    )
+    .unwrap();
+    let system_prompt = &request.messages[0].content;
+
+    assert!(
+        system_prompt.contains("Current availability: servers=1 tools=1."),
+        "{system_prompt}"
+    );
+    assert!(
+        system_prompt.contains("Do not attempt MCP server jira"),
+        "{system_prompt}"
+    );
+    assert!(
+        !system_prompt.contains("Current availability: servers=0 tools=0."),
+        "{system_prompt}"
+    );
+}
+
 /// Verifies that MCP tool descriptions are quoted and whitespace-normalized in
 /// the prompt context so model-visible metadata stays readable and stable.
 #[test]

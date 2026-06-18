@@ -4507,6 +4507,86 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(!parameters_text.contains("minItems"));
 }
 
+/// Verifies DeepSeek selected-model requests with default concrete actions use
+/// the action-dispatch shim even when the interaction kind is still the
+/// initial capability-decision phase.
+///
+/// Runtime widens the selected model's first request with default `mcp_call`
+/// and memory actions after assembly. DeepSeek must serialize that concrete
+/// surface instead of choosing the narrow capability selector from
+/// `interaction_kind` alone, or the model cannot directly call available MCP
+/// tools and may drift into no-op memory actions.
+#[test]
+fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_initial_surface() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("xhigh".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use the GitLab MCP server to inspect an issue".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request
+        .allowed_actions
+        .extend([
+            crate::agent::AllowedAction::McpCall,
+            crate::agent::AllowedAction::MemorySearch,
+            crate::agent::AllowedAction::MemoryStore,
+        ]);
+    request.available_mcp_tools = vec![crate::mcp::McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","properties":{"iid":{"type":"integer"}}}"#
+            .to_string(),
+    }];
+
+    let http_request = build_deepseek_chat_completions_http_request(
+        &request,
+        "deepseek-key",
+        "https://api.deepseek.com/chat/completions",
+        false,
+        1000,
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&http_request.body).unwrap();
+    let tool = deepseek_maap_function_tool(&value);
+    let action_types = deepseek_tool_action_types(tool);
+    let description = tool["function"]["description"].as_str().unwrap();
+
+    assert_eq!(
+        value["tool_choice"]["function"]["name"],
+        DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME
+    );
+    assert_eq!(tool["function"]["name"], DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME);
+    assert!(action_types.contains(&"mcp_call".to_string()));
+    assert!(action_types.contains(&"memory_search".to_string()));
+    assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(description.contains("If this schema includes mcp_call"), "{description}");
+    assert!(
+        description.contains("Do not use memory_search to decide whether visible MCP metadata"),
+        "{description}"
+    );
+    assert!(
+        !description.contains("Decide the next Mezzanine capability"),
+        "{description}"
+    );
+    assert!(tool["function"]["parameters"]["properties"].get("actions").is_some());
+}
+
 /// Verifies DeepSeek subagent execution requests disable thinking before
 /// forcing the MAAP tool and exposing the concrete subagent action variants.
 ///

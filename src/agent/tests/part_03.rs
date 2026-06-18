@@ -1235,6 +1235,55 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
     assert!(!allowed_actions.contains(&"shell_command"));
 }
 
+/// Verifies the shared default action-gate helper exposes the same concrete
+/// MCP and memory actions that the selected-model runner adds before provider
+/// submission.
+///
+/// Runtime request-shape diagnostics use this helper without executing a full
+/// turn. This regression keeps those diagnostics aligned with the live runner
+/// so an initial selected-model request with MCP tools is not reported as a
+/// capability-only or memory-only surface.
+#[test]
+fn default_action_gates_expose_mcp_and_memory_for_diagnostic_request_shapes() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use any helpful MCP integration before answering".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let tools = vec![McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object"}"#.to_string(),
+    }];
+
+    super::apply_default_action_gates(&mut request, &tools, true, false);
+
+    let allowed_actions = request.allowed_actions.action_type_names();
+    assert!(allowed_actions.contains(&"mcp_call"));
+    assert!(allowed_actions.contains(&"memory_search"));
+    assert!(allowed_actions.contains(&"memory_store"));
+    assert!(allowed_actions.contains(&"request_capability"));
+    assert_eq!(request.available_mcp_tools, tools);
+    assert!(request.memory_actions_enabled);
+    assert!(!request.issue_actions_enabled);
+}
+
 
 /// Verifies model-authored aborts are repaired instead of treated as a valid
 /// way to end recoverable turns. A model that merely needs more repository
