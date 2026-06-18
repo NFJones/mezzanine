@@ -3043,6 +3043,67 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
 }
 
+/// Verifies MCP context adds a routing hint when the current user request
+/// matches available server metadata.
+///
+/// Server purpose can be the decisive user-facing description even when the
+/// individual tool description is generic. The provider should receive an
+/// explicit current-turn hint rather than relying on memory lookup or indirect
+/// discovery to rediscover why MCP is relevant.
+#[test]
+fn mcp_context_marks_routing_match_for_verbatim_server_purpose() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "GitLab issue and merge request operations".to_string(),
+    }])
+    .unwrap();
+    let context = append_mcp_context(
+        context,
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "gitlab".to_string(),
+                display_name: "GitLab".to_string(),
+                purpose: "GitLab issue and merge request operations".to_string(),
+                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![crate::mcp::McpPromptTool {
+                server_id: "gitlab".to_string(),
+                tool_name: "get_issue".to_string(),
+                description: "Read one issue".to_string(),
+                approval_required: false,
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            }],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("routing_match=available_mcp server=gitlab match=server_purpose"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("next_action_hint=mcp_call"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("prefer mcp_call before memory_search or memory_store"),
+        "{}",
+        context.blocks[0].content
+    );
+}
+
 /// Verifies provider request assembly carries runtime MCP availability into
 /// the system prompt instead of leaving the prompt profile at its empty
 /// defaults.

@@ -90,6 +90,7 @@ pub fn append_mcp_context(
     });
     let mut unavailable_servers = summary.unavailable_servers.clone();
     unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    let routing_match_lines = mcp_routing_match_lines(&context, summary);
 
     for server in &available_servers {
         lines.push(mcp_available_server_line(server));
@@ -102,6 +103,7 @@ pub fn append_mcp_context(
             mcp_context_quoted_value(&tool.description)
         ));
     }
+    lines.extend(routing_match_lines);
     for server in &unavailable_servers {
         lines.push(format!(
             "unavailable_server={} purpose={} usage_instructions={} retryable={} reason={}",
@@ -126,6 +128,97 @@ pub fn append_mcp_context(
         },
     );
     AgentContext::new(context.blocks)
+}
+
+/// Builds MCP routing hints when the active task matches available metadata.
+fn mcp_routing_match_lines(context: &AgentContext, summary: &McpPromptSummary) -> Vec<String> {
+    let task_text = mcp_context_normalized_task_text(context);
+    if task_text.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    for server in &summary.available_servers {
+        for (label, value) in [
+            ("server_id", server.server_id.as_str()),
+            ("server_name", server.display_name.as_str()),
+            ("server_purpose", server.purpose.as_str()),
+            (
+                "server_usage_instructions",
+                server.usage_instructions.as_str(),
+            ),
+        ] {
+            if mcp_context_metadata_matches_task(&task_text, value) {
+                lines.push(format!(
+                    "routing_match=available_mcp server={} match={} matched_text={} next_action_hint=mcp_call reason={}",
+                    server.server_id,
+                    label,
+                    mcp_context_quoted_value(value),
+                    mcp_context_quoted_value("Current user request matches available MCP server metadata; prefer mcp_call before memory_search or memory_store unless the user explicitly asks to recall or save persistent memory.")
+                ));
+            }
+        }
+    }
+    for tool in &summary.available_tools {
+        for (label, value) in [
+            ("tool_id", tool.tool_name.as_str()),
+            ("tool_description", tool.description.as_str()),
+        ] {
+            if mcp_context_metadata_matches_task(&task_text, value) {
+                lines.push(format!(
+                    "routing_match=available_mcp tool={}/{} match={} matched_text={} next_action_hint=mcp_call reason={}",
+                    tool.server_id,
+                    tool.tool_name,
+                    label,
+                    mcp_context_quoted_value(value),
+                    mcp_context_quoted_value("Current user request matches available MCP tool metadata; prefer mcp_call before memory_search or memory_store unless the user explicitly asks to recall or save persistent memory.")
+                ));
+            }
+        }
+    }
+    lines.sort();
+    lines.dedup();
+    lines.into_iter().take(5).collect()
+}
+
+/// Returns normalized user-authored task text for MCP routing hints.
+fn mcp_context_normalized_task_text(context: &AgentContext) -> String {
+    let text = context
+        .blocks
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::UserInstruction)
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    mcp_context_normalize_match_text(&text)
+}
+
+/// Reports whether one MCP metadata value is specific and present in the task.
+fn mcp_context_metadata_matches_task(normalized_task: &str, metadata: &str) -> bool {
+    let metadata = mcp_context_normalize_match_text(metadata);
+    metadata.len() >= 3
+        && metadata.split_whitespace().count() <= 18
+        && normalized_task.contains(&metadata)
+}
+
+/// Normalizes text for deterministic MCP metadata matching.
+fn mcp_context_normalize_match_text(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut previous_space = true;
+    for character in value.chars().flat_map(char::to_lowercase) {
+        let normalized = if character.is_ascii_alphanumeric() || matches!(character, '/' | '_') {
+            Some(character)
+        } else {
+            None
+        };
+        if let Some(character) = normalized {
+            output.push(character);
+            previous_space = false;
+        } else if !previous_space {
+            output.push(' ');
+            previous_space = true;
+        }
+    }
+    output.trim().to_string()
 }
 
 /// Formats one available MCP server manifest line for prompt context.

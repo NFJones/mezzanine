@@ -4581,6 +4581,14 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
+        description.contains("routing_match=available_mcp"),
+        "{description}"
+    );
+    assert!(
+        description.contains("mcp_call is the sane first action"),
+        "{description}"
+    );
+    assert!(
         !description.contains("Decide the next Mezzanine capability"),
         "{description}"
     );

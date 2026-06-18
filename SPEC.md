@@ -6328,6 +6328,11 @@ current runtime context. When runtime MCP context is present, all model-visible
 MCP availability surfaces, including the system prompt and structured action
 schema, MUST agree on whether MCP servers and tools are available and MUST NOT
 report zero available MCP tools while concrete `mcp_call` variants are exposed.
+When the active user request matches available MCP server or tool metadata, the
+runtime MCP context SHOULD include an explicit routing hint that identifies the
+matching server or tool and tells the model that `mcp_call` is the sane next
+action before generic memory actions, unless the user explicitly asked to recall
+or save persistent memory.
 
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.

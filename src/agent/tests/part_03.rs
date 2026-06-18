@@ -1145,6 +1145,8 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .as_str()
         .unwrap();
     assert!(query_description.contains("Do not use memory_search by default"));
+    assert!(query_description.contains("routing_match=available_mcp"));
+    assert!(query_description.contains("call the matching MCP tool before memory_search"));
     assert!(query_description.contains("startup ritual"));
     assert!(query_description.contains("paraphrase and search again"));
 }
@@ -4284,6 +4286,70 @@ fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_s
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
+/// Verifies OpenAI's composite current-request tool keeps both MCP and memory
+/// available while explicitly describing the MCP routing-match hint.
+///
+/// This protects the intended non-restrictive behavior: the model still sees
+/// the full composite action surface, but the selected tool description carries
+/// enough current-turn context to choose `mcp_call` before generic memory
+/// actions when MCP metadata already matches the task.
+#[test]
+fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_actions() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "GitLab issue and merge request operations".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request
+        .allowed_actions
+        .extend([
+            crate::agent::AllowedAction::McpCall,
+            crate::agent::AllowedAction::MemorySearch,
+            crate::agent::AllowedAction::MemoryStore,
+        ]);
+    request.available_mcp_tools = vec![McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","properties":{"iid":{"type":"integer"}}}"#
+            .to_string(),
+    }];
+
+    let body = openai_responses_request_body(&request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let current_tool = openai_function_tool(&value, "submit_maap_current_actions");
+    let description = current_tool["description"].as_str().unwrap();
+    let action_types = openai_tool_action_types(current_tool);
+
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
+    assert!(action_types.contains(&"mcp_call".to_string()));
+    assert!(action_types.contains(&"memory_search".to_string()));
+    assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(
+        description.contains("routing_match=available_mcp"),
+        "{description}"
+    );
+    assert!(
+        description.contains("mcp_call is the sane first action"),
+        "{description}"
+    );
+}
+
 /// Verifies openai responses request body uses mcp tool argument schemas.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -4371,7 +4437,9 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         mcp_schemas[0]["properties"]["arguments"]["description"]
             .as_str()
             .unwrap()
-            .contains("Use this action when the task matches this tool description: Read file"),
+            .contains(
+                "Use this action when the task matches this tool description or the runtime MCP integrations context shows a routing_match"
+            ),
         "{}",
         mcp_schemas[0]
     );
