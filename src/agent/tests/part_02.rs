@@ -167,6 +167,20 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Prefer config_change over editing config files or describing steps"));
     assert!(prompt.contains("Config changes follow the active approval policy"));
     assert!(prompt.contains("mcp_call: call only MCP tools listed as available"));
+    assert!(prompt.contains("emit mcp_call as the first useful action"));
+    assert!(
+        prompt.contains(
+            "Do not emit a say-only setup batch claiming that a schema-valid or initial batch is needed before the MCP call"
+        ),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "The MAAP batch is the wrapper for the current response, not a separate prerequisite phase"
+        ),
+        "{prompt}"
+    );
+    assert!(prompt.contains("When a useful executable action is listed in the active schema"));
     let removed_user_input_action = ["request", "user_input"].join("_");
     assert!(!prompt.contains(&removed_user_input_action));
     assert!(!prompt.contains("abort: stop with a reason"));
@@ -4586,6 +4600,14 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
     );
     assert!(
         description.contains("mcp_call is the sane first action"),
+        "{description}"
+    );
+    assert!(
+        description.contains("The function call is the action-batch envelope"),
+        "{description}"
+    );
+    assert!(
+        description.contains("do not emit a say-only or progress batch claiming"),
         "{description}"
     );
     assert!(

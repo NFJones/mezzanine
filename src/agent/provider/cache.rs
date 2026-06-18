@@ -280,6 +280,7 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
              The latest user prompt is the active task; previous user transcript messages are historical context only and must not be answered as new requests. \
              OpenAI may receive a cache-stable list of inactive MAAP tools, but tool_choice selects only active_function_tool for this request. \
              Emit only action objects whose type appears in allowed_actions and is present in the selected function schema. \
+             The active function call is the schema-valid action-batch envelope for this response; do not emit a say-only setup batch claiming that an initial or schema-valid batch is needed before an available executable action. \
              Treat [executed result] and [action_result ...] messages as current execution evidence. If they already satisfy the task, emit say with status final instead of requesting capability or rerunning actions to reconfirm them. \
              Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill. Users can still invoke skills explicitly with $<skill-name> syntax before this request is built. \
              If the needed action type is absent and request_capability appears in allowed_actions, emit request_capability immediately for the needed coarse capability; do not spend the response on a plan or progress message. \

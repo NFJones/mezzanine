@@ -3634,6 +3634,11 @@ for terminal execution. A non-final action batch containing only `say` and
 `complete` actions MUST NOT be rejected solely because the `final` flag is
 false; Mezzanine MUST display the visible text and MAY treat the turn as
 complete when no executable, blocking, or runtime-mutating action remains.
+Provider-facing prompt and tool descriptions MUST describe the action batch as
+the current response envelope, not as a prerequisite setup step; when an
+executable action is available and useful, the model should put that action in
+the current batch instead of emitting a `say`-only progress batch that claims a
+schema-valid or initial batch is needed before execution.
 
 When the configured provider does not support native structured actions, the
 harness MUST require action proposals to appear as a single fenced JSON block

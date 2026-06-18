@@ -518,7 +518,7 @@ fn openai_chat_completions_maap_tool(request: &ModelRequest) -> serde_json::Valu
         "function": {
             "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
             "description": format!(
-                "Submit one validated Mezzanine MAAP action batch. Return a function call, not prose. If this schema includes mcp_call and runtime MCP context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. {}",
+                "Submit one validated Mezzanine MAAP action batch. Return a function call, not prose. The function call is the action-batch envelope, not a prerequisite step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action. If an executable action is available and useful, put that action in this function call now. If this schema includes mcp_call and runtime MCP context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. {}",
                 mcp_tool_manifest_for_description(&request.available_mcp_tools)
             ),
             "parameters": maap_action_batch_schema(&request.allowed_actions, &request.available_mcp_tools)

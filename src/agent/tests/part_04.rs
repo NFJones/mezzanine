@@ -422,6 +422,14 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
             .contains("Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."),
         "{description}"
     );
+    assert!(
+        description.contains("The function call is the action-batch envelope"),
+        "{description}"
+    );
+    assert!(
+        description.contains("put that action in this function call now"),
+        "{description}"
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -2489,6 +2497,17 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             .unwrap()
             .content
             .contains("unavailable server"),
+        "{:?}",
+        requests[2].messages
+    );
+    assert!(
+        requests[2]
+            .messages
+            .iter()
+            .find(|message| message.content.contains("ephemeral maap repair"))
+            .unwrap()
+            .content
+            .contains("The corrected batch is the schema-valid wrapper for the next useful action"),
         "{:?}",
         requests[2].messages
     );

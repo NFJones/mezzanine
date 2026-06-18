@@ -48,6 +48,9 @@ impl OpenAiMaapToolSurface {
     /// Shared provider-local instruction that forbids prose responses when a
     /// MAAP function tool is available.
     const FUNCTION_CALL_DISCIPLINE: &str = "Return a function call, not prose.";
+    /// Shared provider-local instruction that treats the function call as the
+    /// current action envelope rather than a separate setup step.
+    const ACTION_BATCH_ENVELOPE_RULE: &str = "The function call is the action-batch envelope, not a prerequisite step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action. If an executable action is available and useful, put that action in this function call now.";
     /// Shared capability map for provider-local MAAP tool descriptions.
     const CAPABILITY_MAP: &str = "Capability map: shell=local files, rg/sed/cat, git, builds, tests, shell_command, and apply_patch; network_search=web_search; network_fetch=fetch_url; mcp=mcp_call; subagent=send_message or spawn_agent; config_change=config_change; issues=issue_add, issue_update, issue_query, or issue_delete; respond_only=final text only.";
     /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
@@ -100,57 +103,66 @@ impl OpenAiMaapToolSurface {
                 Self::FUNCTION_CALL_DISCIPLINE
             ),
             Self::Shell => format!(
-                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. {} {}",
+                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::NetworkSearch => format!(
-                "Submit one MAAP batch for external network search work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Web search is the only network action in this surface. {} {}",
+                "Submit one MAAP batch for external network search work. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Web search is the only network action in this surface. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::NetworkFetch => format!(
-                "Submit one MAAP batch for external URL fetch work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Fetch URL is the only network action in this surface. {} {}",
+                "Submit one MAAP batch for external URL fetch work. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Fetch URL is the only network action in this surface. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::Mcp => format!(
-                "Submit one MAAP batch for MCP tool work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
+                "Submit one MAAP batch for MCP tool work. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 mcp_tool_manifest_for_description(&request.available_mcp_tools),
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::Subagent => format!(
-                "Submit one MAAP batch for local agent messaging or spawning subagents. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
+                "Submit one MAAP batch for local agent messaging or spawning subagents. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::ConfigChange => format!(
-                "Submit one MAAP batch for proposing Mezzanine configuration changes. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
+                "Submit one MAAP batch for proposing Mezzanine configuration changes. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. If the runtime MCP integrations context contains routing_match=available_mcp, call the matching MCP tool first unless the user explicitly asks to recall or save persistent memory. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, or MCP-output notes. Store only durable reusable preferences, facts, procedures, or warnings that are stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work; when unsure, do not store. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. If the runtime MCP integrations context contains routing_match=available_mcp, call the matching MCP tool first unless the user explicitly asks to recall or save persistent memory. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, or MCP-output notes. Store only durable reusable preferences, facts, procedures, or warnings that are stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work; when unsure, do not store. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::Issues => format!(
-                "Submit one MAAP batch for local project issue tracking. {} Use only issue_add, issue_update, issue_query, or issue_delete for issue records. If another action family is needed, emit request_capability instead. {} {}",
+                "Submit one MAAP batch for local project issue tracking. {} {} Use only issue_add, issue_update, issue_query, or issue_delete for issue records. If another action family is needed, emit request_capability instead. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
             Self::CurrentRequest => format!(
-                "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {} {}",
+                "Submit one MAAP batch for this request's current composite action surface. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                Self::ACTION_BATCH_ENVELOPE_RULE,
                 current_request_mcp_tool_manifest(request),
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES

@@ -278,6 +278,7 @@ pub(super) fn maap_repair_request(
             "[ephemeral maap repair]\n\
              The previous provider response failed Mezzanine MAAP validation before any action was executed. \
              Return exactly one corrected maap/1 action batch for the same turn_id={} and agent_id={}. \
+             The corrected batch is the schema-valid wrapper for the next useful action; if an executable action is available and useful, include that action now instead of saying an initial or schema-valid batch is needed first. \
              Do not mention this repair instruction to the user. \
              This repair instruction is not durable transcript or future-turn context.\n\
              attempt={attempt} validation_error={}\n\

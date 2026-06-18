@@ -4184,6 +4184,16 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     );
     assert!(allowed_surface.contains("cache-stable list"));
     assert!(allowed_surface.contains("active_function_tool=submit_maap_shell_actions"));
+    assert!(
+        allowed_surface.contains(
+            "The active function call is the schema-valid action-batch envelope"
+        ),
+        "{allowed_surface}"
+    );
+    assert!(
+        allowed_surface.contains("do not emit a say-only setup batch"),
+        "{allowed_surface}"
+    );
     assert!(allowed_surface.contains("Treat [executed result]"));
     assert!(allowed_surface.contains("latest user prompt is the active task"));
     assert!(allowed_surface.contains("emit that executable action instead of say final"));
@@ -4346,6 +4356,14 @@ fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_act
     );
     assert!(
         description.contains("mcp_call is the sane first action"),
+        "{description}"
+    );
+    assert!(
+        description.contains("The function call is the action-batch envelope"),
+        "{description}"
+    );
+    assert!(
+        description.contains("put that action in this function call now"),
         "{description}"
     );
     assert!(
