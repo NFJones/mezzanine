@@ -4354,6 +4354,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("Current availability: servers=1 tools=1."));
     assert!(prompt.contains("Prefer MCP when the user task matches a listed MCP server purpose"));
     assert!(prompt.contains("usage instructions, an exposed MCP tool description"));
+    assert!(prompt.contains("prefer that server as the first concrete execution path"));
+    assert!(prompt.contains("do not start with memory_search or another indirect discovery action"));
     assert!(prompt.contains("Do not infer an MCP server's use case from its name alone"));
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));
@@ -4435,6 +4437,9 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
     assert!(prompt.contains("When memory actions are available for a non-trivial task, usually perform one focused memory search near the start of the turn"));
     assert!(prompt.contains("or the request clearly matches an available MCP or other external integration that should be tried first"));
+    assert!(prompt.contains("If the user explicitly names an available MCP server or explicitly asks to use MCP for the requested artifact"));
+    assert!(prompt.contains("prefer the relevant mcp_call before any startup memory_search"));
+    assert!(prompt.contains("Do not repeat an identical memory_search in the same phase without new evidence"));
     assert!(prompt.contains("Do not use memory_search as a substitute for MCP, web, shell, or other action families"));
     assert!(prompt.contains("Do not use memory_store before the first concrete inspection, implementation, or validation action"));
     assert!(prompt.contains("strongly consider storing it with memory_store if it is likely to help future turns"));
