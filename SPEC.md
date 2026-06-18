@@ -7289,7 +7289,11 @@ When persistent memory is enabled, the provider action surface MAY expose a
 gated `memory` capability whose concrete action subset contains
 `memory_search` and `memory_store`. These on-demand actions MUST execute
 through the runtime-owned persistent store and MUST return bounded action
-results for provider continuation. For most non-trivial tasks, agents SHOULD
+results for provider continuation. The model-facing `memory_store` action MUST
+accept only durable `preference`, `fact`, `procedure`, and `warning` kinds; it
+MUST NOT expose `episode` or `scratch` kinds because they encourage transcript
+summaries, scratch notes, and other current-turn-only persistence. For most
+non-trivial tasks, agents SHOULD
 perform one focused early memory search for potentially useful prior context.
 Agents MAY skip that early search when the task is clearly self-contained and
 durable prior context is very unlikely to help. Agents SHOULD usually limit

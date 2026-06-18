@@ -442,6 +442,126 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
     let _ = fs::remove_dir_all(audit_root);
 }
 
+/// Verifies model-authored memory stores reject episodic and scratch kinds at
+/// runtime even if a malformed provider output bypasses the provider schema.
+///
+/// This regression keeps the runtime fail-closed with the model-facing schema:
+/// transient transcript summaries and scratch notes must not be persisted as
+/// durable memory records from ordinary `memory_store` actions.
+#[test]
+fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-memory-kind-config");
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-memory-kind-turn","input":"store memory"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let actions = ["episode", "scratch"]
+        .into_iter()
+        .map(|kind| crate::agent::AgentAction {
+            id: format!("mem-{kind}"),
+            rationale: "store transient memory".to_string(),
+            payload: crate::agent::AgentActionPayload::MemoryStore {
+                kind: kind.to_string(),
+                priority: Some(50),
+                scope: Some("project".to_string()),
+                keywords: Vec::new(),
+                content: "temporary turn note".to_string(),
+                expires_in_days: None,
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "using memory".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: actions.clone(),
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: actions
+            .iter()
+            .map(|action| crate::agent::ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                action_id: action.id.clone(),
+                action_type: "memory_store",
+                status: ActionStatus::Running,
+                content: Vec::new(),
+                structured_content_json: None,
+                is_error: false,
+                error: None,
+            })
+            .collect(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .execute_running_memory_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    for result in &execution.action_results {
+        assert_eq!(result.status, ActionStatus::Failed);
+        let error = result.error.as_ref().expect("memory store should fail");
+        assert!(
+            error
+                .message
+                .contains("memory_store kind must be preference, fact, procedure, or warning"),
+            "{result:?}"
+        );
+    }
+    let store = crate::memory::PersistentMemoryStore::under_config_root(config_root.clone());
+    let records = store
+        .search(&crate::memory::MemorySearchRequest {
+            query: Some("temporary".to_string()),
+            scope: None,
+            kind: None,
+            state: None,
+            source: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert!(records.is_empty(), "{records:?}");
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies full-access mode satisfies MCP tool prompt approval while still
 /// executing the call through the normal MCP registry and transport path.
 ///

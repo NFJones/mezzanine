@@ -1042,6 +1042,57 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
     assert!(!allowed_actions.contains(&"shell_command"));
 }
 
+/// Verifies the model-facing memory store schema exposes only durable memory
+/// kinds and excludes episodic or scratch storage categories.
+///
+/// This regression keeps the provider-visible schema aligned with the memory
+/// policy that ordinary agent turns must not persist transcript summaries,
+/// scratch notes, or other current-turn-only operational state.
+#[test]
+fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "remember durable context".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Memory);
+
+    let body = openai_responses_request_body(&request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let memory_tool = openai_function_tool(&value, "submit_maap_memory_actions");
+    assert_openai_strict_schema_shape(&memory_tool["parameters"]);
+    let memory_store_schema = openai_tool_action_schemas(memory_tool)
+        .iter()
+        .find(|schema| schema["properties"]["type"]["enum"][0] == "memory_store")
+        .expect("memory capability should expose memory_store");
+
+    assert_eq!(
+        memory_store_schema["properties"]["kind"]["enum"],
+        serde_json::json!(["preference", "fact", "procedure", "warning"])
+    );
+    let kind_description = memory_store_schema["properties"]["kind"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(kind_description.contains("episodic transcript"));
+    assert!(kind_description.contains("scratch"));
+}
+
 /// Verifies available MCP tools are exposed on the main model's initial
 /// action surface instead of requiring a separate capability request.
 ///

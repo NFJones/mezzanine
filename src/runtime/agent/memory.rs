@@ -318,10 +318,13 @@ fn memory_action_kind(kind: &str) -> Result<crate::memory::MemoryKind> {
         "preference" => Ok(crate::memory::MemoryKind::Preference),
         "fact" => Ok(crate::memory::MemoryKind::Fact),
         "procedure" => Ok(crate::memory::MemoryKind::Procedure),
-        "episode" => Ok(crate::memory::MemoryKind::Episode),
         "warning" => Ok(crate::memory::MemoryKind::Warning),
-        "scratch" => Ok(crate::memory::MemoryKind::Scratch),
-        _ => Err(MezError::invalid_args("memory kind is not supported")),
+        "episode" | "scratch" => Err(MezError::invalid_args(
+            "memory_store kind must be preference, fact, procedure, or warning",
+        )),
+        _ => Err(MezError::invalid_args(
+            "memory_store kind must be preference, fact, procedure, or warning",
+        )),
     }
 }
 
