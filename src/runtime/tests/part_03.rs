@@ -4149,7 +4149,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| Prompt profile | default v23 |"),
+        response.contains("| Prompt profile | default v24 |"),
         "{response}"
     );
     assert!(

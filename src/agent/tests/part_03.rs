@@ -1147,6 +1147,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
     assert!(query_description.contains("Do not use memory_search by default"));
     assert!(query_description.contains("routing_match=available_mcp"));
     assert!(query_description.contains("call the matching MCP tool before memory_search"));
+    assert!(query_description.contains("placeholder current-actions call before MCP"));
     assert!(query_description.contains("startup ritual"));
     assert!(query_description.contains("paraphrase and search again"));
 }
@@ -4359,6 +4360,10 @@ fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_act
         "{description}"
     );
     assert!(
+        description.contains("shell preflight, or request_capability for shell/network first"),
+        "{description}"
+    );
+    assert!(
         description.contains("The function call is the action-batch envelope"),
         "{description}"
     );
@@ -4450,6 +4455,14 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
             .as_str()
             .unwrap()
             .contains("Call MCP tool fs/read_file. Description: Read file"),
+        "{}",
+        mcp_schemas[0]
+    );
+    assert!(
+        mcp_schemas[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("prefer this action before shell preflight"),
         "{}",
         mcp_schemas[0]
     );

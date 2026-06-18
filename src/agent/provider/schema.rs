@@ -124,7 +124,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Mcp => format!(
-                "Submit one MAAP batch for MCP tool work. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
+                "Submit one MAAP batch for MCP tool work. {} {} Use only the action objects in this function schema. If the user named this MCP server or runtime context shows routing_match=available_mcp, call the matching MCP tool as the first useful action; do not use shell preflight, memory actions, or another placeholder step before it. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::ACTION_BATCH_ENVELOPE_RULE,
                 mcp_tool_manifest_for_description(&request.available_mcp_tools),
@@ -146,7 +146,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. If the runtime MCP integrations context contains routing_match=available_mcp, call the matching MCP tool first unless the user explicitly asks to recall or save persistent memory. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, or MCP-output notes. Store only durable reusable preferences, facts, procedures, or warnings that are stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work; when unsure, do not store. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. If the runtime MCP integrations context contains routing_match=available_mcp, call the matching MCP tool first unless the user explicitly asks to recall or save persistent memory. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Never use memory_search or memory_store as a no-op current-actions placeholder before an MCP call. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, MCP-output notes, or no-op placeholders. Store only durable reusable preferences, facts, procedures, or warnings that are stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work; when unsure, do not store. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::ACTION_BATCH_ENVELOPE_RULE,
                 Self::CAPABILITY_MAP,
@@ -160,7 +160,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::CurrentRequest => format!(
-                "Submit one MAAP batch for this request's current composite action surface. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {} {}",
+                "Submit one MAAP batch for this request's current composite action surface. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search, memory_store, shell preflight, or request_capability for shell/network first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search, memory_store, or another no-op action to satisfy this current-actions wrapper before the real MCP call. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::ACTION_BATCH_ENVELOPE_RULE,
                 current_request_mcp_tool_manifest(request),
@@ -786,7 +786,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default or as a startup ritual. If runtime MCP context includes routing_match=available_mcp, call the matching MCP tool before memory_search unless the user explicitly asks to recall persistent memory. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
+                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default or as a startup ritual. If runtime MCP context includes routing_match=available_mcp, call the matching MCP tool before memory_search unless the user explicitly asks to recall persistent memory. Do not use memory_search as a placeholder current-actions call before MCP. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
             ),
             (
                 "limit",
@@ -842,7 +842,7 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
             ),
             described_string_property(
                 "content",
-                "Durable memory body to store. Store only information that is stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work. Do not store secrets, credentials, tokens, sensitive personal data, current-task-only summaries, plans, tool outputs, or transient terminal noise unless the user explicitly instructed storing that exact content.",
+                "Durable memory body to store. Store only information that is stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work. Do not store secrets, credentials, tokens, sensitive personal data, current-task-only summaries, plans, tool outputs, transient terminal noise, no-op placeholders, or current-actions markers unless the user explicitly instructed storing that exact content.",
             ),
             (
                 "expires_in_days",
@@ -999,7 +999,7 @@ pub(super) fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serd
         object.insert(
             "description".to_string(),
             serde_json::json!(format!(
-                "Call MCP tool {}/{}. Description: {}",
+                "Call MCP tool {}/{}. Description: {}. If the user named this MCP server or runtime context shows routing_match=available_mcp, prefer this action before shell preflight, shell/network capability requests, memory_search, or memory_store.",
                 tool.server_id,
                 tool.tool_name,
                 mcp_schema_description(&tool.description)

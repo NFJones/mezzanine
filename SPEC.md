@@ -6345,8 +6345,11 @@ nested JSON Schema variants.
 When the active user request matches available MCP server or tool metadata, the
 runtime MCP context SHOULD include an explicit routing hint that identifies the
 matching server or tool and tells the model that `mcp_call` is the sane next
-action before generic memory actions, unless the user explicitly asked to recall
-or save persistent memory.
+action before shell preflight, shell or network capability requests, or generic
+memory actions, unless the user explicitly asked to recall or save persistent
+memory. The prompt and provider action descriptions MUST prohibit placeholder
+`memory_search` or `memory_store` calls whose only purpose is to satisfy the
+current action wrapper before a real MCP call.
 
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.

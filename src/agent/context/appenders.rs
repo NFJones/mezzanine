@@ -153,7 +153,7 @@ fn mcp_routing_match_lines(context: &AgentContext, summary: &McpPromptSummary) -
                     server.server_id,
                     label,
                     mcp_context_quoted_value(value),
-                    mcp_context_quoted_value("Current user request matches available MCP server metadata; prefer mcp_call before memory_search or memory_store unless the user explicitly asks to recall or save persistent memory.")
+                    mcp_context_quoted_value("Current user request matches available MCP server metadata; prefer mcp_call before shell preflight, shell/network capability requests, memory_search, or memory_store unless the user explicitly asks to recall or save persistent memory.")
                 ));
             }
         }
@@ -170,7 +170,7 @@ fn mcp_routing_match_lines(context: &AgentContext, summary: &McpPromptSummary) -
                     tool.tool_name,
                     label,
                     mcp_context_quoted_value(value),
-                    mcp_context_quoted_value("Current user request matches available MCP tool metadata; prefer mcp_call before memory_search or memory_store unless the user explicitly asks to recall or save persistent memory.")
+                    mcp_context_quoted_value("Current user request matches available MCP tool metadata; prefer mcp_call before shell preflight, shell/network capability requests, memory_search, or memory_store unless the user explicitly asks to recall or save persistent memory.")
                 ));
             }
         }

@@ -168,6 +168,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Config changes follow the active approval policy"));
     assert!(prompt.contains("mcp_call: call only MCP tools listed as available"));
     assert!(prompt.contains("emit mcp_call as the first useful action"));
+    assert!(prompt.contains("do not request shell/network capability, run shell preflight"));
     assert!(
         prompt.contains(
             "Do not emit a say-only setup batch claiming that a schema-valid or initial batch is needed before the MCP call"
@@ -4600,6 +4601,14 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
     );
     assert!(
         description.contains("mcp_call is the sane first action"),
+        "{description}"
+    );
+    assert!(
+        description.contains("shell preflight, or request_capability for shell/network first"),
+        "{description}"
+    );
+    assert!(
+        description.contains("current-actions wrapper before the real MCP call"),
         "{description}"
     );
     assert!(

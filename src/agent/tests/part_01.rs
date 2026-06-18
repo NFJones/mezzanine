@@ -3112,7 +3112,7 @@ fn mcp_context_marks_routing_match_for_verbatim_server_purpose() {
     assert!(
         context.blocks[0]
             .content
-            .contains("prefer mcp_call before memory_search or memory_store"),
+            .contains("prefer mcp_call before shell preflight"),
         "{}",
         context.blocks[0].content
     );
@@ -4563,7 +4563,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v23"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v24"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4582,7 +4582,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("Prefer MCP when the user task matches a listed MCP server purpose"));
     assert!(prompt.contains("usage instructions, an exposed MCP tool description"));
     assert!(prompt.contains("prefer that server as the first concrete execution path"));
-    assert!(prompt.contains("do not start with memory_search or another indirect discovery action"));
+    assert!(prompt.contains("do not start with memory_search, memory_store, shell_command"));
+    assert!(prompt.contains("request_capability for shell/network"));
     assert!(prompt.contains("Do not infer an MCP server's use case from its name alone"));
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));
@@ -4667,6 +4668,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("For MCP-backed workflows, do not use memory_search or memory_store"));
     assert!(prompt.contains("When the user names an MCP server and a matching exposed tool exists"));
     assert!(prompt.contains("MCP-backed workflows normally forbid memory_search and memory_store"));
+    assert!(prompt.contains("placeholder memory actions to satisfy a current-actions wrapper"));
     assert!(prompt.contains("Do not repeat an identical memory_search in the same phase without new evidence"));
     assert!(prompt.contains("Do not use memory_search as a substitute for MCP, web, shell, or other action families"));
     assert!(prompt.contains("Do not use memory_store before the first concrete inspection, implementation, or validation action"));
