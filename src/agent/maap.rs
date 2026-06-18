@@ -669,21 +669,12 @@ impl MaapBatch {
         }
 
         let mut ids = BTreeSet::new();
-        let mut memory_search_count = 0usize;
         for action in &self.actions {
             validate_non_empty("action id", &action.id)?;
             if !ids.insert(action.id.as_str()) {
                 return Err(MezError::invalid_args(
                     "agent action batch contains duplicate action ids",
                 ));
-            }
-            if matches!(action.payload, AgentActionPayload::MemorySearch { .. }) {
-                memory_search_count = memory_search_count.saturating_add(1);
-                if memory_search_count > 1 {
-                    return Err(MezError::invalid_args(
-                        "agent action batch must not include more than one memory_search action",
-                    ));
-                }
             }
         }
         for action in &self.actions {
