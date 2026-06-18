@@ -7292,20 +7292,24 @@ through the runtime-owned persistent store and MUST return bounded action
 results for provider continuation. The model-facing `memory_store` action MUST
 accept only durable `preference`, `fact`, `procedure`, and `warning` kinds; it
 MUST NOT expose `episode` or `scratch` kinds because they encourage transcript
-summaries, scratch notes, and other current-turn-only persistence. For most
-non-trivial tasks, agents SHOULD
-perform one focused early memory search for potentially useful prior context.
-Agents MAY skip that early search when the task is clearly self-contained and
-durable prior context is very unlikely to help. Agents SHOULD usually limit
-themselves to a single early memory search unless later results create a
-specific reason for another. Agents MUST treat retrieved memory as secondary
-hints and MUST confirm important conclusions against current artifacts,
-repository state, tests, logs, or other current action results before relying
-on them. When salient stable information is uncovered that is likely to help
-future turns, agents SHOULD consider storing it with `memory_store`. When
-persistent memory is
-disabled, the harness MUST deny the `memory`
-capability and MUST NOT expose `memory_search` or `memory_store`.
+summaries, scratch notes, and other current-turn-only persistence. Agents MUST
+NOT use `memory_search` by default or as a startup ritual merely because a
+task is non-trivial. Agents MAY use at most one focused `memory_search` only
+when a concrete prior-context question cannot be answered from the current
+prompt, current action results, or another directly inspectable artifact such
+as MCP, web, shell, or repository state. Agents MUST NOT repeat a
+`memory_search` unless later results create a new concrete retrieval gap.
+Agents MUST treat retrieved memory as secondary hints and MUST confirm
+important conclusions against current artifacts, repository state, tests,
+logs, or other current action results before relying on them. Agents MUST NOT
+store prompt-specific, current-turn, tool-output, repo-state, issue-state,
+plan, progress, or MCP-output notes. When salient stable information is
+uncovered that is durable, reusable beyond the current task, not already
+present in current context, not provided by the user only for the current
+task, and likely to help future turns, agents MAY store it with
+`memory_store`; when unsure, they MUST NOT store it. When persistent memory is
+disabled, the harness MUST deny the `memory` capability and MUST NOT expose
+`memory_search` or `memory_store`.
 
 When local issue tracking is enabled, the provider action surface MAY expose a
 gated `issues` capability whose concrete action subset contains `issue_add`,

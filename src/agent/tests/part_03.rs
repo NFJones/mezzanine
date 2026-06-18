@@ -1089,8 +1089,64 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
     let kind_description = memory_store_schema["properties"]["kind"]["description"]
         .as_str()
         .unwrap();
+    assert!(kind_description.contains("tool-output"));
+    assert!(kind_description.contains("current-turn"));
     assert!(kind_description.contains("episodic transcript"));
     assert!(kind_description.contains("scratch"));
+    let content_description = memory_store_schema["properties"]["content"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(content_description.contains("reusable beyond the current task"));
+    assert!(content_description.contains("not already present in current context"));
+    assert!(content_description.contains("not user-provided only for this task"));
+}
+
+/// Verifies the model-facing memory search schema forbids startup-ritual
+/// searches and repeated paraphrase retries.
+///
+/// This regression keeps provider-visible guidance aligned with the stricter
+/// no-memory-by-default policy so models do not treat persistent memory as a
+/// normal first step on non-trivial turns.
+#[test]
+fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "remember durable context".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Memory);
+
+    let body = openai_responses_request_body(&request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let memory_tool = openai_function_tool(&value, "submit_maap_memory_actions");
+    assert_openai_strict_schema_shape(&memory_tool["parameters"]);
+    let memory_search_schema = openai_tool_action_schemas(memory_tool)
+        .iter()
+        .find(|schema| schema["properties"]["type"]["enum"][0] == "memory_search")
+        .expect("memory capability should expose memory_search");
+
+    let query_description = memory_search_schema["properties"]["query"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(query_description.contains("Do not use memory_search by default"));
+    assert!(query_description.contains("startup ritual"));
+    assert!(query_description.contains("paraphrase and search again"));
 }
 
 /// Verifies available MCP tools are exposed on the main model's initial

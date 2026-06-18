@@ -136,7 +136,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, or MCP-output notes. Store only durable reusable preferences, facts, procedures, or warnings; when unsure, do not store. {} {}",
+                "Submit one MAAP batch for on-demand persistent memory access. {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, or MCP-output notes. Store only durable reusable preferences, facts, procedures, or warnings that are stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work; when unsure, do not store. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -731,7 +731,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "Search durable prior context only when it is actually needed. Skip memory_search when the task is self-contained, asks about visible system prompt/action descriptions/MCP metadata, or should use an available MCP, web, shell, or other direct artifact action first. Use at most one focused startup search and never duplicate an identical memory_search in the same batch.",
+                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default or as a startup ritual. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
             ),
             (
                 "limit",
@@ -757,7 +757,7 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": ["preference", "fact", "procedure", "warning"],
-                    "description": "Durable memory kind. Use memory_store only for stable reusable information that would help future turns. Do not store prompt-specific, current-turn, episodic transcript, scratch, or other transient notes."
+                    "description": "Durable memory kind. Use memory_store only for stable reusable information that will help future unrelated turns. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, MCP-output, episodic transcript, scratch, or other transient notes."
                 }),
             ),
             (
@@ -787,7 +787,7 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
             ),
             described_string_property(
                 "content",
-                "Durable memory body to store. Do not store secrets, credentials, tokens, sensitive personal data, or transient terminal noise unless the user explicitly instructed storing that exact content.",
+                "Durable memory body to store. Store only information that is stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work. Do not store secrets, credentials, tokens, sensitive personal data, current-task-only summaries, plans, tool outputs, or transient terminal noise unless the user explicitly instructed storing that exact content.",
             ),
             (
                 "expires_in_days",
