@@ -4195,6 +4195,30 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     assert_eq!(mcp_schemas.len(), 2);
     assert_eq!(mcp_schemas[0]["properties"]["server"]["enum"][0], "fs");
     assert_eq!(mcp_schemas[0]["properties"]["tool"]["enum"][0], "read_file");
+    assert!(
+        mcp_schemas[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Call MCP tool fs/read_file. Description: Read file"),
+        "{}",
+        mcp_schemas[0]
+    );
+    assert!(
+        mcp_schemas[0]["properties"]["tool"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Tool description: Read file"),
+        "{}",
+        mcp_schemas[0]
+    );
+    assert!(
+        mcp_schemas[0]["properties"]["arguments"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Use this action when the task matches this tool description: Read file"),
+        "{}",
+        mcp_schemas[0]
+    );
     assert_eq!(mcp_schemas[1]["properties"]["server"]["enum"][0], "zeta");
     assert_eq!(mcp_schemas[1]["properties"]["tool"]["enum"][0], "later");
     assert_eq!(

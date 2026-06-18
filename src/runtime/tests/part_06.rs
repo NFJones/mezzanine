@@ -246,7 +246,9 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     assert!(execution.request.messages.iter().any(|message| {
         message.source == ContextSourceKind::Configuration
             && message.content.contains("[mcp integrations]")
-            && message.content.contains("available_tool=fixture/echo")
+            && message
+                .content
+                .contains("available_tool=fixture/echo description=")
     }));
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert!(

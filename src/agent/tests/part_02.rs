@@ -523,6 +523,52 @@ fn maap_batch_rejects_duplicate_action_ids() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
+/// Verifies MAAP validation rejects multiple memory searches in one batch.
+///
+/// Memory search is a durable-context lookup, not a broad discovery loop. This
+/// regression keeps uncertain model outputs from queueing many memory searches
+/// before answering directly or trying a more specific exposed action such as
+/// MCP.
+#[test]
+fn maap_batch_rejects_multiple_memory_search_actions() {
+    let batch = MaapBatch {
+        protocol: "maap/1".to_string(),
+        rationale: "test action batch rationale".to_string(),
+        thought: None,
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        actions: vec![
+            AgentAction {
+                id: "m1".to_string(),
+                rationale: "search once".to_string(),
+                payload: AgentActionPayload::MemorySearch {
+                    query: "mcp routing".to_string(),
+                    limit: Some(5),
+                },
+            },
+            AgentAction {
+                id: "m2".to_string(),
+                rationale: "search twice".to_string(),
+                payload: AgentActionPayload::MemorySearch {
+                    query: "mcp routing".to_string(),
+                    limit: Some(5),
+                },
+            },
+        ],
+        final_turn: false,
+    };
+
+    let error = batch.validate(&turn(), &[], &[]).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error
+            .message()
+            .contains("must not include more than one memory_search"),
+        "{error}"
+    );
+}
+
 /// Verifies that every MAAP batch carries a concise action-batch rationale.
 ///
 /// Normal-mode logging renders this value as the batch-level thinking line, so
