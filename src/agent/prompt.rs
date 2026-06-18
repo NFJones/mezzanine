@@ -298,7 +298,7 @@ pub(super) fn mcp_prompt(profile: &AgentPromptProfile) -> String {
     );
     for server in &profile.mcp_summary.unavailable_servers {
         lines.push(format!(
-            "Do not attempt MCP server {} unless the user retries or re-enables it; purpose: {}; reason: {}.",
+            "MCP server {} is configured but not currently callable; do not use memory_search as a substitute for it. Purpose: {}; reason: {}. Use mcp_call only if a later runtime MCP context lists this server with available tools.",
             server.server_id, server.purpose, server.reason
         ));
     }

@@ -128,6 +128,37 @@ fn unavailable_server_does_not_expose_tools() {
     );
 }
 
+/// Verifies configured MCP servers stay visible in prompt summaries until
+/// runtime discovery either makes them callable or records a concrete failure.
+///
+/// This guards the selected-model routing surface: a configured server must not
+/// disappear from model-facing MCP context merely because discovery has not
+/// populated available tools yet.
+#[test]
+fn configured_server_is_prompt_visible_as_pending_discovery() {
+    let mut registry = McpRegistry::default();
+    let mut config = config();
+    config.external_capability.purpose = "Filesystem read operations".to_string();
+    config.external_capability.usage_instructions =
+        "Use when the task needs MCP-backed file reads.".to_string();
+    registry.add_server(config).unwrap();
+
+    let summary = registry.prompt_summary();
+
+    assert!(summary.available_servers.is_empty());
+    assert!(summary.available_tools.is_empty());
+    assert_eq!(summary.unavailable_servers.len(), 1);
+    let server = &summary.unavailable_servers[0];
+    assert_eq!(server.server_id, "fs");
+    assert_eq!(server.purpose, "Filesystem read operations");
+    assert_eq!(
+        server.usage_instructions,
+        "Use when the task needs MCP-backed file reads."
+    );
+    assert_eq!(server.reason, "runtime discovery pending");
+    assert!(server.retryable);
+}
+
 /// Verifies session blacklist hides tools.
 ///
 /// This regression scenario documents the behavior being protected so a

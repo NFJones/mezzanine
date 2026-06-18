@@ -4589,6 +4589,11 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
+        description
+            .contains("Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."),
+        "{description}"
+    );
+    assert!(
         !description.contains("Decide the next Mezzanine capability"),
         "{description}"
     );

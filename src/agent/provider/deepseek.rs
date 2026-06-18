@@ -9,7 +9,7 @@ use super::chat_completions::{
     ChatCompletionsDialect, ChatCompletionsRetry, parse_chat_completions_response_envelope,
 };
 use super::errors::provider_maap_parse_error;
-use super::schema::maap_action_batch_schema;
+use super::schema::{maap_action_batch_schema, mcp_tool_manifest_for_description};
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_MODELS_ENDPOINT,
@@ -506,9 +506,10 @@ fn chat_completions_maap_tool_description(
             "Submit one user-facing response through this function. Return a function call, not prose. The arguments are translated into one internal MAAP/1 say action. Only progress, final, or blocked say text is valid; do not request tools or capabilities from this response-only surface.".to_string()
         }
         DeepSeekMaapShimKind::ActionDispatch => format!(
-            "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {} {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
+            "Submit exactly one MAAP/1 action batch through this function. Return a function call, not prose. Current allowed action types: {}. Use only the action objects in this function schema. {} {} {routing_rule} If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {capability_map} {anti_examples}",
             request.allowed_actions.action_type_names().join(","),
             deepseek_mcp_memory_routing_guidance(request),
+            mcp_tool_manifest_for_description(&request.available_mcp_tools),
         ),
     }
 }

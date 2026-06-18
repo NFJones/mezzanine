@@ -97,7 +97,7 @@ pub fn append_mcp_context(
     }
     for tool in &available_tools {
         lines.push(format!(
-            "available_tool={}/{} description={}",
+            "available_tool={}/{} route=mcp_call callable=true description={}",
             tool.server_id,
             tool.tool_name,
             mcp_context_quoted_value(&tool.description)
@@ -224,7 +224,7 @@ fn mcp_context_normalize_match_text(value: &str) -> String {
 /// Formats one available MCP server manifest line for prompt context.
 fn mcp_available_server_line(server: &McpPromptServer) -> String {
     format!(
-        "server={} status=available name={} purpose={} usage_instructions={} tools={}",
+        "server={} status=available route=mcp_call name={} purpose={} usage_instructions={} tools={}",
         server.server_id,
         mcp_context_quoted_value(&server.display_name),
         mcp_context_quoted_value(&server.purpose),

@@ -6328,6 +6328,10 @@ current runtime context. When runtime MCP context is present, all model-visible
 MCP availability surfaces, including the system prompt and structured action
 schema, MUST agree on whether MCP servers and tools are available and MUST NOT
 report zero available MCP tools while concrete `mcp_call` variants are exposed.
+Provider action descriptions for a surface that can emit `mcp_call` MUST include
+a bounded, secret-safe manifest of the callable `server/tool` identities and
+tool descriptions, so the model does not need to infer MCP routes only from
+nested JSON Schema variants.
 When the active user request matches available MCP server or tool metadata, the
 runtime MCP context SHOULD include an explicit routing hint that identifies the
 matching server or tool and tells the model that `mcp_call` is the sane next
@@ -6406,14 +6410,17 @@ write scopes when the agent is a subagent.
 
 The prompt MUST include a secret-safe MCP integration manifest for the current
 session. Available MCP servers MUST be presented with configured server id,
-status, model-visible external-capability purpose, and available-tool count.
+status, model-visible external-capability purpose, the `mcp_call` route, and
+available-tool count.
 Available MCP tools MAY be summarized lazily, but when tool details are included
-they MUST be bounded and MUST NOT expose approval requirements, secret-bearing
-transport, environment, header, credential, or raw schema data.
-MCP servers that are disabled, blacklisted for the session, or unavailable
-because of environmental failure MUST NOT be presented as available tools, and
-the prompt MUST prohibit attempts to use them while preserving their
-model-visible purpose and non-secret blocker reason.
+they MUST identify `mcp_call` as the callable route, MUST be bounded, and MUST
+NOT expose approval requirements, secret-bearing transport, environment, header,
+credential, or raw schema data. MCP servers that are configured but still
+pending runtime discovery MUST be presented as non-callable/pending rather than
+omitted from the MCP manifest. MCP servers that are disabled, blacklisted for
+the session, or unavailable because of environmental failure MUST NOT be
+presented as available tools, and the prompt MUST prohibit attempts to use them
+while preserving their model-visible purpose and non-secret blocker reason.
 
 The prompt MUST instruct the agent to report blockers and uncertainty rather
 than inventing unavailable state.

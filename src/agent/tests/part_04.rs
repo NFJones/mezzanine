@@ -306,6 +306,125 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies generic OpenAI-compatible Chat Completions tool descriptions list
+/// the callable MCP tools in plain language.
+///
+/// Some local OpenAI-compatible models choose actions from the function
+/// description before inspecting nested JSON Schema variants. The selected
+/// tool wrapper therefore needs to name MCP server/tool routes directly instead
+/// of relying only on the `mcp_call` schema branch.
+#[test]
+fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-mcp-description-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use GitLab issue operations".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions.extend([
+        crate::agent::AllowedAction::McpCall,
+        crate::agent::AllowedAction::MemorySearch,
+        crate::agent::AllowedAction::MemoryStore,
+    ]);
+    request.available_mcp_tools = vec![crate::mcp::McpPromptTool {
+        server_id: "gitlab".to_string(),
+        tool_name: "get_issue".to_string(),
+        description: "Read one GitLab issue".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","properties":{"iid":{"type":"integer"}}}"#
+            .to_string(),
+    }];
+    let arguments = serde_json::json!({
+        "rationale": "generic compatible provider called MCP",
+        "thought": null,
+        "actions": [
+            {
+                "type": "mcp_call",
+                "server": "gitlab",
+                "tool": "get_issue",
+                "arguments": {"iid": 7}
+            }
+        ]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "arguments": arguments
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    };
+
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(
+        response.action_batch.unwrap().rationale,
+        "generic compatible provider called MCP"
+    );
+    let sent = provider.transport.requests.borrow();
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    let description = body["tools"][0]["function"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        description
+            .contains("Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."),
+        "{description}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that generic OpenAI-compatible Chat Completions can encode MAAP as
 /// a structured JSON response instead of a native tool call.
 ///

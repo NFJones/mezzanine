@@ -87,7 +87,7 @@ impl OpenAiMaapToolSurface {
     }
 
     /// Returns provider-facing guidance for this function tool.
-    fn description(self) -> String {
+    fn description(self, request: &ModelRequest) -> String {
         match self {
             Self::CapabilityDecision => format!(
                 "Submit one MAAP batch for deciding the next coarse capability. {} Only say and request_capability are valid. If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Model-selected skill lookup/loading is disabled. {} {}",
@@ -118,8 +118,9 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::Mcp => format!(
-                "Submit one MAAP batch for MCP tool work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {}",
+                "Submit one MAAP batch for MCP tool work. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                mcp_tool_manifest_for_description(&request.available_mcp_tools),
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
@@ -148,8 +149,9 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::CurrentRequest => format!(
-                "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {}",
+                "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search or memory_store first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
+                current_request_mcp_tool_manifest(request),
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
             ),
@@ -258,10 +260,51 @@ fn openai_maap_action_batch_tool(
     serde_json::json!({
         "type": "function",
         "name": surface.tool_name(),
-        "description": surface.description(),
+        "description": surface.description(request),
         "strict": true,
         "parameters": maap_action_batch_schema(&allowed_actions, &request.available_mcp_tools)
     })
+}
+
+/// Returns a compact model-facing manifest for MCP tools in one provider schema.
+pub(super) fn mcp_tool_manifest_for_description(tools: &[McpPromptTool]) -> String {
+    const MAX_TOOL_DESCRIPTION_COUNT: usize = 20;
+    if tools.is_empty() {
+        return "No MCP tools are currently callable in this schema.".to_string();
+    }
+    let sorted_tools = sorted_mcp_prompt_tools(tools);
+    let total = sorted_tools.len();
+    let mut entries = sorted_tools
+        .into_iter()
+        .take(MAX_TOOL_DESCRIPTION_COUNT)
+        .map(|tool| {
+            format!(
+                "{}/{}: {}",
+                tool.server_id,
+                tool.tool_name,
+                mcp_schema_description(&tool.description)
+            )
+        })
+        .collect::<Vec<_>>();
+    if total > MAX_TOOL_DESCRIPTION_COUNT {
+        entries.push(format!(
+            "... plus {} more MCP tools listed in the schema",
+            total - MAX_TOOL_DESCRIPTION_COUNT
+        ));
+    }
+    format!(
+        "Available MCP tools callable with mcp_call: {}.",
+        entries.join("; ")
+    )
+}
+
+/// Returns the MCP manifest only when the composite surface can call MCP.
+fn current_request_mcp_tool_manifest(request: &ModelRequest) -> String {
+    if request.allowed_actions.contains(AllowedAction::McpCall) {
+        mcp_tool_manifest_for_description(&request.available_mcp_tools)
+    } else {
+        "No mcp_call action is active on this composite surface.".to_string()
+    }
 }
 
 /// Runs the maap action batch schema operation for this subsystem.

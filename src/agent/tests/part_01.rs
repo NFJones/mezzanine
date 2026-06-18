@@ -3006,6 +3006,20 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert!(
         context.blocks[0]
             .content
+            .contains("available_tool=fs/read_file route=mcp_call callable=true"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("server=fs status=available route=mcp_call"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0]
+            .content
             .contains("description=\"Read files\"")
     );
     assert!(
@@ -3169,7 +3183,7 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
         "{system_prompt}"
     );
     assert!(
-        system_prompt.contains("Do not attempt MCP server jira"),
+        system_prompt.contains("MCP server jira is configured but not currently callable"),
         "{system_prompt}"
     );
     assert!(
@@ -4511,7 +4525,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));
     assert!(!prompt.contains(r#""path""#), "{prompt}");
-    assert!(prompt.contains("Do not attempt MCP server gitlab"));
+    assert!(prompt.contains("MCP server gitlab is configured but not currently callable"));
+    assert!(prompt.contains("do not use memory_search as a substitute for it"));
     assert!(prompt.contains("Write scopes: src/agent.rs"));
     assert!(prompt.contains("external-integration path"));
     assert!(prompt.contains("The existence of MCP integrations or skills is not evidence that they are relevant"));

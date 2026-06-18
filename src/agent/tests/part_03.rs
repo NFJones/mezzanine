@@ -4348,6 +4348,11 @@ fn openai_current_tool_guides_mcp_routing_match_before_memory_without_hiding_act
         description.contains("mcp_call is the sane first action"),
         "{description}"
     );
+    assert!(
+        description
+            .contains("Available MCP tools callable with mcp_call: gitlab/get_issue: Read one GitLab issue."),
+        "{description}"
+    );
 }
 
 /// Verifies openai responses request body uses mcp tool argument schemas.
@@ -4401,9 +4406,14 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let mcp_tool = openai_function_tool(&value, "submit_maap_mcp_actions");
+    let description = mcp_tool["description"].as_str().unwrap();
     assert!(value.get("text").is_none());
     assert_openai_strict_schema_shape(&mcp_tool["parameters"]);
     assert_eq!(value["tool_choice"]["name"], "submit_maap_mcp_actions");
+    assert!(
+        description.contains("Available MCP tools callable with mcp_call: fs/read_file: Read file"),
+        "{description}"
+    );
     let action_schemas = openai_tool_action_schemas(mcp_tool);
     let mcp_schemas = action_schemas
         .iter()

@@ -412,7 +412,9 @@ impl McpRegistry {
                 !server.configured.enabled
                     || matches!(
                         server.status,
-                        McpServerStatus::Unavailable
+                        McpServerStatus::Configured
+                            | McpServerStatus::Starting
+                            | McpServerStatus::Unavailable
                             | McpServerStatus::Blacklisted
                             | McpServerStatus::Failed
                     )
@@ -425,18 +427,13 @@ impl McpRegistry {
                     .external_capability
                     .usage_instructions
                     .clone(),
-                reason: if server.configured.enabled {
-                    server
-                        .blacklist_reason
-                        .clone()
-                        .unwrap_or_else(|| format!("{:?}", server.status))
-                } else {
-                    "disabled".to_string()
-                },
+                reason: mcp_prompt_unavailable_reason(server),
                 retryable: server.configured.enabled
                     && matches!(
                         server.status,
-                        McpServerStatus::Unavailable
+                        McpServerStatus::Configured
+                            | McpServerStatus::Starting
+                            | McpServerStatus::Unavailable
                             | McpServerStatus::Blacklisted
                             | McpServerStatus::Failed
                     ),
@@ -478,6 +475,24 @@ impl McpRegistry {
         self.servers.get_mut(server_id).ok_or_else(|| {
             MezError::new(crate::error::MezErrorKind::NotFound, "MCP server not found")
         })
+    }
+}
+
+/// Returns a model-facing reason for one non-callable MCP server state.
+fn mcp_prompt_unavailable_reason(server: &McpServerState) -> String {
+    if !server.configured.enabled {
+        return "disabled".to_string();
+    }
+    if let Some(reason) = &server.blacklist_reason {
+        return reason.clone();
+    }
+    match server.status {
+        McpServerStatus::Configured => "runtime discovery pending".to_string(),
+        McpServerStatus::Starting => "runtime discovery in progress".to_string(),
+        McpServerStatus::Unavailable => "unavailable".to_string(),
+        McpServerStatus::Blacklisted => "blacklisted for this session".to_string(),
+        McpServerStatus::Failed => "startup or protocol failure".to_string(),
+        McpServerStatus::Available => "available".to_string(),
     }
 }
 
