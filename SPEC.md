@@ -6398,10 +6398,10 @@ write scopes when the agent is a subagent.
 
 The prompt MUST include a secret-safe MCP integration manifest for the current
 session. Available MCP servers MUST be presented with configured server id,
-status, model-visible external-capability purpose, available-tool count, and a
-bounded approval-required summary. Available MCP tools MAY be summarized lazily,
-but when tool details are included they MUST be bounded and MUST NOT expose
-secret-bearing transport, environment, header, credential, or raw schema data.
+status, model-visible external-capability purpose, and available-tool count.
+Available MCP tools MAY be summarized lazily, but when tool details are included
+they MUST be bounded and MUST NOT expose approval requirements, secret-bearing
+transport, environment, header, credential, or raw schema data.
 MCP servers that are disabled, blacklisted for the session, or unavailable
 because of environmental failure MUST NOT be presented as available tools, and
 the prompt MUST prohibit attempts to use them while preserving their

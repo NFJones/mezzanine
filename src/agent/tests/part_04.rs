@@ -2114,11 +2114,11 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(
-        execution.action_results[0]
+        !execution.action_results[0]
             .structured_content_json
             .as_deref()
             .unwrap()
-            .contains("\"approval_required\":false")
+            .contains("approval_required")
     );
 }
 

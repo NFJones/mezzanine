@@ -96,11 +96,10 @@ pub fn append_mcp_context(
     }
     for tool in &available_tools {
         lines.push(format!(
-            "available_tool={}/{} description={} approval_required={}",
+            "available_tool={}/{} description={}",
             tool.server_id,
             tool.tool_name,
-            mcp_context_quoted_value(&tool.description),
-            tool.approval_required
+            mcp_context_quoted_value(&tool.description)
         ));
     }
     for server in &unavailable_servers {
@@ -132,13 +131,12 @@ pub fn append_mcp_context(
 /// Formats one available MCP server manifest line for prompt context.
 fn mcp_available_server_line(server: &McpPromptServer) -> String {
     format!(
-        "server={} status=available name={} purpose={} usage_instructions={} tools={} approval_required_tools={}",
+        "server={} status=available name={} purpose={} usage_instructions={} tools={}",
         server.server_id,
         mcp_context_quoted_value(&server.display_name),
         mcp_context_quoted_value(&server.purpose),
         mcp_context_quoted_value(&server.usage_instructions),
-        server.tool_count,
-        server.approval_required_tool_count
+        server.tool_count
     )
 }
 

@@ -351,11 +351,10 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         vec!["mcp call accepted for external-integration execution".to_string()]
                     },
                     Some(format!(
-                        r#"{{"server":"{}","tool":"{}","arguments":{},"approval_required":{},"approval":{}}}"#,
+                        r#"{{"server":"{}","tool":"{}","arguments":{},"approval":{}}}"#,
                         json_escape(server),
                         json_escape(tool),
                         arguments_json,
-                        approval_required,
                         if auto_allowed {
                             auto_allow_approval_json(action, "mcp_call").to_string()
                         } else if approval_required {

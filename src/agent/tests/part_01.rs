@@ -3009,6 +3009,16 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
             .contains("description=\"Read files\"")
     );
     assert!(
+        !context.blocks[0].content.contains("approval_required"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        !context.blocks[0].content.contains("approval_required_tools"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
         !context.blocks[0].content.contains("input_schema"),
         "{}",
         context.blocks[0].content

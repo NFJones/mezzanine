@@ -944,11 +944,10 @@ pub(super) fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serd
         object.insert(
             "description".to_string(),
             serde_json::json!(format!(
-                "Call MCP tool {}/{}. Description: {} Approval required: {}.",
+                "Call MCP tool {}/{}. Description: {}",
                 tool.server_id,
                 tool.tool_name,
-                mcp_schema_description(&tool.description),
-                tool.approval_required
+                mcp_schema_description(&tool.description)
             )),
         );
     }
