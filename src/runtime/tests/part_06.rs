@@ -265,6 +265,10 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     assert!(audit.contains(r#""outcome":"started""#), "{audit}");
     assert!(audit.contains(r#""outcome":"succeeded""#), "{audit}");
     assert!(audit.contains(r#""server_id":"fixture""#), "{audit}");
+    assert!(
+        audit.contains(r#""arguments_json":"{\"message\":\"hello\"}""#),
+        "{audit}"
+    );
     let _ = fs::remove_dir_all(audit_root);
 }
 

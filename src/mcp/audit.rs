@@ -31,6 +31,7 @@ pub async fn call_stdio_mcp_tool_with_audit(
         &plan.server_id,
         &plan.tool_name,
         call_id,
+        &plan.arguments_json,
         "started",
     );
     audit_log.append(started)?;
@@ -47,6 +48,7 @@ pub async fn call_stdio_mcp_tool_with_audit(
         &plan.server_id,
         &plan.tool_name,
         call_id,
+        &plan.arguments_json,
         outcome,
     );
     audit_log.append(completed)?;
@@ -99,6 +101,7 @@ pub async fn call_streamable_http_mcp_tool_with_audit(
         &tool_call.server_id,
         &tool_call.tool_name,
         audit.call_id,
+        &tool_call.arguments_json,
         "started",
     );
     audit.audit_log.append(started)?;
@@ -116,6 +119,7 @@ pub async fn call_streamable_http_mcp_tool_with_audit(
         &tool_call.server_id,
         &tool_call.tool_name,
         audit.call_id,
+        &tool_call.arguments_json,
         outcome,
     );
     audit.audit_log.append(completed)?;

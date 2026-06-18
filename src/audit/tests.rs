@@ -443,11 +443,21 @@ fn audit_helpers_include_required_metadata_and_redact_secrets() {
     assert_metadata(&logout, "provider", "openai");
     assert_metadata(&logout, "account_id", "acct1");
 
-    let mcp = AuditRecord::mcp_call("$1", actor(), "fs", "read_file", "call1", "succeeded");
+    let mcp = AuditRecord::mcp_call(
+        "$1",
+        actor(),
+        "fs",
+        "read_file",
+        "call1",
+        r#"{"token":"token=secret"}"#,
+        "succeeded",
+    );
     assert_event(&mcp, "external_integration", "mcp_call", "succeeded");
     assert_metadata(&mcp, "server_id", "fs");
     assert_metadata(&mcp, "tool_name", "read_file");
     assert_metadata(&mcp, "call_id", "call1");
+    assert_metadata(&mcp, "arguments_json", "[REDACTED]");
+    assert!(mcp.redactions.contains(&"metadata".to_string()));
 
     let provider =
         AuditRecord::provider_request("$1", actor(), "openai", "gpt-test", "turn-1", "succeeded");

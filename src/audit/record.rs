@@ -234,12 +234,14 @@ impl AuditRecord {
         server_id: impl Into<String>,
         tool_name: impl Into<String>,
         call_id: impl Into<String>,
+        arguments_json: impl Into<String>,
         outcome: impl Into<String>,
     ) -> Self {
         let mut record = Self::new(session_id, actor, "external_integration", "mcp_call")
             .with_metadata("server_id", server_id)
             .with_metadata("tool_name", tool_name)
-            .with_metadata("call_id", call_id);
+            .with_metadata("call_id", call_id)
+            .with_metadata("arguments_json", arguments_json);
         record.outcome = outcome.into();
         record.sanitized()
     }

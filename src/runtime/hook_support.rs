@@ -208,6 +208,7 @@ impl McpActionExecutor for RuntimeMcpActionExecutor<'_> {
                 &plan.server_id,
                 &plan.tool_name,
                 &self.call_id,
+                &plan.arguments_json,
                 "started",
             ))?;
         }
@@ -224,6 +225,7 @@ impl McpActionExecutor for RuntimeMcpActionExecutor<'_> {
                 &plan.server_id,
                 &plan.tool_name,
                 &self.call_id,
+                &plan.arguments_json,
                 outcome,
             ))?;
         }
@@ -248,6 +250,7 @@ impl AsyncMcpActionExecutor for RuntimeMcpActionExecutor<'_> {
                 &plan.server_id,
                 &plan.tool_name,
                 &self.call_id,
+                &plan.arguments_json,
                 "started",
             ))?;
         }
@@ -267,6 +270,7 @@ impl AsyncMcpActionExecutor for RuntimeMcpActionExecutor<'_> {
                 &plan.server_id,
                 &plan.tool_name,
                 &self.call_id,
+                &plan.arguments_json,
                 outcome,
             ))?;
         }

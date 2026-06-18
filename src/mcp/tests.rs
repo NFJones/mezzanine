@@ -921,6 +921,7 @@ async fn stdio_tool_call_writes_start_and_completion_audit_records() {
     assert!(audit.contains(r#""outcome":"started""#));
     assert!(audit.contains(r#""outcome":"succeeded""#));
     assert!(audit.contains(r#""server_id":"fixture""#));
+    assert!(audit.contains(r#""arguments_json":"{\"message\":\"hello\"}""#));
     let _ = std::fs::remove_dir_all(audit_dir);
 }
 
@@ -1112,6 +1113,7 @@ async fn streamable_http_tool_call_writes_start_and_completion_audit_records() {
     assert!(audit.contains(r#""outcome":"started""#));
     assert!(audit.contains(r#""outcome":"succeeded""#));
     assert!(audit.contains(r#""server_id":"http""#));
+    assert!(audit.contains(r#""arguments_json":"{\"message\":\"hello\"}""#));
     let _ = std::fs::remove_dir_all(audit_dir);
 }
 

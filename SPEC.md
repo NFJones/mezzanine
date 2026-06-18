@@ -4070,8 +4070,11 @@ validation and materialization of aliases and color slots into the persisted and
 live configuration state.
 
 An `mcp_call` action MUST include server identity, tool name, and JSON
-arguments. It MUST NOT reference disabled, unavailable, or session-blacklisted
-MCP servers.
+arguments. Its audit records MUST include server identity, tool name, call
+identity, and JSON arguments for both local stdio and streamable HTTP MCP
+servers; when argument values require scrubbing, the audit log MUST retain the
+field with a redaction marker instead of omitting it. It MUST NOT reference
+disabled, unavailable, or session-blacklisted MCP servers.
 
 The harness MUST validate every action against the `maap/1` schema before
 permission evaluation. Unknown action types, missing required fields, duplicate
