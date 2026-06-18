@@ -195,9 +195,107 @@ fn mcp_context_normalized_task_text(context: &AgentContext) -> String {
 /// Reports whether one MCP metadata value is specific and present in the task.
 fn mcp_context_metadata_matches_task(normalized_task: &str, metadata: &str) -> bool {
     let metadata = mcp_context_normalize_match_text(metadata);
-    metadata.len() >= 3
-        && metadata.split_whitespace().count() <= 18
-        && normalized_task.contains(&metadata)
+    if metadata.len() < 3 {
+        return false;
+    }
+    let metadata_tokens = metadata.split_whitespace().collect::<Vec<_>>();
+    if metadata_tokens.is_empty() {
+        return false;
+    }
+    if metadata_tokens.len() <= 18
+        && mcp_context_normalized_task_contains_phrase(normalized_task, &metadata)
+    {
+        return true;
+    }
+    metadata_tokens
+        .into_iter()
+        .filter(|token| mcp_context_salient_metadata_token(token))
+        .any(|token| mcp_context_normalized_task_contains_token(normalized_task, token))
+}
+
+/// Reports whether normalized task text contains a whole metadata phrase.
+fn mcp_context_normalized_task_contains_phrase(normalized_task: &str, metadata: &str) -> bool {
+    let task = format!(" {normalized_task} ");
+    let phrase = format!(" {metadata} ");
+    task.contains(&phrase)
+}
+
+/// Reports whether normalized task text contains a whole metadata token.
+fn mcp_context_normalized_task_contains_token(normalized_task: &str, metadata_token: &str) -> bool {
+    normalized_task
+        .split_whitespace()
+        .any(|task_token| task_token == metadata_token)
+}
+
+/// Reports whether one metadata token is distinctive enough for routing.
+fn mcp_context_salient_metadata_token(token: &str) -> bool {
+    (token.len() >= 4 || token.contains('/') || token.contains('_'))
+        && !mcp_context_generic_metadata_token(token)
+}
+
+/// Reports whether one metadata token is too generic for MCP routing hints.
+fn mcp_context_generic_metadata_token(token: &str) -> bool {
+    matches!(
+        token,
+        "about"
+            | "access"
+            | "action"
+            | "actions"
+            | "agent"
+            | "all"
+            | "and"
+            | "api"
+            | "available"
+            | "call"
+            | "called"
+            | "can"
+            | "client"
+            | "content"
+            | "create"
+            | "current"
+            | "data"
+            | "delete"
+            | "document"
+            | "documents"
+            | "fetch"
+            | "file"
+            | "files"
+            | "find"
+            | "for"
+            | "from"
+            | "get"
+            | "integration"
+            | "integrations"
+            | "interact"
+            | "issue"
+            | "issues"
+            | "list"
+            | "manage"
+            | "operation"
+            | "operations"
+            | "read"
+            | "request"
+            | "requests"
+            | "review"
+            | "search"
+            | "server"
+            | "service"
+            | "services"
+            | "task"
+            | "the"
+            | "this"
+            | "tool"
+            | "tools"
+            | "update"
+            | "use"
+            | "used"
+            | "using"
+            | "when"
+            | "with"
+            | "work"
+            | "workflow"
+            | "workflows"
+    )
 }
 
 /// Normalizes text for deterministic MCP metadata matching.

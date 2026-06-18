@@ -101,6 +101,47 @@ fn available_server_exposes_tools() {
     assert!(prompt_tools[0].input_schema_json.contains(r#""path""#));
 }
 
+/// Verifies prompt-summary tool descriptions include server capability
+/// metadata for the same concrete `mcp_call` route.
+///
+/// Provider schemas are built from prompt-summary tools. If the callable tool
+/// description omits the server-level purpose and usage instructions, a model
+/// can see a generic tool but miss the configured reason that this MCP server
+/// is relevant to the current task.
+#[test]
+fn prompt_summary_enriches_tool_descriptions_with_server_capability_metadata() {
+    let mut registry = McpRegistry::default();
+    let mut config = config();
+    config.external_capability.purpose = "LedgerNote records and approval notes".to_string();
+    config.external_capability.usage_instructions =
+        "Use when the task needs LedgerNote records.".to_string();
+    registry.add_server(config).unwrap();
+    registry.mark_available("fs", vec![tool()]).unwrap();
+
+    let prompt_tools = registry.prompt_summary().available_tools;
+
+    assert_eq!(prompt_tools.len(), 1);
+    assert!(
+        prompt_tools[0].description.contains("Read a file"),
+        "{}",
+        prompt_tools[0].description
+    );
+    assert!(
+        prompt_tools[0]
+            .description
+            .contains("Server purpose: LedgerNote records and approval notes."),
+        "{}",
+        prompt_tools[0].description
+    );
+    assert!(
+        prompt_tools[0]
+            .description
+            .contains("Usage: Use when the task needs LedgerNote records."),
+        "{}",
+        prompt_tools[0].description
+    );
+}
+
 /// Verifies unavailable server does not expose tools.
 ///
 /// This regression scenario documents the behavior being protected so a

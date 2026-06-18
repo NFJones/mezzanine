@@ -3118,6 +3118,68 @@ fn mcp_context_marks_routing_match_for_verbatim_server_purpose() {
     );
 }
 
+/// Verifies MCP context adds a routing hint when the current user request
+/// matches a distinctive server metadata token without repeating the whole
+/// configured description.
+///
+/// Users normally describe the work they want done rather than quoting an MCP
+/// server purpose verbatim. Server-level metadata must still be enough to make
+/// the concrete MCP route visible as the sane first action, while generic words
+/// such as "fetch" and "review" are not treated as decisive matches.
+#[test]
+fn mcp_context_marks_routing_match_for_salient_server_metadata_token() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "Fetch and review the ledgernote entry from last week.".to_string(),
+    }])
+    .unwrap();
+    let context = append_mcp_context(
+        context,
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "records".to_string(),
+                display_name: "Records".to_string(),
+                purpose: "LedgerNote records and approval notes".to_string(),
+                usage_instructions: "Use for LedgerNote review tasks.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![crate::mcp::McpPromptTool {
+                server_id: "records".to_string(),
+                tool_name: "fetch_record".to_string(),
+                description: "Fetch one external record".to_string(),
+                approval_required: false,
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            }],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("routing_match=available_mcp server=records match=server_purpose"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("matched_text=\"LedgerNote records and approval notes\""),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("next_action_hint=mcp_call"),
+        "{}",
+        context.blocks[0].content
+    );
+}
+
 /// Verifies provider request assembly carries runtime MCP availability into
 /// the system prompt instead of leaving the prompt profile at its empty
 /// defaults.

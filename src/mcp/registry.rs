@@ -395,7 +395,7 @@ impl McpRegistry {
                     .map(|tool| McpPromptTool {
                         server_id: server.configured.id.clone(),
                         tool_name: tool.name.clone(),
-                        description: tool.description.clone(),
+                        description: mcp_prompt_tool_description(server, tool),
                         approval_required: server.configured.approval_for_tool(&tool.name)
                             == McpApprovalSetting::Prompt
                             || (server.configured.approval_for_tool(&tool.name)
@@ -493,6 +493,36 @@ fn mcp_prompt_unavailable_reason(server: &McpServerState) -> String {
         McpServerStatus::Blacklisted => "blacklisted for this session".to_string(),
         McpServerStatus::Failed => "startup or protocol failure".to_string(),
         McpServerStatus::Available => "available".to_string(),
+    }
+}
+
+/// Builds model-facing tool metadata from tool and server capability text.
+fn mcp_prompt_tool_description(server: &McpServerState, tool: &McpToolState) -> String {
+    let mut parts = Vec::new();
+    mcp_prompt_push_description_part(&mut parts, "", &tool.description);
+    mcp_prompt_push_description_part(
+        &mut parts,
+        "Server purpose",
+        &server.configured.external_capability.purpose,
+    );
+    mcp_prompt_push_description_part(
+        &mut parts,
+        "Usage",
+        &server.configured.external_capability.usage_instructions,
+    );
+    parts.join(" ")
+}
+
+/// Appends one compact prompt-description clause when the source text exists.
+fn mcp_prompt_push_description_part(parts: &mut Vec<String>, label: &str, value: &str) {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return;
+    }
+    if label.is_empty() {
+        parts.push(collapsed);
+    } else {
+        parts.push(format!("{label}: {collapsed}."));
     }
 }
 
