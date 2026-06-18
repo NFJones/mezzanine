@@ -36,7 +36,6 @@ use super::recovery::{
     summarize_provider_failure_execution,
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
-use super::{current_task_explicitly_requests_memory, current_task_matches_available_mcp_metadata};
 use crate::subagent::SubagentScopeDeclaration;
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -48,13 +47,9 @@ use crate::subagent::SubagentScopeDeclaration;
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
 /// Exposes persistent-memory actions on the main model action surface when enabled.
-fn expose_default_memory_actions(
-    request: &mut ModelRequest,
-    memory_actions_enabled: bool,
-    expose_actions: bool,
-) {
+fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
     request.memory_actions_enabled = memory_actions_enabled;
-    if !memory_actions_enabled || !expose_actions {
+    if !memory_actions_enabled {
         return;
     }
     request
@@ -89,10 +84,7 @@ pub(crate) fn apply_default_action_gates(
     issue_actions_enabled: bool,
 ) {
     expose_default_mcp_actions(request, available_mcp_tools);
-    let expose_memory_actions =
-        !current_task_matches_available_mcp_metadata(request, available_mcp_tools)
-            || current_task_explicitly_requests_memory(request);
-    expose_default_memory_actions(request, memory_actions_enabled, expose_memory_actions);
+    expose_default_memory_actions(request, memory_actions_enabled);
     expose_issue_actions_gate(request, issue_actions_enabled);
 }
 

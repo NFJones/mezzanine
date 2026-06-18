@@ -15,7 +15,6 @@ use super::super::{
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
-    current_task_explicitly_requests_memory, current_task_matches_available_mcp_metadata,
     say_structured_content_json,
 };
 
@@ -145,20 +144,18 @@ pub(super) fn capability_continuation_request(
         AllowedActionSet::action_execution_base()
     };
     for (_, decision) in &decisions {
-        if decision.granted || decision.exposes_alternative_surface() {
+        if decision.granted {
             allowed_actions.extend_set(&decision.allowed_actions);
         }
     }
-    let action_surface_available = decisions
-        .iter()
-        .any(|(_, decision)| decision.granted || decision.exposes_alternative_surface());
+    let granted_any = decisions.iter().any(|(_, decision)| decision.granted);
     let mut request = previous_request.clone();
-    request.interaction_kind = if action_surface_available || carried_execution_surface {
+    request.interaction_kind = if granted_any || carried_execution_surface {
         ModelInteractionKind::ActionExecution
     } else {
         ModelInteractionKind::CapabilityDecision
     };
-    request.allowed_actions = if action_surface_available || carried_execution_surface {
+    request.allowed_actions = if granted_any || carried_execution_surface {
         allowed_actions
     } else {
         AllowedActionSet::capability_decision()
@@ -217,14 +214,6 @@ struct CapabilityDecision {
     reason: String,
 }
 
-impl CapabilityDecision {
-    /// Returns whether a denied capability still exposes a deterministic
-    /// alternative action surface for the next provider request.
-    fn exposes_alternative_surface(&self) -> bool {
-        !self.granted && self.allowed_actions != AllowedActionSet::capability_decision()
-    }
-}
-
 /// Grants or denies a coarse capability with deterministic policy checks.
 ///
 /// This deliberately does not try to solve the task or validate the eventual
@@ -245,16 +234,6 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
             reason: "memory capability requires persistent memory to be enabled in runtime config"
                 .to_string(),
         },
-        AgentCapability::Memory
-            if current_task_matches_available_mcp_metadata(request, &request.available_mcp_tools)
-                && !current_task_explicitly_requests_memory(request) =>
-        {
-            CapabilityDecision {
-                granted: false,
-                allowed_actions: AllowedActionSet::for_capability(AgentCapability::Mcp),
-                reason: "memory capability is not the next path because the current task matches available MCP metadata; use mcp_call unless the user explicitly asks to recall or save persistent memory".to_string(),
-            }
-        }
         AgentCapability::Issues if !request.issue_actions_enabled => CapabilityDecision {
             granted: false,
             allowed_actions: AllowedActionSet::capability_decision(),
