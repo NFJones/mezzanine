@@ -5778,8 +5778,13 @@ Mezzanine MUST support per-server and per-tool approval settings.
 
 MCP tools MUST be visible through the agent shell `/list-mcp` command.
 
-Enabled MCP servers SHOULD be discovered lazily before the first agent-provider
-turn that could expose MCP tools and before `/list-mcp` renders server state.
+Enabled MCP servers MUST begin runtime initialization when the live session
+applies its startup configuration, before the first agent-provider turn can
+snapshot MCP availability. Initialization start and completion MUST be logged in
+a human-readable lifecycle event so users can see when MCP servers are ready to
+field requests. Runtime paths that can observe newly configured or still-pending
+servers after startup, including agent-provider dispatch and `/list-mcp`, SHOULD
+retain lazy discovery as a fallback before rendering or exposing server state.
 Provider adapters that expose MCP tools through structured model tool schemas
 MUST normalize externally advertised MCP input schemas into the target
 provider's accepted schema subset. This normalization MUST preserve the

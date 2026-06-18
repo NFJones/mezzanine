@@ -3287,6 +3287,74 @@ fn runtime_agent_shell_mcp_command_reports_live_registry_detail() {
     assert!(!response.contains("requires_runtime"), "{response}");
 }
 
+/// Verifies async runtime config application initializes MCP transports at
+/// session-start time and records human-readable lifecycle status.
+///
+/// MCP tools need to be available before the first model request so the model
+/// can choose `mcp_call` from concrete runtime context instead of treating the
+/// server as an unknown integration. The event log also needs plain status
+/// messages so operators can see when startup discovery begins and when MCP
+/// servers are ready to field requests.
+#[tokio::test]
+async fn runtime_async_config_apply_initializes_mcp_and_logs_readable_status() {
+    let mut service = test_runtime_service();
+    let script = runtime_mcp_fixture_script(false);
+
+    let report = service
+        .replace_config_layers_async(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\napproval = \"allow\"\ntool_timeout_ms = 1000\n",
+                toml_string(&script)
+            ),
+        }])
+        .await
+        .unwrap();
+
+    assert_eq!(report.mcp_servers_configured, 1);
+    assert_eq!(
+        service.mcp_registry().list_servers()[0].status,
+        crate::mcp::McpServerStatus::Available
+    );
+    assert_eq!(
+        service.mcp_registry().prompt_summary().available_tools[0].tool_name,
+        "echo"
+    );
+    let payloads = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary)
+        .into_iter()
+        .map(|event| event.payload)
+        .collect::<Vec<_>>();
+    assert!(
+        payloads.iter().any(|payload| {
+            payload.contains(r#""phase":"started""#)
+                && payload.contains("Starting MCP initialization for 1 configured server.")
+        }),
+        "{payloads:#?}"
+    );
+    assert!(
+        payloads.iter().any(|payload| {
+            payload.contains(r#""server_id":"fixture""#)
+                && payload.contains(r#""status":"available""#)
+                && payload.contains("MCP server fixture is ready to field requests")
+        }),
+        "{payloads:#?}"
+    );
+    assert!(
+        payloads.iter().any(|payload| {
+            payload.contains(r#""phase":"completed""#)
+                && payload.contains("MCP initialization complete: 1 enabled server ready to field requests")
+        }),
+        "{payloads:#?}"
+    );
+}
+
 /// Verifies `/list-mcp` starts configured MCP transports after a synchronous
 /// config load. Default startup paths apply configuration synchronously, so the
 /// user-facing MCP listing must not require a separate config reload before the

@@ -933,7 +933,12 @@ impl RuntimeSessionService {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let mut registry = std::mem::take(&mut self.mcp_registry);
         let discovery_blacklisted = self
-            .discover_runtime_mcp_transports_async(&mut registry, &environment)
+            .initialize_runtime_mcp_transports_async(
+                &mut registry,
+                &environment,
+                "runtime-config-apply",
+                true,
+            )
             .await?;
         report.mcp_servers_blacklisted.extend(discovery_blacklisted);
         self.mcp_registry = registry;
@@ -951,10 +956,58 @@ impl RuntimeSessionService {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let mut registry = std::mem::take(&mut self.mcp_registry);
         let blacklisted = self
-            .discover_runtime_mcp_transports_async(&mut registry, &environment)
+            .initialize_runtime_mcp_transports_async(
+                &mut registry,
+                &environment,
+                "runtime-mcp-ensure",
+                false,
+            )
             .await?;
         self.mcp_registry = registry;
         let _ = self.persist_registry_update_plan(&self.registry_update_plan());
+        Ok(blacklisted)
+    }
+
+    /// Initializes configured MCP transports and emits readable lifecycle state.
+    ///
+    /// The startup path calls this immediately after applying configuration so
+    /// configured servers are contacted at session start instead of waiting for
+    /// the first agent prompt. Failures still degrade MCP availability for the
+    /// session rather than failing session or pane startup.
+    ///
+    /// # Parameters
+    /// - `registry`: In-memory MCP registry being initialized.
+    /// - `environment`: Process environment used to resolve server startup plans.
+    /// - `source`: Stable source label placed in lifecycle event payloads.
+    /// - `emit_empty_completion`: Whether to log a completion summary when
+    ///   enabled servers exist but none require startup.
+    async fn initialize_runtime_mcp_transports_async(
+        &mut self,
+        registry: &mut McpRegistry,
+        environment: &BTreeMap<String, String>,
+        source: &str,
+        emit_empty_completion: bool,
+    ) -> Result<Vec<String>> {
+        if emit_empty_completion {
+            self.append_runtime_mcp_prechecked_status_events(registry, source)?;
+        }
+        let pending_server_ids = runtime_mcp_pending_discovery_server_ids(registry);
+        if pending_server_ids.is_empty() {
+            if emit_empty_completion && runtime_mcp_enabled_server_count(registry) > 0 {
+                self.append_runtime_mcp_initialization_completed_event(registry, source, 0)?;
+            }
+            return Ok(Vec::new());
+        }
+
+        self.append_runtime_mcp_initialization_started_event(source, pending_server_ids.len())?;
+        let blacklisted = self
+            .discover_runtime_mcp_transports_async(registry, environment)
+            .await?;
+        self.append_runtime_mcp_initialization_completed_event(
+            registry,
+            source,
+            pending_server_ids.len(),
+        )?;
         Ok(blacklisted)
     }
 
@@ -1481,14 +1534,7 @@ impl RuntimeSessionService {
         registry: &mut McpRegistry,
         environment: &BTreeMap<String, String>,
     ) -> Result<Vec<String>> {
-        let server_ids = registry
-            .list_servers()
-            .into_iter()
-            .filter(|server| {
-                server.configured.enabled && server.status == McpServerStatus::Configured
-            })
-            .map(|server| server.configured.id.clone())
-            .collect::<Vec<_>>();
+        let server_ids = runtime_mcp_pending_discovery_server_ids(registry);
         let mut blacklisted = Vec::new();
         for server_id in server_ids {
             match self
@@ -1506,6 +1552,7 @@ impl RuntimeSessionService {
                             server.status,
                             server.tools.len(),
                             None,
+                            "runtime-mcp-discovery",
                         )?;
                     }
                 }
@@ -1518,6 +1565,7 @@ impl RuntimeSessionService {
                         McpServerStatus::Blacklisted,
                         0,
                         Some(&reason),
+                        "runtime-mcp-discovery",
                     )?;
                     blacklisted.push(server_id);
                 }
@@ -1625,6 +1673,7 @@ impl RuntimeSessionService {
         status: McpServerStatus,
         tools: usize,
         reason: Option<&str>,
+        source: &str,
     ) -> Result<()> {
         let reason_json = reason
             .map(|reason| format!(r#""{}""#, json_escape(reason)))
@@ -1632,11 +1681,107 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::McpServerChanged,
             format!(
-                r#"{{"server_id":"{}","status":"{}","tools":{},"reason":{},"source":"runtime-mcp-discovery"}}"#,
+                r#"{{"server_id":"{}","status":"{}","tools":{},"reason":{},"source":"{}","message":"{}"}}"#,
                 json_escape(server_id),
                 runtime_mcp_service_status_name(status),
                 tools,
-                reason_json
+                reason_json,
+                json_escape(source),
+                json_escape(&runtime_mcp_discovery_message(
+                    server_id, status, tools, reason
+                ))
+            ),
+        )
+    }
+
+    /// Appends readable server status events for pre-discovery unavailable MCP servers.
+    fn append_runtime_mcp_prechecked_status_events(
+        &mut self,
+        registry: &McpRegistry,
+        source: &str,
+    ) -> Result<()> {
+        let statuses = registry
+            .list_servers()
+            .into_iter()
+            .filter(|server| {
+                server.configured.enabled
+                    && matches!(
+                        server.status,
+                        McpServerStatus::Unavailable
+                            | McpServerStatus::Blacklisted
+                            | McpServerStatus::Failed
+                    )
+            })
+            .map(|server| {
+                (
+                    server.configured.id.clone(),
+                    server.status,
+                    server.tools.len(),
+                    server.blacklist_reason.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (server_id, status, tools, reason) in statuses {
+            self.append_runtime_mcp_discovery_event(
+                &server_id,
+                status,
+                tools,
+                reason.as_deref(),
+                source,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Appends a readable lifecycle event before a batch MCP initialization run.
+    fn append_runtime_mcp_initialization_started_event(
+        &mut self,
+        source: &str,
+        pending_servers: usize,
+    ) -> Result<()> {
+        self.append_lifecycle_event(
+            EventKind::McpServerChanged,
+            format!(
+                r#"{{"phase":"started","pending_servers":{},"source":"{}","message":"{}"}}"#,
+                pending_servers,
+                json_escape(source),
+                json_escape(&format!(
+                    "Starting MCP initialization for {} configured {}.",
+                    pending_servers,
+                    runtime_mcp_server_word(pending_servers)
+                ))
+            ),
+        )
+    }
+
+    /// Appends a readable lifecycle event after a batch MCP initialization run.
+    fn append_runtime_mcp_initialization_completed_event(
+        &mut self,
+        registry: &McpRegistry,
+        source: &str,
+        attempted_servers: usize,
+    ) -> Result<()> {
+        let counts = RuntimeMcpInitializationCounts::from_registry(registry);
+        self.append_lifecycle_event(
+            EventKind::McpServerChanged,
+            format!(
+                r#"{{"phase":"completed","attempted_servers":{},"enabled_servers":{},"available_servers":{},"unavailable_servers":{},"pending_servers":{},"tools":{},"source":"{}","message":"{}"}}"#,
+                attempted_servers,
+                counts.enabled_servers,
+                counts.available_servers,
+                counts.unavailable_servers(),
+                counts.pending_servers(),
+                counts.available_tools,
+                json_escape(source),
+                json_escape(&format!(
+                    "MCP initialization complete: {} enabled {} ready to field requests, {} unavailable, {} pending, {} available {}.",
+                    counts.available_servers,
+                    runtime_mcp_server_word(counts.available_servers),
+                    counts.unavailable_servers(),
+                    counts.pending_servers(),
+                    counts.available_tools,
+                    runtime_mcp_tool_word(counts.available_tools)
+                ))
             ),
         )
     }
@@ -2193,6 +2338,148 @@ impl RuntimeSessionService {
     pub fn agent_scheduler_mut(&mut self) -> &mut AgentScheduler {
         &mut self.agent_scheduler
     }
+}
+
+/// Counts enabled MCP servers by startup-readiness state.
+struct RuntimeMcpInitializationCounts {
+    /// Number of configured servers that are enabled.
+    enabled_servers: usize,
+    /// Number of enabled servers ready to execute tool calls.
+    available_servers: usize,
+    /// Number of enabled servers still waiting for discovery.
+    configured_servers: usize,
+    /// Number of enabled servers marked as currently starting.
+    starting_servers: usize,
+    /// Number of enabled servers marked unavailable.
+    unavailable_status_servers: usize,
+    /// Number of enabled servers blacklisted for this session.
+    blacklisted_servers: usize,
+    /// Number of enabled servers marked failed.
+    failed_servers: usize,
+    /// Total tools exposed by enabled available servers.
+    available_tools: usize,
+}
+
+impl RuntimeMcpInitializationCounts {
+    /// Builds readiness counts from the live MCP registry.
+    fn from_registry(registry: &McpRegistry) -> Self {
+        let mut counts = Self {
+            enabled_servers: 0,
+            available_servers: 0,
+            configured_servers: 0,
+            starting_servers: 0,
+            unavailable_status_servers: 0,
+            blacklisted_servers: 0,
+            failed_servers: 0,
+            available_tools: 0,
+        };
+        for server in registry
+            .list_servers()
+            .into_iter()
+            .filter(|server| server.configured.enabled)
+        {
+            counts.enabled_servers = counts.enabled_servers.saturating_add(1);
+            match server.status {
+                McpServerStatus::Configured => {
+                    counts.configured_servers = counts.configured_servers.saturating_add(1)
+                }
+                McpServerStatus::Starting => {
+                    counts.starting_servers = counts.starting_servers.saturating_add(1)
+                }
+                McpServerStatus::Available => {
+                    counts.available_servers = counts.available_servers.saturating_add(1);
+                    counts.available_tools =
+                        counts.available_tools.saturating_add(server.tools.len());
+                }
+                McpServerStatus::Unavailable => {
+                    counts.unavailable_status_servers =
+                        counts.unavailable_status_servers.saturating_add(1)
+                }
+                McpServerStatus::Blacklisted => {
+                    counts.blacklisted_servers = counts.blacklisted_servers.saturating_add(1)
+                }
+                McpServerStatus::Failed => {
+                    counts.failed_servers = counts.failed_servers.saturating_add(1)
+                }
+            }
+        }
+        counts
+    }
+
+    /// Returns enabled servers that are not ready because startup failed.
+    fn unavailable_servers(&self) -> usize {
+        self.unavailable_status_servers
+            .saturating_add(self.blacklisted_servers)
+            .saturating_add(self.failed_servers)
+    }
+
+    /// Returns enabled servers that still have not completed discovery.
+    fn pending_servers(&self) -> usize {
+        self.configured_servers
+            .saturating_add(self.starting_servers)
+    }
+}
+
+/// Returns enabled MCP servers that still need runtime discovery.
+fn runtime_mcp_pending_discovery_server_ids(registry: &McpRegistry) -> Vec<String> {
+    registry
+        .list_servers()
+        .into_iter()
+        .filter(|server| server.configured.enabled && server.status == McpServerStatus::Configured)
+        .map(|server| server.configured.id.clone())
+        .collect()
+}
+
+/// Returns how many MCP servers are enabled in the registry.
+fn runtime_mcp_enabled_server_count(registry: &McpRegistry) -> usize {
+    registry
+        .list_servers()
+        .into_iter()
+        .filter(|server| server.configured.enabled)
+        .count()
+}
+
+/// Returns a human-readable MCP discovery result message for event logs.
+fn runtime_mcp_discovery_message(
+    server_id: &str,
+    status: McpServerStatus,
+    tools: usize,
+    reason: Option<&str>,
+) -> String {
+    match status {
+        McpServerStatus::Available => format!(
+            "MCP server {server_id} is ready to field requests with {tools} available {}.",
+            runtime_mcp_tool_word(tools)
+        ),
+        McpServerStatus::Blacklisted => match reason {
+            Some(reason) if !reason.trim().is_empty() => {
+                format!("MCP server {server_id} is unavailable for this session: {reason}.")
+            }
+            _ => format!("MCP server {server_id} is unavailable for this session."),
+        },
+        McpServerStatus::Configured => {
+            format!("MCP server {server_id} is configured and waiting for startup.")
+        }
+        McpServerStatus::Starting => {
+            format!("MCP server {server_id} is starting.")
+        }
+        McpServerStatus::Unavailable | McpServerStatus::Failed => match reason {
+            Some(reason) if !reason.trim().is_empty() => {
+                format!("MCP server {server_id} is unavailable: {reason}.")
+            }
+            _ => format!("MCP server {server_id} is unavailable."),
+        },
+    }
+}
+
+/// Returns the readable singular or plural MCP server noun.
+fn runtime_mcp_server_word(count: usize) -> &'static str {
+    if count == 1 { "server" } else { "servers" }
+}
+
+/// Returns the readable singular or plural MCP tool noun.
+fn runtime_mcp_tool_word(count: usize) -> &'static str {
+    if count == 1 { "tool" } else { "tools" }
 }
 
 /// Returns the normalized MCP status name used in runtime discovery events.
