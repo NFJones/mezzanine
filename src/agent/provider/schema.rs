@@ -148,7 +148,7 @@ impl OpenAiMaapToolSurface {
                 Self::ANTI_EXAMPLES
             ),
             Self::CurrentRequest => format!(
-                "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
+                "Submit one MAAP batch for this request's current composite action surface. {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use at most one focused startup memory_search only when durable prior context is needed; never emit duplicate identical memory_search actions in one batch. {} {}",
                 Self::FUNCTION_CALL_DISCIPLINE,
                 Self::CAPABILITY_MAP,
                 Self::ANTI_EXAMPLES
@@ -731,7 +731,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "For most non-trivial tasks, search persistent memory once near the start of the turn unless the task is clearly self-contained and durable prior context is very unlikely to help. Keep queries focused.",
+                "Search durable prior context only when it is actually needed. Skip memory_search when the task is self-contained, asks about visible system prompt/action descriptions/MCP metadata, or should use an available MCP, web, shell, or other direct artifact action first. Use at most one focused startup search and never duplicate an identical memory_search in the same batch.",
             ),
             (
                 "limit",
@@ -914,27 +914,72 @@ fn maap_config_change_action_schema() -> serde_json::Value {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serde_json::Value {
-    maap_action_object_schema(
+    let mut schema = maap_action_object_schema(
         "mcp_call",
         [
             (
                 "server",
                 serde_json::json!({
                     "type": "string",
-                    "enum": [tool.server_id]
+                    "enum": [tool.server_id],
+                    "description": format!("MCP server id exposed for this tool: {}", tool.server_id)
                 }),
             ),
             (
                 "tool",
                 serde_json::json!({
                     "type": "string",
-                    "enum": [tool.tool_name]
+                    "enum": [tool.tool_name],
+                    "description": format!("MCP tool exposed by server {}: {}. Tool description: {}", tool.server_id, tool.tool_name, mcp_schema_description(&tool.description))
                 }),
             ),
-            ("arguments", mcp_tool_arguments_schema(tool)),
+            (
+                "arguments",
+                mcp_tool_arguments_schema_with_description(tool),
+            ),
         ],
         &["server", "tool", "arguments"],
-    )
+    );
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "description".to_string(),
+            serde_json::json!(format!(
+                "Call MCP tool {}/{}. Description: {} Approval required: {}.",
+                tool.server_id,
+                tool.tool_name,
+                mcp_schema_description(&tool.description),
+                tool.approval_required
+            )),
+        );
+    }
+    schema
+}
+
+/// Returns a compact provider-facing description for MCP schema metadata.
+fn mcp_schema_description(description: &str) -> String {
+    let normalized = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        "No tool description was provided by the MCP server.".to_string()
+    } else {
+        normalized
+    }
+}
+
+/// Returns the MCP tool arguments schema with tool-specific guidance attached.
+fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> serde_json::Value {
+    let mut schema = mcp_tool_arguments_schema(tool);
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "description".to_string(),
+            serde_json::json!(format!(
+                "Arguments for MCP tool {}/{}. Use this action when the task matches this tool description: {}",
+                tool.server_id,
+                tool.tool_name,
+                mcp_schema_description(&tool.description)
+            )),
+        );
+    }
+    schema
 }
 
 /// Runs the mcp tool arguments schema operation for this subsystem.
