@@ -1075,7 +1075,7 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let memory_tool = openai_function_tool(&value, "submit_maap_memory_actions");
+    let memory_tool = openai_function_tool(&value, "submit_maap_action_batch");
     assert_openai_strict_schema_shape(&memory_tool["parameters"]);
     let memory_store_schema = openai_tool_action_schemas(memory_tool)
         .iter()
@@ -1134,7 +1134,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let memory_tool = openai_function_tool(&value, "submit_maap_memory_actions");
+    let memory_tool = openai_function_tool(&value, "submit_maap_action_batch");
     assert_openai_strict_schema_shape(&memory_tool["parameters"]);
     let memory_search_schema = openai_tool_action_schemas(memory_tool)
         .iter()
@@ -1146,8 +1146,8 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .unwrap();
     assert!(query_description.contains("Do not use memory_search by default"));
     assert!(query_description.contains("routing_match=available_mcp"));
-    assert!(query_description.contains("call the matching MCP tool before memory_search"));
-    assert!(query_description.contains("placeholder current-actions call before MCP"));
+    assert!(query_description.contains("not a reason to search memory first"));
+    assert!(query_description.contains("placeholder setup before another direct action"));
     assert!(query_description.contains("startup ritual"));
     assert!(query_description.contains("paraphrase and search again"));
 }
@@ -2303,7 +2303,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let capability_tool = openai_function_tool(&value, "submit_maap_capability_decision");
+    let capability_tool = openai_function_tool(&value, "submit_maap_action_batch");
 
     assert_openai_strict_schema_shape(&capability_tool["parameters"]);
     assert_eq!(value["model"], "gpt-test");
@@ -2320,12 +2320,12 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(capability_tool["strict"], true);
     assert_eq!(
         value["tool_choice"]["name"],
-        "submit_maap_capability_decision"
+        "submit_maap_action_batch"
     );
     assert_eq!(
         value["tools"].as_array().unwrap().len(),
-        10,
-        "all stable OpenAI MAAP function surfaces should remain advertised"
+        1,
+        "OpenAI should receive one canonical MAAP function tool"
     );
     let schema_properties = capability_tool["parameters"]["properties"]
         .as_object()
@@ -2336,7 +2336,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
-    assert!(capability_description.contains("emit request_capability only"));
+    assert!(capability_description.contains("currently allowed actions"));
+    assert!(capability_description.contains("Choose the smallest action"));
     assert!(capability_description.contains("Capability map: shell=local files"));
     assert!(capability_description.contains("Wrong: say(blocked"));
     assert!(capability_description.contains("Right: request_capability(capability=\"shell\""));
@@ -2397,7 +2398,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
         2,
-        "the forced capability-decision tool must expose only active non-effecting actions"
+        "the canonical tool must expose only currently allowed capability-decision actions"
     );
     assert_eq!(
         capability_tool["parameters"]["properties"]["actions"]["minItems"],
@@ -2567,7 +2568,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(allowed_surface.contains("[allowed action surface]"));
     assert!(allowed_surface.contains("allowed_actions=say,request_capability"));
     assert!(allowed_surface.contains("authoritative for action eligibility"));
-    assert!(allowed_surface.contains("cache-stable list"));
+    assert!(allowed_surface.contains("one canonical MAAP action-batch function"));
     assert!(allowed_surface.contains("Emit only action objects whose type appears"));
     assert!(allowed_surface.contains("Treat [executed result]"));
 }
@@ -2892,14 +2893,14 @@ fn openai_prompt_cache_key_falls_back_to_session_identity() {
     );
 }
 
-/// Verifies OpenAI MAAP tool schemas stay byte-stable when only the currently
-/// selected action surface changes.
+/// Verifies OpenAI MAAP tool schemas track the current allowed action surface.
 ///
-/// OpenAI prompt caching treats tool definitions as cacheable prefix material.
-/// Mezzanine therefore advertises a stable list of strict MAAP function tools,
-/// then uses tool_choice to force the narrow surface selected for this turn.
+/// A single canonical function keeps action selection simple for the model, and
+/// its schema carries the request's current allowed actions. The stable prompt
+/// text can remain reusable while the provider request shape reflects the live
+/// action schema.
 #[test]
-fn openai_maap_schema_is_stable_across_allowed_action_surfaces() {
+fn openai_maap_schema_tracks_current_allowed_action_surface() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -2934,24 +2935,24 @@ fn openai_maap_schema_is_stable_across_allowed_action_surfaces() {
 
     assert!(capability_body.get("text").is_none());
     assert!(execution_body.get("text").is_none());
-    assert_eq!(capability_body["tools"], execution_body["tools"]);
+    assert_ne!(capability_body["tools"], execution_body["tools"]);
     assert_eq!(
         capability_body["tool_choice"]["name"],
-        "submit_maap_capability_decision"
+        "submit_maap_action_batch"
     );
     assert_eq!(
         execution_body["tool_choice"]["name"],
-        "submit_maap_shell_actions"
+        "submit_maap_action_batch"
     );
     assert_eq!(
         capability_diagnostics.response_format_sha256,
         execution_diagnostics.response_format_sha256
     );
-    assert_eq!(
+    assert_ne!(
         capability_diagnostics.tools_sha256,
         execution_diagnostics.tools_sha256
     );
-    assert_ne!(
+    assert_eq!(
         capability_diagnostics.tool_choice_sha256,
         execution_diagnostics.tool_choice_sha256
     );
@@ -4104,8 +4105,8 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     );
 }
 
-/// Verifies openai responses request body exposes a cache-stable tool list
-/// while forcing the active executable action schema.
+/// Verifies openai responses request body exposes the current executable
+/// action schema through one canonical tool.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -4137,14 +4138,13 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let shell_tool = openai_function_tool(&value, "submit_maap_shell_actions");
-    let fetch_tool = openai_function_tool(&value, "submit_maap_network_fetch_actions");
+    let shell_tool = openai_function_tool(&value, "submit_maap_action_batch");
 
     assert!(value.get("text").is_none());
     assert_openai_strict_schema_shape(&shell_tool["parameters"]);
     assert_eq!(shell_tool["type"], "function");
     assert_eq!(shell_tool["strict"], true);
-    assert_eq!(value["tool_choice"]["name"], "submit_maap_shell_actions");
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert_eq!(
         shell_tool["parameters"]["required"],
         serde_json::json!(["rationale", "thought", "actions"])
@@ -4173,18 +4173,14 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert!(!action_types.contains(&"abort".to_string()));
     assert!(!action_types.contains(&"fetch_url".to_string()));
     assert!(!action_types.contains(&"web_search".to_string()));
-    assert!(
-        openai_tool_action_types(fetch_tool).contains(&"fetch_url".to_string()),
-        "inactive fetch tool remains in the stable OpenAI tool list for caching"
-    );
     let allowed_surface = value["input"].as_array().unwrap().last().unwrap()["content"][0]["text"]
         .as_str()
         .unwrap();
     assert!(
         allowed_surface.contains("allowed_actions=say,request_capability,shell_command,apply_patch")
     );
-    assert!(allowed_surface.contains("cache-stable list"));
-    assert!(allowed_surface.contains("active_function_tool=submit_maap_shell_actions"));
+    assert!(allowed_surface.contains("one canonical MAAP action-batch function"));
+    assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
     assert!(
         allowed_surface.contains(
             "The active function call is the schema-valid action-batch envelope"
@@ -4246,13 +4242,14 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
 }
 
 /// Verifies uncommon composite capability grants still get provider-enforced
-/// narrowing instead of falling back to the historical all-action MAAP schema.
+/// current-schema narrowing instead of falling back to an all-action MAAP
+/// schema.
 ///
 /// Multiple request_capability actions can be granted in one continuation. The
-/// common single-capability tools should stay cache-stable, but the selected
-/// fallback tool for this request must expose exactly the composite surface.
+/// canonical function for this request must expose exactly the composite
+/// surface.
 #[test]
-fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_surface() {
+fn openai_responses_request_body_uses_current_schema_for_composite_action_surface() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -4282,11 +4279,11 @@ fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_s
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let current_tool = openai_function_tool(&value, "submit_maap_current_actions");
+    let current_tool = openai_function_tool(&value, "submit_maap_action_batch");
     let action_types = openai_tool_action_types(current_tool);
 
-    assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
-    assert_eq!(value["tools"].as_array().unwrap().len(), 11);
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
+    assert_eq!(value["tools"].as_array().unwrap().len(), 1);
     assert!(action_types.contains(&"say".to_string()));
     assert!(action_types.contains(&"request_capability".to_string()));
     assert!(action_types.contains(&"shell_command".to_string()));
@@ -4297,14 +4294,13 @@ fn openai_responses_request_body_uses_narrow_current_tool_for_composite_action_s
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
-/// Verifies MCP routing matches select the dedicated MCP surface before memory.
+/// Verifies MCP routing matches remain on the unified current action surface.
 ///
-/// An explicit MCP route must be deterministic rather than advisory: if memory
-/// actions remain visible in the first provider request, models can satisfy the
-/// turn with repeated durable-memory lookups instead of trying the named MCP
-/// integration.
+/// The routing hint should make the matching MCP tool directly callable without
+/// hiding other useful current actions. The provider schema should let the
+/// model pick the smallest action that makes progress.
 #[test]
-fn openai_routing_matched_mcp_uses_dedicated_surface_before_memory() {
+fn openai_routing_matched_mcp_stays_on_unified_surface_with_memory() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
@@ -4352,24 +4348,24 @@ fn openai_routing_matched_mcp_uses_dedicated_surface_before_memory() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let mcp_tool_schema = openai_function_tool(&value, "submit_maap_mcp_actions");
+    let mcp_tool_schema = openai_function_tool(&value, "submit_maap_action_batch");
     let description = mcp_tool_schema["description"].as_str().unwrap();
     let action_types = openai_tool_action_types(mcp_tool_schema);
 
-    assert_eq!(value["tool_choice"]["name"], "submit_maap_mcp_actions");
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(action_types.contains(&"mcp_call".to_string()));
-    assert!(!action_types.contains(&"memory_search".to_string()));
-    assert!(!action_types.contains(&"memory_store".to_string()));
+    assert!(action_types.contains(&"memory_search".to_string()));
+    assert!(action_types.contains(&"memory_store".to_string()));
     assert!(
         description.contains("Available MCP tools callable with mcp_call: githubcopilot/list_ci_results"),
         "{description}"
     );
     assert!(
-        description.contains("call the matching MCP tool as the first useful action"),
+        description.contains("Choose the smallest action that makes concrete progress"),
         "{description}"
     );
     assert!(
-        description.contains("shell preflight, shell/network capability requests"),
+        description.contains("direct inspection or execution beats placeholder setup"),
         "{description}"
     );
     assert!(
@@ -4380,79 +4376,6 @@ fn openai_routing_matched_mcp_uses_dedicated_surface_before_memory() {
         description.contains("put that action in this function call now"),
         "{description}"
     );
-}
-
-/// Verifies memory actions return after the turn has an MCP action result.
-///
-/// The MCP-first restriction is a first-attempt rule. Once MCP has produced an
-/// action result, fallback capability routing can expose memory again for a
-/// concrete durable-context gap.
-#[test]
-fn openai_routing_matched_mcp_releases_memory_after_mcp_result() {
-    let mcp_tool = McpPromptTool {
-        server_id: "githubcopilot".to_string(),
-        tool_name: "list_ci_results".to_string(),
-        description: "Read GitHub CI check results for a repository".to_string(),
-        approval_required: false,
-        input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#
-            .to_string(),
-    };
-    let context = crate::agent::append_mcp_context(
-        AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                label: "user".to_string(),
-                content: "use the githubcopilot mcp server to pull the latest CI results"
-                    .to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                label: "action result m1".to_string(),
-                content:
-                    "[action_result m1 mcp_call failed]\nerror: mcp_tool_error missing repo"
-                        .to_string(),
-            },
-        ])
-        .unwrap(),
-        &crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
-                server_id: "githubcopilot".to_string(),
-                display_name: "GitHub Copilot".to_string(),
-                purpose: "GitHub repository and CI operations".to_string(),
-                usage_instructions: String::new(),
-                tool_count: 1,
-                approval_required_tool_count: 0,
-            }],
-            available_tools: vec![mcp_tool.clone()],
-            unavailable_servers: Vec::new(),
-        },
-    )
-    .unwrap();
-    let mut request = assemble_model_request(
-        &ModelProfile {
-            provider: "openai".to_string(),
-            model: "gpt-test".to_string(),
-            reasoning_profile: None,
-            latency_preference: None,
-            multimodal_required: false,
-            provider_options: std::collections::BTreeMap::new(),
-            safety_tier: None,
-        },
-        &turn(),
-        &context,
-    )
-    .unwrap();
-    crate::agent::apply_default_action_gates(&mut request, &[mcp_tool], true, false);
-
-    let body = openai_responses_request_body(&request).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let current_tool = openai_function_tool(&value, "submit_maap_current_actions");
-    let action_types = openai_tool_action_types(current_tool);
-
-    assert_eq!(value["tool_choice"]["name"], "submit_maap_current_actions");
-    assert!(action_types.contains(&"mcp_call".to_string()));
-    assert!(action_types.contains(&"memory_search".to_string()));
-    assert!(action_types.contains(&"memory_store".to_string()));
 }
 
 /// Verifies openai responses request body uses mcp tool argument schemas.
@@ -4505,11 +4428,11 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let mcp_tool = openai_function_tool(&value, "submit_maap_mcp_actions");
+    let mcp_tool = openai_function_tool(&value, "submit_maap_action_batch");
     let description = mcp_tool["description"].as_str().unwrap();
     assert!(value.get("text").is_none());
     assert_openai_strict_schema_shape(&mcp_tool["parameters"]);
-    assert_eq!(value["tool_choice"]["name"], "submit_maap_mcp_actions");
+    assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(
         description.contains("Available MCP tools callable with mcp_call: fs/read_file: Read file"),
         "{description}"
@@ -4539,7 +4462,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         mcp_schemas[0]["description"]
             .as_str()
             .unwrap()
-            .contains("prefer this action before shell preflight"),
+            .contains("use this as a direct action"),
         "{}",
         mcp_schemas[0]
     );
@@ -4610,7 +4533,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let shell_tool = openai_function_tool(&value, "submit_maap_shell_actions");
+    let shell_tool = openai_function_tool(&value, "submit_maap_action_batch");
     assert_openai_strict_schema_shape(&shell_tool["parameters"]);
     let action_schemas = openai_tool_action_schemas(shell_tool);
     let apply_patch_schema = action_schemas
@@ -4743,7 +4666,7 @@ fn openai_responses_request_body_describes_config_change_schema() {
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let config_tool = openai_function_tool(&value, "submit_maap_config_change_actions");
+    let config_tool = openai_function_tool(&value, "submit_maap_action_batch");
     assert_openai_strict_schema_shape(&config_tool["parameters"]);
     let action_schemas = openai_tool_action_schemas(config_tool);
     let config_schema = action_schemas
@@ -5396,7 +5319,7 @@ fn openai_provider_parses_maap_function_call_arguments() {
                         "type": "function_call",
                         "id": "fc_1",
                         "call_id": "call_1",
-                        "name": "submit_maap_shell_actions",
+                        "name": "submit_maap_action_batch",
                         "arguments": arguments
                     }
                 ]

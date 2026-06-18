@@ -8,8 +8,8 @@
 use super::cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
 };
-use super::schema::{openai_maap_action_batch_tools, openai_maap_tool_surface_for_request};
-use super::validate_non_empty;
+use super::schema::openai_maap_action_batch_tools;
+use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
 use crate::agent::{ModelInteractionKind, ModelRequest};
 use crate::error::{MezError, Result};
 
@@ -93,11 +93,10 @@ pub(super) fn openai_responses_request_body_with_stream(
     if request.interaction_kind == ModelInteractionKind::AutoSizing {
         body["tool_choice"] = serde_json::json!("none");
     } else {
-        let surface = openai_maap_tool_surface_for_request(request);
         body["tools"] = serde_json::json!(openai_maap_action_batch_tools(request));
         body["tool_choice"] = serde_json::json!({
             "type": "function",
-            "name": surface.tool_name()
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
         });
     }
     serde_json::to_string(&body).map_err(|error| {

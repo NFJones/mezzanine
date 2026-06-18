@@ -3608,25 +3608,20 @@ ordinary shell work and MUST be expressed as `shell_command` actions. The
 action and SHOULD tell the model to use separate MAAP actions, rather than long
 shell chains, for independent shell work that can be batched safely.
 
-Provider-native structured action schemas SHOULD be cache-stable across normal
-capability-decision, action-execution, and repair interactions when the
-provider's prompt-cache behavior depends on exact tool or schema prefixes. In
-that mode, Mezzanine MAY present a cache-stable collection of provider-native
-tools or schemas, but the provider request MUST use provider-native selection
-controls, such as forced tool choice or allowed-tool restrictions, so the active
-generation surface exposes only the current allowed action set. If several MAAP
-action variants are encoded inside a single function argument schema, that
-selected schema MUST be narrowed to the current allowed action set rather than
-advertising disallowed variants and relying on prompt text to suppress them. A
-late controller instruction SHOULD still list the current allowed action types
-for model context and diagnostics, but it MUST NOT be the only mechanism that
-prevents disallowed actions when provider-native constraints can express the
+Provider-native structured action schemas SHOULD keep the model-facing action
+surface simple enough that the model can choose the smallest useful action
+directly. Providers MAY use cache-stable tool or schema collections only when
+that does not add wrapper-selection ambiguity to normal action choice. Whether
+schemas are stable or assembled per request, the active generation surface MUST
+expose only the current allowed action set. If several MAAP action variants are
+encoded inside a single function argument schema, that selected schema MUST be
+narrowed to the current allowed action set rather than advertising disallowed
+variants and relying on prompt text to suppress them. A late controller
+instruction SHOULD still list the current allowed action types for model
+context and diagnostics, but it MUST NOT be the only mechanism that prevents
+disallowed actions when provider-native constraints can express the
 restriction. The harness MUST validate emitted actions against the current
 allowed action set before execution and MUST reject disallowed action types.
-When a provider or compatibility mode cannot safely expose a broad stable tool
-collection while narrowing the active generation surface, Mezzanine MAY instead
-assemble provider-native schemas from the current interaction kind and allowed
-action set.
 
 Provider-native structured action schemas SHOULD reject empty user-facing text
 fields and SHOULD describe `say` as conversational text only, not a substitute
@@ -6344,18 +6339,17 @@ tool descriptions, so the model does not need to infer MCP routes only from
 nested JSON Schema variants.
 When the active user request matches available MCP server or tool metadata, the
 runtime MCP context SHOULD include an explicit routing hint that identifies the
-matching server or tool and tells the model that `mcp_call` is the sane next
-action before shell preflight, shell or network capability requests, or generic
-memory actions, unless the user explicitly asked to recall or save persistent
-memory. The prompt and provider action descriptions MUST prohibit placeholder
+matching server or tool and tells the model that `mcp_call` is directly
+available when it is the smallest action that makes concrete progress. The
+prompt and provider action descriptions MUST prohibit placeholder
 `memory_search` or `memory_store` calls whose only purpose is to satisfy the
-current action wrapper before a real MCP call.
-When the active user request matches an available MCP server or tool and the
-turn has not yet produced an `mcp_call` action result, the runtime SHOULD
-narrow the default model action surface to the MCP capability surface before
-adding generic persistent-memory actions. This makes an explicit MCP route a
-deterministic first execution path while preserving normal fallback capability
-routing after an MCP result proves that another action family is required.
+current action wrapper before a real action.
+OpenAI Responses provider requests SHOULD expose one canonical MAAP action-batch
+function for the current request instead of multiple surface-specific wrapper
+functions. The canonical function schema SHOULD contain only the actions that
+are currently allowed, so the model chooses the concrete action object that best
+advances the task without first reasoning about a wrapper function family such
+as shell, MCP, memory, or current-actions.
 
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.

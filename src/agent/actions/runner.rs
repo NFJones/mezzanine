@@ -11,10 +11,10 @@ use super::super::ModelProvider;
 #[cfg(test)]
 use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
-    AgentCapability, AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
-    AllowedActionSet, ContextSourceKind, McpPromptTool, MezError, ModelInteractionKind,
-    ModelProfile, ModelRequest, ModelTokenUsage, PathScopes, PermissionPolicy, Result,
-    SessionApprovalStore, assemble_model_request,
+    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
+    AllowedActionSet, McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest,
+    ModelTokenUsage, PathScopes, PermissionPolicy, Result, SessionApprovalStore,
+    assemble_model_request,
 };
 #[cfg(test)]
 use super::super::{MarkerToken, McpToolCallPlan, Path};
@@ -46,12 +46,6 @@ use crate::subagent::SubagentScopeDeclaration;
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
-/// Marker emitted by MCP context when the current task matches callable MCP metadata.
-const AVAILABLE_MCP_ROUTING_MATCH_MARKER: &str = "routing_match=available_mcp";
-
-/// Marker fragment in action-result context that proves this turn already tried MCP.
-const MCP_ACTION_RESULT_MARKER: &str = " mcp_call ";
-
 /// Exposes persistent-memory actions on the main model action surface when enabled.
 fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
     request.memory_actions_enabled = memory_actions_enabled;
@@ -72,29 +66,6 @@ fn expose_default_mcp_actions(request: &mut ModelRequest, available_mcp_tools: &
     request.allowed_actions.extend([AllowedAction::McpCall]);
 }
 
-/// Reports whether current runtime context says MCP is the matched direct route.
-fn request_has_available_mcp_routing_match(request: &ModelRequest) -> bool {
-    request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::Configuration
-            && message.content.contains(AVAILABLE_MCP_ROUTING_MATCH_MARKER)
-    })
-}
-
-/// Reports whether the same turn already received an MCP action result.
-fn request_has_mcp_action_result(request: &ModelRequest) -> bool {
-    request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::ActionResult
-            && message.content.contains(MCP_ACTION_RESULT_MARKER)
-    })
-}
-
-/// Reports whether the default surface should be narrowed to MCP before memory.
-fn request_requires_initial_mcp_surface(request: &ModelRequest) -> bool {
-    !request.available_mcp_tools.is_empty()
-        && request_has_available_mcp_routing_match(request)
-        && !request_has_mcp_action_result(request)
-}
-
 /// Carries the live issue-tracking action gate into provider requests.
 fn expose_issue_actions_gate(request: &mut ModelRequest, issue_actions_enabled: bool) {
     request.issue_actions_enabled = issue_actions_enabled;
@@ -113,13 +84,8 @@ pub(crate) fn apply_default_action_gates(
     issue_actions_enabled: bool,
 ) {
     expose_default_mcp_actions(request, available_mcp_tools);
-    request.memory_actions_enabled = memory_actions_enabled;
-    expose_issue_actions_gate(request, issue_actions_enabled);
-    if request_requires_initial_mcp_surface(request) {
-        request.allowed_actions = AllowedActionSet::for_capability(AgentCapability::Mcp);
-        return;
-    }
     expose_default_memory_actions(request, memory_actions_enabled);
+    expose_issue_actions_gate(request, issue_actions_enabled);
 }
 
 /// Carries agent turn runner state for this subsystem.

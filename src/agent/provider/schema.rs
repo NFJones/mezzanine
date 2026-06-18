@@ -1,23 +1,22 @@
 //! OpenAI MAAP tool and strict-schema construction.
 //!
-//! This module owns cache-stable MAAP tool surfaces, action schemas, MCP
-//! argument schema normalization, and provider-facing schema descriptions.
+//! This module owns MAAP action schemas, MCP argument schema normalization,
+//! and provider-facing schema descriptions.
 
 use super::{
-    AgentCapability, AllowedAction, AllowedActionSet, McpPromptTool, ModelInteractionKind,
-    ModelRequest,
+    AgentCapability, AllowedAction, AllowedActionSet, McpPromptTool, ModelRequest,
+    OPENAI_MAAP_FUNCTION_TOOL_NAME,
 };
 use crate::config::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION,
     config_change_setting_path_description,
 };
 
-/// Cache-stable OpenAI MAAP function-tool surfaces.
+/// Legacy OpenAI MAAP function-tool surfaces.
 ///
-/// OpenAI can cache the complete tool list, while `tool_choice` can force the
-/// one surface that is valid for the current turn. Keeping the action subset at
-/// the function boundary lets strict schema generation remove disallowed action
-/// variants instead of relying on prose inside the prompt.
+/// Current OpenAI requests use the canonical `submit_maap_action_batch`
+/// function. These names remain accepted while parsing older provider events
+/// and persisted transcripts produced during rollout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OpenAiMaapToolSurface {
     /// Initial capability selection surface.
@@ -56,7 +55,7 @@ impl OpenAiMaapToolSurface {
     /// Shared anti-pattern corrections for provider-local MAAP tool descriptions.
     const ANTI_EXAMPLES: &str = "Wrong: say(blocked, \"Need shell capability\"). Right: request_capability(capability=\"shell\", reason=\"Need to inspect repository files\"). Wrong: *** Replace File. Right: *** Update File with anchored hunks. Wrong: inferred apply_patch old context. Right: copy old/context lines verbatim from read file evidence.";
 
-    /// Returns cache-stable surfaces that are always advertised to OpenAI.
+    /// Returns legacy surface names accepted while parsing provider output.
     pub(super) fn stable_surfaces() -> &'static [Self] {
         &[
             Self::CapabilityDecision,
@@ -88,194 +87,43 @@ impl OpenAiMaapToolSurface {
             Self::CurrentRequest => "submit_maap_current_actions",
         }
     }
-
-    /// Returns provider-facing guidance for this function tool.
-    fn description(self, request: &ModelRequest) -> String {
-        match self {
-            Self::CapabilityDecision => format!(
-                "Submit one MAAP batch for deciding the next coarse capability. {} Only say and request_capability are valid. If any local or external action would help, emit request_capability only; missing shell, patch, web, MCP, messaging, subagent, or config action surface is not a blocker. Model-selected skill lookup/loading is disabled. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::RespondOnly => format!(
-                "Submit one MAAP batch for response-only progress or completion. {} Model-selected skill lookup/loading is disabled. Only non-executing say actions are valid.",
-                Self::FUNCTION_CALL_DISCIPLINE
-            ),
-            Self::Shell => format!(
-                "Submit one MAAP batch for local shell work or Mezzanine patch mutations. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Shell and apply_patch are the only executable actions in this surface. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::NetworkSearch => format!(
-                "Submit one MAAP batch for external network search work. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Web search is the only network action in this surface. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::NetworkFetch => format!(
-                "Submit one MAAP batch for external URL fetch work. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Fetch URL is the only network action in this surface. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::Mcp => format!(
-                "Submit one MAAP batch for MCP tool work. {} {} Use only the action objects in this function schema. If the user named this MCP server or runtime context shows routing_match=available_mcp, call the matching MCP tool as the first useful action; do not use shell preflight, shell/network capability requests, memory actions, or another placeholder step before it. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. MCP calls are limited to the tools listed in this function schema. {} {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                mcp_tool_manifest_for_description(&request.available_mcp_tools),
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::Subagent => format!(
-                "Submit one MAAP batch for local agent messaging or spawning subagents. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::ConfigChange => format!(
-                "Submit one MAAP batch for proposing Mezzanine configuration changes. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::Memory => format!(
-                "Submit one MAAP batch for on-demand persistent memory access. {} {} Use memory_search or memory_store only when the current task has a concrete durable-memory lookup or storage need. Default to no memory action. Do not use memory_search as a startup ritual or merely because a task is non-trivial. If the runtime MCP integrations context contains routing_match=available_mcp, call the matching MCP tool first unless the user explicitly asks to recall or save persistent memory. For MCP-backed workflows, do not use memory_search or memory_store unless the user explicitly asks to recall/save information, or a missing durable user preference is required and unavailable from current prompt or inspected artifacts. Never use memory_search or memory_store as a no-op current-actions placeholder before an MCP call. Use at most one focused memory_search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again. Do not treat memory results as primary evidence. If MCP, web, shell, current prompt, or another direct artifact can answer the question, memory actions are prohibited. Do not store prompt-specific, current-turn, tool-output, repo-state, issue-state, plan, progress, MCP-output notes, or no-op placeholders. Store only durable reusable preferences, facts, procedures, or warnings that are stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, and likely to save future work; when unsure, do not store. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::Issues => format!(
-                "Submit one MAAP batch for local project issue tracking. {} {} Use only issue_add, issue_update, issue_query, or issue_delete for issue records. If another action family is needed, emit request_capability instead. {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-            Self::CurrentRequest => format!(
-                "Submit one MAAP batch for this request's current composite action surface. {} {} Use only the action objects in this function schema. If any useful next action is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If this schema includes mcp_call, the MCP server and tool names are visible in the mcp_call variants; use them directly when the user names a matching server or the task matches visible MCP metadata. If the runtime MCP integrations context contains routing_match=available_mcp, treat that as explicit current-turn evidence that mcp_call is the sane first action; do not choose memory_search, memory_store, shell preflight, or request_capability for shell/network first unless the user explicitly asks to recall or save persistent memory. Do not use memory_search, memory_store, or another no-op action to satisfy this current-actions wrapper before the real MCP call. Do not use memory_search to decide whether visible MCP metadata or action descriptions are sufficient. If memory_search is present, use it only for a concrete durable prior-context gap; never use it to decide whether visible MCP metadata or action descriptions are sufficient, and never emit duplicate memory_search actions in one batch. {} {} {}",
-                Self::FUNCTION_CALL_DISCIPLINE,
-                Self::ACTION_BATCH_ENVELOPE_RULE,
-                current_request_mcp_tool_manifest(request),
-                Self::CAPABILITY_MAP,
-                Self::ANTI_EXAMPLES
-            ),
-        }
-    }
-
-    /// Returns the canonical action set for a cache-stable surface.
-    fn allowed_actions(self) -> AllowedActionSet {
-        match self {
-            Self::CapabilityDecision => AllowedActionSet::capability_decision(),
-            Self::RespondOnly => AllowedActionSet::for_capability(AgentCapability::RespondOnly),
-            Self::Shell => AllowedActionSet::for_capability(AgentCapability::Shell),
-            Self::NetworkSearch => AllowedActionSet::for_capability(AgentCapability::NetworkSearch),
-            Self::NetworkFetch => AllowedActionSet::for_capability(AgentCapability::NetworkFetch),
-            Self::Mcp => AllowedActionSet::for_capability(AgentCapability::Mcp),
-            Self::Subagent => AllowedActionSet::for_capability(AgentCapability::Subagent),
-            Self::ConfigChange => AllowedActionSet::for_capability(AgentCapability::ConfigChange),
-            Self::Memory => AllowedActionSet::for_capability(AgentCapability::Memory),
-            Self::Issues => AllowedActionSet::for_capability(AgentCapability::Issues),
-            Self::CurrentRequest => AllowedActionSet::capability_decision(),
-        }
-    }
 }
 
-/// Returns the OpenAI MAAP tool surface that matches one request.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn openai_maap_tool_surface_for_request(
-    request: &ModelRequest,
-) -> OpenAiMaapToolSurface {
-    let allowed_actions = &request.allowed_actions;
-    if *allowed_actions == AllowedActionSet::capability_decision() {
-        return if request.interaction_kind == ModelInteractionKind::CapabilityDecision {
-            OpenAiMaapToolSurface::CapabilityDecision
-        } else {
-            OpenAiMaapToolSurface::RespondOnly
-        };
-    }
-    if *allowed_actions == AllowedActionSet::say_only() {
-        return OpenAiMaapToolSurface::RespondOnly;
-    }
-    for (capability, surface) in [
-        (AgentCapability::Shell, OpenAiMaapToolSurface::Shell),
-        (
-            AgentCapability::NetworkSearch,
-            OpenAiMaapToolSurface::NetworkSearch,
-        ),
-        (
-            AgentCapability::NetworkFetch,
-            OpenAiMaapToolSurface::NetworkFetch,
-        ),
-        (AgentCapability::Mcp, OpenAiMaapToolSurface::Mcp),
-        (AgentCapability::Subagent, OpenAiMaapToolSurface::Subagent),
-        (
-            AgentCapability::ConfigChange,
-            OpenAiMaapToolSurface::ConfigChange,
-        ),
-        (AgentCapability::Memory, OpenAiMaapToolSurface::Memory),
-        (AgentCapability::Issues, OpenAiMaapToolSurface::Issues),
-    ] {
-        if *allowed_actions == AllowedActionSet::for_capability(capability) {
-            return surface;
-        }
-    }
-    OpenAiMaapToolSurface::CurrentRequest
-}
-
-/// Returns the current request's action set for an OpenAI MAAP tool surface.
-fn openai_maap_allowed_actions_for_surface(
-    surface: OpenAiMaapToolSurface,
-    request: &ModelRequest,
-) -> AllowedActionSet {
-    if surface == OpenAiMaapToolSurface::CurrentRequest {
-        request.allowed_actions.clone()
-    } else {
-        surface.allowed_actions()
-    }
-}
-
-/// Builds the cache-stable OpenAI MAAP function-tool list.
+/// Builds the OpenAI MAAP function-tool list for the current request.
 pub(super) fn openai_maap_action_batch_tools(request: &ModelRequest) -> Vec<serde_json::Value> {
-    let selected_surface = openai_maap_tool_surface_for_request(request);
-    let mut tools = OpenAiMaapToolSurface::stable_surfaces()
-        .iter()
-        .copied()
-        .map(|surface| openai_maap_action_batch_tool(surface, request))
-        .collect::<Vec<_>>();
-    if selected_surface == OpenAiMaapToolSurface::CurrentRequest {
-        tools.push(openai_maap_action_batch_tool(selected_surface, request));
-    }
-    tools
+    vec![openai_maap_current_action_batch_tool(request)]
 }
 
-/// Runs the openai maap action batch tool operation for this subsystem.
+/// Builds the canonical OpenAI Responses MAAP action-batch tool.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn openai_maap_action_batch_tool(
-    surface: OpenAiMaapToolSurface,
-    request: &ModelRequest,
-) -> serde_json::Value {
-    let allowed_actions = openai_maap_allowed_actions_for_surface(surface, request);
+/// A single current-schema tool keeps provider-visible action selection simple:
+/// the model chooses the best action object inside one batch instead of first
+/// reasoning about a surface-specific wrapper function name.
+fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::Value {
     serde_json::json!({
         "type": "function",
-        "name": surface.tool_name(),
-        "description": surface.description(request),
+        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+        "description": openai_maap_current_action_batch_description(request),
         "strict": true,
-        "parameters": maap_action_batch_schema(&allowed_actions, &request.available_mcp_tools)
+        "parameters": maap_action_batch_schema(&request.allowed_actions, &request.available_mcp_tools)
     })
+}
+
+/// Returns the provider-facing description for the current MAAP action-batch tool.
+fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
+    let mcp_manifest = if request.allowed_actions.contains(AllowedAction::McpCall) {
+        mcp_tool_manifest_for_description(&request.available_mcp_tools)
+    } else {
+        "No mcp_call action is active on this request surface.".to_string()
+    };
+    format!(
+        "Submit one validated Mezzanine MAAP action batch for the currently allowed actions. {} {} Use only the action objects in this function schema. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is available and useful, put that action in this function call now. If the needed action family is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. Model-selected skill lookup/loading is disabled; request_skills and call_skill are never valid actions. {} {} {}",
+        OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
+        OpenAiMaapToolSurface::ACTION_BATCH_ENVELOPE_RULE,
+        mcp_manifest,
+        OpenAiMaapToolSurface::CAPABILITY_MAP,
+        OpenAiMaapToolSurface::ANTI_EXAMPLES
+    )
 }
 
 /// Returns a compact model-facing manifest for MCP tools in one provider schema.
@@ -308,15 +156,6 @@ pub(super) fn mcp_tool_manifest_for_description(tools: &[McpPromptTool]) -> Stri
         "Available MCP tools callable with mcp_call: {}.",
         entries.join("; ")
     )
-}
-
-/// Returns the MCP manifest only when the composite surface can call MCP.
-fn current_request_mcp_tool_manifest(request: &ModelRequest) -> String {
-    if request.allowed_actions.contains(AllowedAction::McpCall) {
-        mcp_tool_manifest_for_description(&request.available_mcp_tools)
-    } else {
-        "No mcp_call action is active on this composite surface.".to_string()
-    }
 }
 
 /// Runs the maap action batch schema operation for this subsystem.
@@ -786,7 +625,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default or as a startup ritual. If runtime MCP context includes routing_match=available_mcp, call the matching MCP tool before memory_search unless the user explicitly asks to recall persistent memory. Do not use memory_search as a placeholder current-actions call before MCP. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
+                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default or as a startup ritual. Runtime MCP routing_match=available_mcp is direct current-turn evidence for a callable integration, not a reason to search memory first. Do not use memory_search as placeholder setup before another direct action. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
             ),
             (
                 "limit",
@@ -999,7 +838,7 @@ pub(super) fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serd
         object.insert(
             "description".to_string(),
             serde_json::json!(format!(
-                "Call MCP tool {}/{}. Description: {}. If the user named this MCP server or runtime context shows routing_match=available_mcp, prefer this action before shell preflight, shell/network capability requests, memory_search, or memory_store.",
+                "Call MCP tool {}/{}. Description: {}. If the user named this MCP server or runtime context shows routing_match=available_mcp, use this as a direct action when it is the smallest action that makes concrete progress; do not use shell, capability requests, memory_search, or memory_store merely as setup before it.",
                 tool.server_id,
                 tool.tool_name,
                 mcp_schema_description(&tool.description)

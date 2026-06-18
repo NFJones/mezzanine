@@ -1423,10 +1423,10 @@ mod tests {
     }
 
     /// Verifies an MCP tool schema containing `format: uri` can be embedded in
-    /// the OpenAI MCP action surface without leaking the rejected annotation.
+    /// the OpenAI MCP action schema without leaking the rejected annotation.
     ///
     /// This covers the provider error path where OpenAI rejected
-    /// `submit_maap_mcp_actions` because a configured MCP server advertised a
+    /// `submit_maap_action_batch` because a configured MCP server advertised a
     /// nested `arguments.data.uri` field with a URI format annotation.
     #[test]
     fn openai_mcp_action_tool_schema_omits_rejected_uri_format() {

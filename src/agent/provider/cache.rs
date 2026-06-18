@@ -4,8 +4,8 @@
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
-use super::schema::{openai_maap_action_batch_tools, openai_maap_tool_surface_for_request};
-use super::validate_non_empty;
+use super::schema::openai_maap_action_batch_tools;
+use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
 use crate::agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ContextSourceKind,
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
@@ -267,7 +267,6 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
         return None;
     }
     let allowed_actions = request.allowed_actions.action_type_names().join(",");
-    let selected_tool = openai_maap_tool_surface_for_request(request).tool_name();
     Some(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::RuntimeHint,
@@ -275,11 +274,11 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
             "[allowed action surface]\n\
              interaction_kind={}\n\
              allowed_actions={allowed_actions}\n\
-             active_function_tool={selected_tool}\n\
+             active_function_tool={}\n\
              This controller state is authoritative for action eligibility. \
              The latest user prompt is the active task; previous user transcript messages are historical context only and must not be answered as new requests. \
-             OpenAI may receive a cache-stable list of inactive MAAP tools, but tool_choice selects only active_function_tool for this request. \
-             Emit only action objects whose type appears in allowed_actions and is present in the selected function schema. \
+             OpenAI receives one canonical MAAP action-batch function whose schema contains the current allowed_actions for this request. \
+             Emit only action objects whose type appears in allowed_actions and is present in that function schema. \
              The active function call is the schema-valid action-batch envelope for this response; do not emit a say-only setup batch claiming that an initial or schema-valid batch is needed before an available executable action. \
              Treat [executed result] and [action_result ...] messages as current execution evidence. If they already satisfy the task, emit say with status final instead of requesting capability or rerunning actions to reconfirm them. \
              Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill. Users can still invoke skills explicitly with $<skill-name> syntax before this request is built. \
@@ -289,6 +288,7 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
              If no listed action can make progress, emit say with status blocked or final. \
              Disallowed action types are rejected by Mezzanine and waste a recovery attempt.",
             request.interaction_kind.as_str(),
+            OPENAI_MAAP_FUNCTION_TOOL_NAME,
         ),
     })
 }
@@ -401,10 +401,9 @@ pub fn openai_prompt_cache_diagnostics_for_request(
     let tool_choice = if request.interaction_kind == ModelInteractionKind::AutoSizing {
         serde_json::json!("none")
     } else {
-        let surface = openai_maap_tool_surface_for_request(request);
         serde_json::json!({
             "type": "function",
-            "name": surface.tool_name()
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
         })
     };
     let tool_choice_text = serde_json::to_string(&tool_choice).map_err(|error| {
