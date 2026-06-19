@@ -13,6 +13,24 @@ fn terminal_screen_queues_device_status_report_replies() {
     assert!(screen.drain_terminal_response_bytes().is_empty());
 }
 
+/// Verifies CPR replies report the live cursor row after DECOM-relative
+/// addressing inside a scroll region.
+///
+/// Full-screen TUIs often combine origin mode, scroll margins, and cursor
+/// position queries while redrawing bounded regions. This regression ensures
+/// the terminal reports the resolved cursor position after DECOM-adjusted CUP
+/// addressing instead of leaking the relative parameter row or dropping the
+/// reply.
+#[test]
+fn terminal_screen_reports_cpr_after_origin_mode_relative_addressing() {
+    let mut screen = TerminalScreen::new(Size::new(6, 5).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[?6h\x1b[2;4r\x1b[2;3H\x1b[6n");
+
+    assert_eq!(screen.drain_terminal_response_bytes(), b"\x1b[3;3R");
+    assert!(screen.drain_terminal_response_bytes().is_empty());
+}
+
 /// Verifies overlong CSI sequences are dropped with deterministic recovery.
 ///
 /// CSI parameters can be split across reads and may be attacker controlled.
