@@ -96,13 +96,18 @@ impl SnapshotManifest {
     /// on duplicated control-flow logic.
     fn encode(&self) -> String {
         format!(
-            "id={}\nversion={}\nsession_id={}\nname={}\ncreated_at={}\nkind={:?}\nrestorable={}\nwindow_count={}\npane_count={}\nlimitations={}\nstorage_ref={}\ncontains_terminal_history={}\ncontains_agent_transcripts={}\ncontains_raw_credentials={}\nactive_approvals_restored={}\nrestart_required_panes={}\n",
+            "id={}\nversion={}\nsession_id={}\nname={}\ncreated_at={}\nkind={}\nrestorable={}\nwindow_count={}\npane_count={}\nlimitations={}\nstorage_ref={}\ncontains_terminal_history={}\ncontains_agent_transcripts={}\ncontains_raw_credentials={}\nactive_approvals_restored={}\nrestart_required_panes={}\n",
             self.state.id,
             self.state.version,
             self.state.session_id,
             self.state.name.as_deref().unwrap_or(""),
             self.state.created_at,
-            self.state.kind,
+            match &self.state.kind {
+                SnapshotKind::Live => "live",
+                SnapshotKind::Manual => "manual",
+                SnapshotKind::Automatic => "automatic",
+                SnapshotKind::CrashRecovery => "crash_recovery",
+            },
             self.state.restorable,
             self.state.window_count,
             self.state.pane_count,
@@ -130,23 +135,31 @@ impl SnapshotManifest {
             map.insert(key, value);
         }
 
-        let kind = match required(&map, "kind")? {
-            "Live" => SnapshotKind::Live,
-            "Manual" => SnapshotKind::Manual,
-            "Automatic" => SnapshotKind::Automatic,
-            "CrashRecovery" => SnapshotKind::CrashRecovery,
-            _ => return Err(MezError::invalid_args("unknown snapshot kind")),
+        let version = map
+            .get("version")
+            .copied()
+            .map(parse_u32)
+            .transpose()?
+            .unwrap_or(1);
+
+        let kind = match map.get("kind").copied() {
+            Some("live" | "Live") => SnapshotKind::Live,
+            Some("manual" | "Manual") => SnapshotKind::Manual,
+            Some("automatic" | "Automatic") => SnapshotKind::Automatic,
+            Some("crash_recovery" | "CrashRecovery") => SnapshotKind::CrashRecovery,
+            Some(_) => return Err(MezError::invalid_args("unknown snapshot kind")),
+            None if version <= 1 => SnapshotKind::Manual,
+            None => {
+                return Err(MezError::invalid_args(
+                    "missing snapshot manifest field `kind`",
+                ));
+            }
         };
 
         let manifest = Self {
             state: SnapshotState {
                 id: required(&map, "id")?.to_string(),
-                version: map
-                    .get("version")
-                    .copied()
-                    .map(parse_u32)
-                    .transpose()?
-                    .unwrap_or(1),
+                version,
                 session_id: required(&map, "session_id")?.to_string(),
                 name: non_empty_optional(&map, "name"),
                 created_at: map

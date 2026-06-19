@@ -111,6 +111,53 @@ fn snapshot_manifest_round_trips_to_private_file() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies snapshot manifests persist the SPEC's stable lowercase kind names.
+/// This regression scenario protects the serialized manifest contract so new
+/// snapshots remain readable by spec-aligned consumers and future migrations.
+#[test]
+fn snapshot_manifest_persists_spec_kind_names() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-kind-serialize-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+
+    let path = manifest().write_to_dir(&root).unwrap();
+    let encoded = fs::read_to_string(&path).unwrap();
+
+    assert!(encoded.contains("\nkind=manual\n"), "{encoded}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies version-one manifests written before the `kind` field existed
+/// still decode as manual snapshots. This protects snapshot repository and
+/// async runtime paths that must continue reading older persisted manifests.
+#[test]
+fn snapshot_manifest_reads_version_one_manifests_without_kind_as_manual() {
+    let root =
+        std::env::temp_dir().join(format!("mez-snapshot-kind-legacy-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+
+    let manifest = manifest();
+    let path = manifest.write_to_dir(&root).unwrap();
+    let legacy = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with("kind="))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&path, legacy).unwrap();
+
+    let loaded = SnapshotManifest::read_from_file(&path).unwrap();
+
+    assert_eq!(loaded.state.kind, SnapshotKind::Manual);
+    assert_eq!(loaded.state.id, manifest.state.id);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies snapshot repository lists and inspects manifests.
 ///
 /// This regression scenario documents the behavior being protected so a
