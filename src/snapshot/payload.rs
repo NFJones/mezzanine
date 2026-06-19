@@ -1083,14 +1083,45 @@ impl SessionSnapshotPayload {
                     });
                 }
                 Some("pane_terminal_modes") => {
-                    if fields.len() != 9 && fields.len() != 10 {
+                    if fields.len() != 9
+                        && fields.len() != 10
+                        && fields.len() != 11
+                        && fields.len() != 12
+                    {
                         return Err(MezError::invalid_args(
                             "invalid snapshot pane terminal modes field count",
                         ));
                     }
-                    let has_cursor_visible = fields.len() == 10;
+                    let (has_cursor_visible, has_independent_mouse_modes) = match fields.len() {
+                        9 => (false, false),
+                        10 => (true, false),
+                        11 => (false, true),
+                        12 => (true, true),
+                        _ => unreachable!("validated pane terminal mode field count"),
+                    };
                     let mode_offset = usize::from(has_cursor_visible);
                     let pane = payload_pane_mut(&mut payload, &fields[1])?;
+                    let (
+                        normal_mouse_tracking_enabled,
+                        button_event_mouse_tracking_enabled,
+                        any_event_mouse_tracking_enabled,
+                        sgr_mode_index,
+                    ) = if has_independent_mouse_modes {
+                        (
+                            parse_bool(&fields[3 + mode_offset])?,
+                            parse_bool(&fields[4 + mode_offset])?,
+                            parse_bool(&fields[5 + mode_offset])?,
+                            6 + mode_offset,
+                        )
+                    } else {
+                        let mouse_tracking_enabled = parse_bool(&fields[3 + mode_offset])?;
+                        (
+                            mouse_tracking_enabled,
+                            mouse_tracking_enabled,
+                            mouse_tracking_enabled,
+                            4 + mode_offset,
+                        )
+                    };
                     pane.terminal_modes = TerminalModeState {
                         cursor_visible: if has_cursor_visible {
                             parse_bool(&fields[2])?
@@ -1098,13 +1129,15 @@ impl SessionSnapshotPayload {
                             true
                         },
                         bracketed_paste_enabled: parse_bool(&fields[2 + mode_offset])?,
-                        mouse_tracking_enabled: parse_bool(&fields[3 + mode_offset])?,
-                        sgr_mouse_enabled: parse_bool(&fields[4 + mode_offset])?,
-                        application_cursor_enabled: parse_bool(&fields[5 + mode_offset])?,
+                        normal_mouse_tracking_enabled,
+                        button_event_mouse_tracking_enabled,
+                        any_event_mouse_tracking_enabled,
+                        sgr_mouse_enabled: parse_bool(&fields[sgr_mode_index])?,
+                        application_cursor_enabled: parse_bool(&fields[sgr_mode_index + 1])?,
                         origin_mode_enabled: false,
-                        application_keypad_enabled: parse_bool(&fields[6 + mode_offset])?,
-                        focus_events_enabled: parse_bool(&fields[7 + mode_offset])?,
-                        title: non_empty_string(&fields[8 + mode_offset]),
+                        application_keypad_enabled: parse_bool(&fields[sgr_mode_index + 2])?,
+                        focus_events_enabled: parse_bool(&fields[sgr_mode_index + 3])?,
+                        title: non_empty_string(&fields[sgr_mode_index + 4]),
                     };
                 }
                 Some("pane_terminal_saved_cursor") => {
@@ -1642,11 +1675,13 @@ fn encode_frame_settings(target: &str, settings: &SnapshotFrameSettings, output:
 /// on duplicated control-flow logic.
 fn encode_terminal_modes(pane_id: &str, modes: &TerminalModeState, output: &mut String) {
     output.push_str(&format!(
-        "pane_terminal_modes\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "pane_terminal_modes\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         escape_field(pane_id),
         modes.cursor_visible,
         modes.bracketed_paste_enabled,
-        modes.mouse_tracking_enabled,
+        modes.normal_mouse_tracking_enabled,
+        modes.button_event_mouse_tracking_enabled,
+        modes.any_event_mouse_tracking_enabled,
         modes.sgr_mouse_enabled,
         modes.application_cursor_enabled,
         modes.application_keypad_enabled,

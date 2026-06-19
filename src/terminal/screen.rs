@@ -389,8 +389,12 @@ pub struct TerminalModeState {
     pub cursor_visible: bool,
     /// Whether bracketed paste mode is active.
     pub bracketed_paste_enabled: bool,
-    /// Whether application mouse tracking is active.
-    pub mouse_tracking_enabled: bool,
+    /// Whether DECSET 1000 normal mouse tracking is active.
+    pub normal_mouse_tracking_enabled: bool,
+    /// Whether DECSET 1002 button-event mouse tracking is active.
+    pub button_event_mouse_tracking_enabled: bool,
+    /// Whether DECSET 1003 any-event mouse tracking is active.
+    pub any_event_mouse_tracking_enabled: bool,
     /// Whether SGR mouse encoding is active.
     pub sgr_mouse_enabled: bool,
     /// Whether application cursor-key mode is active.
@@ -409,7 +413,9 @@ impl Default for TerminalModeState {
             title: None,
             cursor_visible: true,
             bracketed_paste_enabled: false,
-            mouse_tracking_enabled: false,
+            normal_mouse_tracking_enabled: false,
+            button_event_mouse_tracking_enabled: false,
+            any_event_mouse_tracking_enabled: false,
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
             origin_mode_enabled: false,
@@ -900,11 +906,21 @@ pub struct TerminalScreen {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) bracketed_paste_enabled: bool,
-    /// Stores the mouse tracking enabled value for this data structure.
+    /// Stores the DECSET 1000 normal mouse tracking value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) mouse_tracking_enabled: bool,
+    pub(super) normal_mouse_tracking_enabled: bool,
+    /// Stores the DECSET 1002 button-event mouse tracking value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) button_event_mouse_tracking_enabled: bool,
+    /// Stores the DECSET 1003 any-event mouse tracking value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) any_event_mouse_tracking_enabled: bool,
     /// Stores the sgr mouse enabled value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1014,7 +1030,9 @@ impl TerminalScreen {
             title: None,
             graphic_rendition: GraphicRendition::default(),
             bracketed_paste_enabled: false,
-            mouse_tracking_enabled: false,
+            normal_mouse_tracking_enabled: false,
+            button_event_mouse_tracking_enabled: false,
+            any_event_mouse_tracking_enabled: false,
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
             origin_mode_enabled: false,
@@ -1884,7 +1902,9 @@ impl TerminalScreen {
         self.osc_buffer_truncated = false;
         self.osc_events.clear();
         self.bracketed_paste_enabled = false;
-        self.mouse_tracking_enabled = false;
+        self.normal_mouse_tracking_enabled = false;
+        self.button_event_mouse_tracking_enabled = false;
+        self.any_event_mouse_tracking_enabled = false;
         self.sgr_mouse_enabled = false;
         self.application_cursor_enabled = false;
         self.origin_mode_enabled = false;
@@ -1915,7 +1935,9 @@ impl TerminalScreen {
             title: self.title.clone(),
             cursor_visible: self.cursor_visible,
             bracketed_paste_enabled: self.bracketed_paste_enabled,
-            mouse_tracking_enabled: self.mouse_tracking_enabled,
+            normal_mouse_tracking_enabled: self.normal_mouse_tracking_enabled,
+            button_event_mouse_tracking_enabled: self.button_event_mouse_tracking_enabled,
+            any_event_mouse_tracking_enabled: self.any_event_mouse_tracking_enabled,
             sgr_mouse_enabled: self.sgr_mouse_enabled,
             application_cursor_enabled: self.application_cursor_enabled,
             origin_mode_enabled: self.origin_mode_enabled,
@@ -1929,7 +1951,9 @@ impl TerminalScreen {
         self.title = state.title.clone();
         self.cursor_visible = state.cursor_visible;
         self.bracketed_paste_enabled = state.bracketed_paste_enabled;
-        self.mouse_tracking_enabled = state.mouse_tracking_enabled;
+        self.normal_mouse_tracking_enabled = state.normal_mouse_tracking_enabled;
+        self.button_event_mouse_tracking_enabled = state.button_event_mouse_tracking_enabled;
+        self.any_event_mouse_tracking_enabled = state.any_event_mouse_tracking_enabled;
         self.sgr_mouse_enabled = state.sgr_mouse_enabled;
         self.application_cursor_enabled = state.application_cursor_enabled;
         self.origin_mode_enabled = state.origin_mode_enabled;
@@ -2013,7 +2037,7 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn application_sgr_mouse_enabled(&self) -> bool {
-        self.mouse_tracking_enabled && self.sgr_mouse_enabled
+        self.application_mouse_enabled() && self.sgr_mouse_enabled
     }
 
     /// Runs the application mouse enabled operation for this subsystem.
@@ -2022,7 +2046,9 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn application_mouse_enabled(&self) -> bool {
-        self.mouse_tracking_enabled
+        self.normal_mouse_tracking_enabled
+            || self.button_event_mouse_tracking_enabled
+            || self.any_event_mouse_tracking_enabled
     }
 
     /// Runs the application cursor enabled operation for this subsystem.
@@ -2538,7 +2564,9 @@ impl TerminalScreen {
                 self.cursor.column = 0;
                 self.wrap_pending = false;
             }
-            1000 | 1002 | 1003 => self.mouse_tracking_enabled = enabled,
+            1000 => self.normal_mouse_tracking_enabled = enabled,
+            1002 => self.button_event_mouse_tracking_enabled = enabled,
+            1003 => self.any_event_mouse_tracking_enabled = enabled,
             1004 => self.focus_events_enabled = enabled,
             1006 => self.sgr_mouse_enabled = enabled,
             2004 => self.bracketed_paste_enabled = enabled,
@@ -2560,7 +2588,9 @@ impl TerminalScreen {
             25 => Some(self.cursor_visible),
             1 => Some(self.application_cursor_enabled),
             6 => Some(self.origin_mode_enabled),
-            1000 | 1002 | 1003 => Some(self.mouse_tracking_enabled),
+            1000 => Some(self.normal_mouse_tracking_enabled),
+            1002 => Some(self.button_event_mouse_tracking_enabled),
+            1003 => Some(self.any_event_mouse_tracking_enabled),
             1004 => Some(self.focus_events_enabled),
             1006 => Some(self.sgr_mouse_enabled),
             2004 => Some(self.bracketed_paste_enabled),

@@ -281,20 +281,36 @@ fn terminal_screen_tracks_bracketed_paste_mode() {
 fn terminal_screen_tracks_application_sgr_mouse_mode() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
 
-    screen.feed(b"\x1b[?1000h");
+    screen.feed(b"\x1b[?1002h");
     assert!(screen.application_mouse_enabled());
     assert!(!screen.application_sgr_mouse_enabled());
+    assert!(!screen.mode_state().normal_mouse_tracking_enabled);
+    assert!(screen.mode_state().button_event_mouse_tracking_enabled);
+    assert!(!screen.mode_state().any_event_mouse_tracking_enabled);
 
-    screen.feed(b"\x1b[?1000;1006h");
+    screen.feed(b"\x1b[?1006h");
     assert!(screen.application_mouse_enabled());
     assert!(screen.application_sgr_mouse_enabled());
 
-    screen.feed(b"\x1b[?1006l");
-    assert!(screen.application_mouse_enabled());
-    assert!(!screen.application_sgr_mouse_enabled());
+    screen.feed(b"\x1b[?1000h");
+    assert!(screen.mode_state().normal_mouse_tracking_enabled);
+    assert!(screen.mode_state().button_event_mouse_tracking_enabled);
 
     screen.feed(b"\x1b[?1000l");
+    assert!(!screen.mode_state().normal_mouse_tracking_enabled);
+    assert!(screen.mode_state().button_event_mouse_tracking_enabled);
+    assert!(screen.application_sgr_mouse_enabled());
+
+    screen.feed(b"\x1b[?1003h");
+    assert!(screen.mode_state().any_event_mouse_tracking_enabled);
+
+    screen.feed(b"\x1b[?1002l");
+    assert!(!screen.mode_state().button_event_mouse_tracking_enabled);
+    assert!(screen.mode_state().any_event_mouse_tracking_enabled);
+
+    screen.feed(b"\x1b[?1003l\x1b[?1006l");
     assert!(!screen.application_mouse_enabled());
+    assert!(!screen.application_sgr_mouse_enabled());
 }
 
 /// Verifies terminal screen tracks application cursor keypad and focus modes.
@@ -342,7 +358,9 @@ fn terminal_screen_restores_terminal_mode_state() {
         title: Some("snapshot-title".to_string()),
         cursor_visible: false,
         bracketed_paste_enabled: true,
-        mouse_tracking_enabled: true,
+        normal_mouse_tracking_enabled: false,
+        button_event_mouse_tracking_enabled: true,
+        any_event_mouse_tracking_enabled: false,
         sgr_mouse_enabled: true,
         application_cursor_enabled: true,
         origin_mode_enabled: false,
@@ -356,6 +374,7 @@ fn terminal_screen_restores_terminal_mode_state() {
     assert_eq!(screen.title(), Some("snapshot-title"));
     assert!(!screen.cursor_visible());
     assert!(screen.bracketed_paste_enabled());
+    assert!(screen.application_mouse_enabled());
     assert!(screen.application_sgr_mouse_enabled());
     assert!(screen.application_cursor_enabled());
     assert!(screen.application_keypad_enabled());
@@ -367,7 +386,7 @@ fn terminal_screen_restores_terminal_mode_state() {
 #[test]
 fn terminal_screen_restores_terminal_saved_state() {
     let mut original = TerminalScreen::new(Size::new(10, 4).unwrap(), 10).unwrap();
-    original.feed(b"ab\x1b[s\x1b[?1;1000;1006;2004h\x1b[?1;1000;1006;2004s\x1b[?1;1000;1006;2004l");
+    original.feed(b"ab\x1b[s\x1b[?1;1002;1006;2004h\x1b[?1;1002;1006;2004s\x1b[?1;1002;1006;2004l");
     let saved_state = original.saved_state();
 
     assert_eq!(
@@ -380,15 +399,23 @@ fn terminal_screen_restores_terminal_saved_state() {
             .iter()
             .any(|mode| mode.mode == 2004 && mode.enabled)
     );
+    assert!(
+        saved_state
+            .saved_dec_private_modes
+            .iter()
+            .any(|mode| mode.mode == 1002 && mode.enabled)
+    );
 
     let mut restored = TerminalScreen::new(Size::new(10, 4).unwrap(), 10).unwrap();
     restored.restore_saved_state(&saved_state);
-    restored.feed(b"zz\x1b[uXY\x1b[?1;1000;1006;2004r");
+    restored.feed(b"zz\x1b[uXY\x1b[?1;1002;1006;2004r");
 
     assert_eq!(restored.visible_lines()[0], "zzXY");
     assert!(restored.application_cursor_enabled());
     assert!(restored.application_sgr_mouse_enabled());
     assert!(restored.bracketed_paste_enabled());
+    assert!(!restored.mode_state().normal_mouse_tracking_enabled);
+    assert!(restored.mode_state().button_event_mouse_tracking_enabled);
 }
 
 /// Verifies client loop translates plain arrows in application cursor mode.
