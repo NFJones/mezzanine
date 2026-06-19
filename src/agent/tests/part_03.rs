@@ -1152,7 +1152,9 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
     assert!(query_description.contains("Do not use memory_search by default"));
     assert!(query_description.contains("generic way to make progress"));
     assert!(query_description.contains("facts already present in current action results"));
+    assert!(query_description.contains("identifiers, URLs, versions"));
     assert!(query_description.contains("repo owner/name"));
+    assert!(query_description.contains("issue/PR numbers"));
     assert!(query_description.contains("CI targets"));
     assert!(query_description.contains("routing_match=available_mcp"));
     assert!(query_description.contains("not a reason to search memory first"));
@@ -2347,8 +2349,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(capability_description.contains("Return a function call, not prose"));
     assert!(capability_description.contains("currently allowed actions"));
     assert!(capability_description.contains("Choose the smallest action"));
-    assert!(capability_description.contains("repo owner/name"));
-    assert!(capability_description.contains("request or use shell instead of asking the user"));
+    assert!(capability_description.contains("missing information, parameters, or identifiers"));
+    assert!(capability_description.contains("request or use the relevant capability instead of asking the user"));
+    assert!(capability_description.contains("identifiers, URLs, versions"));
     assert!(capability_description.contains("facts already present in current action results"));
     assert!(capability_description.contains("Capability map: shell=local files"));
     assert!(capability_description.contains("Wrong: say(blocked"));

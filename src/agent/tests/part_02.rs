@@ -124,7 +124,13 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("If the needed action family is absent"));
     assert!(prompt.contains("emit request_capability immediately with no progress say"));
     assert!(prompt.contains("This is a required control action, not a suggestion"));
-    assert!(prompt.contains("Missing task parameters are not user blockers"));
+    assert!(
+        prompt.contains("Missing information, parameters, or identifiers needed to continue are not user blockers")
+    );
+    assert!(prompt.contains("Use the smallest safe available action"));
+    assert!(prompt.contains("Safe gathering means bounded read-only inspection"));
+    assert!(prompt.contains("requires secrets, credentials, or private personal data"));
+    assert!(prompt.contains("Examples of self-gatherable task-local facts include identifiers, URLs, versions"));
     assert!(prompt.contains("derive owner/repo, branch, commit, remote URL"));
     assert!(prompt.contains("request shell capability instead of asking the user"));
     assert!(prompt.contains("takes precedence over blocked say, final say"));
@@ -172,8 +178,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("mcp_call: call only MCP tools listed as available"));
     assert!(prompt.contains("Choose it when it is the smallest action that makes concrete progress"));
     assert!(prompt.contains("Do not request shell/network capability, run shell preflight"));
-    assert!(prompt.contains("Request or use shell when required MCP arguments"));
-    assert!(prompt.contains("must be derived from the current checkout"));
+    assert!(prompt.contains("Request or use the relevant information-gathering capability"));
+    assert!(prompt.contains("safely derived from local, web, or integration context"));
     assert!(
         prompt.contains(
             "Do not emit a say-only setup batch claiming that a schema-valid or initial batch is needed before the MCP call"
@@ -4617,7 +4623,11 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
-        description.contains("request shell"),
+        description.contains("safely gathered context"),
+        "{description}"
+    );
+    assert!(
+        description.contains("request it"),
         "{description}"
     );
     assert!(

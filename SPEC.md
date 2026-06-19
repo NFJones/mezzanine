@@ -6085,13 +6085,18 @@ or the necessary evidence is genuinely unavailable.
 The prompt MUST state that the agent uses provided context and explicit action
 results, requests or searches for missing details when needed, reports blockers
 and uncertainty, and does not invent unavailable state.
-It MUST instruct the agent that task-local facts are not user blockers when
-they can be derived from the current prompt, action results, active pane
-working directory, git metadata, project files, MCP results, web results, or
-another available action. For current-repository tasks, the prompt MUST prefer
-deriving repository owner/name, branch, commit, remote URL, paths, and similar
-local metadata with available actions, or requesting shell capability when shell
-is needed but absent, over asking the user to provide that information.
+It MUST instruct the agent that missing information, parameters, identifiers,
+and task-local facts needed to continue are not user blockers when they can be
+safely gathered from the current prompt, action results, active pane working
+directory, project files, MCP results, web results, explicit URLs, or another
+available or requestable action. The prompt MUST define safe gathering as
+bounded read-only inspection or policy-allowed non-destructive lookup. It MUST
+instruct the agent to ask the user only when the required information cannot be
+discovered without unsafe or destructive action, requires secrets, credentials,
+or private personal data, or represents a subjective user choice. Examples of
+self-gatherable task-local facts SHOULD include identifiers, URLs, versions,
+paths, command forms, config names, repository owner/name, branch, commit,
+remote URL, issue or pull request numbers, and CI targets.
 It MUST instruct the agent to prioritize accuracy over agreement. If the
 user's premise conflicts with available evidence, the prompt MUST tell the
 agent to state the conflict directly and act on the evidence rather than
@@ -6239,9 +6244,10 @@ that shell commands MUST NOT be embedded in `say` text. It MUST instruct the
 model to set an appropriate `say` content type, including at least plain text,
 Markdown, and diff content types, so rendered output can preserve user-facing
 structure.
-The prompt MUST prohibit asking the user for repository coordinates, paths,
-branches, command forms, or other task-local facts that can be derived from the
-current checkout, action results, or available integrations.
+The prompt MUST prohibit asking the user for task-local facts, identifiers,
+URLs, paths, branches, command forms, integration arguments, or other
+information needed to continue when it can be safely gathered from current
+artifacts, action results, or available or requestable integrations.
 
 The prompt MUST explain that `shell_command` is the fallback for exact pane
 shell input, including builds, tests, version-control operations, package
@@ -6354,12 +6360,14 @@ available when it is the smallest action that makes concrete progress. The
 prompt and provider action descriptions MUST prohibit placeholder
 `memory_search` or `memory_store` calls whose only purpose is to satisfy the
 current action wrapper before a real action.
-If a callable MCP tool needs arguments such as repository owner/name, branch,
-commit, or path and the user referred to the current repository or checkout,
-the prompt and provider action descriptions MUST instruct the model to fill
-those arguments from current prompt context or action results when available,
-or to request/use shell to inspect local checkout metadata when needed, instead
-of asking the user or using persistent memory.
+If a callable MCP tool needs arguments such as identifiers, URLs, paths,
+repository owner/name, branch, commit, issue or pull request number, or CI
+target, the prompt and provider action descriptions MUST instruct the model to
+fill those arguments from current prompt context, action results, or safely
+gatherable local, web, or integration context when available. If a required
+argument can be safely gathered but the needed action family is absent, the
+model MUST request the relevant capability instead of asking the user or using
+persistent memory.
 OpenAI Responses provider requests SHOULD expose one canonical MAAP action-batch
 function for the current request instead of multiple surface-specific wrapper
 functions. The canonical function schema SHOULD contain only the actions that
@@ -6372,8 +6380,9 @@ real progress and to avoid actions that do not answer the current task.
 It MUST state that persistent-memory actions are not a generic progress
 mechanism. The prompt and provider action descriptions MUST prohibit
 `memory_search` for facts already present in current action results, including
-repository owner/name, branch, commit, remotes, paths, CI targets, and other
-task-local metadata. They MUST prohibit `memory_store` for current-turn action
+identifiers, URLs, versions, paths, command forms, config names, repository
+owner/name, branch, commit, remotes, issue or pull request numbers, CI targets,
+and other task-local metadata. They MUST prohibit `memory_store` for current-turn action
 results, current checkout repo slugs, remotes, branches, commits, paths, CI
 state, MCP results, plans, progress, or other transient task state unless the
 user explicitly requested storing that exact content.
@@ -7351,8 +7360,10 @@ when a concrete prior-context question cannot be answered from the current
 prompt, current action results, or another directly inspectable artifact such
 as MCP, web, shell, or repository state. Agents MUST NOT use
 `memory_search` as a generic way to make progress or to retrieve facts already
-present in current action results, including repository owner/name, branch,
-commit, remotes, paths, CI targets, and other task-local metadata. Agents MUST
+present in current action results, including identifiers, URLs, versions,
+paths, command forms, config names, repository owner/name, branch, commit,
+remotes, issue or pull request numbers, CI targets, and other task-local
+metadata. Agents MUST
 NOT repeat a `memory_search` unless later results create a new concrete
 retrieval gap.
 Agents MUST treat retrieved memory as secondary hints and MUST confirm

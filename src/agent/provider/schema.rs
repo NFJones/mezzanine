@@ -117,7 +117,7 @@ fn openai_maap_current_action_batch_description(request: &ModelRequest) -> Strin
         "No mcp_call action is active on this request surface.".to_string()
     };
     format!(
-        "Submit one validated Mezzanine MAAP action batch for the currently allowed actions. {} {} Use only the action objects in this function schema. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is available and useful, put that action in this function call now. If the needed action family is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If task-local facts such as repo owner/name, branch, commit, remote URL, path, or command form are needed and can be discovered from the current checkout, request or use shell instead of asking the user. Do not use memory_search or memory_store to rehydrate, preserve, or look up facts already present in current action results. Model-selected skill lookup/loading is disabled; request_skills and call_skill are never valid actions. {} {} {}",
+        "Submit one validated Mezzanine MAAP action batch for the currently allowed actions. {} {} Use only the action objects in this function schema. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is available and useful, put that action in this function call now. If the needed action family is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If missing information, parameters, or identifiers can be safely gathered from current context, action results, local artifacts, web results, MCP results, or another available or requestable action, request or use the relevant capability instead of asking the user. Do not ask for task-local facts such as identifiers, URLs, versions, paths, command forms, config names, repo owner/name, branch, commit, remote URL, issue/PR numbers, or CI targets when they can be safely discovered. Do not use memory_search or memory_store to rehydrate, preserve, or look up facts already present in current action results. Model-selected skill lookup/loading is disabled; request_skills and call_skill are never valid actions. {} {} {}",
         OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
         OpenAiMaapToolSurface::ACTION_BATCH_ENVELOPE_RULE,
         mcp_manifest,
@@ -357,7 +357,7 @@ fn maap_request_capability_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "enum": AgentCapability::all_names(),
-                    "description": "Coarse action family to expose through the controller when the current schema lacks actions needed for the task. This is not a user permission request. Use shell when task-local facts such as current repo owner/name, branch, commit, remotes, paths, or command forms must be derived from the checkout before another action can proceed. Capability map: shell exposes shell_command and apply_patch for local files, rg/sed/cat, git, builds, tests, and patch edits; network_search exposes web_search; network_fetch exposes fetch_url; mcp exposes mcp_call; subagent exposes send_message and spawn_agent; config_change exposes config_change; respond_only is only for final text."
+                    "description": "Coarse action family to expose through the controller when the current schema lacks actions needed for the task. This is not a user permission request. Use the relevant capability to safely gather missing task-local information before another action can proceed: shell for local workspace or process inspection, network_search for current external facts, network_fetch for explicit URLs, mcp for integration data, and config_change for Mezzanine configuration state. Capability map: shell exposes shell_command and apply_patch for local files, rg/sed/cat, git, builds, tests, and patch edits; network_search exposes web_search; network_fetch exposes fetch_url; mcp exposes mcp_call; subagent exposes send_message and spawn_agent; config_change exposes config_change; respond_only is only for final text."
                 }),
             ),
             (
@@ -625,7 +625,7 @@ fn maap_memory_search_action_schema() -> serde_json::Value {
         [
             described_string_property(
                 "query",
-                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default, as a startup ritual, or as a generic way to make progress. Never search memory for facts already present in current action results, including repo owner/name, branch, commit, remotes, paths, or CI targets. Runtime MCP routing_match=available_mcp is direct current-turn evidence for a callable integration, not a reason to search memory first. Do not use memory_search as placeholder setup before another direct action. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
+                "Search durable prior context only when a specific missing prior-context question exists and current prompt, action results, MCP, shell, web, or another direct artifact cannot answer it. Do not use memory_search by default, as a startup ritual, or as a generic way to make progress. Never search memory for facts already present in current action results, including identifiers, URLs, versions, paths, command forms, config names, repo owner/name, branch, commit, remotes, issue/PR numbers, or CI targets. Runtime MCP routing_match=available_mcp is direct current-turn evidence for a callable integration, not a reason to search memory first. Do not use memory_search as placeholder setup before another direct action. Use at most one focused search unless later action results create a new concrete retrieval gap; lack of useful results is not a reason to paraphrase and search again.",
             ),
             (
                 "limit",
@@ -838,7 +838,7 @@ pub(super) fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serd
         object.insert(
             "description".to_string(),
             serde_json::json!(format!(
-                "Call MCP tool {}/{}. Description: {}. If the user named this MCP server or runtime context shows routing_match=available_mcp, use this as a direct action when it is the smallest action that makes concrete progress; do not use shell, capability requests, memory_search, or memory_store merely as setup before it. If required arguments such as repo owner/name, branch, commit, or path are already present in current prompt or action results, use them directly; if they must be derived from the current checkout and shell is absent, request shell instead of asking the user.",
+                "Call MCP tool {}/{}. Description: {}. If the user named this MCP server or runtime context shows routing_match=available_mcp, use this as a direct action when it is the smallest action that makes concrete progress; do not use shell, capability requests, memory_search, or memory_store merely as setup before it. If required arguments such as identifiers, URLs, paths, repo owner/name, branch, commit, issue/PR number, or CI target are already present in current prompt or action results, use them directly; if they must be safely derived from local, web, or integration context and the needed capability is absent, request that capability instead of asking the user.",
                 tool.server_id,
                 tool.tool_name,
                 mcp_schema_description(&tool.description)
@@ -865,7 +865,7 @@ fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> serde_jso
         object.insert(
             "description".to_string(),
             serde_json::json!(format!(
-                "Arguments for MCP tool {}/{}. Use this action when the task matches this tool description or the runtime MCP integrations context shows a routing_match for this server/tool. Fill task-local arguments from current prompt or action results when available instead of searching memory or asking the user: {}",
+                "Arguments for MCP tool {}/{}. Use this action when the task matches this tool description or the runtime MCP integrations context shows a routing_match for this server/tool. Fill task-local arguments from current prompt, action results, or safely gatherable context when available instead of searching memory or asking the user: {}",
                 tool.server_id,
                 tool.tool_name,
                 mcp_schema_description(&tool.description)
