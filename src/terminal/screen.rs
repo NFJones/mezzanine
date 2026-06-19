@@ -854,6 +854,12 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) bell_events: u64,
+    /// Stores incomplete UTF-8 bytes retained across `feed` calls.
+    ///
+    /// PTY reads can split one multibyte scalar across separate input chunks.
+    /// The decoder must retain that trailing prefix instead of emitting a
+    /// replacement character before the remaining bytes arrive.
+    pub(super) utf8_tail: Vec<u8>,
 }
 
 impl TerminalScreen {
@@ -905,6 +911,7 @@ impl TerminalScreen {
             normal_viewport_detached_from_history: false,
             activity_events: 0,
             bell_events: 0,
+            utf8_tail: Vec::new(),
         })
     }
 
@@ -917,9 +924,49 @@ impl TerminalScreen {
         if !input.is_empty() {
             self.activity_events = self.activity_events.saturating_add(1);
         }
-        let text = String::from_utf8_lossy(input);
-        for ch in text.chars() {
-            self.feed_char(ch);
+        let mut bytes = Vec::with_capacity(self.utf8_tail.len().saturating_add(input.len()));
+        if !self.utf8_tail.is_empty() {
+            bytes.extend_from_slice(&self.utf8_tail);
+            self.utf8_tail.clear();
+        }
+        bytes.extend_from_slice(input);
+
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match std::str::from_utf8(&bytes[offset..]) {
+                Ok(text) => {
+                    for ch in text.chars() {
+                        self.feed_char(ch);
+                    }
+                    break;
+                }
+                Err(error) => {
+                    let valid_up_to = error.valid_up_to();
+                    if valid_up_to > 0 {
+                        let text = std::str::from_utf8(&bytes[offset..offset + valid_up_to])
+                            .expect("valid UTF-8 prefix must decode");
+                        for ch in text.chars() {
+                            self.feed_char(ch);
+                        }
+                        offset += valid_up_to;
+                    }
+
+                    match error.error_len() {
+                        Some(error_len) => {
+                            let invalid_end = offset + error_len;
+                            let text = String::from_utf8_lossy(&bytes[offset..invalid_end]);
+                            for ch in text.chars() {
+                                self.feed_char(ch);
+                            }
+                            offset = invalid_end;
+                        }
+                        None => {
+                            self.utf8_tail.extend_from_slice(&bytes[offset..]);
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 

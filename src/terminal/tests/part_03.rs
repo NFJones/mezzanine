@@ -264,6 +264,31 @@ fn terminal_screen_utf8_and_wide_characters() {
     assert_eq!(screen.visible_lines()[3], "piñata");
 }
 
+/// Verifies that split UTF-8 feeds preserve an incomplete multibyte prefix
+/// until the remaining bytes arrive in a later chunk.
+///
+/// PTY reads can split one UTF-8 scalar across separate `feed` calls. The
+/// terminal must not emit replacement characters for an otherwise valid scalar
+/// just because its trailing bytes arrive in the next read.
+#[test]
+fn terminal_screen_preserves_split_utf8_across_feed_calls() {
+    let size = Size::new(20, 4).unwrap();
+    let mut screen = TerminalScreen::new(size, 100).unwrap();
+
+    screen.feed(&[0x63, 0x61, 0x66, 0xc3]);
+    assert_eq!(screen.visible_lines()[0], "caf");
+
+    screen.feed(&[0xa9]);
+    assert_eq!(screen.visible_lines()[0], "café");
+
+    screen.feed(b"\r\n");
+    screen.feed(&[0xf0, 0x9f]);
+    assert_eq!(screen.visible_lines()[1], "");
+
+    screen.feed(&[0x98, 0x80]);
+    assert_eq!(screen.visible_lines()[1], "😀");
+}
+
 /// Verifies that a wide character at the final column boundary defers wrapping
 /// correctly and that the character appears at the start of the next line.
 #[test]
