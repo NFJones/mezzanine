@@ -140,6 +140,33 @@ pub struct AlternateScreenState {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) active: bool,
+    /// Saved normal-screen state restored when alternate mode exits.
+    pub(super) saved_normal_screen: Option<SavedNormalScreenState>,
+}
+
+/// Saved normal-screen content and cursor state restored after alternate mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SavedNormalScreenState {
+    /// Stored visible cell contents for the normal screen.
+    pub(super) cells: Vec<Vec<TerminalScreenCell>>,
+    /// Stored per-cell renditions for the normal screen.
+    pub(super) renditions: Vec<Vec<GraphicRendition>>,
+    /// Stored soft-wrap flags for the normal screen.
+    pub(super) line_wraps: Vec<bool>,
+    /// Stored copy-mode text overrides for the normal screen.
+    pub(super) line_copy_texts: Vec<Option<String>>,
+    /// Stored visible cursor position for the normal screen.
+    pub(super) cursor: Cursor,
+    /// Stored cursor visibility requested by the pane application.
+    pub(super) cursor_visible: bool,
+    /// Stored deferred autowrap state for the normal screen.
+    pub(super) wrap_pending: bool,
+    /// Stored saved cursor position for later ESC restore operations.
+    pub(super) saved_cursor: Option<Cursor>,
+    /// Stored active SGR rendition carried by subsequent printable cells.
+    pub(super) graphic_rendition: GraphicRendition,
+    /// Stored detached-scrollback state for shell-clear restoration behavior.
+    pub(super) normal_viewport_detached_from_history: bool,
 }
 
 impl AlternateScreenState {
@@ -149,7 +176,10 @@ impl AlternateScreenState {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn new() -> Self {
-        Self { active: false }
+        Self {
+            active: false,
+            saved_normal_screen: None,
+        }
     }
 
     /// Runs the enter operation for this subsystem.
@@ -161,13 +191,26 @@ impl AlternateScreenState {
         self.active = true;
     }
 
+    /// Runs the enter with saved normal screen operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn enter_with_saved_normal_screen(&mut self, state: SavedNormalScreenState) {
+        if !self.active {
+            self.saved_normal_screen = Some(state);
+        }
+        self.active = true;
+    }
+
     /// Runs the leave operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn leave(&mut self) {
+    pub(super) fn leave(&mut self) -> Option<SavedNormalScreenState> {
         self.active = false;
+        self.saved_normal_screen.take()
     }
 
     /// Runs the active operation for this subsystem.
@@ -2244,6 +2287,36 @@ impl TerminalScreen {
         }
     }
 
+    /// Captures normal-screen state before alternate mode clears the viewport.
+    fn saved_normal_screen_state(&self) -> SavedNormalScreenState {
+        SavedNormalScreenState {
+            cells: self.cells.clone(),
+            renditions: self.renditions.clone(),
+            line_wraps: self.line_wraps.clone(),
+            line_copy_texts: self.line_copy_texts.clone(),
+            cursor: self.cursor,
+            cursor_visible: self.cursor_visible,
+            wrap_pending: self.wrap_pending,
+            saved_cursor: self.saved_cursor,
+            graphic_rendition: self.graphic_rendition,
+            normal_viewport_detached_from_history: self.normal_viewport_detached_from_history,
+        }
+    }
+
+    /// Restores saved normal-screen state after alternate mode exits.
+    fn restore_saved_normal_screen_state(&mut self, state: SavedNormalScreenState) {
+        self.cells = state.cells;
+        self.renditions = state.renditions;
+        self.line_wraps = state.line_wraps;
+        self.line_copy_texts = state.line_copy_texts;
+        self.cursor = state.cursor;
+        self.cursor_visible = state.cursor_visible;
+        self.wrap_pending = state.wrap_pending;
+        self.saved_cursor = state.saved_cursor;
+        self.graphic_rendition = state.graphic_rendition;
+        self.normal_viewport_detached_from_history = state.normal_viewport_detached_from_history;
+    }
+
     /// Runs the apply dec private modes operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -2290,11 +2363,14 @@ impl TerminalScreen {
         match mode {
             47 | 1047 | 1049 => {
                 if enabled {
-                    self.alternate.enter();
+                    let state = self.saved_normal_screen_state();
+                    self.alternate.enter_with_saved_normal_screen(state);
+                    self.clear_screen();
+                } else if let Some(state) = self.alternate.leave() {
+                    self.restore_saved_normal_screen_state(state);
                 } else {
-                    self.alternate.leave();
+                    self.clear_screen();
                 }
-                self.clear_screen();
             }
             25 => self.cursor_visible = enabled,
             1 => self.application_cursor_enabled = enabled,

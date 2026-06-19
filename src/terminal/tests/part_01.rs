@@ -5756,6 +5756,29 @@ fn terminal_screen_excludes_alternate_screen_from_history() {
     assert!(!screen.alternate_screen_active());
 }
 
+/// Verifies terminal screen restores normal-screen content and cursor after
+/// alternate-screen exit.
+///
+/// Full-screen TUIs expect DECSET 1049 to preserve the underlying normal
+/// buffer while drawing into a separate alternate screen. Leaving alternate
+/// mode must restore that buffer and resume output at the saved cursor.
+#[test]
+fn terminal_screen_restores_normal_screen_after_alternate_screen_exit() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"keep");
+    screen.feed(b"\x1b[?1049hsecret");
+
+    assert!(screen.alternate_screen_active());
+    assert_eq!(screen.visible_lines()[0], "secret");
+
+    screen.feed(b"\x1b[?1049l!");
+
+    assert!(screen.history().is_empty());
+    assert_eq!(screen.visible_lines()[0], "keep!");
+    assert!(!screen.alternate_screen_active());
+}
+
 /// Verifies terminal screen handles cursor address and clear line.
 ///
 /// This regression scenario documents the behavior being protected so a
