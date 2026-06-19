@@ -340,10 +340,11 @@ fn foreground_attach_exits_cleanly_without_broken_pipe_error() {
 /// shell script through a real `mez attach` PTY.
 ///
 /// This regression exercises the end-to-end foreground attach path with a
-/// minimal TUI-style script that explicitly enters alternate screen, enables
-/// focus events, clears the viewport, draws sentinel text, and restores the
-/// normal screen. The attach client must surface the full-screen host mode
-/// bytes and return to the shell prompt after the script exits.
+/// minimal TUI-style script that explicitly enters pane-local alternate screen,
+/// enables focus events, clears the viewport, draws sentinel text, and restores
+/// the normal screen. The attach client must surface the rendered full-screen
+/// contents without switching the containing terminal into host alternate
+/// screen, and return to the shell prompt after the script exits.
 #[test]
 fn foreground_attach_runs_minimal_full_screen_script() {
     let root = test_root("fg-attach-tui");
@@ -380,7 +381,7 @@ fn foreground_attach_runs_minimal_full_screen_script() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output);
-    assert!(text.contains("\x1b[?1049h"), "{text}");
+    assert!(!text.contains("\x1b[?1049h"), "{text}");
     assert!(text.contains("\x1b[?1004h"), "{text}");
     assert!(text.contains("mini-tui"), "{text}");
     assert!(text.contains("ready"), "{text}");

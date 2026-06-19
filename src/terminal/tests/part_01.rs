@@ -3367,6 +3367,30 @@ fn attached_terminal_output_frame_disables_host_mouse_reporting_when_configured(
     assert!(rendered.contains("\x1b[?1006l\x1b[?1002l\x1b[?1000l"), "{rendered:?}");
 }
 
+/// Verifies attached-terminal frames keep the containing terminal on its
+/// normal screen even when the pane-local screen model is in alternate screen.
+/// Codex-like TUIs can enter DEC 1049 internally without capturing the mouse,
+/// and mirroring that state to the host terminal would make ordinary host
+/// scrollback unavailable despite Mezzanine retaining pane-local history and
+/// copy-mode ownership.
+#[test]
+fn attached_terminal_output_frame_keeps_host_normal_screen_for_alternate_panes() {
+    let frame = encode_attached_terminal_output_frame_with_styles(
+        &["fullscreen pane".to_string()],
+        &[],
+        None,
+        AttachedTerminalOutputModes {
+            alternate_screen: true,
+            ..AttachedTerminalOutputModes::default()
+        },
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[?1049h"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[?1049l"), "{rendered:?}");
+    assert!(rendered.contains("fullscreen pane"), "{rendered:?}");
+}
+
 /// Verifies attached-terminal cursor presentation clamps to the rendered frame
 /// bounds before emitting one-based terminal coordinates. A visible cursor at the
 /// internal end-of-row insertion point must not become column `width + 1`, since
@@ -3871,6 +3895,40 @@ fn attached_terminal_output_update_omits_unchanged_frame_bytes() {
     );
 
     assert!(frame.is_empty(), "{:?}", String::from_utf8_lossy(&frame));
+}
+
+/// Verifies pane-local alternate-screen transitions do not force host terminal
+/// alternate-screen transitions or full redraws when the composed attached view
+/// is otherwise unchanged. The pane screen model still records the transition,
+/// but the attached host terminal must stay on its normal screen so normal
+/// terminal scrollback remains available for fullscreen agent TUIs.
+#[test]
+fn attached_terminal_output_update_ignores_alternate_screen_for_host_modes() {
+    let lines = vec!["one    ".to_string(), "two    ".to_string()];
+    let previous_modes = AttachedTerminalOutputModes {
+        cursor_visible: true,
+        cursor_blink: false,
+        alternate_screen: false,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], previous_modes);
+    let next_modes = AttachedTerminalOutputModes {
+        alternate_screen: true,
+        ..previous_modes
+    };
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &[],
+        None,
+        next_modes,
+        Some(&previous),
+    );
+    let rendered = String::from_utf8(frame).unwrap();
+
+    assert!(!rendered.contains("\x1b[?1049h"), "{rendered:?}");
+    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
+    assert!(rendered.is_empty(), "{rendered:?}");
 }
 
 /// Verifies stable-size attached-terminal updates emit only cursor bytes when

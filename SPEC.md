@@ -1192,6 +1192,13 @@ Mezzanine MUST NOT set pane `TERM` to `xterm`, `xterm-256color`, or another
 host-terminal identity by default. A pane application sees Mezzanine as the
 terminal, not the containing terminal emulator.
 
+Attached foreground clients MUST keep the containing terminal emulator on its
+normal screen while rendering pane-local alternate-screen contents. Mezzanine
+MUST NOT mirror pane alternate-screen entry to host DEC 1049 alternate-screen
+mode, so the containing terminal's normal scrollback remains available while
+pane-local alternate-screen parsing, rendering, and history rules remain owned
+by Mezzanine.
+
 Mezzanine SHOULD provide a command or first-run step that installs or prints
 the Mezzanine terminfo entry for the current user. If terminfo installation is
 not possible, Mezzanine MUST continue with the best documented fallback and

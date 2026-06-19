@@ -335,10 +335,12 @@ pub struct AttachedTerminalOutputModes {
     /// This mirrors the active pane application mode so full-screen
     /// applications continue to receive focus changes while attached.
     pub focus_events: bool,
-    /// Whether the active pane uses alternate-screen host presentation.
+    /// Whether the active pane is using its pane-local alternate screen.
     ///
-    /// Attached redraws retain this state so incremental updates can preserve
-    /// full-screen host semantics without forcing a full repaint.
+    /// This state is kept for structured clients and diagnostics. Attached
+    /// terminal redraws intentionally keep the containing terminal on its
+    /// normal screen so host scrollback remains available while Mezzanine owns
+    /// pane-local alternate-screen rendering.
     pub alternate_screen: bool,
     /// Whether the attached terminal should request host mouse reporting.
     ///
@@ -1113,15 +1115,6 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             modes,
         );
     }
-    if previous.alternate_screen != modes.alternate_screen {
-        return encode_attached_terminal_output_frame_with_styles(
-            lines,
-            line_style_spans,
-            keypad_transition,
-            modes,
-        );
-    }
-
     let mut frame = Vec::new();
     match keypad_transition {
         Some(true) => frame.extend_from_slice(b"\x1b="),
@@ -1183,11 +1176,6 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             if previous.focus_events || modes.focus_events {
                 frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
             }
-            if previous.alternate_screen || modes.alternate_screen {
-                frame.extend_from_slice(attached_terminal_alternate_screen_frame(
-                    modes.alternate_screen,
-                ));
-            }
             presentation_reset_emitted = true;
         }
         let row = index.saturating_add(1);
@@ -1215,11 +1203,6 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             ));
             if previous.focus_events || modes.focus_events {
                 frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
-            }
-            if previous.alternate_screen || modes.alternate_screen {
-                frame.extend_from_slice(attached_terminal_alternate_screen_frame(
-                    modes.alternate_screen,
-                ));
             }
         }
         frame.extend_from_slice(cursor_presentation.as_bytes());
@@ -1707,12 +1690,13 @@ const fn attached_terminal_focus_events_frame(enabled: bool) -> &'static [u8] {
 }
 
 /// Returns the host alternate-screen DEC private-mode sequence for a frame.
+///
+/// Attached clients are always rendered on the containing terminal's normal
+/// screen. Pane alternate-screen state remains pane-local so the host terminal
+/// retains its ordinary scrollback while Mezzanine renders the composed view.
 const fn attached_terminal_alternate_screen_frame(enabled: bool) -> &'static [u8] {
-    if enabled {
-        b"\x1b[?1049h"
-    } else {
-        b"\x1b[?1049l"
-    }
+    let _ = enabled;
+    b"\x1b[?1049l"
 }
 
 /// Defines the fn const used by this subsystem.
