@@ -8,14 +8,14 @@
 use super::super::AsyncModelProvider;
 #[cfg(test)]
 use super::super::ModelProvider;
-#[cfg(test)]
-use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
-    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
-    AllowedActionSet, McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest,
-    ModelTokenUsage, PathScopes, PermissionPolicy, Result, SessionApprovalStore,
-    assemble_model_request,
+    ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnLedger, AgentTurnRecord,
+    AgentTurnState, AllowedAction, AllowedActionSet, ContextSourceKind, McpPromptTool, MezError,
+    ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage, PathScopes,
+    PermissionPolicy, Result, SessionApprovalStore, assemble_model_request,
 };
+#[cfg(test)]
+use super::super::{ActionStatus, local_action_plan};
 #[cfg(test)]
 use super::super::{MarkerToken, McpToolCallPlan, Path};
 #[cfg(test)]
@@ -45,6 +45,126 @@ use crate::subagent::SubagentScopeDeclaration;
 /// durable transcripts and future model context when the corrected response is
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
+
+/// Maximum memory searches accepted during one user turn.
+///
+/// Memory is durable prior context, not a route-discovery fallback. Keeping the
+/// runtime cap small gives the model room for one focused search plus one
+/// exceptional follow-up while preventing paraphrase loops.
+const MEMORY_SEARCH_ACTION_LIMIT_PER_TURN: usize = 2;
+
+/// Maximum memory stores accepted during one user turn.
+///
+/// Storing multiple records from a single work loop is usually a sign that the
+/// model is persisting transient task state instead of saving a durable
+/// reusable fact.
+const MEMORY_STORE_ACTION_LIMIT_PER_TURN: usize = 1;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct MemoryActionBudget {
+    /// Number of memory search actions already accepted or observed in the
+    /// active turn context.
+    search_count: usize,
+    /// Number of memory store actions already accepted or observed in the
+    /// active turn context.
+    store_count: usize,
+}
+
+impl MemoryActionBudget {
+    /// Builds the memory action budget from current model context.
+    ///
+    /// Only action-result blocks are counted because they represent memory
+    /// actions that have already been surfaced to the model during this active
+    /// work loop.
+    fn from_context(context: &AgentContext) -> Self {
+        let mut budget = Self::default();
+        for block in &context.blocks {
+            if block.source != ContextSourceKind::ActionResult {
+                continue;
+            }
+            if action_result_block_has_action_type(&block.content, "memory_search") {
+                budget.search_count = budget.search_count.saturating_add(1);
+            }
+            if action_result_block_has_action_type(&block.content, "memory_store") {
+                budget.store_count = budget.store_count.saturating_add(1);
+            }
+        }
+        budget
+    }
+
+    /// Accepts a memory action against the turn budget or returns a skipped result.
+    ///
+    /// Non-memory actions do not consume this budget. Over-budget memory
+    /// actions become successful skipped results so unrelated useful actions in
+    /// the same batch are not blocked by the guardrail.
+    fn accept_or_skip(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+    ) -> Option<ActionResult> {
+        match &action.payload {
+            AgentActionPayload::MemorySearch { .. } => {
+                if self.search_count >= MEMORY_SEARCH_ACTION_LIMIT_PER_TURN {
+                    return Some(memory_budget_skip_result(
+                        turn,
+                        action,
+                        "memory_search_turn_limit",
+                        "memory_search skipped: per-turn memory search limit reached; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead",
+                        MEMORY_SEARCH_ACTION_LIMIT_PER_TURN,
+                    ));
+                }
+                self.search_count = self.search_count.saturating_add(1);
+                None
+            }
+            AgentActionPayload::MemoryStore { .. } => {
+                if self.store_count >= MEMORY_STORE_ACTION_LIMIT_PER_TURN {
+                    return Some(memory_budget_skip_result(
+                        turn,
+                        action,
+                        "memory_store_turn_limit",
+                        "memory_store skipped: per-turn memory store limit reached; do not persist transient task state",
+                        MEMORY_STORE_ACTION_LIMIT_PER_TURN,
+                    ));
+                }
+                self.store_count = self.store_count.saturating_add(1);
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Reports whether a model-context action-result block has the supplied action type.
+fn action_result_block_has_action_type(content: &str, action_type: &str) -> bool {
+    let Some(header) = content.lines().next() else {
+        return false;
+    };
+    header.starts_with("[action_result ") && header.split_whitespace().nth(2) == Some(action_type)
+}
+
+/// Builds the structured skipped result returned for an over-budget memory action.
+fn memory_budget_skip_result(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    code: &str,
+    message: &str,
+    limit: usize,
+) -> ActionResult {
+    ActionResult::succeeded(
+        turn,
+        action,
+        vec![message.to_string()],
+        Some(
+            serde_json::json!({
+                "state": "skipped_runtime_memory_guardrail",
+                "code": code,
+                "limit": limit,
+                "message": message,
+            })
+            .to_string(),
+        ),
+    )
+}
 
 /// Exposes persistent-memory actions on the main model action surface when enabled.
 fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
@@ -364,7 +484,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 
         let final_turn = batch.final_turn;
         let mut action_results = Vec::with_capacity(batch.actions.len());
+        let mut memory_budget = MemoryActionBudget::from_context(context);
         for action in &batch.actions {
+            if let Some(result) = memory_budget.accept_or_skip(&turn, action) {
+                action_results.push(result);
+                continue;
+            }
             action_results.push(self.plan_action_result(&turn, action)?);
         }
         let terminal_state = turn_state_from_action_results(&action_results, final_turn);
@@ -736,7 +861,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
 
         let final_turn = batch.final_turn;
         let mut action_results = Vec::with_capacity(batch.actions.len());
+        let mut memory_budget = MemoryActionBudget::from_context(context);
         for action in &batch.actions {
+            if let Some(result) = memory_budget.accept_or_skip(&turn, action) {
+                action_results.push(result);
+                continue;
+            }
             action_results.push(self.plan_action_result(&turn, action)?);
         }
         let terminal_state = turn_state_from_action_results(&action_results, final_turn);

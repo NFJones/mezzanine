@@ -4609,7 +4609,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v28"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v29"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4712,6 +4712,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("from source-backed inference, assumptions, and unresolved uncertainty"));
     assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
     assert!(prompt.contains("Do not use memory_search by default"));
+    assert!(prompt.contains("use at most one memory_search in ordinary turns"));
+    assert!(prompt.contains("never more than two memory_search actions in one user turn"));
     assert!(prompt.contains("Never use memory_search to retrieve facts already present in current action results"));
     assert!(
         prompt.contains("For MCP-backed workflows, do not use memory_search or memory_store")
@@ -4719,10 +4721,15 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("When the user names an MCP server and a matching exposed tool exists"));
     assert!(prompt.contains("merely to set up, justify, or avoid a directly useful MCP call"));
     assert!(prompt.contains("placeholder memory actions to satisfy an action wrapper"));
+    assert!(prompt.contains("choose the next direct route yourself"));
+    assert!(prompt.contains("adjust or broaden the same integration query"));
+    assert!(prompt.contains("Do not use memory_search to decide the next route"));
     assert!(prompt.contains("Do not repeat an identical memory_search in the same phase without new evidence"));
     assert!(prompt.contains("Do not use memory_search as a substitute for MCP, web, shell, or other action families"));
     assert!(prompt.contains("Do not use memory_store before the first concrete inspection, implementation, or validation action"));
     assert!(prompt.contains("store it with memory_store only if it is durable, reusable beyond the current task"));
+    assert!(prompt.contains("almost certain to be useful in future sessions"));
+    assert!(prompt.contains("Do not emit more than one memory_store action in one user turn"));
     assert!(
         prompt.contains("Do not store prompt-specific, one-off, current-turn, action-result")
     );

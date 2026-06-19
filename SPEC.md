@@ -6378,14 +6378,22 @@ as shell, MCP, memory, or current-actions.
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.
 It MUST state that persistent-memory actions are not a generic progress
-mechanism. The prompt and provider action descriptions MUST prohibit
+mechanism. They MUST instruct the model that unclear next steps should be
+resolved with current action results, adjusted direct integration queries,
+bounded local/web/MCP inspection, or a bounded report/blocker rather than
+memory lookup. The prompt and provider action descriptions MUST prohibit
 `memory_search` for facts already present in current action results, including
 identifiers, URLs, versions, paths, command forms, config names, repository
 owner/name, branch, commit, remotes, issue or pull request numbers, CI targets,
-and other task-local metadata. They MUST prohibit `memory_store` for current-turn action
-results, current checkout repo slugs, remotes, branches, commits, paths, CI
-state, MCP results, plans, progress, or other transient task state unless the
-user explicitly requested storing that exact content.
+and other task-local metadata. They MUST state that ordinary turns should use
+at most one focused `memory_search`, and that the runtime MUST skip additional
+`memory_search` actions after two searches in one user turn. They MUST prohibit
+`memory_store` for current-turn action results, current checkout repo slugs,
+remotes, branches, commits, paths, CI state, MCP results, plans, progress, or
+other transient task state unless the user explicitly requested storing that
+exact content. They MUST state that `memory_store` is reserved for information
+almost certain to be useful in future sessions, and that the runtime MUST skip
+additional `memory_store` actions after one store in one user turn.
 The prompt MUST treat repository exploration as a bounded means to choose the
 next concrete action rather than as an open-ended phase. It SHOULD guide
 ordinary implementation, debugging, design, and report tasks toward one focused
@@ -7358,14 +7366,17 @@ NOT use `memory_search` by default or as a startup ritual merely because a
 task is non-trivial. Agents MAY use at most one focused `memory_search` only
 when a concrete prior-context question cannot be answered from the current
 prompt, current action results, or another directly inspectable artifact such
-as MCP, web, shell, or repository state. Agents MUST NOT use
+as MCP, web, shell, or repository state. If the path forward is unclear,
+agents MUST choose from current action results, adjusted direct integration
+queries, bounded local/web/MCP inspection, or a bounded report/blocker instead
+of using memory as route discovery. Agents MUST NOT use
 `memory_search` as a generic way to make progress or to retrieve facts already
 present in current action results, including identifiers, URLs, versions,
 paths, command forms, config names, repository owner/name, branch, commit,
 remotes, issue or pull request numbers, CI targets, and other task-local
-metadata. Agents MUST
-NOT repeat a `memory_search` unless later results create a new concrete
-retrieval gap.
+metadata. Agents MUST NOT use more than two `memory_search` actions in one
+user turn. Agents MUST NOT repeat a `memory_search` unless later results
+create a new concrete retrieval gap.
 Agents MUST treat retrieved memory as secondary hints and MUST confirm
 important conclusions against current artifacts, repository state, tests,
 logs, or other current action results before relying on them. Agents MUST NOT
@@ -7376,8 +7387,10 @@ task-state notes unless the user explicitly requested storing that exact
 content. When salient stable information is
 uncovered that is durable, reusable beyond the current task, not already
 present in current context, not provided by the user only for the current
-task, and likely to help future turns, agents MAY store it with
-`memory_store`; when unsure, they MUST NOT store it. When persistent memory is
+task, almost certain to be useful in future sessions, and unlikely to be
+cheaply rediscovered, agents MAY store it with `memory_store`; when unsure,
+they MUST NOT store it. Agents MUST NOT use more than one `memory_store`
+action in one user turn. When persistent memory is
 disabled, the harness MUST deny the `memory` capability and MUST NOT expose
 `memory_search` or `memory_store`.
 

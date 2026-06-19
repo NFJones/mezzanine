@@ -4623,6 +4623,18 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
+        description.contains("adjust or broaden a direct integration query"),
+        "{description}"
+    );
+    assert!(
+        description.contains("report a bounded blocker"),
+        "{description}"
+    );
+    assert!(
+        description.contains("never more than two in one user turn"),
+        "{description}"
+    );
+    assert!(
         description.contains("safely gathered context"),
         "{description}"
     );

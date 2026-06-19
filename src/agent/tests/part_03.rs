@@ -1095,12 +1095,15 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
     assert!(kind_description.contains("CI-state"));
     assert!(kind_description.contains("episodic transcript"));
     assert!(kind_description.contains("scratch"));
+    assert!(kind_description.contains("almost certain to help future sessions"));
     let content_description = memory_store_schema["properties"]["content"]["description"]
         .as_str()
         .unwrap();
     assert!(content_description.contains("reusable beyond the current task"));
     assert!(content_description.contains("not already present in current context"));
     assert!(content_description.contains("not user-provided only for this task"));
+    assert!(content_description.contains("almost certain to be useful in future sessions"));
+    assert!(content_description.contains("Emit at most one memory_store action in one user turn"));
     assert!(content_description.contains("current checkout repo slugs"));
     assert!(content_description.contains("owner/repo"));
     assert!(content_description.contains("CI results"));
@@ -1151,6 +1154,8 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .unwrap();
     assert!(query_description.contains("Do not use memory_search by default"));
     assert!(query_description.contains("generic way to make progress"));
+    assert!(query_description.contains("at most one focused search in ordinary turns"));
+    assert!(query_description.contains("never more than two memory_search actions in one user turn"));
     assert!(query_description.contains("facts already present in current action results"));
     assert!(query_description.contains("identifiers, URLs, versions"));
     assert!(query_description.contains("repo owner/name"));
@@ -1158,6 +1163,8 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
     assert!(query_description.contains("CI targets"));
     assert!(query_description.contains("routing_match=available_mcp"));
     assert!(query_description.contains("not a reason to search memory first"));
+    assert!(query_description.contains("adjust or broaden a direct integration query"));
+    assert!(query_description.contains("report a bounded blocker"));
     assert!(query_description.contains("placeholder setup before another direct action"));
     assert!(query_description.contains("startup ritual"));
     assert!(query_description.contains("paraphrase and search again"));

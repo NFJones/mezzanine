@@ -1703,6 +1703,343 @@ fn turn_runner_accepts_memory_store_for_runtime_execution() {
     assert!(structured.contains(r#""state":"pending_runtime_memory""#));
 }
 
+/// Builds a memory search action for runner budget tests.
+///
+/// Keeping this helper local to the memory-planning regressions makes the
+/// tests read in terms of the behavior under test instead of repeating the
+/// same MAAP payload fields.
+fn memory_search_action(id: &str) -> AgentAction {
+    AgentAction {
+        id: id.to_string(),
+        rationale: "retrieve a bounded durable memory hint".to_string(),
+        payload: AgentActionPayload::MemorySearch {
+            query: format!("durable context {id}"),
+            limit: Some(1),
+        },
+    }
+}
+
+/// Builds a memory store action for runner budget tests.
+///
+/// Store actions share a longer payload than searches, so the helper keeps the
+/// guardrail assertions focused on runtime behavior rather than durable memory
+/// schema boilerplate.
+fn memory_store_action(id: &str) -> AgentAction {
+    AgentAction {
+        id: id.to_string(),
+        rationale: "store durable project context".to_string(),
+        payload: AgentActionPayload::MemoryStore {
+            kind: "fact".to_string(),
+            priority: Some(80),
+            scope: Some("project".to_string()),
+            keywords: vec!["memory".to_string(), "guardrail".to_string()],
+            content: format!("durable reusable context from {id}"),
+            expires_in_days: Some(30),
+        },
+    }
+}
+
+/// Verifies the runner accepts only the first two memory searches in one turn.
+///
+/// Prompt guidance should reduce memory-search eagerness, but the runtime must
+/// also stop repeated same-turn searches deterministically. This regression
+/// ensures an over-budget search is converted into a successful skipped action
+/// result while the earlier memory actions still proceed to runtime execution.
+#[test]
+fn turn_runner_skips_memory_searches_after_per_turn_limit() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Memory,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "try repeated memory searches".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![
+                    memory_search_action("memory-search-1"),
+                    memory_search_action("memory-search-2"),
+                    memory_search_action("memory-search-3"),
+                ],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: true,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "search memory repeatedly".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+    assert_eq!(execution.action_results.len(), 3);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert_eq!(execution.action_results[1].status, ActionStatus::Running);
+    assert_eq!(execution.action_results[2].status, ActionStatus::Succeeded);
+    assert_eq!(
+        execution.action_results[2].content_texts(),
+        vec![
+            "memory_search skipped: per-turn memory search limit reached; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead"
+        ]
+    );
+    let structured = execution.action_results[2]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(
+        structured.contains(r#""state":"skipped_runtime_memory_guardrail""#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""code":"memory_search_turn_limit""#),
+        "{structured}"
+    );
+    assert!(structured.contains(r#""limit":2"#), "{structured}");
+}
+
+/// Verifies same-turn memory search results already in context consume the
+/// runner budget.
+///
+/// Memory loops often appear across continuation turns rather than inside one
+/// provider batch. This regression makes those prior action-result blocks count
+/// toward the same user-turn limit so a third search is skipped instead of
+/// extending a paraphrase loop.
+#[test]
+fn turn_runner_counts_prior_memory_search_results_from_context() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Memory,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "try one more memory search".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![memory_search_action("memory-search-3")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: true,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![
+                ContextBlock {
+                    source: ContextSourceKind::UserInstruction,
+                    label: "user".to_string(),
+                    content: "search memory repeatedly".to_string(),
+                },
+                ContextBlock {
+                    source: ContextSourceKind::ActionResult,
+                    label: "action result memory-search-1".to_string(),
+                    content: "[action_result memory-search-1 memory_search succeeded]\ncontent:\nmemory_search returned 0 records".to_string(),
+                },
+                ContextBlock {
+                    source: ContextSourceKind::ActionResult,
+                    label: "action result memory-search-2".to_string(),
+                    content: "[action_result memory-search-2 memory_search succeeded]\ncontent:\nmemory_search returned 0 records".to_string(),
+                },
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+    assert_eq!(execution.action_results.len(), 1);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(
+        execution.action_results[0].content_texts(),
+        vec![
+            "memory_search skipped: per-turn memory search limit reached; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead"
+        ]
+    );
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(
+        structured.contains(r#""state":"skipped_runtime_memory_guardrail""#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""code":"memory_search_turn_limit""#),
+        "{structured}"
+    );
+}
+
+/// Verifies prior memory stores in context consume the one-store turn budget.
+///
+/// Memory storage should be exceptional because it persists beyond the current
+/// task. This regression ensures a continuation turn cannot save additional
+/// transient task state after a memory store has already been planned in the
+/// same active context.
+#[test]
+fn turn_runner_skips_memory_store_after_per_turn_limit() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Memory,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "try one more memory store".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![memory_store_action("memory-store-2")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: true,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![
+                ContextBlock {
+                    source: ContextSourceKind::UserInstruction,
+                    label: "user".to_string(),
+                    content: "store this repeatedly".to_string(),
+                },
+                ContextBlock {
+                    source: ContextSourceKind::ActionResult,
+                    label: "action result memory-store-1".to_string(),
+                    content: "[action_result memory-store-1 memory_store succeeded]\ncontent:\nmemory_store persisted 1 record".to_string(),
+                },
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+    assert_eq!(execution.action_results.len(), 1);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(
+        execution.action_results[0].content_texts(),
+        vec![
+            "memory_store skipped: per-turn memory store limit reached; do not persist transient task state"
+        ]
+    );
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(
+        structured.contains(r#""state":"skipped_runtime_memory_guardrail""#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""code":"memory_store_turn_limit""#),
+        "{structured}"
+    );
+    assert!(structured.contains(r#""limit":1"#), "{structured}");
+}
+
 /// Verifies that auto-allow uses the model rationale as its reasonableness
 /// assessment. The reduced MAAP shape no longer carries a separate approval
 /// hint field.
