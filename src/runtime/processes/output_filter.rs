@@ -788,7 +788,7 @@ impl RuntimeSessionService {
             descriptor_size,
             &transaction_bytes,
         )?;
-        let (title, activity_events, bell_events, render_alternate_active) = {
+        let (title, activity_events, bell_events, render_alternate_active, terminal_response_bytes) = {
             let screen = self.pane_screens.entry(output.pane_id.clone()).or_insert(
                 TerminalScreen::new_with_history_config(
                     descriptor_size,
@@ -800,6 +800,7 @@ impl RuntimeSessionService {
             let previous_bell_events = screen.bell_events();
             screen.feed(&render_bytes);
             let _ = screen.drain_osc_events();
+            let terminal_response_bytes = screen.drain_terminal_response_bytes();
             (
                 screen.title().map(ToOwned::to_owned),
                 screen
@@ -807,8 +808,15 @@ impl RuntimeSessionService {
                     .saturating_sub(previous_activity_events),
                 screen.bell_events().saturating_sub(previous_bell_events),
                 screen.alternate_screen_active(),
+                terminal_response_bytes,
             )
         };
+        if !terminal_response_bytes.is_empty() {
+            self.write_runtime_pane_input_priority(
+                output.pane_id.as_str(),
+                &terminal_response_bytes,
+            )?;
+        }
         let alternate_active = transaction_alternate_active || render_alternate_active;
         let terminal_title = osc_events.iter().rev().find_map(|event| match event {
             TerminalOscEvent::TitleChanged { title } => Some(title.clone()),
@@ -1272,6 +1280,7 @@ impl RuntimeSessionService {
                 })?
         };
         screen.feed(bytes);
+        let _ = screen.drain_terminal_response_bytes();
         Ok((screen.drain_osc_events(), screen.alternate_screen_active()))
     }
 

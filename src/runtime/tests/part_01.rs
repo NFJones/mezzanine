@@ -4031,6 +4031,33 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
     assert_eq!(prompt_repaint, b"\r$ ");
 }
 
+/// Verifies terminal-generated response bytes are forwarded back to the pane.
+///
+/// CSI 6n is a pane application query, not visible output. When the terminal
+/// parser emits a cursor-position report, the runtime must write that reply to
+/// the pane input path so full-screen applications waiting on CPR can continue.
+#[test]
+fn runtime_pane_output_device_status_report_is_forwarded_to_pane_input() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let _process = service
+        .take_running_pane_process_for_async_owner(&pane_id)
+        .unwrap();
+
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"\x1b[3;5H\x1b[6n".to_vec())
+        .unwrap();
+
+    let deferred = service.drain_deferred_pane_inputs();
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0].pane_id, pane_id);
+    assert_eq!(deferred[0].bytes, b"\x1b[3;5R");
+}
+
 /// Verifies that synchronized panes fan out primary foreground input to every
 /// pane in the active window. The deferred pane-I/O path is the foreground
 /// async terminal path, so it must preserve one ordered input payload per pane

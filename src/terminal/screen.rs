@@ -12,6 +12,9 @@ use super::{
 
 // Terminal screen parser, OSC events, and alternate-screen state.
 
+/// Maximum bytes retained for one CSI parameter/intermediate sequence.
+const MAX_CSI_STRING_BYTES: usize = 1024;
+
 /// Runs the parse dec private mode params operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -756,6 +759,11 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) csi_buffer: String,
+    /// Whether the current CSI sequence exceeded the bounded parser buffer.
+    ///
+    /// Once set, the parser ignores bytes until the final byte and then drops
+    /// the complete malformed sequence rather than dispatching truncated state.
+    pub(super) csi_buffer_truncated: bool,
     /// Stores the osc buffer value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -771,6 +779,8 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) osc_events: Vec<TerminalOscEvent>,
+    /// Terminal-generated response bytes that must be written back to the pane.
+    pub(super) terminal_response_bytes: Vec<u8>,
     /// Stores the title value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -875,9 +885,11 @@ impl TerminalScreen {
             saved_cursor: None,
             parser_state: ParserState::Ground,
             csi_buffer: String::new(),
+            csi_buffer_truncated: false,
             osc_buffer: String::new(),
             osc_buffer_truncated: false,
             osc_events: Vec::new(),
+            terminal_response_bytes: Vec::new(),
             title: None,
             graphic_rendition: GraphicRendition::default(),
             bracketed_paste_enabled: false,
@@ -1880,6 +1892,11 @@ impl TerminalScreen {
         std::mem::take(&mut self.osc_events)
     }
 
+    /// Drains terminal-generated reply bytes for the pane process.
+    pub fn drain_terminal_response_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.terminal_response_bytes)
+    }
+
     /// Runs the activity events operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1954,6 +1971,7 @@ impl TerminalScreen {
     pub(super) fn feed_escape(&mut self, ch: char) {
         if ch == '[' {
             self.csi_buffer.clear();
+            self.csi_buffer_truncated = false;
             self.parser_state = ParserState::Csi;
         } else if ch == ']' {
             self.osc_buffer.clear();
@@ -2097,11 +2115,16 @@ impl TerminalScreen {
     pub(super) fn feed_csi(&mut self, ch: char) {
         if ('@'..='~').contains(&ch) {
             let params = self.csi_buffer.clone();
-            self.dispatch_csi(&params, ch);
+            if !self.csi_buffer_truncated {
+                self.dispatch_csi(&params, ch);
+            }
             self.csi_buffer.clear();
+            self.csi_buffer_truncated = false;
             self.parser_state = ParserState::Ground;
-        } else {
+        } else if self.csi_buffer.len().saturating_add(ch.len_utf8()) <= MAX_CSI_STRING_BYTES {
             self.csi_buffer.push(ch);
+        } else {
+            self.csi_buffer_truncated = true;
         }
     }
 
@@ -2145,6 +2168,7 @@ impl TerminalScreen {
             'e' => self.move_cursor_relative(params, 1, 0),
             'J' => self.erase_display(params),
             'K' => self.erase_line(params),
+            'n' => self.report_device_status(params),
             '@' => self.insert_blank_chars(csi_count(params)),
             'P' => self.delete_chars(csi_count(params)),
             'L' => self.insert_lines(csi_count(params)),
@@ -2155,6 +2179,20 @@ impl TerminalScreen {
             'r' => self.set_scroll_region(params),
             's' => self.save_cursor(),
             'u' => self.restore_cursor(),
+            _ => {}
+        }
+    }
+
+    /// Queues terminal-generated device status replies for the pane process.
+    fn report_device_status(&mut self, params: &str) {
+        match first_csi_param(params) {
+            5 => self.terminal_response_bytes.extend_from_slice(b"\x1b[0n"),
+            6 => {
+                let row = self.cursor.row.saturating_add(1);
+                let column = self.cursor.column.saturating_add(1);
+                self.terminal_response_bytes
+                    .extend_from_slice(format!("\x1b[{row};{column}R").as_bytes());
+            }
             _ => {}
         }
     }

@@ -1,3 +1,38 @@
+/// Verifies terminal device status reports queue pane-directed reply bytes.
+///
+/// Full-screen terminal applications query cursor position with CSI 6n and
+/// expect the terminal emulator to write a 1-based CPR response back to the
+/// pane process rather than rendering the query or silently dropping it.
+#[test]
+fn terminal_screen_queues_device_status_report_replies() {
+    let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[2;4H\x1b[6n\x1b[5n");
+
+    assert_eq!(screen.drain_terminal_response_bytes(), b"\x1b[2;4R\x1b[0n");
+    assert!(screen.drain_terminal_response_bytes().is_empty());
+}
+
+/// Verifies overlong CSI sequences are dropped with deterministic recovery.
+///
+/// CSI parameters can be split across reads and may be attacker controlled.
+/// The parser must bound retained bytes, avoid emitting replies from truncated
+/// sequences, and recover at the final byte so later valid CSI traffic works.
+#[test]
+fn terminal_screen_bounds_csi_accumulation_and_recovers_after_final_byte() {
+    let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
+    let mut overlong = Vec::from(b"\x1b[".as_slice());
+    overlong.extend(std::iter::repeat_n(b'1', 2048));
+    overlong.push(b'n');
+
+    screen.feed(&overlong);
+    assert!(screen.drain_terminal_response_bytes().is_empty());
+
+    screen.feed(b"\x1b[2;3H\x1b[6n");
+
+    assert_eq!(screen.drain_terminal_response_bytes(), b"\x1b[2;3R");
+}
+
 /// Verifies pane-local clear operations keep the live viewport blank across
 /// subsequent pane splits and resizes.
 ///
