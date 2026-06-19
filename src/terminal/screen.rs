@@ -34,7 +34,7 @@ pub(super) fn parse_dec_private_mode_params(params: &str) -> Option<Vec<u16>> {
 pub fn tracked_dec_private_mode(mode: u16) -> bool {
     matches!(
         mode,
-        1 | 25 | 47 | 1047 | 1049 | 1000 | 1002 | 1003 | 1004 | 1006 | 2004
+        1 | 6 | 25 | 47 | 1047 | 1049 | 1000 | 1002 | 1003 | 1004 | 1006 | 2004
     )
 }
 
@@ -353,6 +353,8 @@ pub struct TerminalModeState {
     pub sgr_mouse_enabled: bool,
     /// Whether application cursor-key mode is active.
     pub application_cursor_enabled: bool,
+    /// Whether DEC origin mode is active.
+    pub origin_mode_enabled: bool,
     /// Whether application keypad mode is active.
     pub application_keypad_enabled: bool,
     /// Whether focus event reporting is active.
@@ -368,6 +370,7 @@ impl Default for TerminalModeState {
             mouse_tracking_enabled: false,
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
+            origin_mode_enabled: false,
             application_keypad_enabled: false,
             focus_events_enabled: false,
         }
@@ -854,6 +857,11 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) application_cursor_enabled: bool,
+    /// Stores the origin mode enabled value for this data structure.
+    ///
+    /// The field is part of the structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) origin_mode_enabled: bool,
     /// Stores the application keypad enabled value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -945,6 +953,7 @@ impl TerminalScreen {
             mouse_tracking_enabled: false,
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
+            origin_mode_enabled: false,
             application_keypad_enabled: false,
             focus_events_enabled: false,
             saved_dec_private_modes: BTreeMap::new(),
@@ -1811,6 +1820,7 @@ impl TerminalScreen {
         self.mouse_tracking_enabled = false;
         self.sgr_mouse_enabled = false;
         self.application_cursor_enabled = false;
+        self.origin_mode_enabled = false;
         self.application_keypad_enabled = false;
         self.focus_events_enabled = false;
         self.saved_dec_private_modes.clear();
@@ -1838,6 +1848,7 @@ impl TerminalScreen {
             mouse_tracking_enabled: self.mouse_tracking_enabled,
             sgr_mouse_enabled: self.sgr_mouse_enabled,
             application_cursor_enabled: self.application_cursor_enabled,
+            origin_mode_enabled: self.origin_mode_enabled,
             application_keypad_enabled: self.application_keypad_enabled,
             focus_events_enabled: self.focus_events_enabled,
         }
@@ -1851,6 +1862,7 @@ impl TerminalScreen {
         self.mouse_tracking_enabled = state.mouse_tracking_enabled;
         self.sgr_mouse_enabled = state.sgr_mouse_enabled;
         self.application_cursor_enabled = state.application_cursor_enabled;
+        self.origin_mode_enabled = state.origin_mode_enabled;
         self.application_keypad_enabled = state.application_keypad_enabled;
         self.focus_events_enabled = state.focus_events_enabled;
     }
@@ -2374,6 +2386,16 @@ impl TerminalScreen {
             }
             25 => self.cursor_visible = enabled,
             1 => self.application_cursor_enabled = enabled,
+            6 => {
+                self.origin_mode_enabled = enabled;
+                self.cursor.row = if enabled {
+                    self.active_scroll_region().0
+                } else {
+                    0
+                };
+                self.cursor.column = 0;
+                self.wrap_pending = false;
+            }
             1000 | 1002 | 1003 => self.mouse_tracking_enabled = enabled,
             1004 => self.focus_events_enabled = enabled,
             1006 => self.sgr_mouse_enabled = enabled,
@@ -2395,6 +2417,7 @@ impl TerminalScreen {
             47 | 1047 | 1049 => Some(self.alternate.active()),
             25 => Some(self.cursor_visible),
             1 => Some(self.application_cursor_enabled),
+            6 => Some(self.origin_mode_enabled),
             1000 | 1002 | 1003 => Some(self.mouse_tracking_enabled),
             1004 => Some(self.focus_events_enabled),
             1006 => Some(self.sgr_mouse_enabled),
@@ -2743,7 +2766,10 @@ impl TerminalScreen {
             .min(self.max_row());
         if top < bottom {
             self.scroll_region = Some((top, bottom));
-            self.cursor = Cursor { row: 0, column: 0 };
+            self.cursor = Cursor {
+                row: if self.origin_mode_enabled { top } else { 0 },
+                column: 0,
+            };
             self.wrap_pending = false;
         }
     }
@@ -2766,7 +2792,12 @@ impl TerminalScreen {
             .filter(|part| !part.is_empty())
             .and_then(|part| part.parse::<usize>().ok())
             .unwrap_or(1);
-        self.cursor.row = row.saturating_sub(1).min(self.max_row());
+        self.cursor.row = if self.origin_mode_enabled {
+            let (top, bottom) = self.active_scroll_region();
+            top.saturating_add(row.saturating_sub(1)).min(bottom)
+        } else {
+            row.saturating_sub(1).min(self.max_row())
+        };
         self.cursor.column = column.saturating_sub(1).min(self.max_column());
     }
 
@@ -2789,7 +2820,12 @@ impl TerminalScreen {
     pub(super) fn move_cursor_row(&mut self, params: &str) {
         self.wrap_pending = false;
         let row = first_csi_param(params).max(1);
-        self.cursor.row = row.saturating_sub(1).min(self.max_row());
+        self.cursor.row = if self.origin_mode_enabled {
+            let (top, bottom) = self.active_scroll_region();
+            top.saturating_add(row.saturating_sub(1)).min(bottom)
+        } else {
+            row.saturating_sub(1).min(self.max_row())
+        };
     }
 
     /// Runs the move cursor next line operation for this subsystem.

@@ -327,6 +327,7 @@ fn terminal_screen_restores_terminal_mode_state() {
         mouse_tracking_enabled: true,
         sgr_mouse_enabled: true,
         application_cursor_enabled: true,
+        origin_mode_enabled: false,
         application_keypad_enabled: true,
         focus_events_enabled: true,
     };

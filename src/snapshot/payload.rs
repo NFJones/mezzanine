@@ -1101,6 +1101,7 @@ impl SessionSnapshotPayload {
                         mouse_tracking_enabled: parse_bool(&fields[3 + mode_offset])?,
                         sgr_mouse_enabled: parse_bool(&fields[4 + mode_offset])?,
                         application_cursor_enabled: parse_bool(&fields[5 + mode_offset])?,
+                        origin_mode_enabled: false,
                         application_keypad_enabled: parse_bool(&fields[6 + mode_offset])?,
                         focus_events_enabled: parse_bool(&fields[7 + mode_offset])?,
                         title: non_empty_string(&fields[8 + mode_offset]),

@@ -5793,6 +5793,21 @@ fn terminal_screen_handles_cursor_address_and_clear_line() {
     assert_eq!(screen.visible_lines()[0], "abxy");
 }
 
+/// Verifies DEC origin mode makes CUP and VPA rows relative to the active
+/// scroll region.
+///
+/// This regression scenario documents that changing the scroll region while
+/// DECOM is active homes the cursor at the top margin and later row-addressing
+/// commands stay relative to that margin.
+#[test]
+fn terminal_screen_origin_mode_offsets_cursor_addressing_into_scroll_region() {
+    let mut screen = TerminalScreen::new(Size::new(6, 5).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[?6h\x1b[2;4rA\x1b[2;3HB\x1b[3d\x1b[1GC");
+
+    assert_eq!(screen.visible_lines(), vec!["", "A", "  B", "C", ""]);
+}
+
 /// Verifies terminal screen handles relative cursor movement and c0 controls.
 ///
 /// This regression scenario documents the behavior being protected so a
