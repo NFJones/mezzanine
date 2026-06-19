@@ -124,6 +124,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("If the needed action family is absent"));
     assert!(prompt.contains("emit request_capability immediately with no progress say"));
     assert!(prompt.contains("This is a required control action, not a suggestion"));
+    assert!(prompt.contains("Missing task parameters are not user blockers"));
+    assert!(prompt.contains("derive owner/repo, branch, commit, remote URL"));
+    assert!(prompt.contains("request shell capability instead of asking the user"));
     assert!(prompt.contains("takes precedence over blocked say, final say"));
     assert!(
         prompt.contains(
@@ -169,6 +172,8 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("mcp_call: call only MCP tools listed as available"));
     assert!(prompt.contains("Choose it when it is the smallest action that makes concrete progress"));
     assert!(prompt.contains("Do not request shell/network capability, run shell preflight"));
+    assert!(prompt.contains("Request or use shell when required MCP arguments"));
+    assert!(prompt.contains("must be derived from the current checkout"));
     assert!(
         prompt.contains(
             "Do not emit a say-only setup batch claiming that a schema-valid or initial batch is needed before the MCP call"
@@ -4605,6 +4610,14 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
     );
     assert!(
         description.contains("merely to set up a useful MCP call"),
+        "{description}"
+    );
+    assert!(
+        description.contains("current action results"),
+        "{description}"
+    );
+    assert!(
+        description.contains("request shell"),
         "{description}"
     );
     assert!(

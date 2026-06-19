@@ -4609,7 +4609,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v26"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v27"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -4712,6 +4712,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("from source-backed inference, assumptions, and unresolved uncertainty"));
     assert!(prompt.contains("Do not claim certainty, root cause, completion, or validation unless current-turn evidence proves it"));
     assert!(prompt.contains("Do not use memory_search by default"));
+    assert!(prompt.contains("Never use memory_search to retrieve facts already present in current action results"));
     assert!(
         prompt.contains("For MCP-backed workflows, do not use memory_search or memory_store")
     );
@@ -4722,7 +4723,10 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("Do not use memory_search as a substitute for MCP, web, shell, or other action families"));
     assert!(prompt.contains("Do not use memory_store before the first concrete inspection, implementation, or validation action"));
     assert!(prompt.contains("store it with memory_store only if it is durable, reusable beyond the current task"));
-    assert!(prompt.contains("Do not store prompt-specific, one-off, current-turn, tool-output, repo-state"));
+    assert!(
+        prompt.contains("Do not store prompt-specific, one-off, current-turn, action-result")
+    );
+    assert!(prompt.contains("current checkout repo slug"));
     assert!(prompt.contains("prefer repository patterns"));
     assert!(prompt.contains("preserve unrelated user worktree changes"));
     assert!(prompt.contains("Terminal work MUST be an executable action"));

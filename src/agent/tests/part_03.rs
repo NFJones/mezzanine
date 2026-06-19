@@ -1090,7 +1090,9 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
         .as_str()
         .unwrap();
     assert!(kind_description.contains("tool-output"));
+    assert!(kind_description.contains("action-result"));
     assert!(kind_description.contains("current-turn"));
+    assert!(kind_description.contains("CI-state"));
     assert!(kind_description.contains("episodic transcript"));
     assert!(kind_description.contains("scratch"));
     let content_description = memory_store_schema["properties"]["content"]["description"]
@@ -1099,6 +1101,9 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
     assert!(content_description.contains("reusable beyond the current task"));
     assert!(content_description.contains("not already present in current context"));
     assert!(content_description.contains("not user-provided only for this task"));
+    assert!(content_description.contains("current checkout repo slugs"));
+    assert!(content_description.contains("owner/repo"));
+    assert!(content_description.contains("CI results"));
 }
 
 /// Verifies the model-facing memory search schema forbids startup-ritual
@@ -1145,6 +1150,10 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .as_str()
         .unwrap();
     assert!(query_description.contains("Do not use memory_search by default"));
+    assert!(query_description.contains("generic way to make progress"));
+    assert!(query_description.contains("facts already present in current action results"));
+    assert!(query_description.contains("repo owner/name"));
+    assert!(query_description.contains("CI targets"));
     assert!(query_description.contains("routing_match=available_mcp"));
     assert!(query_description.contains("not a reason to search memory first"));
     assert!(query_description.contains("placeholder setup before another direct action"));
@@ -2338,6 +2347,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(capability_description.contains("Return a function call, not prose"));
     assert!(capability_description.contains("currently allowed actions"));
     assert!(capability_description.contains("Choose the smallest action"));
+    assert!(capability_description.contains("repo owner/name"));
+    assert!(capability_description.contains("request or use shell instead of asking the user"));
+    assert!(capability_description.contains("facts already present in current action results"));
     assert!(capability_description.contains("Capability map: shell=local files"));
     assert!(capability_description.contains("Wrong: say(blocked"));
     assert!(capability_description.contains("Right: request_capability(capability=\"shell\""));
