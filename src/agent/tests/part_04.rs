@@ -1743,6 +1743,210 @@ fn memory_store_action(id: &str) -> AgentAction {
     }
 }
 
+/// Verifies route-matched MCP availability does not make memory unusable.
+///
+/// MCP routing hints should steer models away from memory as placeholder setup,
+/// but a legitimate durable-context memory action must still reach the runtime
+/// when persistent memory is enabled and MCP tools are also available.
+#[test]
+fn turn_runner_accepts_memory_search_with_matched_mcp_available() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Memory,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "search durable prior context about required function call compliance regressions".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![memory_search_action("memory-search-1")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let mcp_tool = McpPromptTool {
+        server_id: "githubcopilot".to_string(),
+        tool_name: "list_ci_results".to_string(),
+        description: "Read GitHub CI check results for a repository".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object"}"#.to_string(),
+    };
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: vec!["githubcopilot".to_string()],
+        available_mcp_tools: std::slice::from_ref(&mcp_tool),
+        memory_actions_enabled: true,
+        issue_actions_enabled: true,
+    };
+    let context = crate::agent::append_mcp_context(
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use githubcopilot and recall the durable project preference".to_string(),
+        }])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "githubcopilot".to_string(),
+                display_name: "GitHub Copilot".to_string(),
+                purpose: "GitHub repository and CI operations".to_string(),
+                usage_instructions: String::new(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![mcp_tool.clone()],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let execution = runner.run_turn(&mut ledger, turn, context).unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+    assert_eq!(execution.action_results.len(), 1);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert_eq!(
+        execution.action_results[0].content_texts(),
+        vec!["memory action accepted for runtime execution"]
+    );
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""state":"pending_runtime_memory""#));
+}
+
+/// Verifies wrapper-compliance memory placeholders are skipped at runtime.
+///
+/// The model can still see and use memory actions, but a memory action whose
+/// rationale says it is only satisfying a required current-actions/function
+/// wrapper should not execute or consume a same-turn memory budget slot.
+#[test]
+fn turn_runner_skips_memory_search_used_as_action_wrapper_placeholder() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Memory,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale:
+                    "Complying with a required immediate current-actions call before proceeding"
+                        .to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![
+                    memory_search_action("memory-search-placeholder"),
+                    memory_search_action("memory-search-legitimate"),
+                ],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: true,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "use memory only if it is needed".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+    assert_eq!(execution.action_results.len(), 2);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(execution.action_results[1].status, ActionStatus::Succeeded);
+    assert_eq!(
+        execution.action_results[0].content_texts(),
+        vec![
+            "memory action skipped: rationale identified this as action-wrapper compliance rather than a concrete durable-context need; continue with the direct task action instead"
+        ]
+    );
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(
+        structured.contains(r#""state":"skipped_runtime_memory_guardrail""#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""code":"memory_wrapper_placeholder""#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""limit":0"#),
+        "{structured}"
+    );
+    assert_eq!(
+        execution.action_results[1].content_texts(),
+        vec![
+            "memory action skipped: rationale identified this as action-wrapper compliance rather than a concrete durable-context need; continue with the direct task action instead"
+        ]
+    );
+}
+
 /// Verifies the runner accepts only the first two memory searches in one turn.
 ///
 /// Prompt guidance should reduce memory-search eagerness, but the runtime must

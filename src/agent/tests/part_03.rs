@@ -1308,15 +1308,14 @@ fn default_action_gates_expose_mcp_and_memory_for_diagnostic_request_shapes() {
     assert!(!request.issue_actions_enabled);
 }
 
-/// Verifies matched MCP routes narrow the default selected-model action surface.
+/// Verifies matched MCP routes do not suppress the persistent-memory surface.
 ///
-/// When runtime context already identifies a directly relevant available MCP
-/// tool, memory actions should not sit beside `mcp_call` as a tempting
-/// placeholder route. Persistent memory remains enabled for explicit
-/// capability requests, but the default schema should focus the model on the
-/// matching integration call.
+/// MCP routing hints are evidence that `mcp_call` is directly useful, not a
+/// global reason to hide other enabled capabilities. This keeps memory usable
+/// for turns that legitimately need durable prior context even when MCP servers
+/// are configured and route-matched.
 #[test]
-fn default_action_gates_hide_memory_when_mcp_routing_match_is_available() {
+fn default_action_gates_keep_memory_when_mcp_routing_match_is_available() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
@@ -1364,8 +1363,8 @@ fn default_action_gates_hide_memory_when_mcp_routing_match_is_available() {
 
     let allowed_actions = request.allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"mcp_call"));
-    assert!(!allowed_actions.contains(&"memory_search"));
-    assert!(!allowed_actions.contains(&"memory_store"));
+    assert!(allowed_actions.contains(&"memory_search"));
+    assert!(allowed_actions.contains(&"memory_store"));
     assert!(allowed_actions.contains(&"request_capability"));
     assert_eq!(request.available_mcp_tools, vec![mcp_tool]);
     assert!(request.memory_actions_enabled);
@@ -4391,13 +4390,13 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
-/// Verifies MCP routing matches narrow the unified current action surface.
+/// Verifies MCP routing matches keep the unified current action surface.
 ///
-/// The routing hint should make the matching MCP tool directly callable without
-/// exposing memory actions as placeholder setup routes. The provider schema
-/// should let the model pick `mcp_call` without first stepping through memory.
+/// The routing hint should make the matching MCP tool directly callable, but it
+/// must not remove memory as a usable feature. Provider guidance and runtime
+/// guardrails handle placeholder memory behavior without hiding the action.
 #[test]
-fn openai_routing_matched_mcp_omits_memory_from_default_surface() {
+fn openai_routing_matched_mcp_keeps_memory_on_default_surface() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
@@ -4451,8 +4450,8 @@ fn openai_routing_matched_mcp_omits_memory_from_default_surface() {
 
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(action_types.contains(&"mcp_call".to_string()));
-    assert!(!action_types.contains(&"memory_search".to_string()));
-    assert!(!action_types.contains(&"memory_store".to_string()));
+    assert!(action_types.contains(&"memory_search".to_string()));
+    assert!(action_types.contains(&"memory_store".to_string()));
     assert!(
         description.contains("Available MCP tools callable with mcp_call: githubcopilot/list_ci_results"),
         "{description}"

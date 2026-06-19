@@ -6362,14 +6362,13 @@ When the active user request matches available MCP server or tool metadata, the
 runtime MCP context SHOULD include an explicit routing hint that identifies the
 matching server or tool and tells the model that `mcp_call` is directly
 available when it is the smallest action that makes concrete progress. The
-default selected-model action surface MUST hide `memory_search` and
-`memory_store` when it exposes `mcp_call` and current runtime context contains
-this available-MCP routing hint. Memory MAY remain requestable as an explicit
-capability when persistent memory is enabled, but it MUST NOT be advertised as a
-same-step default action beside the matching MCP call. The prompt and provider
-action descriptions MUST prohibit placeholder `memory_search` or
-`memory_store` calls whose only purpose is to satisfy the current action wrapper
-before a real action.
+default selected-model action surface MAY expose `mcp_call`, `memory_search`,
+and `memory_store` together when those capabilities are enabled. The presence of
+configured or route-matched MCP integrations MUST NOT by itself suppress
+persistent memory as an available feature. The prompt and provider action
+descriptions MUST prohibit placeholder `memory_search` or `memory_store` calls
+whose only purpose is to satisfy the current action wrapper before a real
+action.
 If a callable MCP tool needs arguments such as identifiers, URLs, paths,
 repository owner/name, branch, commit, issue or pull request number, or CI
 target, the prompt and provider action descriptions MUST instruct the model to
@@ -6408,10 +6407,12 @@ remotes, branches, commits, paths, CI state, MCP results, plans, progress, or
 other transient task state unless the user explicitly requested storing that
 exact content. They MUST state that `memory_store` is reserved for information
 almost certain to be useful in future sessions, and that the runtime MUST skip
-additional `memory_store` actions after one store in one user turn. When
-available MCP routing already identifies a direct `mcp_call` route for the
-current task, the runtime MUST NOT expose memory actions on the default
-selected-model surface.
+additional `memory_store` actions after one store in one user turn. When a
+memory action's model-authored rationale or thought frames it as compliance with
+a required function call, tool call, current-actions call, schema wrapper,
+action wrapper, or action envelope instead of a concrete durable-context need,
+the runtime MUST skip that memory action without blocking unrelated useful
+actions in the same batch.
 The prompt MUST treat repository exploration as a bounded means to choose the
 next concrete action rather than as an open-ended phase. It SHOULD guide
 ordinary implementation, debugging, design, and report tasks toward one focused

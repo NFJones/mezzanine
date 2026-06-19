@@ -60,9 +60,6 @@ const MEMORY_SEARCH_ACTION_LIMIT_PER_TURN: usize = 2;
 /// reusable fact.
 const MEMORY_STORE_ACTION_LIMIT_PER_TURN: usize = 1;
 
-/// Model-context marker emitted when the current task matches an available MCP route.
-const MCP_ROUTING_MATCH_MARKER: &str = "routing_match=available_mcp";
-
 #[derive(Debug, Clone, Copy, Default)]
 struct MemoryActionBudget {
     /// Number of memory search actions already accepted or observed in the
@@ -104,7 +101,18 @@ impl MemoryActionBudget {
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
+        batch_rationale: &str,
+        batch_thought: Option<&str>,
     ) -> Option<ActionResult> {
+        if memory_action_is_wrapper_placeholder(action, batch_rationale, batch_thought) {
+            return Some(memory_budget_skip_result(
+                turn,
+                action,
+                "memory_wrapper_placeholder",
+                "memory action skipped: rationale identified this as action-wrapper compliance rather than a concrete durable-context need; continue with the direct task action instead",
+                0,
+            ));
+        }
         match &action.payload {
             AgentActionPayload::MemorySearch { .. } => {
                 if self.search_count >= MEMORY_SEARCH_ACTION_LIMIT_PER_TURN {
@@ -175,30 +183,92 @@ fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enab
     if !memory_actions_enabled {
         return;
     }
-    if request_has_direct_mcp_routing_match(request) {
-        request.allowed_actions.remove(AllowedAction::MemorySearch);
-        request.allowed_actions.remove(AllowedAction::MemoryStore);
-        return;
-    }
     request
         .allowed_actions
         .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
 }
 
-/// Reports whether runtime context already identifies a direct available MCP route.
+/// Reports whether a memory action is only satisfying the function/action wrapper.
 ///
-/// In this state the default surface should stay focused on `mcp_call` and
-/// other direct execution actions. Memory remains requestable as an explicit
-/// capability, but it is not advertised as a same-step shortcut beside the
-/// matching integration call.
-fn request_has_direct_mcp_routing_match(request: &ModelRequest) -> bool {
-    request.allowed_actions.contains(AllowedAction::McpCall)
-        && !request.available_mcp_tools.is_empty()
-        && request.messages.iter().any(|message| {
-            message.source == ContextSourceKind::Configuration
-                && message.content.starts_with("[mcp integrations]\n")
-                && message.content.contains(MCP_ROUTING_MATCH_MARKER)
-        })
+/// The runtime should keep memory available when it is the right tool, but
+/// should not let a model convert wrapper-compliance confusion into a durable
+/// memory lookup or store. The match requires both wrapper terminology and
+/// compliance/setup language so ordinary memory searches about prompt behavior
+/// are not rejected merely for mentioning a function call.
+fn memory_action_is_wrapper_placeholder(
+    action: &AgentAction,
+    batch_rationale: &str,
+    batch_thought: Option<&str>,
+) -> bool {
+    if !matches!(
+        action.payload,
+        AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. }
+    ) {
+        return false;
+    }
+    let mut text = String::new();
+    text.push_str(batch_rationale);
+    text.push('\n');
+    if let Some(batch_thought) = batch_thought {
+        text.push_str(batch_thought);
+        text.push('\n');
+    }
+    text.push_str(&action.rationale);
+    memory_placeholder_text_mentions_wrapper_compliance(&text)
+}
+
+/// Reports whether text frames an action as wrapper compliance instead of work.
+fn memory_placeholder_text_mentions_wrapper_compliance(text: &str) -> bool {
+    let normalized = normalize_memory_placeholder_text(text);
+    let mentions_wrapper = [
+        "required function call",
+        "required tool call",
+        "required current actions call",
+        "required current action call",
+        "current actions call",
+        "schema wrapper",
+        "action wrapper",
+        "function call requirement",
+        "schema valid batch",
+        "action batch envelope",
+        "transport envelope",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    if !mentions_wrapper {
+        return false;
+    }
+    [
+        "comply",
+        "complying",
+        "satisfy",
+        "satisfying",
+        "satisfies",
+        "placeholder",
+        "prerequisite",
+        "before proceeding",
+        "required immediate",
+        "schema valid batch is needed",
+        "initial batch is needed",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+/// Normalizes model-authored rationale text for guardrail phrase matching.
+fn normalize_memory_placeholder_text(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut previous_space = true;
+    for character in text.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            output.push(character);
+            previous_space = false;
+        } else if !previous_space {
+            output.push(' ');
+            previous_space = true;
+        }
+    }
+    output.trim().to_string()
 }
 
 /// Exposes MCP tool calls on the main model action surface when tools are available.
@@ -510,7 +580,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         let mut action_results = Vec::with_capacity(batch.actions.len());
         let mut memory_budget = MemoryActionBudget::from_context(context);
         for action in &batch.actions {
-            if let Some(result) = memory_budget.accept_or_skip(&turn, action) {
+            if let Some(result) = memory_budget.accept_or_skip(
+                &turn,
+                action,
+                &batch.rationale,
+                batch.thought.as_deref(),
+            ) {
                 action_results.push(result);
                 continue;
             }
@@ -887,7 +962,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         let mut action_results = Vec::with_capacity(batch.actions.len());
         let mut memory_budget = MemoryActionBudget::from_context(context);
         for action in &batch.actions {
-            if let Some(result) = memory_budget.accept_or_skip(&turn, action) {
+            if let Some(result) = memory_budget.accept_or_skip(
+                &turn,
+                action,
+                &batch.rationale,
+                batch.thought.as_deref(),
+            ) {
                 action_results.push(result);
                 continue;
             }
