@@ -1299,7 +1299,7 @@ fn xterm_compatible_profile_declares_required_capabilities() {
     );
     assert_eq!(
         profile.capabilities.dcs_string_controls,
-        CapabilitySupport::Supported
+        CapabilitySupport::Unsupported
     );
     assert_eq!(
         profile.capabilities.sgr.indexed_256_colors,
@@ -1393,6 +1393,26 @@ fn terminfo_accepts_mezzanine_alias_from_installed_terms() {
     assert_eq!(selection.profile, TerminalProfile::XtermCompatible);
     assert_eq!(selection.source, TerminfoSource::Mezzanine);
     assert!(!selection.degraded);
+}
+
+/// Verifies the xterm-compatible profile does not advertise DCS string controls
+/// before the emulator grows a matching handler.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn xterm_compatible_profile_does_not_advertise_unimplemented_dcs_support() {
+    let profile = terminal_profile_named("xterm-compatible").unwrap();
+
+    assert_eq!(
+        profile.capabilities.dcs_string_controls,
+        CapabilitySupport::Unsupported
+    );
+    assert_eq!(
+        profile.capabilities.osc_string_controls,
+        CapabilitySupport::Supported
+    );
 }
 
 /// Verifies terminfo fallbacks have capability safe degradation.

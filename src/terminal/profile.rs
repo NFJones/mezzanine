@@ -272,7 +272,7 @@ impl TerminalCapabilities {
             esc_sequences: CapabilitySupport::Supported,
             csi_sequences: CapabilitySupport::Supported,
             osc_string_controls: CapabilitySupport::Supported,
-            dcs_string_controls: CapabilitySupport::Supported,
+            dcs_string_controls: CapabilitySupport::Unsupported,
             sgr: SgrCapabilities {
                 attributes: CapabilitySupport::Supported,
                 basic_colors: CapabilitySupport::Supported,
