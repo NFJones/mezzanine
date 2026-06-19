@@ -286,11 +286,11 @@ impl TerminalCapabilities {
                 application_cursor: CapabilitySupport::Supported,
                 application_keypad: CapabilitySupport::Supported,
                 bracketed_paste: CapabilitySupport::Supported,
-                focus_events: CapabilitySupport::Supported,
+                focus_events: CapabilitySupport::HostDependent,
                 sgr_mouse: CapabilitySupport::Supported,
             },
             title_setting: CapabilitySupport::Supported,
-            clipboard: CapabilitySupport::Supported,
+            clipboard: CapabilitySupport::PolicyGated,
             save_restore: SaveRestoreCapabilities {
                 cursor: CapabilitySupport::Supported,
                 modes: CapabilitySupport::Supported,
@@ -736,6 +736,22 @@ pub(super) fn terminfo_diagnostics(
             "active terminal profile={} selected TERM={}",
             profile.profile.name(),
             profile.term
+        ),
+    });
+    diagnostics.push(TerminalDiagnostic {
+        severity: TerminalDiagnosticSeverity::Info,
+        code: "terminal.capabilities",
+        message: format!(
+            "advertised capabilities: csi={:?} osc={:?} dcs={:?} sgr_256={:?} true_color={:?} alternate_screen={:?} focus_events={:?} sgr_mouse={:?} clipboard={:?}",
+            profile.capabilities.csi_sequences,
+            profile.capabilities.osc_string_controls,
+            profile.capabilities.dcs_string_controls,
+            profile.capabilities.sgr.indexed_256_colors,
+            profile.capabilities.sgr.true_color,
+            profile.capabilities.dec_private_modes.alternate_screen,
+            profile.capabilities.dec_private_modes.focus_events,
+            profile.capabilities.dec_private_modes.sgr_mouse,
+            profile.capabilities.clipboard,
         ),
     });
 

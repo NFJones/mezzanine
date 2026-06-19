@@ -1327,7 +1327,7 @@ fn xterm_compatible_profile_declares_required_capabilities() {
     );
     assert_eq!(
         profile.capabilities.dec_private_modes.focus_events,
-        CapabilitySupport::Supported
+        CapabilitySupport::HostDependent
     );
     assert_eq!(
         profile.capabilities.dec_private_modes.sgr_mouse,
@@ -1337,7 +1337,7 @@ fn xterm_compatible_profile_declares_required_capabilities() {
         profile.capabilities.title_setting,
         CapabilitySupport::Supported
     );
-    assert_eq!(profile.capabilities.clipboard, CapabilitySupport::Supported);
+    assert_eq!(profile.capabilities.clipboard, CapabilitySupport::PolicyGated);
     assert_eq!(
         profile.capabilities.save_restore.cursor,
         CapabilitySupport::Supported
