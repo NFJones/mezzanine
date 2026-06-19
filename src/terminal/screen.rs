@@ -38,6 +38,48 @@ pub fn tracked_dec_private_mode(mode: u16) -> bool {
     )
 }
 
+/// Identifies one designated VT charset for printable GL bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum TerminalCharset {
+    /// ASCII maps printable bytes directly to Unicode scalars.
+    #[default]
+    Ascii,
+    /// DEC Special Graphics remaps ASCII bytes to box-drawing glyphs.
+    DecSpecialGraphics,
+}
+
+/// Returns the Unicode glyph emitted for one DEC Special Graphics character.
+fn dec_special_graphics_char(ch: char) -> Option<char> {
+    Some(match ch {
+        '`' => '◆',
+        'a' => '▒',
+        'f' => '°',
+        'g' => '±',
+        'j' => '┘',
+        'k' => '┐',
+        'l' => '┌',
+        'm' => '└',
+        'n' => '┼',
+        'o' => '⎺',
+        'p' => '⎻',
+        'q' => '─',
+        'r' => '⎼',
+        's' => '⎽',
+        't' => '├',
+        'u' => '┤',
+        'v' => '┴',
+        'w' => '┬',
+        'x' => '│',
+        'y' => '≤',
+        'z' => '≥',
+        '{' => 'π',
+        '|' => '≠',
+        '}' => '£',
+        '~' => '·',
+        _ => return None,
+    })
+}
+
 /// Display-only gutter prefix used for pane-local Mezzanine agent transcript
 /// lines.
 const AGENT_TRANSCRIPT_GUTTER_PREFIX: &str = "▐ ";
@@ -402,6 +444,12 @@ pub struct TerminalSavedState {
     pub saved_cursor: Option<TerminalCursorState>,
     /// Saved tracked DEC private modes from CSI `?mode s`.
     pub saved_dec_private_modes: Vec<TerminalSavedDecPrivateMode>,
+    /// Whether G0 is designated as DEC Special Graphics.
+    pub g0_dec_special_graphics: bool,
+    /// Whether G1 is designated as DEC Special Graphics.
+    pub g1_dec_special_graphics: bool,
+    /// Whether SO currently invokes G1 into GL.
+    pub shift_out: bool,
 }
 
 /// Carries Parser State state for this subsystem.
@@ -420,6 +468,16 @@ pub(super) enum ParserState {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Escape,
+    /// Represents the Escape Charset G0 case for this enumeration.
+    ///
+    /// Callers use this variant to describe one explicit state or command path
+    /// without relying on stringly typed status values.
+    EscapeCharsetG0,
+    /// Represents the Escape Charset G1 case for this enumeration.
+    ///
+    /// Callers use this variant to describe one explicit state or command path
+    /// without relying on stringly typed status values.
+    EscapeCharsetG1,
     /// Represents the Csi case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -905,6 +963,12 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) bell_events: u64,
+    /// Charset designated into the G0 slot.
+    pub(super) g0_charset: TerminalCharset,
+    /// Charset designated into the G1 slot.
+    pub(super) g1_charset: TerminalCharset,
+    /// Whether SO currently invokes G1 into GL.
+    pub(super) shift_out: bool,
     /// Stores incomplete UTF-8 bytes retained across `feed` calls.
     ///
     /// PTY reads can split one multibyte scalar across separate input chunks.
@@ -963,6 +1027,9 @@ impl TerminalScreen {
             normal_viewport_detached_from_history: false,
             activity_events: 0,
             bell_events: 0,
+            g0_charset: TerminalCharset::Ascii,
+            g1_charset: TerminalCharset::Ascii,
+            shift_out: false,
             utf8_tail: Vec::new(),
         })
     }
@@ -1823,6 +1890,9 @@ impl TerminalScreen {
         self.origin_mode_enabled = false;
         self.application_keypad_enabled = false;
         self.focus_events_enabled = false;
+        self.g0_charset = TerminalCharset::Ascii;
+        self.g1_charset = TerminalCharset::Ascii;
+        self.shift_out = false;
         self.saved_dec_private_modes.clear();
         self.scroll_region = None;
         self.normal_viewport_detached_from_history = false;
@@ -1882,6 +1952,9 @@ impl TerminalScreen {
                     enabled: *enabled,
                 })
                 .collect(),
+            g0_dec_special_graphics: self.g0_charset == TerminalCharset::DecSpecialGraphics,
+            g1_dec_special_graphics: self.g1_charset == TerminalCharset::DecSpecialGraphics,
+            shift_out: self.shift_out,
         }
     }
 
@@ -1898,6 +1971,17 @@ impl TerminalScreen {
                     .insert(saved_mode.mode, saved_mode.enabled);
             }
         }
+        self.g0_charset = if state.g0_dec_special_graphics {
+            TerminalCharset::DecSpecialGraphics
+        } else {
+            TerminalCharset::Ascii
+        };
+        self.g1_charset = if state.g1_dec_special_graphics {
+            TerminalCharset::DecSpecialGraphics
+        } else {
+            TerminalCharset::Ascii
+        };
+        self.shift_out = state.shift_out;
     }
 
     /// Runs the alternate screen active operation for this subsystem.
@@ -2026,6 +2110,8 @@ impl TerminalScreen {
         match self.parser_state {
             ParserState::Ground => self.feed_ground(ch),
             ParserState::Escape => self.feed_escape(ch),
+            ParserState::EscapeCharsetG0 => self.feed_escape_charset_g0(ch),
+            ParserState::EscapeCharsetG1 => self.feed_escape_charset_g1(ch),
             ParserState::Csi => self.feed_csi(ch),
             ParserState::Osc => self.feed_osc(ch),
             ParserState::OscEscape => self.feed_osc_escape(ch),
@@ -2060,6 +2146,8 @@ impl TerminalScreen {
                 let next_tab = (self.cursor.column / 8 + 1) * 8;
                 self.cursor.column = next_tab.min(self.max_column());
             }
+            '\u{000e}' => self.shift_out = true,
+            '\u{000f}' => self.shift_out = false,
             ch if !ch.is_control() => self.print(ch),
             _ => {}
         }
@@ -2079,6 +2167,10 @@ impl TerminalScreen {
             self.osc_buffer.clear();
             self.osc_buffer_truncated = false;
             self.parser_state = ParserState::Osc;
+        } else if ch == '(' {
+            self.parser_state = ParserState::EscapeCharsetG0;
+        } else if ch == ')' {
+            self.parser_state = ParserState::EscapeCharsetG1;
         } else if matches!(ch, 'P' | 'X' | '^' | '_') {
             self.parser_state = ParserState::Dcs;
         } else if ch == '7' {
@@ -2098,6 +2190,56 @@ impl TerminalScreen {
             self.parser_state = ParserState::Ground;
         } else {
             self.parser_state = ParserState::Ground;
+        }
+    }
+
+    /// Runs the feed escape charset G0 operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn feed_escape_charset_g0(&mut self, ch: char) {
+        self.designate_charset(false, ch);
+    }
+
+    /// Runs the feed escape charset G1 operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn feed_escape_charset_g1(&mut self, ch: char) {
+        self.designate_charset(true, ch);
+    }
+
+    /// Runs the designate charset operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn designate_charset(&mut self, g1: bool, ch: char) {
+        let charset = match ch {
+            '0' => TerminalCharset::DecSpecialGraphics,
+            'B' => TerminalCharset::Ascii,
+            _ => {
+                self.parser_state = ParserState::Ground;
+                return;
+            }
+        };
+
+        if g1 {
+            self.g1_charset = charset;
+        } else {
+            self.g0_charset = charset;
+        }
+        self.parser_state = ParserState::Ground;
+    }
+
+    /// Returns the currently invoked GL charset.
+    fn active_charset(&self) -> TerminalCharset {
+        if self.shift_out {
+            self.g1_charset
+        } else {
+            self.g0_charset
         }
     }
 
@@ -2435,7 +2577,11 @@ impl TerminalScreen {
         if self.try_extend_previous_grapheme(ch) {
             return;
         }
-        let text = ch.to_string();
+        let translated = match self.active_charset() {
+            TerminalCharset::Ascii => ch,
+            TerminalCharset::DecSpecialGraphics => dec_special_graphics_char(ch).unwrap_or(ch),
+        };
+        let text = translated.to_string();
         let width = terminal_grapheme_width(&text);
         if width == 0 {
             return;

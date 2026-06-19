@@ -576,6 +576,9 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
                 mode: 2004,
                 enabled: true,
             }],
+            g0_dec_special_graphics: false,
+            g1_dec_special_graphics: false,
+            shift_out: false,
         },
         exit_status: Some(crate::process::PaneExitStatus {
             code: Some(7),

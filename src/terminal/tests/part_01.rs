@@ -5779,6 +5779,42 @@ fn terminal_screen_restores_normal_screen_after_alternate_screen_exit() {
     assert!(!screen.alternate_screen_active());
 }
 
+/// Verifies G0 DEC Special Graphics designation renders box-drawing glyphs.
+///
+/// Ncurses ACS output commonly designates `ESC ( 0` and then emits ASCII box
+/// drawing bytes in GL. This regression guards that the terminal screen maps
+/// those bytes into Unicode box-drawing characters instead of leaving the raw
+/// ASCII source visible.
+#[test]
+fn terminal_screen_renders_dec_special_graphics_from_g0_charset() {
+    let mut screen = TerminalScreen::new(Size::new(6, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b(0lqk");
+
+    assert_eq!(screen.visible_lines()[0], "┌─┐");
+}
+
+/// Verifies saved parser state restores an invoked G1 DEC Special Graphics
+/// charset across snapshot resume.
+///
+/// Full-screen applications may designate `ESC ) 0`, invoke it with SO, and
+/// then rely on later output after snapshot restore to keep rendering ACS line
+/// drawing until SI switches GL back to G0. This regression guards both the
+/// SO/SI control handling and saved-state persistence for the active charset
+/// selection.
+#[test]
+fn terminal_screen_restores_invoked_g1_dec_special_graphics_from_saved_state() {
+    let mut source = TerminalScreen::new(Size::new(6, 2).unwrap(), 10).unwrap();
+    source.feed(b"\x1b)0\x0e");
+    let saved_state = source.saved_state();
+
+    let mut restored = TerminalScreen::new(Size::new(6, 2).unwrap(), 10).unwrap();
+    restored.restore_saved_state(&saved_state);
+    restored.feed(b"x\x0fq");
+
+    assert_eq!(restored.visible_lines()[0], "│q");
+}
+
 /// Verifies terminal screen handles cursor address and clear line.
 ///
 /// This regression scenario documents the behavior being protected so a
