@@ -1202,8 +1202,11 @@ which are forwarded to the containing terminal, which are translated, and which
 are ignored.
 
 Alternate screen contents MUST be represented separately from the normal screen
-and normal history buffer. Output produced while a pane is in an alternate
-screen MUST NOT be appended to the normal bounded history buffer.
+and live alternate-screen buffer. Alternate-screen redraws, cursor-addressed
+updates, and visible cells MUST NOT be appended to the normal bounded history
+buffer. Rows that actually scroll off the top of the full alternate-screen
+region MAY be appended to the normal bounded history buffer so line-oriented
+fullscreen programs remain scrollable through pane-local history.
 
 Default agent context assembly MUST NOT include passive terminal contents from
 the visible screen, normal history, or alternate screen. When a pane is
@@ -1217,9 +1220,11 @@ agent context and any history-inclusive observations MUST exclude the
 alternate-screen cell contents.
 
 User-facing commands and mouse text selection MAY provide an explicit
-visible-screen capture mode for the active alternate screen, but alternate-screen
-content MUST NOT appear in history-inclusive capture, copy-mode history, or
-default agent context.
+visible-screen capture mode for the active alternate screen, but visible
+alternate-screen content MUST NOT appear in history-inclusive capture, copy-mode
+history, or default agent context. Alternate-screen rows already recorded as
+full-region scroll-off history MAY appear through normal history, copy-mode, and
+history-inclusive capture paths.
 
 Mezzanine MUST preserve compatibility with programs that expect a multiplexed
 xterm-compatible terminal: full-screen programs MUST be able to enter and leave

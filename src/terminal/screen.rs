@@ -264,13 +264,19 @@ impl AlternateScreenState {
         self.active
     }
 
-    /// Runs the should record to history operation for this subsystem.
+    /// Returns whether normal-screen output should be recorded to history.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn should_record_to_history(&self) -> bool {
         !self.active
+    }
+
+    /// Returns whether alternate-screen scroll-off rows should be recorded to
+    /// history.
+    pub fn should_record_scroll_off_to_history(&self) -> bool {
+        true
     }
 }
 
@@ -2733,7 +2739,10 @@ impl TerminalScreen {
         }
         let count = count.min(bottom.saturating_sub(top).saturating_add(1));
         for _ in 0..count {
-            if top == 0 && bottom == self.max_row() && self.alternate.should_record_to_history() {
+            if top == 0
+                && bottom == self.max_row()
+                && self.alternate.should_record_scroll_off_to_history()
+            {
                 self.normal_viewport_detached_from_history = false;
                 self.history.push_styled_line_with_wrap(
                     styled_line_from_row_with_copy_text(

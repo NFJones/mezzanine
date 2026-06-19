@@ -5766,10 +5766,27 @@ fn terminal_screen_scrolls_normal_output_into_history() {
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn terminal_screen_excludes_alternate_screen_from_history() {
+fn terminal_screen_records_alternate_screen_scroll_off_history() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
 
     screen.feed(b"\x1b[?1049halt\ninside\nmore\x1b[?1049lback");
+
+    assert_eq!(screen.history().lines().collect::<Vec<_>>(), vec!["alt"]);
+    assert_eq!(screen.visible_lines()[0], "back");
+    assert!(!screen.alternate_screen_active());
+}
+
+/// Verifies alternate-screen redraws do not pollute history.
+///
+/// This regression scenario covers true TUI-style painting where an
+/// alternate-screen application repeatedly updates visible cells without
+/// scrolling the full pane. Only rows that actually scroll off the top should
+/// become pane-local history.
+#[test]
+fn terminal_screen_excludes_alternate_screen_redraws_from_history() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[?1049hfirst\x1b[Hsecond\x1b[?1049lback");
 
     assert!(screen.history().is_empty());
     assert_eq!(screen.visible_lines()[0], "back");
