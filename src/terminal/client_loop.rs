@@ -206,6 +206,16 @@ pub struct RenderedClientView {
     /// This mirrors the active pane application mode so host clipboard pastes
     /// arrive with `CSI 200~`/`CSI 201~` delimiters and can be routed opaquely.
     pub bracketed_paste: bool,
+    /// Whether host focus event reporting should be enabled for the attached terminal.
+    ///
+    /// This mirrors the active pane application mode so focus in/out events
+    /// reach full-screen applications through the attached host terminal.
+    pub focus_events: bool,
+    /// Whether the active pane expects alternate-screen host presentation semantics.
+    ///
+    /// This records the pane-local presentation mode so attached-terminal
+    /// redraws can retain full-screen host behavior across incremental updates.
+    pub alternate_screen: bool,
     /// Whether the attached terminal should request host mouse reporting.
     ///
     /// This mirrors the foreground client mouse policy so serialized client
@@ -320,6 +330,16 @@ pub struct AttachedTerminalOutputModes {
     /// be forwarded to the pane without interpreting Mezzanine prefix commands
     /// or mouse reports embedded in the pasted bytes.
     pub bracketed_paste: bool,
+    /// Whether host focus event reporting should be enabled for a frame.
+    ///
+    /// This mirrors the active pane application mode so full-screen
+    /// applications continue to receive focus changes while attached.
+    pub focus_events: bool,
+    /// Whether the active pane uses alternate-screen host presentation.
+    ///
+    /// Attached redraws retain this state so incremental updates can preserve
+    /// full-screen host semantics without forcing a full repaint.
+    pub alternate_screen: bool,
     /// Whether the attached terminal should request host mouse reporting.
     ///
     /// This mirrors the foreground client's configured mouse policy so
@@ -376,6 +396,8 @@ impl Default for AttachedTerminalOutputModes {
         Self {
             application_keypad: false,
             bracketed_paste: false,
+            focus_events: false,
+            alternate_screen: false,
             host_mouse_reporting: true,
             cursor_style: TerminalCursorStyle::default(),
             cursor_blink: false,
@@ -702,6 +724,10 @@ pub(crate) struct AttachedTerminalOutputFrameState {
     line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Whether host bracketed paste was enabled for the retained frame.
     bracketed_paste: bool,
+    /// Whether host focus event reporting was enabled for the retained frame.
+    focus_events: bool,
+    /// Whether alternate-screen host presentation was enabled for the retained frame.
+    alternate_screen: bool,
     /// Whether host mouse reporting was enabled for the retained frame.
     host_mouse_reporting: bool,
     /// Cursor presentation sequence emitted by the retained frame.
@@ -734,6 +760,8 @@ impl AttachedTerminalOutputFrameState {
             lines: lines.to_vec(),
             line_style_spans: normalized_style_span_rows(line_style_spans, lines.len()),
             bracketed_paste: modes.bracketed_paste,
+            focus_events: modes.focus_events,
+            alternate_screen: modes.alternate_screen,
             host_mouse_reporting: modes.host_mouse_reporting,
             cursor_presentation: cursor_presentation_sequence(lines, modes),
         }
@@ -1036,6 +1064,10 @@ pub(crate) fn encode_attached_terminal_output_frame_with_styles(
     frame.extend_from_slice(attached_terminal_bracketed_paste_frame(
         modes.bracketed_paste,
     ));
+    frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
+    frame.extend_from_slice(attached_terminal_alternate_screen_frame(
+        modes.alternate_screen,
+    ));
     frame.extend_from_slice(b"\x1b[2J\x1b[H");
     for (index, line) in lines.iter().enumerate() {
         if index > 0 {
@@ -1081,6 +1113,14 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             modes,
         );
     }
+    if previous.alternate_screen != modes.alternate_screen {
+        return encode_attached_terminal_output_frame_with_styles(
+            lines,
+            line_style_spans,
+            keypad_transition,
+            modes,
+        );
+    }
 
     let mut frame = Vec::new();
     match keypad_transition {
@@ -1092,6 +1132,9 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
         frame.extend_from_slice(attached_terminal_bracketed_paste_frame(
             modes.bracketed_paste,
         ));
+    }
+    if previous.focus_events != modes.focus_events {
+        frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
     }
     if previous.host_mouse_reporting != modes.host_mouse_reporting {
         frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
@@ -1137,6 +1180,14 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
                 modes.host_mouse_reporting,
             ));
+            if previous.focus_events || modes.focus_events {
+                frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
+            }
+            if previous.alternate_screen || modes.alternate_screen {
+                frame.extend_from_slice(attached_terminal_alternate_screen_frame(
+                    modes.alternate_screen,
+                ));
+            }
             presentation_reset_emitted = true;
         }
         let row = index.saturating_add(1);
@@ -1162,6 +1213,14 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
                 modes.host_mouse_reporting,
             ));
+            if previous.focus_events || modes.focus_events {
+                frame.extend_from_slice(attached_terminal_focus_events_frame(modes.focus_events));
+            }
+            if previous.alternate_screen || modes.alternate_screen {
+                frame.extend_from_slice(attached_terminal_alternate_screen_frame(
+                    modes.alternate_screen,
+                ));
+            }
         }
         frame.extend_from_slice(cursor_presentation.as_bytes());
     }
@@ -1245,6 +1304,8 @@ fn terminal_output_style_spans_drop_focused_overlay_spans_for_mismatched_diff_ro
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -1299,6 +1360,8 @@ fn terminal_output_style_spans_drop_hidden_spans_for_matching_diff_row_slices() 
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -1634,12 +1697,30 @@ const fn attached_terminal_bracketed_paste_frame(enabled: bool) -> &'static [u8]
     }
 }
 
+/// Returns the host focus-event DEC private-mode sequence for a frame.
+const fn attached_terminal_focus_events_frame(enabled: bool) -> &'static [u8] {
+    if enabled {
+        b"\x1b[?1004h"
+    } else {
+        b"\x1b[?1004l"
+    }
+}
+
+/// Returns the host alternate-screen DEC private-mode sequence for a frame.
+const fn attached_terminal_alternate_screen_frame(enabled: bool) -> &'static [u8] {
+    if enabled {
+        b"\x1b[?1049h"
+    } else {
+        b"\x1b[?1049l"
+    }
+}
+
 /// Defines the fn const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(crate) const fn attached_terminal_restore_presentation_frame() -> &'static [u8] {
-    b"\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
+    b"\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
 }
 
 /// Runs the cursor presentation sequence operation for this subsystem.
@@ -2973,6 +3054,8 @@ where
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: terminal_config.mouse_policy.pane_application_keypad_mode,
                 bracketed_paste: terminal_config.pane_bracketed_paste_mode,
+                focus_events: view.is_some_and(|view| view.focus_events),
+                alternate_screen: view.is_some_and(|view| view.alternate_screen),
                 host_mouse_reporting: terminal_config.mouse_policy.enabled,
                 cursor_style: terminal_config.cursor_style,
                 cursor_blink: terminal_config.cursor_blink,

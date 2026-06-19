@@ -249,6 +249,10 @@ pub fn render_attached_client_view(
     );
     let requires_client_scroll = role == ClientViewRole::Observer
         && (client_size.columns < window.size.columns || client_size.rows < window.size.rows);
+    let active_pane_screen = window
+        .panes()
+        .get(window.active_pane_index())
+        .and_then(|active_pane| screens.get(&active_pane.id.to_string()));
     Ok(Some(RenderedClientView {
         role,
         authoritative_size: window.size,
@@ -267,6 +271,8 @@ pub fn render_attached_client_view(
         cursor_blink_interval_ms: config.cursor_blink_interval_ms,
         application_keypad: config.mouse_policy.pane_application_keypad_mode,
         bracketed_paste: config.pane_bracketed_paste_mode,
+        focus_events: active_pane_screen.is_some_and(|screen| screen.focus_events_enabled()),
+        alternate_screen: active_pane_screen.is_some_and(|screen| screen.alternate_screen_active()),
         host_mouse_reporting: config.mouse_policy.enabled,
         animation_refresh_interval_ms: if config.frame_context.animation_tick_ms > 0 {
             AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS

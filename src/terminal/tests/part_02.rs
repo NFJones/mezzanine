@@ -399,15 +399,15 @@ fn attached_output_frame_sets_client_application_keypad_mode() {
     let lines = vec!["pane".to_string()];
     assert!(
         encode_attached_terminal_output_frame_with_keypad_transition(&lines, Some(true),)
-            .starts_with(b"\x1b=\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H")
+            .starts_with(b"\x1b=\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H")
     );
     assert!(
         encode_attached_terminal_output_frame_with_keypad_transition(&lines, Some(false),)
-            .starts_with(b"\x1b>\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H")
+            .starts_with(b"\x1b>\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H")
     );
     assert!(
         encode_attached_terminal_output_frame_with_keypad_transition(&lines, None).starts_with(
-            b"\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
+            b"\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H"
         )
     );
 }
@@ -430,7 +430,7 @@ fn attached_output_frame_sets_host_bracketed_paste_mode() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(rendered.starts_with(
-        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004h\x1b[2J\x1b[H"
+        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004h\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H"
     ));
     assert!(
         String::from_utf8(
@@ -492,7 +492,7 @@ fn attached_output_frame_encodes_sgr_style_spans() {
 
     assert_eq!(
         rendered,
-        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H\x1b[0;1;38;5;120mAB\x1b[0;4;7;38;2;1;2;3;44mC\x1b[0mD\x1b[?25l\x1b[0m"
+        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H\x1b[0;1;38;5;120mAB\x1b[0;4;7;38;2;1;2;3;44mC\x1b[0mD\x1b[?25l\x1b[0m"
     );
 }
 

@@ -2828,6 +2828,8 @@ fn attached_terminal_client_step_routes_input_and_composes_output() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -2914,6 +2916,8 @@ fn attached_terminal_client_step_forwards_raw_input_when_primary_prompt_is_activ
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -3135,6 +3139,8 @@ fn attached_terminal_client_loop_pumps_input_output_and_stops_on_hangup() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -3241,6 +3247,8 @@ fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -3269,7 +3277,7 @@ fn attached_terminal_fd_loop_io_reads_and_writes_unix_fds() {
     assert_eq!(report.output_frames, 1);
     assert!(report.bytes_written > 0);
     assert!(rendered.starts_with(
-        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
+        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H"
     ));
     assert!(rendered.contains("pane"));
     assert!(rendered.ends_with("\x1b[?25l\x1b[0m\x1b[2 q\x1b[1;1H\x1b[?25h"));
@@ -3331,7 +3339,7 @@ fn attached_terminal_output_frame_controls_cursor_presentation() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(rendered.starts_with(
-        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[2J\x1b[H"
+        "\x1b[?25l\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[?1000;1002;1006h\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[2J\x1b[H"
     ));
     assert!(rendered.contains("pane"));
     assert!(rendered.ends_with("\x1b[?25l\x1b[0m\x1b[4 q\x1b[3;4H\x1b[?25h"));
@@ -3943,7 +3951,7 @@ fn attached_terminal_restore_frame_restores_cursor_visibility() {
 
     assert_eq!(
         restore,
-        "\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
+        "\x1b[?2004l\x1b[?1004l\x1b[?1049l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b>\x1b[0m\x1b[?6l\x1b[?69l\x1b[r\x1b[?7h\x1b[2J\x1b[H\x1b[?25h\x1b[0 q"
     );
 }
 
@@ -4565,6 +4573,8 @@ fn observer_client_presentation_uses_local_viewport_offset() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -4812,6 +4822,8 @@ fn client_presentation_renders_status_line_inside_authoritative_size() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -4867,6 +4879,8 @@ fn client_presentation_highlights_current_pager_search_match() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -4920,6 +4934,8 @@ fn terminal_output_style_spans_drop_styles_for_matching_row_slice() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -5002,6 +5018,8 @@ fn readline_prompt_client_presentation_places_prompt_on_status_row() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
@@ -5049,6 +5067,8 @@ fn readline_prompt_client_presentation_styles_agent_prompt_by_display_width() {
         cursor_blink_interval_ms: 500,
         application_keypad: false,
         bracketed_paste: false,
+        focus_events: false,
+        alternate_screen: false,
         host_mouse_reporting: true,
         animation_refresh_interval_ms: 0,
         ui_theme: UiTheme::default(),
