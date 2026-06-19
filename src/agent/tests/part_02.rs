@@ -4647,7 +4647,11 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
-        description.contains("The function call is the action-batch envelope"),
+        description.contains("The function call is only the transport envelope"),
+        "{description}"
+    );
+    assert!(
+        description.contains("required-function-call"),
         "{description}"
     );
     assert!(

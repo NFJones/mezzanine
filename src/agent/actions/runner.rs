@@ -60,6 +60,9 @@ const MEMORY_SEARCH_ACTION_LIMIT_PER_TURN: usize = 2;
 /// reusable fact.
 const MEMORY_STORE_ACTION_LIMIT_PER_TURN: usize = 1;
 
+/// Model-context marker emitted when the current task matches an available MCP route.
+const MCP_ROUTING_MATCH_MARKER: &str = "routing_match=available_mcp";
+
 #[derive(Debug, Clone, Copy, Default)]
 struct MemoryActionBudget {
     /// Number of memory search actions already accepted or observed in the
@@ -172,9 +175,30 @@ fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enab
     if !memory_actions_enabled {
         return;
     }
+    if request_has_direct_mcp_routing_match(request) {
+        request.allowed_actions.remove(AllowedAction::MemorySearch);
+        request.allowed_actions.remove(AllowedAction::MemoryStore);
+        return;
+    }
     request
         .allowed_actions
         .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
+}
+
+/// Reports whether runtime context already identifies a direct available MCP route.
+///
+/// In this state the default surface should stay focused on `mcp_call` and
+/// other direct execution actions. Memory remains requestable as an explicit
+/// capability, but it is not advertised as a same-step shortcut beside the
+/// matching integration call.
+fn request_has_direct_mcp_routing_match(request: &ModelRequest) -> bool {
+    request.allowed_actions.contains(AllowedAction::McpCall)
+        && !request.available_mcp_tools.is_empty()
+        && request.messages.iter().any(|message| {
+            message.source == ContextSourceKind::Configuration
+                && message.content.starts_with("[mcp integrations]\n")
+                && message.content.contains(MCP_ROUTING_MATCH_MARKER)
+        })
 }
 
 /// Exposes MCP tool calls on the main model action surface when tools are available.

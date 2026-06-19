@@ -423,7 +423,11 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         "{description}"
     );
     assert!(
-        description.contains("The function call is the action-batch envelope"),
+        description.contains("The function call is only the transport envelope"),
+        "{description}"
+    );
+    assert!(
+        description.contains("required-function-call compliance"),
         "{description}"
     );
     assert!(

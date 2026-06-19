@@ -1308,6 +1308,69 @@ fn default_action_gates_expose_mcp_and_memory_for_diagnostic_request_shapes() {
     assert!(!request.issue_actions_enabled);
 }
 
+/// Verifies matched MCP routes narrow the default selected-model action surface.
+///
+/// When runtime context already identifies a directly relevant available MCP
+/// tool, memory actions should not sit beside `mcp_call` as a tempting
+/// placeholder route. Persistent memory remains enabled for explicit
+/// capability requests, but the default schema should focus the model on the
+/// matching integration call.
+#[test]
+fn default_action_gates_hide_memory_when_mcp_routing_match_is_available() {
+    let mcp_tool = McpPromptTool {
+        server_id: "githubcopilot".to_string(),
+        tool_name: "list_ci_results".to_string(),
+        description: "Read GitHub CI check results for a repository".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object"}"#.to_string(),
+    };
+    let context = crate::agent::append_mcp_context(
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use the githubcopilot mcp server to inspect CI".to_string(),
+        }])
+        .unwrap(),
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "githubcopilot".to_string(),
+                display_name: "GitHub Copilot".to_string(),
+                purpose: "GitHub repository and CI operations".to_string(),
+                usage_instructions: String::new(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![mcp_tool.clone()],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &context,
+    )
+    .unwrap();
+
+    super::apply_default_action_gates(&mut request, std::slice::from_ref(&mcp_tool), true, false);
+
+    let allowed_actions = request.allowed_actions.action_type_names();
+    assert!(allowed_actions.contains(&"mcp_call"));
+    assert!(!allowed_actions.contains(&"memory_search"));
+    assert!(!allowed_actions.contains(&"memory_store"));
+    assert!(allowed_actions.contains(&"request_capability"));
+    assert_eq!(request.available_mcp_tools, vec![mcp_tool]);
+    assert!(request.memory_actions_enabled);
+}
+
 
 /// Verifies model-authored aborts are repaired instead of treated as a valid
 /// way to end recoverable turns. A model that merely needs more repository
@@ -2358,6 +2421,9 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     let capability_description = capability_tool["description"].as_str().unwrap();
     assert!(capability_description.contains("Return a function call, not prose"));
     assert!(capability_description.contains("currently allowed actions"));
+    assert!(capability_description.contains("transport envelope"));
+    assert!(capability_description.contains("not a prerequisite task step"));
+    assert!(capability_description.contains("required-function-call"));
     assert!(capability_description.contains("Choose the smallest action"));
     assert!(capability_description.contains("missing information, parameters, or identifiers"));
     assert!(capability_description.contains("request or use the relevant capability instead of asking the user"));
@@ -2386,6 +2452,10 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
             .unwrap();
     assert!(rationale_description.contains("Terse additive reason"));
     assert!(rationale_description.contains("actions are next"));
+    assert!(rationale_description.contains("directly advances the user task"));
+    assert!(rationale_description.contains("required function call"));
+    assert!(rationale_description.contains("current-actions call"));
+    assert!(rationale_description.contains("schema wrapper"));
     assert!(rationale_description.contains("Do not restate the user request"));
     assert!(rationale_description.contains("prior rationale"));
     assert!(rationale_description.contains("progress say"));
@@ -2413,7 +2483,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         "{thought_description}"
     );
     assert!(
-        rationale_description.len() < 240,
+        rationale_description.len() < 420,
         "batch rationale schema should stay compact: {rationale_description}"
     );
     assert!(
@@ -4207,9 +4277,11 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert!(allowed_surface.contains("one canonical MAAP action-batch function"));
     assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
     assert!(
-        allowed_surface.contains(
-            "The active function call is the schema-valid action-batch envelope"
-        ),
+        allowed_surface.contains("The active function call is the schema-valid transport envelope"),
+        "{allowed_surface}"
+    );
+    assert!(
+        allowed_surface.contains("required-function-call"),
         "{allowed_surface}"
     );
     assert!(
@@ -4319,13 +4391,13 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
-/// Verifies MCP routing matches remain on the unified current action surface.
+/// Verifies MCP routing matches narrow the unified current action surface.
 ///
 /// The routing hint should make the matching MCP tool directly callable without
-/// hiding other useful current actions. The provider schema should let the
-/// model pick the smallest action that makes progress.
+/// exposing memory actions as placeholder setup routes. The provider schema
+/// should let the model pick `mcp_call` without first stepping through memory.
 #[test]
-fn openai_routing_matched_mcp_stays_on_unified_surface_with_memory() {
+fn openai_routing_matched_mcp_omits_memory_from_default_surface() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
@@ -4379,8 +4451,8 @@ fn openai_routing_matched_mcp_stays_on_unified_surface_with_memory() {
 
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(action_types.contains(&"mcp_call".to_string()));
-    assert!(action_types.contains(&"memory_search".to_string()));
-    assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(!action_types.contains(&"memory_search".to_string()));
+    assert!(!action_types.contains(&"memory_store".to_string()));
     assert!(
         description.contains("Available MCP tools callable with mcp_call: githubcopilot/list_ci_results"),
         "{description}"
@@ -4394,7 +4466,11 @@ fn openai_routing_matched_mcp_stays_on_unified_surface_with_memory() {
         "{description}"
     );
     assert!(
-        description.contains("The function call is the action-batch envelope"),
+        description.contains("The function call is only the transport envelope"),
+        "{description}"
+    );
+    assert!(
+        description.contains("required-function-call"),
         "{description}"
     );
     assert!(

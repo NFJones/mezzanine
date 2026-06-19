@@ -1548,10 +1548,7 @@ impl RuntimeSessionService {
                 .is_some_and(|server| {
                     runtime_mcp_server_needs_live_auth_rediscovery(
                         server,
-                        runtime_mcp_server_has_live_auth_recovery(
-                            server,
-                            self.auth_store.as_ref(),
-                        ),
+                        runtime_mcp_server_has_live_auth_recovery(server, self.auth_store.as_ref()),
                     )
                 });
             if should_reset {

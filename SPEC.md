@@ -6362,9 +6362,14 @@ When the active user request matches available MCP server or tool metadata, the
 runtime MCP context SHOULD include an explicit routing hint that identifies the
 matching server or tool and tells the model that `mcp_call` is directly
 available when it is the smallest action that makes concrete progress. The
-prompt and provider action descriptions MUST prohibit placeholder
-`memory_search` or `memory_store` calls whose only purpose is to satisfy the
-current action wrapper before a real action.
+default selected-model action surface MUST hide `memory_search` and
+`memory_store` when it exposes `mcp_call` and current runtime context contains
+this available-MCP routing hint. Memory MAY remain requestable as an explicit
+capability when persistent memory is enabled, but it MUST NOT be advertised as a
+same-step default action beside the matching MCP call. The prompt and provider
+action descriptions MUST prohibit placeholder `memory_search` or
+`memory_store` calls whose only purpose is to satisfy the current action wrapper
+before a real action.
 If a callable MCP tool needs arguments such as identifiers, URLs, paths,
 repository owner/name, branch, commit, issue or pull request number, or CI
 target, the prompt and provider action descriptions MUST instruct the model to
@@ -6378,7 +6383,12 @@ function for the current request instead of multiple surface-specific wrapper
 functions. The canonical function schema SHOULD contain only the actions that
 are currently allowed, so the model chooses the concrete action object that best
 advances the task without first reasoning about a wrapper function family such
-as shell, MCP, memory, or current-actions.
+as shell, MCP, memory, or current-actions. Provider descriptions for the
+canonical function MUST explain that the function call is only the transport
+envelope for the chosen MAAP action batch, not a prerequisite task step, and
+MUST prohibit rationale or thought text that says the model is complying with a
+required function call, tool call, current-actions call, schema wrapper, or
+action wrapper.
 
 The prompt SHOULD instruct the agent to choose the smallest action that makes
 real progress and to avoid actions that do not answer the current task.
@@ -6398,7 +6408,10 @@ remotes, branches, commits, paths, CI state, MCP results, plans, progress, or
 other transient task state unless the user explicitly requested storing that
 exact content. They MUST state that `memory_store` is reserved for information
 almost certain to be useful in future sessions, and that the runtime MUST skip
-additional `memory_store` actions after one store in one user turn.
+additional `memory_store` actions after one store in one user turn. When
+available MCP routing already identifies a direct `mcp_call` route for the
+current task, the runtime MUST NOT expose memory actions on the default
+selected-model surface.
 The prompt MUST treat repository exploration as a bounded means to choose the
 next concrete action rather than as an open-ended phase. It SHOULD guide
 ordinary implementation, debugging, design, and report tasks toward one focused
