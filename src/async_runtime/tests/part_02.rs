@@ -930,6 +930,76 @@ async fn async_pty_pane_process_io_bridges_live_portable_pty() {
     );
 }
 
+/// Verifies that the live PTY backend can observe a minimal full-screen/TUI
+/// mode transition over real pane output.
+///
+/// This regression extends the deterministic TUI suite with a portable-pty
+/// process that enters alternate screen, enables focus events, clears the
+/// viewport, draws sentinel text, and restores the normal screen. The async
+/// PTY backend must preserve both the host-mode bytes and the visible content
+/// in output order so later end-to-end compatibility tests can build on a
+/// proven live-pane transport path.
+#[tokio::test]
+async fn async_pty_pane_process_io_preserves_full_screen_mode_bytes() {
+    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let process = spawn_pane_process(
+        &shell,
+        Some(
+            "/bin/sh -c \"printf '\\033[?1049h\\033[?1004h\\033[H\\033[2Jmini-tui\\nready\\033[?1004l\\033[?1049l'\"",
+        ),
+        &test_pane_environment(),
+        Size::new(80, 24).unwrap(),
+    )
+    .unwrap();
+    let mut backend = AsyncPtyPaneProcessIo::new("%fullscreen", process).unwrap();
+
+    let mut output = Vec::new();
+    for _ in 0..50 {
+        if let Some(bytes) = backend.read_output(4096).await.unwrap() {
+            output.extend(bytes);
+        }
+        let text = String::from_utf8_lossy(&output);
+        if text.contains("\x1b[?1049h")
+            && text.contains("\x1b[?1004h")
+            && text.contains("mini-tui")
+            && text.contains("ready")
+            && text.contains("\x1b[?1004l")
+            && text.contains("\x1b[?1049l")
+        {
+            break;
+        }
+        if let Some(activity) = backend.output_activity()
+            && let Ok(result) = tokio::time::timeout(Duration::from_millis(500), activity).await
+        {
+            result.unwrap();
+        }
+    }
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(text.contains("\x1b[?1049h"), "{text}");
+    assert!(text.contains("\x1b[?1004h"), "{text}");
+    assert!(text.contains("mini-tui"), "{text}");
+    assert!(text.contains("ready"), "{text}");
+    assert!(text.contains("\x1b[?1004l"), "{text}");
+    assert!(text.contains("\x1b[?1049l"), "{text}");
+
+    let event = backend.terminate(true).await.unwrap();
+
+    let ProcessEvent::Exited {
+        pane_id,
+        exit_code,
+        signal,
+    } = event
+    else {
+        panic!("expected process exit event, got {event:?}");
+    };
+    assert_eq!(pane_id, "%fullscreen");
+    assert!(
+        exit_code.is_some() || signal.is_some(),
+        "terminated process should expose an exit code or signal"
+    );
+}
+
 /// Verifies that the pane driver service loop submits output events to the
 /// runtime actor and reports both submitted and applied event counts. This is
 /// the reusable bridge that live per-pane PTY tasks use after actor handoff.
