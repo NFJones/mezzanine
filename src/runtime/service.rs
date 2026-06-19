@@ -991,7 +991,9 @@ impl RuntimeSessionService {
         if emit_empty_completion {
             self.append_runtime_mcp_prechecked_status_events(registry, source)?;
         }
-        let pending_server_ids = runtime_mcp_pending_discovery_server_ids(registry);
+        let pending_server_ids = runtime_mcp_pending_discovery_server_ids(registry, |server| {
+            runtime_mcp_server_has_live_auth_recovery(server, self.auth_store.as_ref())
+        });
         if pending_server_ids.is_empty() {
             if emit_empty_completion && runtime_mcp_enabled_server_count(registry) > 0 {
                 self.append_runtime_mcp_initialization_completed_event(registry, source, 0)?;
@@ -1534,9 +1536,27 @@ impl RuntimeSessionService {
         registry: &mut McpRegistry,
         environment: &BTreeMap<String, String>,
     ) -> Result<Vec<String>> {
-        let server_ids = runtime_mcp_pending_discovery_server_ids(registry);
+        let server_ids = runtime_mcp_pending_discovery_server_ids(registry, |server| {
+            runtime_mcp_server_has_live_auth_recovery(server, self.auth_store.as_ref())
+        });
         let mut blacklisted = Vec::new();
         for server_id in server_ids {
+            let should_reset = registry
+                .list_servers()
+                .into_iter()
+                .find(|server| server.configured.id == server_id)
+                .is_some_and(|server| {
+                    runtime_mcp_server_needs_live_auth_rediscovery(
+                        server,
+                        runtime_mcp_server_has_live_auth_recovery(
+                            server,
+                            self.auth_store.as_ref(),
+                        ),
+                    )
+                });
+            if should_reset {
+                registry.retry_server(&server_id)?;
+            }
             match self
                 .discover_runtime_mcp_transport_async(registry, &server_id, environment)
                 .await
@@ -1641,7 +1661,7 @@ impl RuntimeSessionService {
                 } else {
                     None
                 };
-                let discovery = discover_streamable_http_mcp_server_with_auth_token(
+                let discovery = match discover_streamable_http_mcp_server_with_auth_token(
                     &plan,
                     environment,
                     "mezzanine",
@@ -1650,7 +1670,34 @@ impl RuntimeSessionService {
                         .as_ref()
                         .map(secrecy::ExposeSecret::expose_secret),
                 )
-                .await?;
+                .await
+                {
+                    Ok(discovery) => discovery,
+                    Err(error)
+                        if error.kind() == crate::error::MezErrorKind::Forbidden
+                            && bearer_token_env.is_none()
+                            && self.auth_store.as_ref().is_some_and(|store| {
+                                store.mcp_refresh_token(server_id).ok().flatten().is_some()
+                            }) =>
+                    {
+                        let auth_store = self.auth_store.as_ref().ok_or_else(|| {
+                            MezError::invalid_state("MCP OAuth refresh requires an auth store")
+                        })?;
+                        auth_store
+                            .refresh_mcp_oauth_credential_for_server_async(server_id)
+                            .await?;
+                        let refreshed_token = auth_store.mcp_access_token(server_id)?;
+                        discover_streamable_http_mcp_server_with_auth_token(
+                            &plan,
+                            environment,
+                            "mezzanine",
+                            env!("CARGO_PKG_VERSION"),
+                            Some(secrecy::ExposeSecret::expose_secret(&refreshed_token)),
+                        )
+                        .await?
+                    }
+                    Err(error) => return Err(error),
+                };
                 registry
                     .mark_available_from_discovered_tools(server_id, discovery.tools.clone())?;
                 self.mcp_transports.insert_streamable_http(
@@ -2421,13 +2468,60 @@ impl RuntimeMcpInitializationCounts {
 }
 
 /// Returns enabled MCP servers that still need runtime discovery.
-fn runtime_mcp_pending_discovery_server_ids(registry: &McpRegistry) -> Vec<String> {
+fn runtime_mcp_pending_discovery_server_ids<F>(
+    registry: &McpRegistry,
+    has_live_auth_recovery: F,
+) -> Vec<String>
+where
+    F: Fn(&crate::mcp::McpServerState) -> bool,
+{
     registry
         .list_servers()
         .into_iter()
-        .filter(|server| server.configured.enabled && server.status == McpServerStatus::Configured)
+        .filter(|server| {
+            runtime_mcp_server_needs_runtime_discovery(server, has_live_auth_recovery(server))
+        })
         .map(|server| server.configured.id.clone())
         .collect()
+}
+
+/// Returns whether one enabled MCP server should re-enter runtime discovery.
+fn runtime_mcp_server_needs_runtime_discovery(
+    server: &crate::mcp::McpServerState,
+    has_live_auth_recovery: bool,
+) -> bool {
+    server.configured.enabled
+        && (server.status == McpServerStatus::Configured
+            || runtime_mcp_server_needs_live_auth_rediscovery(server, has_live_auth_recovery))
+}
+
+/// Returns whether one MCP server should retry live discovery after auth changes.
+fn runtime_mcp_server_needs_live_auth_rediscovery(
+    server: &crate::mcp::McpServerState,
+    has_live_auth_recovery: bool,
+) -> bool {
+    has_live_auth_recovery
+        && server.configured.kind == crate::mcp::McpServerKind::Http
+        && server.configured.bearer_token_env.is_none()
+        && matches!(
+            server.status,
+            McpServerStatus::Unavailable | McpServerStatus::Blacklisted | McpServerStatus::Failed
+        )
+}
+
+/// Returns whether a server has stored OAuth state that can recover live discovery.
+fn runtime_mcp_server_has_live_auth_recovery(
+    server: &crate::mcp::McpServerState,
+    auth_store: Option<&crate::auth::AuthStore>,
+) -> bool {
+    auth_store.is_some_and(|store| {
+        store.mcp_access_token(&server.configured.id).is_ok()
+            || store
+                .mcp_refresh_token(&server.configured.id)
+                .ok()
+                .flatten()
+                .is_some()
+    })
 }
 
 /// Returns how many MCP servers are enabled in the registry.
@@ -2503,5 +2597,56 @@ fn runtime_agent_session_metadata_visibility(value: &str) -> Result<AgentShellVi
         _ => Err(MezError::invalid_args(
             "agent session metadata visibility is invalid",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies lazy runtime discovery retries blacklisted streamable HTTP MCP
+    /// servers when stored OAuth state can recover auth. This regression keeps
+    /// `/list-mcp` and MCP tool usage live-reloadable after `mez mcp login`
+    /// without requiring a Mez restart.
+    #[test]
+    fn runtime_mcp_pending_discovery_retries_blacklisted_http_server_with_auth_recovery() {
+        let mut registry = McpRegistry::default();
+        registry
+            .add_server(crate::mcp::McpServerConfig::streamable_http(
+                "fixture",
+                "fixture",
+                "https://example.invalid/mcp",
+            ))
+            .unwrap();
+        registry
+            .blacklist_for_session("fixture", "oauth expired")
+            .unwrap();
+
+        assert_eq!(
+            runtime_mcp_pending_discovery_server_ids(&registry, |server| {
+                server.configured.id == "fixture"
+            }),
+            vec!["fixture".to_string()]
+        );
+    }
+
+    /// Verifies lazy runtime discovery leaves blacklisted streamable HTTP MCP
+    /// servers excluded when no stored OAuth recovery path exists. This avoids
+    /// broadly clearing explicit session blacklists for unrelated failures.
+    #[test]
+    fn runtime_mcp_pending_discovery_excludes_blacklisted_http_server_without_auth_recovery() {
+        let mut registry = McpRegistry::default();
+        registry
+            .add_server(crate::mcp::McpServerConfig::streamable_http(
+                "fixture",
+                "fixture",
+                "https://example.invalid/mcp",
+            ))
+            .unwrap();
+        registry
+            .blacklist_for_session("fixture", "oauth expired")
+            .unwrap();
+
+        assert!(runtime_mcp_pending_discovery_server_ids(&registry, |_| false).is_empty());
     }
 }
