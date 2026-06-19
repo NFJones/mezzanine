@@ -336,6 +336,58 @@ fn foreground_attach_exits_cleanly_without_broken_pipe_error() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
+/// Launches a detached foreground service and runs a deterministic full-screen
+/// shell script through a real `mez attach` PTY.
+///
+/// This regression exercises the end-to-end foreground attach path with a
+/// minimal TUI-style script that explicitly enters alternate screen, enables
+/// focus events, clears the viewport, draws sentinel text, and restores the
+/// normal screen. The attach client must surface the full-screen host mode
+/// bytes and return to the shell prompt after the script exits.
+#[test]
+fn foreground_attach_runs_minimal_full_screen_script() {
+    let root = test_root("fg-attach-tui");
+    let home = root.join("home");
+    let runtime = root.join("runtime");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = runtime.join("tui.sock");
+
+    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut output = Vec::new();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("serving: true")
+                && text.contains("0 shell")
+                && text.contains("\r\n\x1b[0m$")
+                && text.contains("\x1b[?25h")
+        })
+        .unwrap();
+
+    process
+        .write_input(
+            b"printf '\\033[?1049h\\033[?1004h\\033[H\\033[2Jmini-tui'; printf '\\nready'; sleep 1\n",
+        )
+        .unwrap();
+    thread::sleep(Duration::from_secs(2));
+
+    process
+        .write_input(b"printf '\\033[?1004l\\033[?1049l'; echo shell-resumed; exit\n")
+        .unwrap();
+    process
+        .read_until_exit(&mut output, Duration::from_secs(10))
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(text.contains("\x1b[?1049h"), "{text}");
+    assert!(text.contains("\x1b[?1004h"), "{text}");
+    assert!(text.contains("mini-tui"), "{text}");
+    assert!(text.contains("ready"), "{text}");
+    assert!(text.contains("\x1b[?1004l"), "{text}");
+    assert!(text.contains("\x1b[?1049l"), "{text}");
+}
+
 /// Launches `mez attach` inside a PTY whose real size intentionally differs
 /// from stale `COLUMNS`/`LINES` environment values. The first control initialize
 /// frame must report the PTY size, because default `mez` startup uses this frame
