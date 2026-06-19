@@ -562,6 +562,116 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies failed runtime memory actions tell the model to continue without
+/// retrying memory.
+///
+/// This regression keeps runtime-fed memory rejection text aligned with the
+/// prompt guidance so a failed memory action nudges the model toward direct
+/// evidence instead of looping on memory again.
+#[test]
+fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memory() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-memory-disabled-config");
+    service.set_config_root(config_root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[memory]\nenabled = false\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-memory-disabled-turn","input":"use memory"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "mem-search".to_string(),
+        rationale: "search memory".to_string(),
+        payload: crate::agent::AgentActionPayload::MemorySearch {
+            query: "prompt cache".to_string(),
+            limit: Some(3),
+        },
+    };
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "using memory".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![crate::agent::ActionResult {
+            protocol: "maap/1".to_string(),
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            action_id: action.id.clone(),
+            action_type: "memory_search",
+            status: ActionStatus::Running,
+            content: Vec::new(),
+            structured_content_json: None,
+            is_error: false,
+            error: None,
+        }],
+        final_turn: true,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .execute_running_memory_actions_for_turn(&turn, &mut execution)
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    let error = execution.action_results[0]
+        .error
+        .as_ref()
+        .expect("memory search should fail when memory is disabled");
+    assert_eq!(error.code, "memory_disabled");
+    assert!(
+        error
+            .message
+            .contains("continue with current action results, MCP, shell, web, or a bounded report instead of retrying memory actions"),
+        "{error:?}"
+    );
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies full-access mode satisfies MCP tool prompt approval while still
 /// executing the call through the normal MCP registry and transport path.
 ///

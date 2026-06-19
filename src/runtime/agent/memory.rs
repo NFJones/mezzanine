@@ -101,7 +101,7 @@ impl RuntimeSessionService {
                 action,
                 ActionStatus::Failed,
                 "memory_disabled",
-                "memory actions require memory.enabled to be true".to_string(),
+                "memory actions require memory.enabled to be true; continue with current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
             );
         }
         let Some(config_root) = self.config_root.clone() else {
@@ -110,7 +110,7 @@ impl RuntimeSessionService {
                 action,
                 ActionStatus::Failed,
                 "memory_store_unavailable",
-                "persistent memory actions require a configured config root".to_string(),
+                "persistent memory actions require a configured config root; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
             );
         };
         let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);

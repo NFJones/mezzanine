@@ -1819,7 +1819,7 @@ fn turn_runner_skips_memory_searches_after_per_turn_limit() {
     assert_eq!(
         execution.action_results[2].content_texts(),
         vec![
-            "memory_search skipped: per-turn memory search limit reached; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead"
+            "memory_search skipped: per-turn memory search limit reached; continue the task with direct artifacts, current action results, MCP, shell, web, or a bounded report instead, and do not search memory again this turn"
         ]
     );
     let structured = execution.action_results[2]
@@ -1924,7 +1924,7 @@ fn turn_runner_counts_prior_memory_search_results_from_context() {
     assert_eq!(
         execution.action_results[0].content_texts(),
         vec![
-            "memory_search skipped: per-turn memory search limit reached; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead"
+            "memory_search skipped: per-turn memory search limit reached; continue the task with direct artifacts, current action results, MCP, shell, web, or a bounded report instead, and do not search memory again this turn"
         ]
     );
     let structured = execution.action_results[0]

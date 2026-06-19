@@ -1153,6 +1153,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .as_str()
         .unwrap();
     assert!(query_description.contains("Do not use memory_search by default"));
+    assert!(query_description.contains("Treat it as optional support"));
     assert!(query_description.contains("generic way to make progress"));
     assert!(query_description.contains("at most one focused search in ordinary turns"));
     assert!(query_description.contains("never more than two memory_search actions in one user turn"));
@@ -1166,6 +1167,8 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
     assert!(query_description.contains("adjust or broaden a direct integration query"));
     assert!(query_description.contains("report a bounded blocker"));
     assert!(query_description.contains("placeholder setup before another direct action"));
+    assert!(query_description.contains("If runtime skips or rejects a memory action"));
+    assert!(query_description.contains("instead of searching memory again"));
     assert!(query_description.contains("startup ritual"));
     assert!(query_description.contains("paraphrase and search again"));
 }

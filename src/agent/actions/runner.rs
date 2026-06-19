@@ -109,7 +109,7 @@ impl MemoryActionBudget {
                         turn,
                         action,
                         "memory_search_turn_limit",
-                        "memory_search skipped: per-turn memory search limit reached; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead",
+                        "memory_search skipped: per-turn memory search limit reached; continue the task with direct artifacts, current action results, MCP, shell, web, or a bounded report instead, and do not search memory again this turn",
                         MEMORY_SEARCH_ACTION_LIMIT_PER_TURN,
                     ));
                 }
