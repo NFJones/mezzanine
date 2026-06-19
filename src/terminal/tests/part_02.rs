@@ -808,6 +808,23 @@ fn terminal_screen_replaces_invalid_utf8_without_breaking_layout() {
     assert_eq!(screen.visible_lines()[0], "ok \u{fffd} done");
 }
 
+/// Verifies terminal screen buffers split multibyte UTF-8 scalars across feeds.
+///
+/// PTY reads can split one multibyte character between chunks during
+/// full-screen redraws. The decoder must retain the incomplete prefix so the
+/// visible row keeps only the valid leading text until the remaining bytes
+/// arrive.
+#[test]
+fn terminal_screen_buffers_split_utf8_scalar_until_remaining_bytes_arrive() {
+    let mut screen = TerminalScreen::new(Size::new(12, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"caf\xc3");
+    assert_eq!(screen.visible_lines()[0], "caf");
+
+    screen.feed(b"\xa9!");
+    assert_eq!(screen.visible_lines()[0], "caf\u{e9}!");
+}
+
 /// Verifies terminal screen preserves combining marks in live rows.
 ///
 /// This regression scenario documents the behavior being protected so a
