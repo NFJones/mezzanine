@@ -319,6 +319,7 @@ impl RuntimeSessionService {
                 DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS,
             agent_loop_limit: DEFAULT_AGENT_LOOP_LIMIT,
             agent_local_action_executor: DEFAULT_AGENT_LOCAL_ACTION_EXECUTOR,
+            agent_local_action_executor_overrides: BTreeMap::new(),
             agent_loops_by_pane: BTreeMap::new(),
             agent_loop_turns: BTreeMap::new(),
             agent_turn_shell_dispatch_history: BTreeMap::new(),

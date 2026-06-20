@@ -556,7 +556,9 @@ impl RuntimeSessionService {
                 execution.action_results[index] = result;
                 continue;
             }
-            if self.agent_local_action_executor == RuntimeLocalActionExecutor::Native {
+            if self.agent_local_action_executor_for_pane(&turn.pane_id)
+                == RuntimeLocalActionExecutor::Native
+            {
                 let marker = runtime_marker_for_action(turn, &action.id)?;
                 let Some(working_directory) = self.pane_current_working_directory(&turn.pane_id)
                 else {

@@ -5016,6 +5016,14 @@ The baseline command capabilities are:
   accept `on`, `off`, `toggle`, and `status`. The command MUST update the
   pane-local agent preference and MUST checkpoint that preference with other
   pane-scoped agent shell preferences.
+- `/shell-mode`: Inspect or change the local action executor for the active
+  agent shell. It MUST accept `native`, `pane`, `shell`, `pane_shell`,
+  `status`, and optional `--scope session|config`. Session scope MUST update
+  the active pane immediately without requiring an agent-shell restart. Config
+  scope MUST persist `agents.local_action_executor` through normal config
+  mutation validation and then use the persisted mode. Status output MUST show
+  the effective mode, configured mode, source, and native-mode host-equivalence
+  warning state when applicable.
 - `/personality`: Configure response style when supported.
 - `/stop`: Stop background jobs owned by the agent. User-initiated stops MUST
   settle the affected turn as interrupted/cancelled rather than failed.

@@ -1953,6 +1953,8 @@ pub struct RuntimeSessionService {
     pub(super) agent_loop_limit: usize,
     /// Configured transport for model-authored local actions.
     pub(super) agent_local_action_executor: RuntimeLocalActionExecutor,
+    /// Pane-scoped slash-command overrides for model-authored local actions.
+    pub(super) agent_local_action_executor_overrides: BTreeMap<String, RuntimeLocalActionExecutor>,
     /// Active `/loop` controller state keyed by pane id.
     pub(super) agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
     /// Loop metadata keyed by runtime agent turn id.

@@ -1731,6 +1731,11 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         body.contains("inspect or change persistent memory enablement."),
         "{body}"
     );
+    assert!(body.contains("| `/shell-mode` |"), "{body}");
+    assert!(
+        body.contains("inspect or change local action execution transport."),
+        "{body}"
+    );
     assert!(!body.contains("/mention"), "{body}");
     assert!(!body.contains("/plan"), "{body}");
     assert!(!body.contains("/ps"), "{body}");
@@ -1872,6 +1877,15 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         model,
         AgentShellCommandOutcome::RequiresRuntime { ref reason, .. }
             if reason.contains("PolicyMutation")
+    ));
+    let shell_mode = execute_agent_shell_command(&mut store, "%1", "/shell-mode native")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        shell_mode,
+        AgentShellCommandOutcome::RequiresRuntime { ref command, ref reason, .. }
+            if command == "shell-mode"
+                && reason.contains("local action executor changes require the live runtime")
     ));
     assert!(
         execute_agent_shell_command(&mut store, "%1", "ordinary prompt")

@@ -327,6 +327,75 @@ fn runtime_agent_shell_routing_command_sets_pane_override() {
     );
 }
 
+/// Verifies that `/shell-mode` updates pane-local local-action executor state,
+/// reports status details, and can persist the configured default.
+#[test]
+fn runtime_agent_shell_shell_mode_command_sets_override_and_persists_config() {
+    let mut service = test_runtime_service();
+    service.config_root = Some(temp_root("runtime-shell-mode-config"));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let enabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"shell-mode-native","method":"agent/shell/command","params":{"idempotency_key":"shell-mode-native","input":"/shell-mode native"}}"#,
+        &primary,
+    );
+
+    assert!(enabled.contains(r#""kind":"mutated""#), "{enabled}");
+    assert!(enabled.contains(r#""command":"shell-mode""#), "{enabled}");
+    assert!(enabled.contains("mode=native"), "{enabled}");
+    assert!(enabled.contains("source=session"), "{enabled}");
+    assert_eq!(
+        service.agent_local_action_executor_overrides.get("%1").copied(),
+        Some(RuntimeLocalActionExecutor::Native)
+    );
+    assert_eq!(
+        service.agent_local_action_executor_for_pane("%1"),
+        RuntimeLocalActionExecutor::Native
+    );
+
+    let status = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"shell-mode-status","method":"agent/shell/command","params":{"idempotency_key":"shell-mode-status","input":"/shell-mode status"}}"#,
+        &primary,
+    );
+    assert!(status.contains(r#""kind":"display""#), "{status}");
+    assert!(status.contains("mode=native"), "{status}");
+    assert!(status.contains("configured=pane"), "{status}");
+    assert!(status.contains("source=session"), "{status}");
+
+    let persisted = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"shell-mode-config","method":"agent/shell/command","params":{"idempotency_key":"shell-mode-config","input":"/shell-mode native --scope config"}}"#,
+        &primary,
+    );
+    assert!(persisted.contains(r#""kind":"mutated""#), "{persisted}");
+    assert!(persisted.contains("mode=native"), "{persisted}");
+    assert!(persisted.contains("source=config"), "{persisted}");
+    assert!(persisted.contains("config_changed=true"), "{persisted}");
+    assert_eq!(
+        service.agent_local_action_executor,
+        RuntimeLocalActionExecutor::Native
+    );
+    assert_eq!(
+        service.agent_local_action_executor_overrides.get("%1").copied(),
+        None
+    );
+
+    let config_path = crate::config::ConfigPaths::from_root(
+        service.config_root.clone().expect("shell-mode config root should exist"),
+    )
+    .default_primary_file();
+    let config_text = std::fs::read_to_string(config_path).unwrap();
+    assert!(
+        config_text.contains("local_action_executor = \"native\""),
+        "{config_text}"
+    );
+}
+
 /// Verifies that routing runs an internal router request before
 /// the turn provider request, applies the selected model and reasoning effort,
 /// and keeps router prompt/response correspondence out of persisted model

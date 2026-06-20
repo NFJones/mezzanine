@@ -153,7 +153,8 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<()> {
-        if self.agent_local_action_executor != RuntimeLocalActionExecutor::Native {
+        if self.agent_local_action_executor_for_pane(pane_id) != RuntimeLocalActionExecutor::Native
+        {
             return Ok(());
         }
         let Some(working_directory) = self.pane_current_working_directory(pane_id) else {
@@ -353,6 +354,17 @@ impl RuntimeSessionService {
                         &pane_id,
                         input,
                         Some(&personality_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "shell-mode"
+                {
+                    let shell_mode_outcome =
+                        self.execute_agent_shell_shell_mode_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&shell_mode_outcome),
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()

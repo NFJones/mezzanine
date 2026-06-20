@@ -796,10 +796,9 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "debug-config"
         | "diff"
         | "list-modified-files" => "copy and diagnostics",
-        "approval" | "approve" | "routing" | "init" | "latency" | "list-mcp" | "log-level"
-        | "memory" | "directive" | "logout" | "model" | "permissions" | "personality" | "trust" => {
-            "configuration"
-        }
+        "approval" | "approve" | "routing" | "shell-mode" | "init" | "latency" | "list-mcp"
+        | "log-level" | "memory" | "directive" | "logout" | "model" | "permissions"
+        | "personality" | "trust" => "configuration",
         "help" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
@@ -841,6 +840,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "model" => "inspect or change model and reasoning settings.",
         "latency" => "inspect or change latency/cost preference.",
         "routing" => "toggle pane-local automatic model sizing.",
+        "shell-mode" => "inspect or change local action execution transport.",
         "directive" => "inspect or set a session-scoped developer-instruction addendum.",
         "personality" => "inspect or change response personality.",
         "loop" => {

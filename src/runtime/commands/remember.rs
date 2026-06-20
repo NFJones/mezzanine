@@ -847,7 +847,7 @@ impl RuntimeSessionService {
     }
 
     /// Finds or creates the private primary config file for slash-command persistence.
-    fn runtime_primary_config_path_for_agent_command(&mut self) -> Result<PathBuf> {
+    pub(super) fn runtime_primary_config_path_for_agent_command(&mut self) -> Result<PathBuf> {
         if let Some(path) = self
             .config_layers
             .iter()
