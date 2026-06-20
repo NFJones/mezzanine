@@ -4055,7 +4055,7 @@ fn readiness_blocks_probes_when_pane_is_not_ready() {
 #[test]
 fn readiness_override_requires_warning_ack_and_is_one_epoch_only() {
     let mut store = PaneReadinessOverrideStore::default();
-    store.record_pending_probe("%1").unwrap();
+    store.record_pending_probe("%1", "probe-1").unwrap();
     assert!(store.has_pending_probe("%1"));
 
     let error = store
@@ -4074,6 +4074,26 @@ fn readiness_override_requires_warning_ack_and_is_one_epoch_only() {
     let consumed = store.consume_epoch("%1", 7).unwrap();
     assert_eq!(consumed.pane_id, "%1");
     assert!(!store.allows_epoch("%1", 7));
+}
+
+/// Verifies pending readiness probes are cleared only by their active marker.
+///
+/// This regression scenario protects probe epoch ownership. A late completion
+/// or timeout from a superseded probe must not clear the active probe marker
+/// for the same pane, otherwise stale probe output can mutate readiness for the
+/// wrong shell boundary.
+#[test]
+fn readiness_pending_probe_requires_matching_marker() {
+    let mut store = PaneReadinessOverrideStore::default();
+
+    store.record_pending_probe("%1", "probe-a").unwrap();
+    store.record_pending_probe("%1", "probe-b").unwrap();
+
+    assert_eq!(store.pending_probe_marker("%1"), Some("probe-b"));
+    assert!(!store.clear_pending_probe_if_matches("%1", "probe-a"));
+    assert_eq!(store.pending_probe_marker("%1"), Some("probe-b"));
+    assert!(store.clear_pending_probe_if_matches("%1", "probe-b"));
+    assert!(!store.has_pending_probe("%1"));
 }
 
 /// Verifies readiness override revokes on safety boundary changes.

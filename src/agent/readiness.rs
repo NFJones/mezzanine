@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{BTreeMap, BTreeSet, EnvironmentSignature, MezError, Result, validate_non_empty};
+use super::{BTreeMap, EnvironmentSignature, MezError, Result, validate_non_empty};
 
 // Pane readiness state and override handling.
 
@@ -153,11 +153,11 @@ pub struct PaneReadinessOverrideStore {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) overrides: BTreeMap<String, PaneReadinessOverride>,
-    /// Stores the pending probes value for this data structure.
+    /// Stores the active pending probe marker by pane id.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) pending_probes: BTreeSet<String>,
+    pub(super) pending_probes: BTreeMap<String, String>,
 }
 
 impl PaneReadinessOverrideStore {
@@ -166,10 +166,16 @@ impl PaneReadinessOverrideStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn record_pending_probe(&mut self, pane_id: impl Into<String>) -> Result<()> {
+    pub fn record_pending_probe(
+        &mut self,
+        pane_id: impl Into<String>,
+        marker: impl Into<String>,
+    ) -> Result<()> {
         let pane_id = pane_id.into();
+        let marker = marker.into();
         validate_non_empty("pane id", &pane_id)?;
-        self.pending_probes.insert(pane_id);
+        validate_non_empty("readiness probe marker", &marker)?;
+        self.pending_probes.insert(pane_id, marker);
         Ok(())
     }
 
@@ -179,7 +185,16 @@ impl PaneReadinessOverrideStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn has_pending_probe(&self, pane_id: &str) -> bool {
-        self.pending_probes.contains(pane_id)
+        self.pending_probes.contains_key(pane_id)
+    }
+
+    /// Runs the pending probe marker operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn pending_probe_marker(&self, pane_id: &str) -> Option<&str> {
+        self.pending_probes.get(pane_id).map(String::as_str)
     }
 
     /// Runs the clear pending probe operation for this subsystem.
@@ -188,7 +203,19 @@ impl PaneReadinessOverrideStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn clear_pending_probe(&mut self, pane_id: &str) -> bool {
-        self.pending_probes.remove(pane_id)
+        self.pending_probes.remove(pane_id).is_some()
+    }
+
+    /// Runs the clear pending probe if marker matches operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn clear_pending_probe_if_matches(&mut self, pane_id: &str, marker: &str) -> bool {
+        if self.pending_probe_marker(pane_id) != Some(marker) {
+            return false;
+        }
+        self.clear_pending_probe(pane_id)
     }
 
     /// Runs the mark ready for epoch operation for this subsystem.

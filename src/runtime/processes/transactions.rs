@@ -320,8 +320,19 @@ impl RuntimeSessionService {
                 )
             }
             RunningShellTransactionKind::ReadinessProbe => {
-                self.pane_readiness_overrides
-                    .clear_pending_probe(&transaction.pane_id);
+                if !self
+                    .pane_readiness_overrides
+                    .clear_pending_probe_if_matches(&transaction.pane_id, marker)
+                {
+                    self.append_agent_trace_turn_event(
+                        &transaction.pane_id,
+                        &transaction.turn_id,
+                        &format!(
+                            "readiness_probe ignored reason=stale_protocol_violation marker={marker}"
+                        ),
+                    )?;
+                    return Ok(0);
+                }
                 if let Some(action_id) = self.pending_shell_action_id_for_turn(&transaction.turn_id)
                 {
                     let terminal_observation = shell_transaction_protocol_violation_observation(
@@ -458,8 +469,17 @@ impl RuntimeSessionService {
         transaction: RunningShellTransactionRef,
         error: &str,
     ) -> Result<()> {
-        self.pane_readiness_overrides
-            .clear_pending_probe(&transaction.pane_id);
+        if !self
+            .pane_readiness_overrides
+            .clear_pending_probe_if_matches(&transaction.pane_id, marker)
+        {
+            self.append_agent_trace_turn_event(
+                &transaction.pane_id,
+                &transaction.turn_id,
+                &format!("readiness_probe ignored reason=stale_write_failure marker={marker}"),
+            )?;
+            return Ok(());
+        }
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
         self.append_agent_trace_turn_event(
@@ -715,8 +735,17 @@ impl RuntimeSessionService {
         elapsed_ms: u64,
     ) -> Result<()> {
         self.interrupt_shell_transaction_pane(&transaction.pane_id)?;
-        self.pane_readiness_overrides
-            .clear_pending_probe(&transaction.pane_id);
+        if !self
+            .pane_readiness_overrides
+            .clear_pending_probe_if_matches(&transaction.pane_id, marker)
+        {
+            self.append_agent_trace_turn_event(
+                &transaction.pane_id,
+                &transaction.turn_id,
+                &format!("readiness_probe ignored reason=stale_timeout marker={marker}"),
+            )?;
+            return Ok(());
+        }
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
         self.append_agent_trace_turn_event(
@@ -1477,7 +1506,7 @@ impl RuntimeSessionService {
         self.remember_mez_wrapper_filter_command(&turn.pane_id, probe_command);
         self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes())?;
         self.pane_readiness_overrides
-            .record_pending_probe(&turn.pane_id)?;
+            .record_pending_probe(&turn.pane_id, &marker_id)?;
         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Probing);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -1543,7 +1572,17 @@ impl RuntimeSessionService {
                 "readiness probe marker identity does not match agent turn",
             ));
         }
-        self.pane_readiness_overrides.clear_pending_probe(pane_id);
+        if !self
+            .pane_readiness_overrides
+            .clear_pending_probe_if_matches(pane_id, marker)
+        {
+            self.append_agent_trace_turn_event(
+                pane_id,
+                turn_id,
+                &format!("readiness_probe ignored reason=stale_marker marker={marker}"),
+            )?;
+            return Ok(0);
+        }
         if exit_code == 0 {
             let previous_readiness = self.pane_readiness_state(pane_id);
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);

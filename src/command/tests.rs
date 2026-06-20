@@ -1669,7 +1669,7 @@ fn mark_pane_ready_requires_acknowledgement_before_store_mutation() {
         .id
         .to_string();
     let mut store = PaneReadinessOverrideStore::default();
-    store.record_pending_probe(&pane_id).unwrap();
+    store.record_pending_probe(&pane_id, "probe-1").unwrap();
 
     let warning = display_body(
         execute_mark_pane_ready_command(
