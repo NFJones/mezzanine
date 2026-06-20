@@ -1722,6 +1722,180 @@ fn native_shell_command_executor_rejects_interactive_and_stateful_actions() {
     );
 }
 
+/// Verifies native apply_patch execution applies a Mezzanine patch through the
+/// existing MAAP action and result path without pane dispatch.
+///
+/// This protects the native patch transport contract: the model still emits an
+/// `apply_patch` action, the runtime mutates the file through native Rust code,
+/// and structured metadata records native execution rather than pane shell
+/// dispatch.
+#[test]
+fn native_apply_patch_executor_updates_file_without_pane_dispatch() {
+    let temp = test_temp_dir("native-apply-patch-success");
+    std::fs::write(temp.join("note.txt"), "old\n").unwrap();
+    let action = AgentAction {
+        id: "native-patch-success".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &temp);
+
+    let result = execute_local_action(&turn(), &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(std::fs::read_to_string(temp.join("note.txt")).unwrap(), "new\n");
+    assert!(result.content_text().contains("diff -- apply patch"));
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""kind":"apply_patch""#), "{structured}");
+    assert!(structured.contains(r#""execution_transport":"native""#), "{structured}");
+    assert!(structured.contains(r#""sent_to_pane":false"#), "{structured}");
+    assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
+}
+
+/// Verifies native apply_patch execution reports stale hunks through the same
+/// model-correctable action-result path used by shell-backed patch failures.
+///
+/// A native patch transport must not silently apply approximate edits. Exact
+/// hunk matching failures should leave the target unchanged and return the
+/// existing actionable mismatch diagnostic to the model.
+#[test]
+fn native_apply_patch_executor_reports_stale_hunk_without_mutation() {
+    let temp = test_temp_dir("native-apply-patch-stale-hunk");
+    std::fs::write(temp.join("note.txt"), "current\n").unwrap();
+    let action = AgentAction {
+        id: "native-patch-stale".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &temp);
+
+    let result = execute_local_action(&turn(), &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Failed);
+    assert_eq!(
+        std::fs::read_to_string(temp.join("note.txt")).unwrap(),
+        "current\n"
+    );
+    assert!(
+        result.content_text().contains("apply_patch: hunk did not match: note.txt"),
+        "{}",
+        result.content_text()
+    );
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""execution_transport":"native""#), "{structured}");
+    assert!(structured.contains(r#""sent_to_pane":false"#), "{structured}");
+}
+
+/// Verifies native apply_patch execution resolves in-tree symlink targets
+/// before writing final bytes.
+///
+/// Native execution must preserve the existing shell-backed behavior where a
+/// symlink to a regular file inside the working directory patches the resolved
+/// target without replacing the symlink node itself.
+#[cfg(unix)]
+#[test]
+fn native_apply_patch_executor_resolves_in_tree_symlink_targets() {
+    let temp = test_temp_dir("native-apply-patch-symlink");
+    std::fs::write(temp.join("real.txt"), "old\n").unwrap();
+    std::os::unix::fs::symlink("real.txt", temp.join("link.txt")).unwrap();
+    let action = AgentAction {
+        id: "native-patch-symlink".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: link.txt\n@@\n-old\n+new\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &temp);
+
+    let result = execute_local_action(&turn(), &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(std::fs::read_to_string(temp.join("real.txt")).unwrap(), "new\n");
+    assert!(
+        std::fs::symlink_metadata(temp.join("link.txt"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+/// Verifies native apply_patch execution rejects symlink escapes and
+/// non-regular filesystem targets before attempting writes.
+///
+/// Native filesystem access must be at least as conservative as the pane-shell
+/// patch path: resolved targets outside the working directory and special
+/// filesystem nodes should fail with model-repairable diagnostics.
+#[cfg(unix)]
+#[test]
+fn native_apply_patch_executor_rejects_symlink_escape_and_non_regular_targets() {
+    let temp = test_temp_dir("native-apply-patch-safety");
+    let outside = test_temp_dir("native-apply-patch-outside");
+    std::fs::write(outside.join("outside.txt"), "old\n").unwrap();
+    std::os::unix::fs::symlink(outside.join("outside.txt"), temp.join("escape.txt")).unwrap();
+    let escape_action = AgentAction {
+        id: "native-patch-escape".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: escape.txt\n@@\n-old\n+new\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let mut escape_executor = NativeShellLocalExecutor::new("/bin/sh", &temp);
+
+    let escape_result =
+        execute_local_action(&turn(), &escape_action, marker(), &mut escape_executor).unwrap();
+
+    assert_eq!(escape_result.status, ActionStatus::Failed);
+    assert!(
+        escape_result
+            .content_text()
+            .contains("resolved path is outside current working directory"),
+        "{}",
+        escape_result.content_text()
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.join("outside.txt")).unwrap(),
+        "old\n"
+    );
+
+    let fifo = temp.join("fifo.txt");
+    let mkfifo = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(mkfifo.success(), "mkfifo should be available on the Unix test host");
+    let fifo_action = AgentAction {
+        id: "native-patch-fifo".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: fifo.txt\n@@\n-old\n+new\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let mut fifo_executor = NativeShellLocalExecutor::new("/bin/sh", &temp);
+
+    let fifo_result = execute_local_action(&turn(), &fifo_action, marker(), &mut fifo_executor)
+        .unwrap();
+
+    assert_eq!(fifo_result.status, ActionStatus::Failed);
+    assert!(
+        fifo_result
+            .content_text()
+            .contains("refusing to patch non-regular file: fifo.txt"),
+        "{}",
+        fifo_result.content_text()
+    );
+}
+
 /// Verifies semantic patch lowering supports Mezzanine patch
 /// blocks through a shell-backed applicator.
 ///

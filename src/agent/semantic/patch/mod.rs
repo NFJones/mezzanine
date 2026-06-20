@@ -10,6 +10,10 @@ use crate::agent::maap::{is_mez_patch_payload, validate_apply_patch_payload};
 use crate::agent::shell::shell_quote;
 use crate::error::{MezError, Result};
 use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod matcher;
 mod parser;
@@ -80,6 +84,244 @@ pub fn apply_patch_write_plan_from_read_output(
     let snapshots = parse_apply_patch_snapshot_output(read_output)?;
     let changes = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
     mez_apply_patch_write_plan(changes)
+}
+
+/// Applies one model-authored patch directly through the host filesystem.
+///
+/// The native path reuses the same parser, hunk matcher, path safety checks,
+/// and preimage verification as the shell-backed read/write pipeline while
+/// avoiding pane-shell dispatch for environments where native local execution
+/// has already been allowed by the runtime.
+pub fn apply_patch_natively(patch: &str, strip: Option<u64>, cwd: &Path) -> Result<()> {
+    if strip.is_some() {
+        return Err(MezError::invalid_args(
+            "apply_patch strip is unsupported for Mezzanine patch blocks",
+        ));
+    }
+    let effective =
+        try_convert_unified_diff_to_mez_patch(patch).unwrap_or_else(|| patch.to_string());
+    validate_apply_patch_payload(&effective)?;
+    debug_assert!(is_mez_patch_payload(&effective));
+    let patch = parse_mez_patch(&effective)?;
+    let cwd = canonical_apply_patch_cwd(cwd)?;
+    let snapshots = native_apply_patch_snapshots(&patch, &cwd)?;
+    let changes = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
+    apply_native_patch_changes(&cwd, &changes)
+}
+
+fn canonical_apply_patch_cwd(cwd: &Path) -> Result<PathBuf> {
+    let canonical = fs::canonicalize(cwd).map_err(|error| {
+        MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!("apply_patch: failed to resolve current working directory: {error}"),
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(MezError::invalid_args(
+            "apply_patch: current working directory is not a directory",
+        ));
+    }
+    Ok(canonical)
+}
+
+fn native_apply_patch_snapshots(
+    patch: &MezPatch,
+    cwd: &Path,
+) -> Result<BTreeMap<String, ApplyPatchSnapshot>> {
+    let mut snapshots = BTreeMap::new();
+    for path in patch.touched_paths() {
+        let snapshot = native_apply_patch_snapshot(&path, cwd)?;
+        snapshots.insert(path, snapshot);
+    }
+    Ok(snapshots)
+}
+
+fn native_apply_patch_snapshot(path: &str, cwd: &Path) -> Result<ApplyPatchSnapshot> {
+    let target = cwd.join(path);
+    let resolved = native_apply_patch_resolved_path(cwd, Path::new(path))?;
+    let resolved_text = resolved.to_string_lossy().into_owned();
+    if !path_is_under_cwd(cwd, &resolved) {
+        return Ok(ApplyPatchSnapshot::outside_cwd(
+            path.to_string(),
+            resolved_text,
+        ));
+    }
+    let metadata = match fs::metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(ApplyPatchSnapshot::missing(path.to_string(), resolved_text));
+        }
+        Err(_) => return Ok(ApplyPatchSnapshot::error(path.to_string(), resolved_text)),
+    };
+    if !metadata.is_file() {
+        return Ok(ApplyPatchSnapshot::non_regular(
+            path.to_string(),
+            resolved_text,
+        ));
+    }
+    let bytes = fs::read(&target).map_err(|error| {
+        MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!("apply_patch: failed to read file: {path}: {error}"),
+        )
+    })?;
+    Ok(ApplyPatchSnapshot::regular(
+        path.to_string(),
+        resolved_text,
+        bytes,
+    ))
+}
+
+fn native_apply_patch_resolved_path(cwd: &Path, relative: &Path) -> Result<PathBuf> {
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    }) {
+        return Err(MezError::invalid_args(format!(
+            "apply_patch: unsafe patch path: {}",
+            relative.display()
+        )));
+    }
+    let target = cwd.join(relative);
+    if target.exists() || fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.is_symlink())
+    {
+        return fs::canonicalize(&target).map_err(|_| {
+            MezError::invalid_args(format!(
+                "apply_patch: failed to resolve path: {}",
+                relative.display()
+            ))
+        });
+    }
+    let mut existing_parent = target.as_path();
+    let mut missing_components = Vec::new();
+    while !existing_parent.exists() {
+        let Some(name) = existing_parent.file_name() else {
+            break;
+        };
+        missing_components.push(name.to_os_string());
+        let Some(parent) = existing_parent.parent() else {
+            break;
+        };
+        existing_parent = parent;
+    }
+    let mut resolved = fs::canonicalize(existing_parent).map_err(|_| {
+        MezError::invalid_args(format!(
+            "apply_patch: failed to resolve path: {}",
+            relative.display()
+        ))
+    })?;
+    for component in missing_components.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn path_is_under_cwd(cwd: &Path, path: &Path) -> bool {
+    path == cwd || path.starts_with(cwd)
+}
+
+fn apply_native_patch_changes(cwd: &Path, changes: &[ApplyPatchFileChange]) -> Result<()> {
+    for change in changes {
+        apply_native_patch_change(cwd, change)?;
+    }
+    Ok(())
+}
+
+fn apply_native_patch_change(cwd: &Path, change: &ApplyPatchFileChange) -> Result<()> {
+    let resolved = native_apply_patch_resolved_path(cwd, Path::new(&change.path))?;
+    let expected = PathBuf::from(&change.resolved_path);
+    if !path_is_under_cwd(cwd, &resolved) {
+        return Err(MezError::invalid_args(format!(
+            "apply_patch: resolved path is outside current working directory: {}",
+            change.path
+        )));
+    }
+    if resolved != expected {
+        return Err(MezError::invalid_args(format!(
+            "apply_patch: resolved path changed before apply: {}",
+            change.path
+        )));
+    }
+    verify_native_patch_preimage(change, &resolved)?;
+    match &change.final_bytes {
+        Some(bytes) => write_native_patch_bytes(&resolved, bytes),
+        None => fs::remove_file(&resolved).map_err(|error| {
+            MezError::new(
+                crate::error::MezErrorKind::Io,
+                format!(
+                    "apply_patch: failed to delete file: {}: {error}",
+                    change.path
+                ),
+            )
+        }),
+    }
+}
+
+fn verify_native_patch_preimage(change: &ApplyPatchFileChange, resolved: &Path) -> Result<()> {
+    match &change.original {
+        ApplyPatchOriginalState::Regular(bytes) => {
+            let metadata = fs::metadata(resolved).map_err(|_| {
+                MezError::invalid_args(format!(
+                    "apply_patch: refusing to patch non-regular file: {}",
+                    change.path
+                ))
+            })?;
+            if !metadata.is_file() {
+                return Err(MezError::invalid_args(format!(
+                    "apply_patch: refusing to patch non-regular file: {}",
+                    change.path
+                )));
+            }
+            let current = fs::read(resolved).map_err(|error| {
+                MezError::new(
+                    crate::error::MezErrorKind::Io,
+                    format!("apply_patch: failed to read file: {}: {error}", change.path),
+                )
+            })?;
+            if current != *bytes {
+                return Err(MezError::invalid_args(format!(
+                    "apply_patch: file changed before apply: {}",
+                    change.path
+                )));
+            }
+            Ok(())
+        }
+        ApplyPatchOriginalState::Missing => {
+            if resolved.exists() || fs::symlink_metadata(resolved).is_ok() {
+                return Err(MezError::invalid_args(format!(
+                    "apply_patch: refusing to add existing path: {}",
+                    change.path
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn write_native_patch_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp = native_patch_temp_path(path);
+    fs::write(&temp, bytes)?;
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        error.into()
+    })
+}
+
+fn native_patch_temp_path(path: &Path) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "patch".to_string());
+    path.with_file_name(format!(".{name}.mez-{nanos}.tmp"))
 }
 
 /// Returns the sorted relative paths touched by one Mezzanine patch.

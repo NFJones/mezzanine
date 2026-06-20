@@ -10,8 +10,8 @@ use super::super::{
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, LocalActionKind, LocalActionPlan,
     MarkerToken, McpToolCallPlan, McpToolCallResponse, MezError, Path, Result, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
-    local_action_plan, tool_discovery_script,
+    action_content_blocks_from_json_or_text, action_text_content_blocks, apply_patch_natively,
+    json_escape, local_action_plan, tool_discovery_script,
 };
 use super::{
     ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
@@ -128,6 +128,8 @@ impl LocalExecutionTransport {
 pub struct LocalExecutionRequest {
     /// Structured `action_id` value carried by this API type.
     pub action_id: String,
+    /// Original MAAP action whose model-facing shape must stay transport-neutral.
+    pub action: AgentAction,
     /// Structured `turn_id` value needed by transports that render wrappers.
     pub turn_id: String,
     /// Structured `agent_id` value needed by transports that render wrappers.
@@ -246,11 +248,11 @@ impl NativeShellLocalExecutor {
     /// Builds a native shell-command executor rooted at one working directory.
     pub fn new(
         shell_path: impl Into<std::path::PathBuf>,
-        working_directory: impl Into<std::path::PathBuf>,
+        working_directory: impl AsRef<std::path::Path>,
     ) -> Self {
         Self {
             shell_path: shell_path.into(),
-            working_directory: working_directory.into(),
+            working_directory: working_directory.as_ref().to_path_buf(),
         }
     }
 }
@@ -260,23 +262,53 @@ impl LocalActionExecutor for NativeShellLocalExecutor {
         &mut self,
         request: &LocalExecutionRequest,
     ) -> Result<LocalExecutionOutput> {
-        if request.plan.kind != LocalActionKind::ShellCommand {
-            return Err(MezError::invalid_args(
-                "native shell executor only supports shell_command actions",
-            ));
+        match request.plan.kind {
+            LocalActionKind::ShellCommand => {
+                if request.plan.interactive {
+                    return Err(MezError::invalid_args(
+                        "native shell_command execution does not support interactive actions",
+                    ));
+                }
+                if request.plan.stateful {
+                    return Err(MezError::invalid_args(
+                        "native shell_command execution does not support stateful actions",
+                    ));
+                }
+                execute_native_shell_command(&self.shell_path, &self.working_directory, request)
+                    .map(LocalExecutionOutput::native)
+            }
+            LocalActionKind::ApplyPatch => {
+                execute_native_apply_patch(&request.action, &self.working_directory)
+                    .map(LocalExecutionOutput::native)
+            }
         }
-        if request.plan.interactive {
-            return Err(MezError::invalid_args(
-                "native shell_command execution does not support interactive actions",
-            ));
-        }
-        if request.plan.stateful {
-            return Err(MezError::invalid_args(
-                "native shell_command execution does not support stateful actions",
-            ));
-        }
-        execute_native_shell_command(&self.shell_path, &self.working_directory, request)
-            .map(LocalExecutionOutput::native)
+    }
+}
+
+fn execute_native_apply_patch(
+    action: &AgentAction,
+    working_directory: &std::path::Path,
+) -> Result<ShellExecutionOutput> {
+    let AgentActionPayload::ApplyPatch { patch, strip } = &action.payload else {
+        return Err(MezError::invalid_args(
+            "native apply_patch execution requires an apply_patch action",
+        ));
+    };
+    match apply_patch_natively(patch, *strip, working_directory) {
+        Ok(()) => Ok(ShellExecutionOutput::new(
+            Some(0),
+            String::new(),
+            String::new(),
+            false,
+            false,
+        )),
+        Err(error) => Ok(ShellExecutionOutput::new(
+            Some(1),
+            String::new(),
+            format!("{}\n", error.message()),
+            false,
+            false,
+        )),
     }
 }
 
@@ -396,6 +428,7 @@ pub fn execute_local_action(
     };
     let request = LocalExecutionRequest {
         action_id: action.id.clone(),
+        action: action.clone(),
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),
         pane_id: turn.pane_id.clone(),
