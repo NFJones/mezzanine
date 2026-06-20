@@ -20,8 +20,8 @@ use super::super::{ActionStatus, local_action_plan};
 use super::super::{MarkerToken, McpToolCallPlan, Path};
 #[cfg(test)]
 use super::execution::{
-    McpActionExecutor, PaneShellExecutor, execute_mcp_action_through_runtime,
-    execute_shell_action_through_pane,
+    LocalActionExecutor, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
+    execute_local_action, execute_mcp_action_through_runtime,
 };
 use super::recovery::{
     FailureSummaryInput, FailureSummaryScope, capability_continuation_request,
@@ -618,6 +618,31 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         context: AgentContext,
         shell_path: &Path,
         executor: &mut impl PaneShellExecutor,
+        marker_for_action: M,
+    ) -> Result<AgentTurnExecution>
+    where
+        M: FnMut(&AgentAction) -> Result<MarkerToken>,
+    {
+        let mut local_executor = PaneShellLocalExecutor::new(shell_path, executor);
+        self.run_turn_with_local_executor(
+            ledger,
+            turn,
+            context,
+            &mut local_executor,
+            marker_for_action,
+        )
+    }
+
+    /// Executes local actions through a transport-neutral executor.
+    ///
+    /// Callers receive a typed result or error with context from the underlying
+    /// runtime operation.
+    pub fn run_turn_with_local_executor<M>(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: AgentContext,
+        executor: &mut impl LocalActionExecutor,
         mut marker_for_action: M,
     ) -> Result<AgentTurnExecution>
     where
@@ -646,8 +671,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 continue;
             }
             let marker = marker_for_action(action)?;
-            *result =
-                execute_shell_action_through_pane(&turn, action, marker, shell_path, executor)?;
+            *result = execute_local_action(&turn, action, marker, executor)?;
         }
 
         execution.terminal_state =

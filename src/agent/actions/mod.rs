@@ -19,8 +19,10 @@ mod shell_transport;
 mod transcript;
 
 pub use execution::{
-    AsyncMcpActionExecutor, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
-    ShellExecutionRequest, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
+    AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
+    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
+    ShellExecutionOutput, ShellExecutionRequest, discover_tools_through_pane_shell,
+    execute_local_action, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_shell_action_through_pane,
     postprocess_shell_action_success_output, shell_command_result_content,
 };
@@ -109,6 +111,7 @@ fn say_structured_content_json(status: SayStatus, content_type: &str, text: &str
 /// runtime operation.
 pub fn shell_command_structured_content_json(
     action: &AgentAction,
+    execution_transport: Option<&str>,
     sent_to_pane: bool,
     approval: serde_json::Value,
     matched_rules: &[String],
@@ -134,6 +137,7 @@ pub fn shell_command_structured_content_json(
         "read_observations": read_observations,
         "generated_command_elided": generated_command_elided,
         "generated_command_bytes": if generated_command_elided { Some(plan.command.len()) } else { None },
+        "execution_transport": execution_transport.unwrap_or("pane_shell"),
         "sent_to_pane": sent_to_pane,
         "stateful": plan.stateful,
         "approval": approval,

@@ -2185,6 +2185,7 @@ impl RuntimeSessionService {
             };
             let structured_content = shell_command_structured_content_json(
                 &action,
+                Some("pane_shell"),
                 true,
                 serde_json::Value::Null,
                 &[],
@@ -2265,6 +2266,7 @@ impl RuntimeSessionService {
                     };
                     let structured_content = shell_command_structured_content_json(
                         skipped_action,
+                        Some("pane_shell"),
                         false,
                         serde_json::Value::Null,
                         &[],

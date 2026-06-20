@@ -400,6 +400,7 @@ impl RuntimeSessionService {
                     vec!["approved local action accepted for pane execution".to_string()],
                     Some(shell_command_structured_content_json(
                         &action,
+                        Some("pane_shell"),
                         false,
                         serde_json::json!({
                             "state": "approved",

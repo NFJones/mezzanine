@@ -802,6 +802,7 @@ impl RuntimeSessionService {
                     execution.action_results[index].structured_content_json =
                         Some(shell_command_structured_content_json(
                             action,
+                            Some("pane_shell"),
                             false,
                             serde_json::json!({
                                 "state": "pre_shell_hook_pending",

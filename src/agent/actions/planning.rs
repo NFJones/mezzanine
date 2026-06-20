@@ -86,6 +86,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         vec!["local action accepted for pane execution".to_string()],
                         Some(shell_command_structured_content_json(
                             action,
+                            Some("pane_shell"),
                             false,
                             serde_json::Value::Null,
                             &[],
@@ -107,6 +108,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                             ],
                             Some(shell_command_structured_content_json(
                                 action,
+                                Some("pane_shell"),
                                 false,
                                 auto_allow_approval_json(action, action.action_type()),
                                 &[],
@@ -120,6 +122,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         vec!["approval required before executing local action".to_string()],
                         shell_command_structured_content_json(
                             action,
+                            Some("pane_shell"),
                             false,
                             serde_json::json!({
                                 "state": "pending",

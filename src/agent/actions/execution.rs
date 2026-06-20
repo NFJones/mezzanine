@@ -7,10 +7,11 @@
 
 use super::super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpToolCallPlan,
-    McpToolCallResponse, MezError, Path, Result, ShellTransaction, ShellTransactionOutputTransport,
-    ToolDiscoveryCache, ToolInventory, action_content_blocks_from_json_or_text,
-    action_text_content_blocks, json_escape, local_action_plan, tool_discovery_script,
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, LocalActionPlan, MarkerToken,
+    McpToolCallPlan, McpToolCallResponse, MezError, Path, Result, ShellTransaction,
+    ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
+    action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
+    local_action_plan, tool_discovery_script,
 };
 use super::{
     ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
@@ -92,6 +93,135 @@ pub trait PaneShellExecutor {
     fn execute_shell(&mut self, request: &ShellExecutionRequest) -> Result<ShellExecutionOutput>;
 }
 
+/// Identifies the runtime transport used to execute a local action plan.
+///
+/// Local actions keep their model-facing MAAP action names regardless of this
+/// value. The transport is selected by runtime code after planning and policy
+/// checks have accepted an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalExecutionTransport {
+    /// Execute the local action by dispatching a transaction to the pane shell.
+    PaneShell,
+    /// Execute the local action through a native runtime executor.
+    Native,
+}
+
+impl LocalExecutionTransport {
+    /// Returns the stable string recorded in structured action-result metadata.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PaneShell => "pane_shell",
+            Self::Native => "native",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Carries transport-neutral local action execution request state.
+///
+/// The planned command remains available to every transport, while
+/// pane-specific wrapper state is supplied only by the pane-shell adapter.
+pub struct LocalExecutionRequest {
+    /// Structured `action_id` value carried by this API type.
+    pub action_id: String,
+    /// Structured `turn_id` value needed by transports that render wrappers.
+    pub turn_id: String,
+    /// Structured `agent_id` value needed by transports that render wrappers.
+    pub agent_id: String,
+    /// Structured `pane_id` value needed by transports that render wrappers.
+    pub pane_id: String,
+    /// Planned local action semantics selected before transport dispatch.
+    pub plan: LocalActionPlan,
+    /// Runtime transport selected for this local action.
+    pub transport: LocalExecutionTransport,
+    /// Marker token used by transports that need a command-output boundary.
+    pub marker: MarkerToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Carries transport-neutral local action execution output state.
+///
+/// The output mirrors shell execution data so existing action-result recovery
+/// and display logic can be reused while the transport choice stays explicit.
+pub struct LocalExecutionOutput {
+    /// Runtime transport that produced this output.
+    pub transport: LocalExecutionTransport,
+    /// Whether this execution sent input to the pane shell.
+    pub sent_to_pane: bool,
+    /// Shell-shaped output returned by the selected local action transport.
+    pub shell_output: ShellExecutionOutput,
+}
+
+impl LocalExecutionOutput {
+    /// Builds output for a pane-shell local action execution.
+    pub fn pane_shell(shell_output: ShellExecutionOutput) -> Self {
+        Self {
+            transport: LocalExecutionTransport::PaneShell,
+            sent_to_pane: true,
+            shell_output,
+        }
+    }
+}
+
+/// Defines the local action executor behavior contract for this subsystem.
+///
+/// Implementors select the concrete transport for an already-planned local
+/// action without changing the model-facing action interface.
+pub trait LocalActionExecutor {
+    /// Runs one planned local action through the selected runtime transport.
+    fn execute_local_action(
+        &mut self,
+        request: &LocalExecutionRequest,
+    ) -> Result<LocalExecutionOutput>;
+}
+
+/// Adapts the existing pane shell executor to the transport-neutral executor
+/// contract.
+pub struct PaneShellLocalExecutor<'a, E> {
+    shell_path: &'a Path,
+    pane_executor: &'a mut E,
+}
+
+impl<'a, E> PaneShellLocalExecutor<'a, E> {
+    /// Builds an adapter around a pane shell executor and shell path.
+    pub fn new(shell_path: &'a Path, pane_executor: &'a mut E) -> Self {
+        Self {
+            shell_path,
+            pane_executor,
+        }
+    }
+}
+
+impl<E> LocalActionExecutor for PaneShellLocalExecutor<'_, E>
+where
+    E: PaneShellExecutor,
+{
+    fn execute_local_action(
+        &mut self,
+        request: &LocalExecutionRequest,
+    ) -> Result<LocalExecutionOutput> {
+        let transaction = ShellTransaction::new(
+            request.marker.clone(),
+            &request.turn_id,
+            &request.agent_id,
+            &request.pane_id,
+            self.shell_path,
+            &request.plan.command,
+        )?
+        .with_output_transport(ShellTransactionOutputTransport::Base64);
+        let shell_request = ShellExecutionRequest {
+            action_id: request.action_id.clone(),
+            transaction,
+            timeout_ms: request.plan.timeout_ms,
+            interactive: request.plan.interactive,
+            stateful: request.plan.stateful,
+        };
+        self.pane_executor
+            .execute_shell(&shell_request)
+            .map(LocalExecutionOutput::pane_shell)
+    }
+}
+
 /// Defines the `McpActionExecutor` behavior contract for this subsystem.
 ///
 /// Implementors provide the concrete I/O or state transition boundary used by
@@ -133,29 +263,37 @@ pub fn execute_shell_action_through_pane(
     shell_path: &Path,
     executor: &mut impl PaneShellExecutor,
 ) -> Result<ActionResult> {
+    let mut local_executor = PaneShellLocalExecutor::new(shell_path, executor);
+    execute_local_action(turn, action, marker, &mut local_executor)
+}
+
+/// Executes a local action through the supplied transport-neutral executor.
+///
+/// Callers receive the same `ActionResult` shape regardless of the transport
+/// that ran the planned local action.
+pub fn execute_local_action(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    marker: MarkerToken,
+    executor: &mut impl LocalActionExecutor,
+) -> Result<ActionResult> {
     let Some(plan) = local_action_plan(action)? else {
         return Err(MezError::invalid_args(
-            "pane shell execution requires a shell-backed action",
+            "local execution requires a local action",
         ));
     };
-    let transaction = ShellTransaction::new(
-        marker.clone(),
-        &turn.turn_id,
-        &turn.agent_id,
-        &turn.pane_id,
-        shell_path,
-        &plan.command,
-    )?
-    .with_output_transport(ShellTransactionOutputTransport::Base64);
-    let request = ShellExecutionRequest {
+    let request = LocalExecutionRequest {
         action_id: action.id.clone(),
-        transaction,
-        timeout_ms: plan.timeout_ms,
-        interactive: plan.interactive,
-        stateful: plan.stateful,
+        turn_id: turn.turn_id.clone(),
+        agent_id: turn.agent_id.clone(),
+        pane_id: turn.pane_id.clone(),
+        plan,
+        transport: LocalExecutionTransport::PaneShell,
+        marker: marker.clone(),
     };
-    let output = postprocess_semantic_shell_output(action, executor.execute_shell(&request)?)?;
-    shell_output_to_action_result(turn, action, output, marker)
+    let mut output = executor.execute_local_action(&request)?;
+    output.shell_output = postprocess_semantic_shell_output(action, output.shell_output)?;
+    local_output_to_action_result(turn, action, output, marker)
 }
 
 /// Applies native success-output shaping for shell-backed semantic actions.
@@ -359,9 +497,27 @@ pub fn discover_tools_through_pane_shell(
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
-pub(super) fn shell_output_to_action_result(
+pub(super) fn local_output_to_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
+    output: LocalExecutionOutput,
+    marker: MarkerToken,
+) -> Result<ActionResult> {
+    local_output_to_action_result_with_transport(
+        turn,
+        action,
+        output.transport,
+        output.sent_to_pane,
+        output.shell_output,
+        marker,
+    )
+}
+
+fn local_output_to_action_result_with_transport(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    transport: LocalExecutionTransport,
+    sent_to_pane: bool,
     output: ShellExecutionOutput,
     marker: MarkerToken,
 ) -> Result<ActionResult> {
@@ -386,7 +542,8 @@ pub(super) fn shell_output_to_action_result(
     };
     let structured = shell_command_structured_content_json(
         action,
-        true,
+        Some(transport.as_str()),
+        sent_to_pane,
         serde_json::Value::Null,
         &[],
         serde_json::json!({

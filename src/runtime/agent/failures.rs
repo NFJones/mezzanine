@@ -233,6 +233,7 @@ impl RuntimeSessionService {
             } else {
                 let structured_content = shell_command_structured_content_json(
                     &action,
+                    Some("pane_shell"),
                     failure.sent_to_pane,
                     serde_json::Value::Null,
                     &[],
