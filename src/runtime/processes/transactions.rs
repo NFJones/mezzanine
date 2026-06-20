@@ -1365,17 +1365,11 @@ impl RuntimeSessionService {
         source: &str,
     ) -> Result<usize> {
         let previous = self.pane_readiness_state(pane_id);
-        if source == "osc133-command-start"
-            && let Some(turn_id) =
-                self.pane_agent_turn_waiting_for_provider_or_shell_dispatch(pane_id)
-        {
-            self.append_agent_trace_turn_event(
-                pane_id,
-                &turn_id,
-                "passive command-start ignored reason=agent_turn_waiting",
-            )?;
-            return Ok(0);
-        }
+        let waiting_turn_id = if source == "osc133-command-start" {
+            self.pane_agent_turn_waiting_for_provider_or_shell_dispatch(pane_id)
+        } else {
+            None
+        };
         if matches!(
             previous,
             PaneReadinessState::Probing
@@ -1383,6 +1377,13 @@ impl RuntimeSessionService {
                 | PaneReadinessState::PasswordPrompt
                 | PaneReadinessState::InteractiveBlocked
         ) {
+            if let Some(turn_id) = waiting_turn_id {
+                self.append_agent_trace_turn_event(
+                    pane_id,
+                    &turn_id,
+                    "passive command-start ignored reason=agent_turn_waiting",
+                )?;
+            }
             return Ok(0);
         }
         let revoked = self
@@ -1390,6 +1391,13 @@ impl RuntimeSessionService {
             .revoke(pane_id, ReadinessOverrideRevocation::CommandStartMetadata)
             .is_some();
         if previous == PaneReadinessState::Busy && !revoked {
+            if let Some(turn_id) = waiting_turn_id {
+                self.append_agent_trace_turn_event(
+                    pane_id,
+                    &turn_id,
+                    "passive command-start ignored reason=agent_turn_waiting",
+                )?;
+            }
             return Ok(0);
         }
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
@@ -1403,6 +1411,13 @@ impl RuntimeSessionService {
                 revoked
             ),
         )?;
+        if let Some(turn_id) = waiting_turn_id {
+            self.append_agent_trace_turn_event(
+                pane_id,
+                &turn_id,
+                "passive command-start ignored reason=agent_turn_waiting",
+            )?;
+        }
         Ok(1)
     }
 
