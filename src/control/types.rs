@@ -646,6 +646,11 @@ pub struct PaneCaptureSource {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub process_state: Option<String>,
+    /// Stores the readiness state value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub readiness_state: Option<String>,
     /// Stores the exit status value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -670,6 +675,7 @@ impl PaneCaptureSource {
             truncated: false,
             primary_pid: None,
             process_state: None,
+            readiness_state: None,
             exit_status: None,
         }
     }

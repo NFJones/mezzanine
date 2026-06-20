@@ -835,6 +835,10 @@ impl RuntimeSessionService {
                     truncated: false,
                     primary_pid,
                     process_state: Some(process_state.to_string()),
+                    readiness_state: Some(
+                        runtime_pane_readiness_state_name(self.pane_readiness_state(pane_id))
+                            .to_string(),
+                    ),
                     exit_status: self
                         .pane_exit_records
                         .get(pane_id)

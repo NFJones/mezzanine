@@ -2239,6 +2239,7 @@ fn pane_capture_uses_supplied_visible_and_history_source() {
         truncated: false,
         primary_pid: Some(1234),
         process_state: Some("running".to_string()),
+        readiness_state: Some("ready".to_string()),
         exit_status: None,
     }];
     let request = format!(
@@ -2256,6 +2257,7 @@ fn pane_capture_uses_supplied_visible_and_history_source() {
     assert!(response.contains(r#""background":{"kind":"indexed","index":4}"#));
     assert!(response.contains(r#""source_available":true"#));
     assert!(response.contains(r#""primary_pid":1234"#));
+    assert!(response.contains(r#""readiness_state":"ready""#));
 }
 
 /// Verifies that pane/capture includes a supplied normalized exit-status
@@ -2277,6 +2279,7 @@ fn pane_capture_embeds_supplied_exit_status() {
         truncated: false,
         primary_pid: None,
         process_state: Some("exited".to_string()),
+        readiness_state: None,
         exit_status: Some(crate::process::PaneExitStatus {
             code: Some(7),
             signal: None,
@@ -2328,6 +2331,7 @@ fn pane_capture_applies_visible_history_and_combined_ranges() {
         truncated: false,
         primary_pid: None,
         process_state: None,
+        readiness_state: None,
         exit_status: None,
     }];
 
@@ -2386,6 +2390,7 @@ fn pane_capture_excludes_alternate_screen_from_history_capture() {
         truncated: false,
         primary_pid: None,
         process_state: None,
+        readiness_state: None,
         exit_status: None,
     }];
     let request = format!(

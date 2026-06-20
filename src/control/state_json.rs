@@ -410,7 +410,7 @@ pub(super) fn pane_state_json_with_capture(
             process_state: source.process_state.as_deref(),
             exit_status: source.exit_status.as_ref(),
             current_working_directory: None,
-            readiness_state: "unknown",
+            readiness_state: source.readiness_state.as_deref().unwrap_or("unknown"),
             alternate_screen_active: source.alternate_screen_active,
         },
     )
