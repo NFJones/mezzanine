@@ -1087,18 +1087,21 @@ impl SessionSnapshotPayload {
                         && fields.len() != 10
                         && fields.len() != 11
                         && fields.len() != 12
+                        && fields.len() != 13
                     {
                         return Err(MezError::invalid_args(
                             "invalid snapshot pane terminal modes field count",
                         ));
                     }
-                    let (has_cursor_visible, has_independent_mouse_modes) = match fields.len() {
-                        9 => (false, false),
-                        10 => (true, false),
-                        11 => (false, true),
-                        12 => (true, true),
-                        _ => unreachable!("validated pane terminal mode field count"),
-                    };
+                    let (has_cursor_visible, has_independent_mouse_modes, has_autowrap_mode) =
+                        match fields.len() {
+                            9 => (false, false, false),
+                            10 => (true, false, false),
+                            11 => (false, true, false),
+                            12 => (true, true, false),
+                            13 => (true, true, true),
+                            _ => unreachable!("validated pane terminal mode field count"),
+                        };
                     let mode_offset = usize::from(has_cursor_visible);
                     let pane = payload_pane_mut(&mut payload, &fields[1])?;
                     let (
@@ -1135,9 +1138,20 @@ impl SessionSnapshotPayload {
                         sgr_mouse_enabled: parse_bool(&fields[sgr_mode_index])?,
                         application_cursor_enabled: parse_bool(&fields[sgr_mode_index + 1])?,
                         origin_mode_enabled: false,
-                        application_keypad_enabled: parse_bool(&fields[sgr_mode_index + 2])?,
-                        focus_events_enabled: parse_bool(&fields[sgr_mode_index + 3])?,
-                        title: non_empty_string(&fields[sgr_mode_index + 4]),
+                        autowrap_enabled: if has_autowrap_mode {
+                            parse_bool(&fields[sgr_mode_index + 2])?
+                        } else {
+                            true
+                        },
+                        application_keypad_enabled: parse_bool(
+                            &fields[sgr_mode_index + 2 + usize::from(has_autowrap_mode)],
+                        )?,
+                        focus_events_enabled: parse_bool(
+                            &fields[sgr_mode_index + 3 + usize::from(has_autowrap_mode)],
+                        )?,
+                        title: non_empty_string(
+                            &fields[sgr_mode_index + 4 + usize::from(has_autowrap_mode)],
+                        ),
                     };
                 }
                 Some("pane_terminal_saved_cursor") => {
@@ -1675,7 +1689,7 @@ fn encode_frame_settings(target: &str, settings: &SnapshotFrameSettings, output:
 /// on duplicated control-flow logic.
 fn encode_terminal_modes(pane_id: &str, modes: &TerminalModeState, output: &mut String) {
     output.push_str(&format!(
-        "pane_terminal_modes\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "pane_terminal_modes\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         escape_field(pane_id),
         modes.cursor_visible,
         modes.bracketed_paste_enabled,
@@ -1684,6 +1698,7 @@ fn encode_terminal_modes(pane_id: &str, modes: &TerminalModeState, output: &mut 
         modes.any_event_mouse_tracking_enabled,
         modes.sgr_mouse_enabled,
         modes.application_cursor_enabled,
+        modes.autowrap_enabled,
         modes.application_keypad_enabled,
         modes.focus_events_enabled,
         escape_field(modes.title.as_deref().unwrap_or(""))

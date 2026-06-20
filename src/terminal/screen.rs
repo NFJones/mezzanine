@@ -34,7 +34,7 @@ pub(super) fn parse_dec_private_mode_params(params: &str) -> Option<Vec<u16>> {
 pub fn tracked_dec_private_mode(mode: u16) -> bool {
     matches!(
         mode,
-        1 | 6 | 25 | 47 | 1047 | 1049 | 1000 | 1002 | 1003 | 1004 | 1006 | 2004
+        1 | 6 | 7 | 25 | 47 | 1047 | 1048 | 1049 | 1000 | 1002 | 1003 | 1004 | 1006 | 2004
     )
 }
 
@@ -276,7 +276,7 @@ impl AlternateScreenState {
     /// Returns whether alternate-screen scroll-off rows should be recorded to
     /// history.
     pub fn should_record_scroll_off_to_history(&self) -> bool {
-        true
+        !self.active
     }
 }
 
@@ -407,6 +407,8 @@ pub struct TerminalModeState {
     pub application_cursor_enabled: bool,
     /// Whether DEC origin mode is active.
     pub origin_mode_enabled: bool,
+    /// Whether DEC autowrap mode is active.
+    pub autowrap_enabled: bool,
     /// Whether application keypad mode is active.
     pub application_keypad_enabled: bool,
     /// Whether focus event reporting is active.
@@ -425,6 +427,7 @@ impl Default for TerminalModeState {
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
             origin_mode_enabled: false,
+            autowrap_enabled: true,
             application_keypad_enabled: false,
             focus_events_enabled: false,
         }
@@ -855,6 +858,12 @@ pub struct TerminalScreen {
     /// The value follows DEC private mode 25 (`CSI ?25h` / `CSI ?25l`) and is
     /// separate from Mezzanine-owned prompt and overlay cursor presentation.
     pub(super) cursor_visible: bool,
+    /// Whether DEC autowrap mode is active.
+    ///
+    /// The value follows DEC private mode 7 (`CSI ?7h` / `CSI ?7l`). When it
+    /// is disabled, printing at the right margin stays on the last column
+    /// instead of deferring a wrap to the next printable character.
+    pub(super) autowrap_enabled: bool,
     /// Stores the wrap pending value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -942,6 +951,12 @@ pub struct TerminalScreen {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) origin_mode_enabled: bool,
+    /// Whether ANSI line-feed/new-line mode is active.
+    ///
+    /// When active, LF behaves like CRLF for line-oriented shell output. When
+    /// reset with `CSI 20 l`, LF preserves the current column and behaves like
+    /// VT index.
+    pub(super) line_feed_newline_enabled: bool,
     /// Stores the application keypad enabled value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -1024,6 +1039,7 @@ impl TerminalScreen {
             line_copy_texts: vec![None; usize::from(size.rows)],
             cursor: Cursor { row: 0, column: 0 },
             cursor_visible: true,
+            autowrap_enabled: true,
             wrap_pending: false,
             saved_cursor: None,
             parser_state: ParserState::Ground,
@@ -1042,6 +1058,7 @@ impl TerminalScreen {
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
             origin_mode_enabled: false,
+            line_feed_newline_enabled: true,
             application_keypad_enabled: false,
             focus_events_enabled: false,
             saved_dec_private_modes: BTreeMap::new(),
@@ -1947,6 +1964,7 @@ impl TerminalScreen {
             sgr_mouse_enabled: self.sgr_mouse_enabled,
             application_cursor_enabled: self.application_cursor_enabled,
             origin_mode_enabled: self.origin_mode_enabled,
+            autowrap_enabled: self.autowrap_enabled,
             application_keypad_enabled: self.application_keypad_enabled,
             focus_events_enabled: self.focus_events_enabled,
         }
@@ -1963,6 +1981,7 @@ impl TerminalScreen {
         self.sgr_mouse_enabled = state.sgr_mouse_enabled;
         self.application_cursor_enabled = state.application_cursor_enabled;
         self.origin_mode_enabled = state.origin_mode_enabled;
+        self.autowrap_enabled = state.autowrap_enabled;
         self.application_keypad_enabled = state.application_keypad_enabled;
         self.focus_events_enabled = state.focus_events_enabled;
     }
@@ -2164,7 +2183,13 @@ impl TerminalScreen {
                 self.parser_state = ParserState::Escape;
             }
             '\u{0007}' => self.bell_events = self.bell_events.saturating_add(1),
-            '\n' => self.newline(),
+            '\n' => {
+                if self.line_feed_newline_enabled {
+                    self.newline();
+                } else {
+                    self.index();
+                }
+            }
             '\r' => {
                 self.wrap_pending = false;
                 self.cursor.column = 0;
@@ -2210,6 +2235,12 @@ impl TerminalScreen {
             self.parser_state = ParserState::Ground;
         } else if ch == '8' {
             self.restore_cursor();
+            self.parser_state = ParserState::Ground;
+        } else if ch == 'D' {
+            self.index();
+            self.parser_state = ParserState::Ground;
+        } else if ch == 'E' {
+            self.next_line();
             self.parser_state = ParserState::Ground;
         } else if ch == 'M' {
             self.reverse_index();
@@ -2416,6 +2447,10 @@ impl TerminalScreen {
             self.apply_dec_private_modes(&modes, final_byte == 'h');
             return;
         }
+        if matches!(final_byte, 'h' | 'l') && params == "20" {
+            self.line_feed_newline_enabled = final_byte == 'h';
+            return;
+        }
         if final_byte == 's'
             && let Some(modes) = parse_dec_private_mode_params(params)
         {
@@ -2549,17 +2584,36 @@ impl TerminalScreen {
         match mode {
             47 | 1047 | 1049 => {
                 if enabled {
+                    if mode == 1049 {
+                        self.save_cursor();
+                    }
                     let state = self.saved_normal_screen_state();
                     self.alternate.enter_with_saved_normal_screen(state);
                     self.clear_screen();
                 } else if let Some(state) = self.alternate.leave() {
                     self.restore_saved_normal_screen_state(state);
+                    if mode == 1049 {
+                        self.restore_cursor();
+                    }
                 } else {
                     self.clear_screen();
                 }
             }
+            1048 => {
+                if enabled {
+                    self.save_cursor();
+                } else {
+                    self.restore_cursor();
+                }
+            }
             25 => self.cursor_visible = enabled,
             1 => self.application_cursor_enabled = enabled,
+            7 => {
+                self.autowrap_enabled = enabled;
+                if !enabled {
+                    self.wrap_pending = false;
+                }
+            }
             6 => {
                 self.origin_mode_enabled = enabled;
                 self.cursor.row = if enabled {
@@ -2591,8 +2645,10 @@ impl TerminalScreen {
         }
         match mode {
             47 | 1047 | 1049 => Some(self.alternate.active()),
+            1048 => Some(self.saved_cursor.is_some()),
             25 => Some(self.cursor_visible),
             1 => Some(self.application_cursor_enabled),
+            7 => Some(self.autowrap_enabled),
             6 => Some(self.origin_mode_enabled),
             1000 => Some(self.normal_mouse_tracking_enabled),
             1002 => Some(self.button_event_mouse_tracking_enabled),
@@ -2625,7 +2681,9 @@ impl TerminalScreen {
         if self.wrap_pending {
             self.wrap_to_next_line();
         }
-        if self.cursor.column.saturating_add(width).saturating_sub(1) > self.max_column() {
+        if self.autowrap_enabled
+            && self.cursor.column.saturating_add(width).saturating_sub(1) > self.max_column()
+        {
             self.wrap_to_next_line();
         }
         self.clear_line_copy_text(self.cursor.row);
@@ -2645,6 +2703,11 @@ impl TerminalScreen {
         }
         let next_column = self.cursor.column.saturating_add(width);
         if next_column > self.max_column() {
+            if !self.autowrap_enabled {
+                self.cursor.column = self.max_column();
+                self.wrap_pending = false;
+                return;
+            }
             self.wrap_pending = true;
         } else {
             self.cursor.column = next_column;
@@ -2657,14 +2720,33 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn newline(&mut self) {
+        self.next_line();
+    }
+
+    /// Runs the index operation for this subsystem.
+    ///
+    /// The function keeps VT-style vertical movement separate from carriage
+    /// return so LF and IND can preserve the current column while NEL and the
+    /// legacy `newline` helper can still move to the first column.
+    pub(super) fn index(&mut self) {
         self.wrap_pending = false;
-        self.cursor.column = 0;
         let (top, bottom) = self.active_scroll_region();
         if self.cursor.row == bottom {
             self.scroll_region_up_from(top, bottom, 1);
         } else {
             self.cursor.row = self.cursor.row.saturating_add(1).min(bottom);
         }
+    }
+
+    /// Runs the next-line operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn next_line(&mut self) {
+        self.wrap_pending = false;
+        self.cursor.column = 0;
+        self.index();
     }
 
     /// Runs the wrap to next line operation for this subsystem.
@@ -3046,10 +3128,15 @@ impl TerminalScreen {
     ) {
         self.wrap_pending = false;
         let amount = csi_count(params);
+        let (min_row, max_row) = if self.origin_mode_enabled {
+            self.active_scroll_region()
+        } else {
+            (0, self.max_row())
+        };
         if row_direction < 0 {
-            self.cursor.row = self.cursor.row.saturating_sub(amount);
+            self.cursor.row = self.cursor.row.saturating_sub(amount).max(min_row);
         } else if row_direction > 0 {
-            self.cursor.row = self.cursor.row.saturating_add(amount).min(self.max_row());
+            self.cursor.row = self.cursor.row.saturating_add(amount).min(max_row);
         }
 
         if column_direction < 0 {

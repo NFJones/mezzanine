@@ -5818,18 +5818,18 @@ fn terminal_screen_scrolls_normal_output_into_history() {
     assert_eq!(screen.visible_lines()[1], "three");
 }
 
-/// Verifies terminal screen excludes alternate screen from history.
+/// Verifies terminal screen excludes alternate-screen scroll-off rows from history.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn terminal_screen_records_alternate_screen_scroll_off_history() {
+fn terminal_screen_excludes_alternate_screen_scroll_off_history() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
 
     screen.feed(b"\x1b[?1049halt\ninside\nmore\x1b[?1049lback");
 
-    assert_eq!(screen.history().lines().collect::<Vec<_>>(), vec!["alt"]);
+    assert!(screen.history().is_empty());
     assert_eq!(screen.visible_lines()[0], "back");
     assert!(!screen.alternate_screen_active());
 }
@@ -5872,6 +5872,23 @@ fn terminal_screen_restores_normal_screen_after_alternate_screen_exit() {
     assert!(screen.history().is_empty());
     assert_eq!(screen.visible_lines()[0], "keep!");
     assert!(!screen.alternate_screen_active());
+}
+
+/// Verifies DEC private mode 1048 saves and restores only the cursor.
+///
+/// Full-screen wrappers can use `CSI ?1048h` and `CSI ?1048l` separately from
+/// alternate-buffer switching, so the mode must not enter alternate screen or
+/// clear visible content while still restoring the saved cursor position.
+#[test]
+fn terminal_screen_dec1048_saves_cursor_without_switching_buffers() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"ab\x1b[?1048hcd\x1b[2;4HXY\x1b[?1048l!");
+
+    assert!(!screen.alternate_screen_active());
+    assert_eq!(screen.visible_lines()[0], "ab!d");
+    assert_eq!(screen.visible_lines()[1], "   XY");
+    assert!(screen.history().is_empty());
 }
 
 /// Verifies G0 DEC Special Graphics designation renders box-drawing glyphs.

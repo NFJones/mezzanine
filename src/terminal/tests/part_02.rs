@@ -244,7 +244,7 @@ fn terminal_screen_handles_insertion_deletion_and_scroll_regions() {
     assert_eq!(screen.visible_lines()[0], "abcd");
 
     let mut screen = TerminalScreen::new(Size::new(8, 4).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree\nfour");
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour");
     screen.feed(b"\x1b[2;4r\x1b[2;1H\x1b[L");
     assert_eq!(screen.visible_lines(), vec!["one", "", "two", "three"]);
 
@@ -254,6 +254,51 @@ fn terminal_screen_handles_insertion_deletion_and_scroll_regions() {
     screen.feed(b"\x1b[2;4r\x1b[4;1H\n");
     assert_eq!(screen.visible_lines(), vec!["one", "three", "", ""]);
     assert!(screen.history().is_empty());
+}
+
+/// Verifies VT-style LF, IND, and NEL line movement semantics. Full-screen
+/// applications use these controls inside scroll regions, so LF/IND must keep
+/// the current column while NEL explicitly returns to column zero.
+#[test]
+fn terminal_screen_handles_vt_line_movement_controls() {
+    let mut screen = TerminalScreen::new(Size::new(8, 4).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[20l");
+    screen.feed(b"ab\ncd");
+    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "", ""]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 4);
+
+    screen.feed(b"\x1bDef");
+    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "    ef", ""]);
+    assert_eq!(screen.cursor_state().row, 2);
+    assert_eq!(screen.cursor_state().column, 6);
+
+    screen.feed(b"\x1bEgh");
+    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "    ef", "gh"]);
+    assert_eq!(screen.cursor_state().row, 3);
+    assert_eq!(screen.cursor_state().column, 2);
+}
+
+/// Verifies relative vertical cursor movement stays inside the active scroll
+/// region while DEC origin mode is enabled. TUIs combine DECOM, margins, and
+/// relative movement during incremental redraws, so CUU/CUD must not escape
+/// the region in that mode.
+#[test]
+fn terminal_screen_origin_mode_clamps_relative_vertical_movement_to_scroll_region() {
+    let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[2;4r\x1b[?6h");
+    assert_eq!(screen.cursor_state().row, 1);
+
+    screen.feed(b"\x1b[10A");
+    assert_eq!(screen.cursor_state().row, 1);
+
+    screen.feed(b"\x1b[10B");
+    assert_eq!(screen.cursor_state().row, 3);
+
+    screen.feed(b"\x1b[?6l\x1b[10A");
+    assert_eq!(screen.cursor_state().row, 0);
 }
 
 /// Verifies terminal screen tracks bracketed paste mode.
@@ -364,6 +409,7 @@ fn terminal_screen_restores_terminal_mode_state() {
         sgr_mouse_enabled: true,
         application_cursor_enabled: true,
         origin_mode_enabled: false,
+        autowrap_enabled: false,
         application_keypad_enabled: true,
         focus_events_enabled: true,
     };
