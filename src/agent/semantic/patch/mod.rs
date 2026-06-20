@@ -223,13 +223,54 @@ fn path_is_under_cwd(cwd: &Path, path: &Path) -> bool {
 }
 
 fn apply_native_patch_changes(cwd: &Path, changes: &[ApplyPatchFileChange]) -> Result<()> {
-    for change in changes {
-        apply_native_patch_change(cwd, change)?;
+    let prepared = prepare_native_patch_changes(cwd, changes)?;
+    let mut applied = Vec::new();
+    for change in &prepared {
+        let result = verify_native_patch_preimage(change.change, &change.resolved)
+            .and_then(|()| apply_prepared_native_patch_change(change));
+        if let Err(error) = result {
+            rollback_native_patch_changes(&applied).map_err(|rollback_error| {
+                MezError::new(
+                    crate::error::MezErrorKind::Io,
+                    format!(
+                        "{}; rollback failed: {}",
+                        error.message(),
+                        rollback_error.message()
+                    ),
+                )
+            })?;
+            return Err(error);
+        }
+        applied.push(change);
     }
     Ok(())
 }
 
-fn apply_native_patch_change(cwd: &Path, change: &ApplyPatchFileChange) -> Result<()> {
+/// Resolved and pre-validated native patch change ready for mutation.
+struct NativePatchPreparedChange<'a> {
+    /// Original semantic change produced by the patch matcher.
+    change: &'a ApplyPatchFileChange,
+    /// Canonical filesystem target verified against the earlier snapshot.
+    resolved: PathBuf,
+}
+
+/// Resolves and verifies every native patch target before mutating any file.
+fn prepare_native_patch_changes<'a>(
+    cwd: &Path,
+    changes: &'a [ApplyPatchFileChange],
+) -> Result<Vec<NativePatchPreparedChange<'a>>> {
+    let mut prepared = Vec::with_capacity(changes.len());
+    for change in changes {
+        prepared.push(prepare_native_patch_change(cwd, change)?);
+    }
+    Ok(prepared)
+}
+
+/// Resolves and verifies one native patch target against its snapshot.
+fn prepare_native_patch_change<'a>(
+    cwd: &Path,
+    change: &'a ApplyPatchFileChange,
+) -> Result<NativePatchPreparedChange<'a>> {
     let resolved = native_apply_patch_resolved_path(cwd, Path::new(&change.path))?;
     let expected = PathBuf::from(&change.resolved_path);
     if !path_is_under_cwd(cwd, &resolved) {
@@ -245,17 +286,50 @@ fn apply_native_patch_change(cwd: &Path, change: &ApplyPatchFileChange) -> Resul
         )));
     }
     verify_native_patch_preimage(change, &resolved)?;
-    match &change.final_bytes {
-        Some(bytes) => write_native_patch_bytes(&resolved, bytes),
-        None => fs::remove_file(&resolved).map_err(|error| {
+    Ok(NativePatchPreparedChange { change, resolved })
+}
+
+/// Applies one prepared native patch change.
+fn apply_prepared_native_patch_change(change: &NativePatchPreparedChange<'_>) -> Result<()> {
+    match &change.change.final_bytes {
+        Some(bytes) => write_native_patch_bytes(&change.resolved, bytes),
+        None => fs::remove_file(&change.resolved).map_err(|error| {
             MezError::new(
                 crate::error::MezErrorKind::Io,
                 format!(
                     "apply_patch: failed to delete file: {}: {error}",
-                    change.path
+                    change.change.path
                 ),
             )
         }),
+    }
+}
+
+/// Restores previously applied native patch changes in reverse order.
+fn rollback_native_patch_changes(applied: &[&NativePatchPreparedChange<'_>]) -> Result<()> {
+    for change in applied.iter().rev() {
+        rollback_native_patch_change(change)?;
+    }
+    Ok(())
+}
+
+/// Restores one native patch target to its original snapshot state.
+fn rollback_native_patch_change(change: &NativePatchPreparedChange<'_>) -> Result<()> {
+    match &change.change.original {
+        ApplyPatchOriginalState::Regular(bytes) => {
+            write_native_patch_bytes(&change.resolved, bytes)
+        }
+        ApplyPatchOriginalState::Missing => match fs::remove_file(&change.resolved) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(MezError::new(
+                crate::error::MezErrorKind::Io,
+                format!(
+                    "apply_patch: failed to roll back file: {}: {error}",
+                    change.change.path
+                ),
+            )),
+        },
     }
 }
 
