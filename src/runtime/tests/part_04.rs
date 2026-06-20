@@ -3253,7 +3253,7 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
     assert!(!service.pane_environment_signatures.contains_key("%1"));
     assert_eq!(
         service.pane_readiness_state("%1"),
-        PaneReadinessState::PromptCandidate
+        PaneReadinessState::Ready
     );
     service.maybe_bootstrap_ready_panes().unwrap();
     assert!(
@@ -3274,6 +3274,28 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
         "{events:?}"
     );
     service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies a degraded pane can recover from later prompt-boundary evidence.
+///
+/// A failed probe or bootstrap can leave a pane `degraded` even after the user
+/// returns it to an idle shell prompt. Prompt markers should restore the pane
+/// to the probeable prompt-candidate path unless foreground metadata proves a
+/// non-shell interactive program is active.
+#[test]
+fn runtime_passive_prompt_recovers_degraded_readiness() {
+    let mut service = test_runtime_service();
+    service.set_pane_readiness("%1", PaneReadinessState::Degraded);
+
+    let observed = service
+        .observe_passive_shell_prompt_candidate("%1", "osc133-prompt")
+        .unwrap();
+
+    assert_eq!(observed, 1);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
 }
 
 /// Verifies shell-integration prompt markers can clear a stale interactive

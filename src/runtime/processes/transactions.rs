@@ -1325,17 +1325,20 @@ impl RuntimeSessionService {
         source: &str,
     ) -> Result<usize> {
         let previous = self.pane_readiness_state(pane_id);
+        let foreground_primary_shell = self.pane_foreground_primary_shell_state(pane_id);
         let may_recover_interactive_block = matches!(
             previous,
             PaneReadinessState::FullScreen
                 | PaneReadinessState::PasswordPrompt
                 | PaneReadinessState::InteractiveBlocked
-        ) && self.pane_foreground_primary_shell_state(pane_id)
-            == Some(true);
+        ) && foreground_primary_shell == Some(true);
+        let may_recover_degraded =
+            previous == PaneReadinessState::Degraded && foreground_primary_shell != Some(false);
         if !matches!(
             previous,
             PaneReadinessState::Unknown | PaneReadinessState::Busy
         ) && !may_recover_interactive_block
+            && !may_recover_degraded
         {
             return Ok(0);
         }
@@ -1759,7 +1762,7 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        if bootstrap_parsed {
+        if bootstrap_parsed || exit_code == 0 {
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
         } else if self.pane_readiness_state(pane_id) == PaneReadinessState::Busy {
             self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
