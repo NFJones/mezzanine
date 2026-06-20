@@ -633,15 +633,6 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         for _ in 0..8 {
             tokio::task::yield_now().await;
         }
-        let ready = client_handle
-            .execute_terminal_command(
-                primary.clone(),
-                "mark-pane-ready --acknowledge-risk --reason async-agent-test".to_string(),
-            )
-            .await
-            .unwrap();
-        assert!(ready.contains("override=applied"), "{ready}");
-
         let start = client_handle
             .execute_agent_shell_command(primary.clone(), "print a marker".to_string())
             .await
