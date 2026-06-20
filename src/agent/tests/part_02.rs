@@ -1657,6 +1657,71 @@ fn shell_action_executor_decodes_encoded_transport_on_nonzero_exit() {
     );
 }
 
+/// Verifies native shell_command execution keeps the MAAP action surface while
+/// marking that no pane shell dispatch occurred.
+///
+/// This protects the native transport contract: model-authored shell_command
+/// actions execute through the same result conversion path, but structured
+/// metadata records `execution_transport = native` and `sent_to_pane = false`.
+#[test]
+fn native_shell_command_executor_captures_output_without_pane_dispatch() {
+    let turn = turn();
+    let action = shell_action("native-shell-1");
+    let cwd = std::env::current_dir().unwrap();
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(result.content_texts(), vec![format!("{}\n", cwd.display())]);
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""execution_transport":"native""#), "{structured}");
+    assert!(structured.contains(r#""sent_to_pane":false"#), "{structured}");
+    assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
+}
+
+/// Verifies native shell_command execution refuses unsupported pane-state
+/// semantics before spawning any command.
+///
+/// Native child processes cannot provide terminal interaction or mutate the
+/// live pane shell state, so these action flags must fail rather than silently
+/// falling back or pretending pane semantics were preserved.
+#[test]
+fn native_shell_command_executor_rejects_interactive_and_stateful_actions() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut interactive = shell_action("native-interactive");
+    if let AgentActionPayload::ShellCommand { interactive, .. } = &mut interactive.payload {
+        *interactive = true;
+    }
+    let mut interactive_executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let interactive_error = execute_local_action(
+        &turn,
+        &interactive,
+        marker(),
+        &mut interactive_executor,
+    )
+    .unwrap_err();
+    assert!(
+        interactive_error.message().contains("interactive"),
+        "{interactive_error}"
+    );
+
+    let mut stateful = shell_action("native-stateful");
+    if let AgentActionPayload::ShellCommand { stateful, .. } = &mut stateful.payload {
+        *stateful = true;
+    }
+    let mut stateful_executor = NativeShellLocalExecutor::new("/bin/sh", cwd);
+
+    let stateful_error =
+        execute_local_action(&turn, &stateful, marker(), &mut stateful_executor).unwrap_err();
+    assert!(
+        stateful_error.message().contains("stateful"),
+        "{stateful_error}"
+    );
+}
+
 /// Verifies semantic patch lowering supports Mezzanine patch
 /// blocks through a shell-backed applicator.
 ///

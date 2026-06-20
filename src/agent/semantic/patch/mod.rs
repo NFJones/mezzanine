@@ -5,7 +5,7 @@
 //! snapshots, matching hunks, producing diagnostics, and generating the shell
 //! write transaction that applies verified bytes.
 
-use super::LocalActionPlan;
+use super::{LocalActionKind, LocalActionPlan};
 use crate::agent::maap::{is_mez_patch_payload, validate_apply_patch_payload};
 use crate::agent::shell::shell_quote;
 use crate::error::{MezError, Result};
@@ -101,6 +101,7 @@ pub fn apply_patch_touched_paths(patch: &str) -> Result<Vec<String>> {
 pub fn apply_patch_error_plan(message: &str) -> LocalActionPlan {
     let message = message.strip_prefix("apply_patch: ").unwrap_or(message);
     LocalActionPlan {
+        kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
         command: format!(
             "# {APPLY_PATCH_WRITE_PHASE_MARKER}\nprintf '%s\\n' {} >&2\nexit 1",
@@ -131,6 +132,7 @@ fn mez_apply_patch_read_plan(patch: &str, strip: Option<u64>) -> Result<LocalAct
     let patch = parse_mez_patch(patch)?;
     let command = mez_apply_patch_read_command(&patch.touched_paths());
     Ok(LocalActionPlan {
+        kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
         command,
         policy_command: "apply_patch".to_string(),
@@ -150,6 +152,7 @@ fn mez_apply_patch_write_plan(changes: Vec<ApplyPatchFileChange>) -> Result<Loca
         command.push_str(&apply_patch_write_change_command(index, change));
     }
     Ok(LocalActionPlan {
+        kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
         command,
         policy_command: "apply_patch".to_string(),

@@ -2778,6 +2778,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
     service.permission_policy_mut().set_approval_bypass(true);
 
     let start = service.dispatch_runtime_control_body(

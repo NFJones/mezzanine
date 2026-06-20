@@ -7,8 +7,8 @@
 
 use super::super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, LocalActionPlan, MarkerToken,
-    McpToolCallPlan, McpToolCallResponse, MezError, Path, Result, ShellTransaction,
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, LocalActionKind, LocalActionPlan,
+    MarkerToken, McpToolCallPlan, McpToolCallResponse, MezError, Path, Result, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
     local_action_plan, tool_discovery_script,
@@ -17,6 +17,10 @@ use super::{
     ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
     shell_command_structured_content_json,
 };
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use wait_timeout::ChildExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries shell execution request state for this subsystem.
@@ -161,6 +165,15 @@ impl LocalExecutionOutput {
             shell_output,
         }
     }
+
+    /// Builds output for a native local action execution.
+    pub fn native(shell_output: ShellExecutionOutput) -> Self {
+        Self {
+            transport: LocalExecutionTransport::Native,
+            sent_to_pane: false,
+            shell_output,
+        }
+    }
 }
 
 /// Defines the local action executor behavior contract for this subsystem.
@@ -220,6 +233,105 @@ where
             .execute_shell(&shell_request)
             .map(LocalExecutionOutput::pane_shell)
     }
+}
+
+/// Executes native-eligible local actions without dispatching through the pane
+/// shell.
+pub struct NativeShellLocalExecutor {
+    shell_path: std::path::PathBuf,
+    working_directory: std::path::PathBuf,
+}
+
+impl NativeShellLocalExecutor {
+    /// Builds a native shell-command executor rooted at one working directory.
+    pub fn new(
+        shell_path: impl Into<std::path::PathBuf>,
+        working_directory: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            shell_path: shell_path.into(),
+            working_directory: working_directory.into(),
+        }
+    }
+}
+
+impl LocalActionExecutor for NativeShellLocalExecutor {
+    fn execute_local_action(
+        &mut self,
+        request: &LocalExecutionRequest,
+    ) -> Result<LocalExecutionOutput> {
+        if request.plan.kind != LocalActionKind::ShellCommand {
+            return Err(MezError::invalid_args(
+                "native shell executor only supports shell_command actions",
+            ));
+        }
+        if request.plan.interactive {
+            return Err(MezError::invalid_args(
+                "native shell_command execution does not support interactive actions",
+            ));
+        }
+        if request.plan.stateful {
+            return Err(MezError::invalid_args(
+                "native shell_command execution does not support stateful actions",
+            ));
+        }
+        execute_native_shell_command(&self.shell_path, &self.working_directory, request)
+            .map(LocalExecutionOutput::native)
+    }
+}
+
+fn execute_native_shell_command(
+    shell_path: &std::path::Path,
+    working_directory: &std::path::Path,
+    request: &LocalExecutionRequest,
+) -> Result<ShellExecutionOutput> {
+    let mut child = Command::new(shell_path)
+        .arg("-lc")
+        .arg(&request.plan.command)
+        .current_dir(working_directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            MezError::new(
+                crate::error::MezErrorKind::Io,
+                format!(
+                    "failed to spawn native shell_command `{}`: {error}",
+                    request.action_id
+                ),
+            )
+        })?;
+
+    let timed_out = if let Some(timeout_ms) = request.plan.timeout_ms {
+        match child.wait_timeout(Duration::from_millis(timeout_ms))? {
+            Some(_status) => false,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                true
+            }
+        }
+    } else {
+        let _ = child.wait()?;
+        false
+    };
+    let exit_code = child.try_wait()?.and_then(|status| status.code());
+    Ok(ShellExecutionOutput::new(
+        exit_code,
+        read_child_pipe(child.stdout.take())?,
+        read_child_pipe(child.stderr.take())?,
+        timed_out,
+        false,
+    ))
+}
+
+fn read_child_pipe(mut pipe: Option<impl Read>) -> Result<String> {
+    let mut bytes = Vec::new();
+    if let Some(pipe) = pipe.as_mut() {
+        pipe.read_to_end(&mut bytes)?;
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Defines the `McpActionExecutor` behavior contract for this subsystem.
@@ -548,7 +660,7 @@ fn local_output_to_action_result_with_transport(
         &[],
         serde_json::json!({
             "source": "executor",
-            "stream": "pty_combined",
+            "stream": if sent_to_pane { "pty_combined" } else { "native_stdio" },
             "marker": marker.as_str(),
             "exit_code": output.exit_code,
             "signal": signal,

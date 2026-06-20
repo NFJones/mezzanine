@@ -88,9 +88,9 @@ pub(crate) use actions::apply_default_action_gates;
 pub use actions::{
     AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, LocalActionExecutor,
     LocalExecutionOutput, LocalExecutionRequest, LocalExecutionTransport, McpActionExecutor,
-    PaneShellExecutor, PaneShellLocalExecutor, ShellExecutionOutput, ShellExecutionRequest,
-    ShellReadObservation, ShellReadObservationKind, ShellReadRange, ShellTransportDecodeResult,
-    ShellTransportDiagnostics, action_result_context_content,
+    NativeShellLocalExecutor, PaneShellExecutor, PaneShellLocalExecutor, ShellExecutionOutput,
+    ShellExecutionRequest, ShellReadObservation, ShellReadObservationKind, ShellReadRange,
+    ShellTransportDecodeResult, ShellTransportDiagnostics, action_result_context_content,
     assistant_context_content_for_execution, decode_shell_output_transport,
     decode_shell_output_transport_with_diagnostics, discover_tools_through_pane_shell,
     execute_local_action, execute_mcp_action_through_runtime,
@@ -173,7 +173,7 @@ pub use readiness::{
     readiness_decision,
 };
 pub use semantic::{
-    ApplyPatchTransactionPhase, LocalActionPlan, action_is_local_shell_backed,
+    ApplyPatchTransactionPhase, LocalActionKind, LocalActionPlan, action_is_local_shell_backed,
     apply_patch_error_plan, apply_patch_touched_paths, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output, local_action_plan, local_action_summary,
     try_convert_unified_diff_to_mez_patch,
