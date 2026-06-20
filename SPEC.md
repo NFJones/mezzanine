@@ -6367,17 +6367,12 @@ Provider action descriptions for a surface that can emit `mcp_call` MUST include
 a bounded, secret-safe manifest of the callable `server/tool` identities and
 tool descriptions, so the model does not need to infer MCP routes only from
 nested JSON Schema variants.
-When the active user request matches available MCP server or tool metadata, the
-runtime MCP context SHOULD include an explicit routing hint that identifies the
-matching server or tool and tells the model that `mcp_call` is directly
-available when it is the smallest action that makes concrete progress. The
-default selected-model action surface MAY expose `mcp_call`, `memory_search`,
-and `memory_store` together when those capabilities are enabled. The presence of
-configured or route-matched MCP integrations MUST NOT by itself suppress
+The default selected-model action surface MAY expose `mcp_call`,
+`memory_search`, and `memory_store` together when those capabilities are
+enabled. The presence of configured MCP integrations MUST NOT by itself suppress
 persistent memory as an available feature. The prompt and provider action
 descriptions MUST prohibit placeholder `memory_search` or `memory_store` calls
-whose only purpose is to satisfy the current action wrapper before a real
-action.
+whose only purpose is to satisfy the current action wrapper before a real action.
 If a callable MCP tool needs arguments such as identifiers, URLs, paths,
 repository owner/name, branch, commit, issue or pull request number, or CI
 target, the prompt and provider action descriptions MUST instruct the model to

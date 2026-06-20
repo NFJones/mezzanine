@@ -4607,11 +4607,11 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
-        description.contains("routing_match=available_mcp"),
+        description.contains("the task matches visible MCP metadata"),
         "{description}"
     );
     assert!(
-        description.contains("mcp_call is a likely useful action"),
+        !description.contains("routing_match=available_mcp"),
         "{description}"
     );
     assert!(
@@ -4643,7 +4643,7 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         "{description}"
     );
     assert!(
-        description.contains("same batch schema as other currently allowed actions"),
+        !description.contains("routing_match=available_mcp"),
         "{description}"
     );
     assert!(

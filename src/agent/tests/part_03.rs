@@ -1162,7 +1162,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
     assert!(query_description.contains("repo owner/name"));
     assert!(query_description.contains("issue/PR numbers"));
     assert!(query_description.contains("CI targets"));
-    assert!(query_description.contains("routing_match=available_mcp"));
+    assert!(query_description.contains("Visible MCP schema and manifest metadata"));
     assert!(query_description.contains("not a reason to search memory first"));
     assert!(query_description.contains("adjust or broaden a direct integration query"));
     assert!(query_description.contains("report a bounded blocker"));
@@ -1308,14 +1308,13 @@ fn default_action_gates_expose_mcp_and_memory_for_diagnostic_request_shapes() {
     assert!(!request.issue_actions_enabled);
 }
 
-/// Verifies matched MCP routes do not suppress the persistent-memory surface.
+/// Verifies available MCP tools do not suppress the persistent-memory surface.
 ///
-/// MCP routing hints are evidence that `mcp_call` is directly useful, not a
-/// global reason to hide other enabled capabilities. This keeps memory usable
-/// for turns that legitimately need durable prior context even when MCP servers
-/// are configured and route-matched.
+/// MCP availability is not a global reason to hide other enabled capabilities.
+/// This keeps memory usable for turns that legitimately need durable prior
+/// context even when MCP servers are configured.
 #[test]
-fn default_action_gates_keep_memory_when_mcp_routing_match_is_available() {
+fn default_action_gates_keep_memory_when_mcp_is_available() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
@@ -4390,13 +4389,14 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
     assert!(!action_types.contains(&"spawn_agent".to_string()));
 }
 
-/// Verifies MCP routing matches keep the unified current action surface.
+/// Verifies available MCP tools keep the unified current action surface.
 ///
-/// The routing hint should make the matching MCP tool directly callable, but it
-/// must not remove memory as a usable feature. Provider guidance and runtime
-/// guardrails handle placeholder memory behavior without hiding the action.
+/// A matching MCP tool should be directly callable through the regular action
+/// schema and manifest, but it must not remove memory as a usable feature.
+/// Provider guidance and runtime guardrails handle placeholder memory behavior
+/// without hiding the action.
 #[test]
-fn openai_routing_matched_mcp_keeps_memory_on_default_surface() {
+fn openai_available_mcp_keeps_memory_on_default_surface() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
@@ -4579,7 +4579,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
             .as_str()
             .unwrap()
             .contains(
-                "Use this action when the task matches this tool description or the runtime MCP integrations context shows a routing_match"
+                "Use this action when the task matches this tool description or the user named this MCP server/tool"
             ),
         "{}",
         mcp_schemas[0]

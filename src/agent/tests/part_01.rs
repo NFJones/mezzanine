@@ -2951,9 +2951,13 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
     assert_eq!(context.blocks[1].content, "api_key = sk-secret");
 }
 
-/// Verifies that MCP prompt context always exposes available MCP tools before
-/// the user prompt so the model can route to configured integrations on the
-/// first turn without relying on MCP-specific discovery language.
+/// Verifies that MCP prompt context exposes compact integration summaries
+/// before the user prompt while deferring unrelated tool descriptions.
+///
+/// Broad MCP tool catalogs should not pressure normal action selection for
+/// ordinary tasks. The context still reports server/tool counts and server
+/// metadata, but detailed `available_tool` lines stay omitted until the user
+/// explicitly asks about MCP, a server, or a tool.
 #[test]
 fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt() {
     let context = AgentContext::new(vec![ContextBlock {
@@ -2998,18 +3002,7 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
             .content
             .contains("available_servers=1 available_tools=1 unavailable_servers=1")
     );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("available_tool=fs/read_file")
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("available_tool=fs/read_file route=mcp_call callable=true"),
-        "{}",
-        context.blocks[0].content
-    );
+    assert!(!context.blocks[0].content.contains("available_tool=fs/read_file"));
     assert!(
         context.blocks[0]
             .content
@@ -3017,11 +3010,7 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
         "{}",
         context.blocks[0].content
     );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("description=\"Read files\"")
-    );
+    assert!(!context.blocks[0].content.contains("description=\"Read files\""));
     assert!(
         !context.blocks[0].content.contains("approval_required"),
         "{}",
@@ -3038,9 +3027,14 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
         context.blocks[0].content
     );
     assert!(
-        !context.blocks[0]
+        context.blocks[0]
             .content
             .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        context.blocks[0].content.contains("omitted=1 detail_limit=8"),
         "{}",
         context.blocks[0].content
     );
@@ -3057,15 +3051,14 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
 }
 
-/// Verifies MCP context adds a routing hint when the current user request
-/// matches available server metadata.
+/// Verifies MCP context does not add routing hints even when the current user
+/// request matches available server metadata.
 ///
-/// Server purpose can be the decisive user-facing description even when the
-/// individual tool description is generic. The provider should receive an
-/// explicit current-turn hint rather than relying on memory lookup or indirect
-/// discovery to rediscover why MCP is relevant.
+/// Server purpose remains visible through the regular MCP manifest line, but
+/// the removed routing-match mechanism must not add extra next-action hints
+/// that can steer the model away from the normal MAAP action-selection rules.
 #[test]
-fn mcp_context_marks_routing_match_for_verbatim_server_purpose() {
+fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
@@ -3098,129 +3091,12 @@ fn mcp_context_marks_routing_match_for_verbatim_server_purpose() {
     assert!(
         context.blocks[0]
             .content
-            .contains("routing_match=available_mcp server=gitlab match=server_purpose"),
+            .contains("server=gitlab status=available route=mcp_call"),
         "{}",
         context.blocks[0].content
     );
     assert!(
-        context.blocks[0]
-            .content
-            .contains("next_action_hint=mcp_call"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("mcp_call is directly available"),
-        "{}",
-        context.blocks[0].content
-    );
-}
-
-/// Verifies MCP context matches compact user spellings of spaced server names.
-///
-/// Users often type a configured integration name as one shell-like token.
-/// Routing must still recognize that `githubcopilot` names the same server as
-/// `GitHub Copilot`; otherwise the direct MCP route is never surfaced as a
-/// routing match.
-#[test]
-fn mcp_context_marks_routing_match_for_compacted_server_name() {
-    let context = AgentContext::new(vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        label: "user".to_string(),
-        content: "use the githubcopilot mcp server to pull latest CI".to_string(),
-    }])
-    .unwrap();
-    let context = append_mcp_context(
-        context,
-        &crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
-                server_id: "github-copilot".to_string(),
-                display_name: "GitHub Copilot".to_string(),
-                purpose: "GitHub repository and CI operations".to_string(),
-                usage_instructions: String::new(),
-                tool_count: 1,
-                approval_required_tool_count: 0,
-            }],
-            available_tools: vec![crate::mcp::McpPromptTool {
-                server_id: "github-copilot".to_string(),
-                tool_name: "list_ci_results".to_string(),
-                description: "Read GitHub CI results".to_string(),
-                approval_required: false,
-                input_schema_json: r#"{"type":"object"}"#.to_string(),
-            }],
-            unavailable_servers: Vec::new(),
-        },
-    )
-    .unwrap();
-
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("routing_match=available_mcp server=github-copilot match=server_name"),
-        "{}",
-        context.blocks[0].content
-    );
-}
-
-/// Verifies MCP context adds a routing hint when the current user request
-/// matches a distinctive server metadata token without repeating the whole
-/// configured description.
-///
-/// Users normally describe the work they want done rather than quoting an MCP
-/// server purpose verbatim. Server-level metadata must still be enough to make
-/// the concrete MCP route visible as directly available, while generic words
-/// such as "fetch" and "review" are not treated as decisive matches.
-#[test]
-fn mcp_context_marks_routing_match_for_salient_server_metadata_token() {
-    let context = AgentContext::new(vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        label: "user".to_string(),
-        content: "Fetch and review the ledgernote entry from last week.".to_string(),
-    }])
-    .unwrap();
-    let context = append_mcp_context(
-        context,
-        &crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
-                server_id: "records".to_string(),
-                display_name: "Records".to_string(),
-                purpose: "LedgerNote records and approval notes".to_string(),
-                usage_instructions: "Use for LedgerNote review tasks.".to_string(),
-                tool_count: 1,
-                approval_required_tool_count: 0,
-            }],
-            available_tools: vec![crate::mcp::McpPromptTool {
-                server_id: "records".to_string(),
-                tool_name: "fetch_record".to_string(),
-                description: "Fetch one external record".to_string(),
-                approval_required: false,
-                input_schema_json: r#"{"type":"object"}"#.to_string(),
-            }],
-            unavailable_servers: Vec::new(),
-        },
-    )
-    .unwrap();
-
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("routing_match=available_mcp server=records match=server_purpose"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("matched_text=\"LedgerNote records and approval notes\""),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("next_action_hint=mcp_call"),
+        !context.blocks[0].content.contains("routing_match="),
         "{}",
         context.blocks[0].content
     );
@@ -3307,7 +3183,7 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
-        content: "call a tool".to_string(),
+        content: "use the fs/read_file MCP tool".to_string(),
     }])
     .unwrap();
     let context = append_mcp_context(
@@ -3406,7 +3282,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     assert!(
         mcp_blocks[0]
             .content
-            .contains("available_tool=git/status")
+            .contains("server=git status=available route=mcp_call")
     );
     assert!(
         !mcp_blocks[0]
@@ -3416,7 +3292,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     assert!(
         mcp_blocks[0]
             .content
-            .contains("description=\"Read status\"")
+            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance omitted=1")
     );
 }
 
@@ -4630,7 +4506,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("treat that server as a direct execution path"));
     assert!(prompt.contains("do not start with memory_search, memory_store, shell_command"));
     assert!(prompt.contains("request_capability for shell/network"));
-    assert!(prompt.contains("mcp_call is a likely useful action in the same batch schema"));
+    assert!(!prompt.contains("routing_match=available_mcp"));
     assert!(prompt.contains("Do not infer an MCP server's use case from its name alone"));
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));

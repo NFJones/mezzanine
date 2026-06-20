@@ -9,7 +9,7 @@ use super::{AgentContext, ContextBlock, ContextSourceKind};
 use crate::agent::validate_non_empty;
 use crate::error::Result;
 use crate::instructions::DiscoveredInstructionFile;
-use crate::mcp::{McpPromptServer, McpPromptSummary};
+use crate::mcp::{McpPromptServer, McpPromptSummary, McpPromptTool};
 use crate::memory::{MemoryRecord, MemoryScope};
 use crate::permissions::PermissionPolicy;
 use crate::scheduler::{AgentScheduler, runnable_agent_ids};
@@ -59,6 +59,8 @@ pub fn append_memory_context(
 ///
 /// Tool details remain compact unless the current user/local text explicitly
 /// asks about MCP or a specific available server/tool.
+const MCP_CONTEXT_MAX_TOOL_DETAIL_LINES: usize = 8;
+
 pub fn append_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
@@ -90,12 +92,17 @@ pub fn append_mcp_context(
     });
     let mut unavailable_servers = summary.unavailable_servers.clone();
     unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    let routing_match_lines = mcp_routing_match_lines(&context, summary);
-
+    let available_tool_count = available_tools.len();
+    let detailed_tools = mcp_context_selected_tool_details(
+        &context,
+        &available_servers,
+        &available_tools,
+        MCP_CONTEXT_MAX_TOOL_DETAIL_LINES,
+    );
     for server in &available_servers {
         lines.push(mcp_available_server_line(server));
     }
-    for tool in &available_tools {
+    for tool in &detailed_tools {
         lines.push(format!(
             "available_tool={}/{} route=mcp_call callable=true description={}",
             tool.server_id,
@@ -103,7 +110,17 @@ pub fn append_mcp_context(
             mcp_context_quoted_value(&tool.description)
         ));
     }
-    lines.extend(routing_match_lines);
+    let omitted_tool_count = available_tool_count.saturating_sub(detailed_tools.len());
+    if omitted_tool_count > 0 {
+        lines.push(format!(
+            "available_tool_inventory=deferred_until_explicit_mcp_relevance omitted={} detail_limit={} reason={}",
+            omitted_tool_count,
+            MCP_CONTEXT_MAX_TOOL_DETAIL_LINES,
+            mcp_context_quoted_value(
+                "Tool descriptions are omitted unless the current task explicitly asks about MCP, an MCP server, or an MCP tool; callable mcp_call schemas remain authoritative."
+            )
+        ));
+    }
     for server in &unavailable_servers {
         lines.push(format!(
             "unavailable_server={} purpose={} usage_instructions={} retryable={} reason={}",
@@ -130,195 +147,94 @@ pub fn append_mcp_context(
     AgentContext::new(context.blocks)
 }
 
-/// Builds MCP routing hints when the active task matches available metadata.
-fn mcp_routing_match_lines(context: &AgentContext, summary: &McpPromptSummary) -> Vec<String> {
-    let task_text = mcp_context_normalized_task_text(context);
+/// Returns the bounded subset of MCP tool details that should be rendered.
+///
+/// The general MCP context is intentionally compact: the action schema remains
+/// authoritative for callable tools, while this manifest only expands tool
+/// descriptions when the current user text explicitly asks about MCP, names a
+/// server, or names a tool. This avoids broad tool catalogs becoming implicit
+/// routing pressure for unrelated tasks.
+fn mcp_context_selected_tool_details(
+    context: &AgentContext,
+    available_servers: &[McpPromptServer],
+    available_tools: &[McpPromptTool],
+    limit: usize,
+) -> Vec<McpPromptTool> {
+    if limit == 0 || available_tools.is_empty() {
+        return Vec::new();
+    }
+    let task_text = mcp_context_normalized_user_text(context);
     if task_text.is_empty() {
         return Vec::new();
     }
-    let mut lines = Vec::new();
-    for server in &summary.available_servers {
-        for (label, value) in [
-            ("server_id", server.server_id.as_str()),
-            ("server_name", server.display_name.as_str()),
-            ("server_purpose", server.purpose.as_str()),
-            (
-                "server_usage_instructions",
-                server.usage_instructions.as_str(),
-            ),
-        ] {
-            if mcp_context_metadata_matches_task(&task_text, value) {
-                lines.push(format!(
-                    "routing_match=available_mcp server={} match={} matched_text={} next_action_hint=mcp_call reason={}",
-                    server.server_id,
-                    label,
-                    mcp_context_quoted_value(value),
-                    mcp_context_quoted_value("Current user request matches available MCP server metadata; mcp_call is directly available when it is the smallest action that makes concrete progress.")
-                ));
-            }
-        }
+    let explicit_mcp_request = mcp_context_contains_token(&task_text, "mcp");
+    let named_servers = available_servers
+        .iter()
+        .filter(|server| {
+            mcp_context_contains_identifier(&task_text, &server.server_id)
+                || mcp_context_contains_identifier(&task_text, &server.display_name)
+        })
+        .map(|server| server.server_id.as_str())
+        .collect::<Vec<_>>();
+    let mut selected = available_tools
+        .iter()
+        .filter(|tool| {
+            named_servers
+                .iter()
+                .any(|server_id| *server_id == tool.server_id)
+                || mcp_context_contains_identifier(&task_text, &tool.tool_name)
+                || mcp_context_contains_identifier(
+                    &task_text,
+                    &format!("{}/{}", tool.server_id, tool.tool_name),
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() && explicit_mcp_request {
+        selected = available_tools.to_vec();
     }
-    for tool in &summary.available_tools {
-        for (label, value) in [
-            ("tool_id", tool.tool_name.as_str()),
-            ("tool_description", tool.description.as_str()),
-        ] {
-            if mcp_context_metadata_matches_task(&task_text, value) {
-                lines.push(format!(
-                    "routing_match=available_mcp tool={}/{} match={} matched_text={} next_action_hint=mcp_call reason={}",
-                    tool.server_id,
-                    tool.tool_name,
-                    label,
-                    mcp_context_quoted_value(value),
-                    mcp_context_quoted_value("Current user request matches available MCP tool metadata; mcp_call is directly available when it is the smallest action that makes concrete progress.")
-                ));
-            }
-        }
-    }
-    lines.sort();
-    lines.dedup();
-    lines.into_iter().take(5).collect()
+    selected.sort_by(|left, right| {
+        left.server_id
+            .cmp(&right.server_id)
+            .then_with(|| left.tool_name.cmp(&right.tool_name))
+    });
+    selected.dedup_by(|left, right| {
+        left.server_id == right.server_id && left.tool_name == right.tool_name
+    });
+    selected.into_iter().take(limit).collect()
 }
 
-/// Returns normalized user-authored task text for MCP routing hints.
-fn mcp_context_normalized_task_text(context: &AgentContext) -> String {
-    let text = context
+/// Returns normalized user-authored text for explicit MCP detail selection.
+fn mcp_context_normalized_user_text(context: &AgentContext) -> String {
+    context
         .blocks
         .iter()
         .filter(|block| block.source == ContextSourceKind::UserInstruction)
-        .map(|block| block.content.as_str())
+        .map(|block| mcp_context_normalize_identifier(&block.content))
         .collect::<Vec<_>>()
-        .join("\n");
-    mcp_context_normalize_match_text(&text)
+        .join(" ")
 }
 
-/// Reports whether one MCP metadata value is specific and present in the task.
-fn mcp_context_metadata_matches_task(normalized_task: &str, metadata: &str) -> bool {
-    let metadata = mcp_context_normalize_match_text(metadata);
-    if metadata.len() < 3 {
-        return false;
-    }
-    let metadata_tokens = metadata.split_whitespace().collect::<Vec<_>>();
-    if metadata_tokens.is_empty() {
-        return false;
-    }
-    if metadata_tokens.len() <= 18
-        && mcp_context_normalized_task_contains_phrase(normalized_task, &metadata)
-    {
-        return true;
-    }
-    if metadata_tokens.len() <= 18
-        && mcp_context_normalized_task_contains_compacted_phrase(normalized_task, &metadata)
-    {
-        return true;
-    }
-    metadata_tokens
-        .into_iter()
-        .filter(|token| mcp_context_salient_metadata_token(token))
-        .any(|token| mcp_context_normalized_task_contains_token(normalized_task, token))
-}
-
-/// Reports whether normalized task text contains a whole metadata phrase.
-fn mcp_context_normalized_task_contains_phrase(normalized_task: &str, metadata: &str) -> bool {
-    let task = format!(" {normalized_task} ");
-    let phrase = format!(" {metadata} ");
-    task.contains(&phrase)
-}
-
-/// Reports whether task text contains metadata when both are compacted.
-fn mcp_context_normalized_task_contains_compacted_phrase(
-    normalized_task: &str,
-    metadata: &str,
-) -> bool {
-    let compacted_metadata = metadata.replace(' ', "");
-    if compacted_metadata.len() < 4 {
-        return false;
-    }
-    normalized_task
-        .replace(' ', "")
-        .contains(&compacted_metadata)
-}
-
-/// Reports whether normalized task text contains a whole metadata token.
-fn mcp_context_normalized_task_contains_token(normalized_task: &str, metadata_token: &str) -> bool {
+/// Reports whether normalized task text contains an exact normalized token.
+fn mcp_context_contains_token(normalized_task: &str, token: &str) -> bool {
     normalized_task
         .split_whitespace()
-        .any(|task_token| task_token == metadata_token)
+        .any(|task_token| task_token == token)
 }
 
-/// Reports whether one metadata token is distinctive enough for routing.
-fn mcp_context_salient_metadata_token(token: &str) -> bool {
-    (token.len() >= 4 || token.contains('/') || token.contains('_'))
-        && !mcp_context_generic_metadata_token(token)
+/// Reports whether normalized task text names one server or tool identifier.
+fn mcp_context_contains_identifier(normalized_task: &str, value: &str) -> bool {
+    let normalized = mcp_context_normalize_identifier(value);
+    if normalized.is_empty() {
+        return false;
+    }
+    let compacted = normalized.replace(' ', "");
+    mcp_context_contains_token(normalized_task, &normalized)
+        || (!compacted.is_empty() && mcp_context_contains_token(normalized_task, &compacted))
 }
 
-/// Reports whether one metadata token is too generic for MCP routing hints.
-fn mcp_context_generic_metadata_token(token: &str) -> bool {
-    matches!(
-        token,
-        "about"
-            | "access"
-            | "action"
-            | "actions"
-            | "agent"
-            | "all"
-            | "and"
-            | "api"
-            | "available"
-            | "call"
-            | "called"
-            | "can"
-            | "client"
-            | "content"
-            | "create"
-            | "current"
-            | "data"
-            | "delete"
-            | "document"
-            | "documents"
-            | "fetch"
-            | "file"
-            | "files"
-            | "find"
-            | "for"
-            | "from"
-            | "get"
-            | "integration"
-            | "integrations"
-            | "interact"
-            | "issue"
-            | "issues"
-            | "list"
-            | "manage"
-            | "operation"
-            | "operations"
-            | "read"
-            | "request"
-            | "requests"
-            | "review"
-            | "search"
-            | "server"
-            | "service"
-            | "services"
-            | "task"
-            | "the"
-            | "this"
-            | "tool"
-            | "tools"
-            | "update"
-            | "use"
-            | "used"
-            | "using"
-            | "when"
-            | "with"
-            | "work"
-            | "workflow"
-            | "workflows"
-    )
-}
-
-/// Normalizes text for deterministic MCP metadata matching.
-fn mcp_context_normalize_match_text(value: &str) -> String {
+/// Normalizes server and tool identifiers for explicit MCP detail selection.
+fn mcp_context_normalize_identifier(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut previous_space = true;
     for character in value.chars().flat_map(char::to_lowercase) {
