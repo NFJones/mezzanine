@@ -1762,6 +1762,105 @@ fn native_shell_command_executor_rejects_interactive_and_stateful_actions() {
     );
 }
 
+/// Verifies native shell_command drains large mixed output before the timeout.
+///
+/// This regression protects the native executor from deadlocking on a full
+/// stdout pipe while a command is still running. The command emits far more
+/// than a pipe buffer to stdout plus a distinct stderr marker, and the native
+/// transport must complete successfully instead of timing out.
+#[test]
+fn native_shell_command_executor_drains_large_mixed_output_before_timeout() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-large-mixed-output");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = r#"python3 -c 'import sys; sys.stdout.write("x" * 200000); sys.stdout.flush(); sys.stderr.write("stderr-marker\n"); sys.stderr.flush()'"#.to_string();
+        *timeout_ms = Some(750);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    let content = result.content_text();
+    assert!(content.contains("stderr-marker"), "missing stderr marker");
+    assert!(content.len() >= 200000, "captured output was too small");
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""timed_out":false"#), "{structured}");
+    assert!(structured.contains(r#""output_truncated":false"#), "{structured}");
+}
+
+/// Verifies native shell_command bounds retained output and reports dropped bytes.
+///
+/// This regression protects the native executor from unbounded memory growth by
+/// continuing to drain stdout after the retained prefix reaches the configured
+/// native capture cap while still surfacing truncation metadata to callers.
+#[test]
+fn native_shell_command_executor_bounds_large_output_and_reports_truncation() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-output-truncation");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = r#"python3 -c 'import sys; sys.stdout.write("y" * 400000); sys.stdout.flush()'"#.to_string();
+        *timeout_ms = Some(750);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert!(result.content_text().len() < 300000, "native output was not bounded");
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""output_truncated":true"#), "{structured}");
+    assert!(structured.contains("\"output_bytes_dropped\":"), "{structured}");
+    assert!(!structured.contains(r#""output_bytes_dropped":0"#), "{structured}");
+}
+
+/// Verifies native shell_command timeout kills descendants that keep pipes open.
+///
+/// This regression protects the native executor from blocking in pipe drains
+/// after the direct shell exits but a forked descendant still holds stdout or
+/// stderr open. Timeout handling must end the whole session promptly.
+#[test]
+fn native_shell_command_executor_times_out_when_descendant_holds_pipe_open() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-descendant-timeout");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command =
+            r#"python3 -c 'import os,time; os.fork() or time.sleep(1)'"#.to_string();
+        *timeout_ms = Some(100);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+    let started = std::time::Instant::now();
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::TimedOut);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(900),
+        "native timeout waited too long: {:?}",
+        started.elapsed()
+    );
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""timed_out":true"#), "{structured}");
+}
+
 /// Verifies native apply_patch execution applies a Mezzanine patch through the
 /// existing MAAP action and result path without pane dispatch.
 ///

@@ -40,6 +40,8 @@ pub struct ShellTransportDiagnostics {
     pub non_utf8_blocks: usize,
     /// Number of trailing base64 bytes dropped from partial frames.
     pub partial_base64_bytes_dropped: usize,
+    /// Number of user-visible output bytes dropped after hitting a capture cap.
+    pub output_bytes_dropped: usize,
 }
 
 impl ShellTransportDiagnostics {
@@ -53,7 +55,9 @@ impl ShellTransportDiagnostics {
 
     /// Reports whether user-visible command output may have been truncated.
     pub fn output_truncated(&self) -> bool {
-        self.missing_end_marker || self.partial_base64_bytes_dropped > 0
+        self.missing_end_marker
+            || self.partial_base64_bytes_dropped > 0
+            || self.output_bytes_dropped > 0
     }
 
     /// Converts diagnostics into structured action-result metadata.
@@ -68,6 +72,7 @@ impl ShellTransportDiagnostics {
             "invalid_base64_blocks": self.invalid_base64_blocks,
             "non_utf8_blocks": self.non_utf8_blocks,
             "partial_base64_bytes_dropped": self.partial_base64_bytes_dropped,
+            "output_bytes_dropped": self.output_bytes_dropped,
         })
     }
 }

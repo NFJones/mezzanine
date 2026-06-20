@@ -17,10 +17,22 @@ use super::{
     ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
     shell_command_structured_content_json,
 };
+use rustix::io::Errno;
+use rustix::process::{Pid, Signal, kill_process_group};
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
+
+/// Maximum bytes retained from one native stdout or stderr stream.
+const NATIVE_SHELL_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
+/// Poll cadence used while monitoring native children and pipe readers.
+const NATIVE_SHELL_POLL_INTERVAL_MS: u64 = 10;
+/// Grace period between TERM and KILL when timing out a native command.
+const NATIVE_SHELL_TIMEOUT_KILL_GRACE_MS: u64 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries shell execution request state for this subsystem.
@@ -444,53 +456,254 @@ fn execute_native_shell_command(
     working_directory: &std::path::Path,
     request: &LocalExecutionRequest,
 ) -> Result<ShellExecutionOutput> {
-    let mut child = Command::new(shell_path)
+    let mut command = Command::new(shell_path);
+    command
         .arg("-lc")
         .arg(&request.plan.command)
         .current_dir(working_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            MezError::new(
-                crate::error::MezErrorKind::Io,
-                format!(
-                    "failed to spawn native shell_command `{}`: {error}",
-                    request.action_id
-                ),
-            )
-        })?;
-
-    let timed_out = if let Some(timeout_ms) = request.plan.timeout_ms {
-        match child.wait_timeout(Duration::from_millis(timeout_ms))? {
-            Some(_status) => false,
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                true
-            }
+        .stderr(Stdio::piped());
+    // SAFETY: `pre_exec` runs in the child immediately before `exec`. Calling
+    // `setsid` only detaches the native command into its own session so timeout
+    // cleanup can signal the full descendant process group without touching
+    // shared Rust state in the parent.
+    unsafe {
+        command.pre_exec(|| rustix::process::setsid().map(|_| ()).map_err(Into::into));
+    }
+    let mut child = command.spawn().map_err(|error| {
+        MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!(
+                "failed to spawn native shell_command `{}`: {error}",
+                request.action_id
+            ),
+        )
+    })?;
+    let (done_tx, done_rx) = mpsc::channel();
+    let stdout_reader = spawn_child_pipe_reader(
+        NativePipeStream::Stdout,
+        child.stdout.take(),
+        NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
+        done_tx.clone(),
+    );
+    let stderr_reader = spawn_child_pipe_reader(
+        NativePipeStream::Stderr,
+        child.stderr.take(),
+        NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
+        done_tx,
+    );
+    let deadline = request
+        .plan
+        .timeout_ms
+        .map(|timeout_ms| Instant::now() + Duration::from_millis(timeout_ms));
+    let poll_interval = Duration::from_millis(NATIVE_SHELL_POLL_INTERVAL_MS);
+    let mut exit_status = None;
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    let mut timed_out = false;
+    loop {
+        drain_child_pipe_completions(&done_rx, &mut stdout_done, &mut stderr_done);
+        if exit_status.is_some() && stdout_done && stderr_done {
+            break;
         }
-    } else {
-        let _ = child.wait()?;
-        false
-    };
-    let exit_code = child.try_wait()?.and_then(|status| status.code());
-    Ok(ShellExecutionOutput::new(
-        exit_code,
-        read_child_pipe(child.stdout.take())?,
-        read_child_pipe(child.stderr.take())?,
+        if let Some(deadline) = deadline {
+            let now = Instant::now();
+            if now >= deadline {
+                timed_out = true;
+                break;
+            }
+            let wait = std::cmp::min(deadline.saturating_duration_since(now), poll_interval);
+            if exit_status.is_none() {
+                if let Some(status) = child.wait_timeout(wait)? {
+                    exit_status = Some(status);
+                }
+            } else {
+                wait_for_child_pipe_completion(&done_rx, wait, &mut stdout_done, &mut stderr_done);
+            }
+            if Instant::now() >= deadline && !(exit_status.is_some() && stdout_done && stderr_done)
+            {
+                timed_out = true;
+                break;
+            }
+        } else if exit_status.is_none() {
+            if let Some(status) = child.wait_timeout(poll_interval)? {
+                exit_status = Some(status);
+            }
+        } else {
+            wait_for_child_pipe_completion(
+                &done_rx,
+                poll_interval,
+                &mut stdout_done,
+                &mut stderr_done,
+            );
+        }
+    }
+    if timed_out {
+        terminate_child_process_group(&mut child)?;
+        if exit_status.is_none() {
+            exit_status = Some(child.wait()?);
+        }
+    }
+    let stdout = join_child_pipe_reader(NativePipeStream::Stdout, stdout_reader)?;
+    let stderr = join_child_pipe_reader(NativePipeStream::Stderr, stderr_reader)?;
+    let mut output = ShellExecutionOutput::new(
+        exit_status.and_then(|status| status.code()),
+        stdout.text,
+        stderr.text,
         timed_out,
         false,
-    ))
+    );
+    output.transport_diagnostics.output_bytes_dropped =
+        stdout.bytes_dropped.saturating_add(stderr.bytes_dropped);
+    Ok(output)
 }
 
-fn read_child_pipe(mut pipe: Option<impl Read>) -> Result<String> {
-    let mut bytes = Vec::new();
-    if let Some(pipe) = pipe.as_mut() {
-        pipe.read_to_end(&mut bytes)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies one native stdio stream drained by a background reader.
+enum NativePipeStream {
+    /// Standard output from the native child process tree.
+    Stdout,
+    /// Standard error from the native child process tree.
+    Stderr,
+}
+
+impl NativePipeStream {
+    /// Returns the stable display label used in diagnostics.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[derive(Debug)]
+/// Bounded text captured from one native child pipe plus dropped-byte metadata.
+struct CapturedPipeOutput {
+    /// UTF-8 text retained for the model-facing action result.
+    text: String,
+    /// Bytes discarded after the retained output reached its configured cap.
+    bytes_dropped: usize,
+}
+
+/// Spawns a background reader that drains one native child pipe to EOF.
+fn spawn_child_pipe_reader<R>(
+    stream: NativePipeStream,
+    pipe: Option<R>,
+    max_bytes: usize,
+    done_tx: mpsc::Sender<NativePipeStream>,
+) -> thread::JoinHandle<Result<CapturedPipeOutput>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let result = read_child_pipe(pipe, max_bytes);
+        let _ = done_tx.send(stream);
+        result
+    })
+}
+
+/// Drains any completed reader notifications without blocking.
+fn drain_child_pipe_completions(
+    done_rx: &mpsc::Receiver<NativePipeStream>,
+    stdout_done: &mut bool,
+    stderr_done: &mut bool,
+) {
+    while let Ok(stream) = done_rx.try_recv() {
+        record_child_pipe_completion(stream, stdout_done, stderr_done);
+    }
+}
+
+/// Waits briefly for one reader notification and records any completions.
+fn wait_for_child_pipe_completion(
+    done_rx: &mpsc::Receiver<NativePipeStream>,
+    wait: Duration,
+    stdout_done: &mut bool,
+    stderr_done: &mut bool,
+) {
+    match done_rx.recv_timeout(wait) {
+        Ok(stream) => record_child_pipe_completion(stream, stdout_done, stderr_done),
+        Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+    }
+    drain_child_pipe_completions(done_rx, stdout_done, stderr_done);
+}
+
+/// Records that one native pipe reader has reached EOF.
+fn record_child_pipe_completion(
+    stream: NativePipeStream,
+    stdout_done: &mut bool,
+    stderr_done: &mut bool,
+) {
+    match stream {
+        NativePipeStream::Stdout => *stdout_done = true,
+        NativePipeStream::Stderr => *stderr_done = true,
+    }
+}
+
+/// Joins one native reader thread and converts panics into typed errors.
+fn join_child_pipe_reader(
+    stream: NativePipeStream,
+    reader: thread::JoinHandle<Result<CapturedPipeOutput>>,
+) -> Result<CapturedPipeOutput> {
+    match reader.join() {
+        Ok(result) => result,
+        Err(_) => Err(MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!(
+                "native shell_command {} reader thread panicked",
+                stream.label()
+            ),
+        )),
+    }
+}
+
+/// Signals the timed-out native child session and its descendants.
+fn terminate_child_process_group(child: &mut std::process::Child) -> Result<()> {
+    if let Some(process_group_leader) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
+        send_signal_to_process_group(process_group_leader, Signal::TERM)?;
+        thread::sleep(Duration::from_millis(NATIVE_SHELL_TIMEOUT_KILL_GRACE_MS));
+        let _ = send_signal_to_process_group(process_group_leader, Signal::KILL);
+    }
+    let _ = child.kill();
+    Ok(())
+}
+
+/// Sends one signal to the native child process group, tolerating races.
+fn send_signal_to_process_group(process_group_leader: Pid, signal: Signal) -> Result<()> {
+    match kill_process_group(process_group_leader, signal) {
+        Ok(()) | Err(Errno::SRCH) => Ok(()),
+        Err(error) => Err(MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!(
+                "failed to send signal {} to native child process group {}: {error}",
+                signal.as_raw(),
+                process_group_leader.as_raw_nonzero().get(),
+            ),
+        )),
+    }
+}
+
+/// Drains one native child pipe while bounding retained bytes.
+fn read_child_pipe<R: Read>(mut pipe: Option<R>, max_bytes: usize) -> Result<CapturedPipeOutput> {
+    let mut bytes = Vec::new();
+    let mut bytes_dropped = 0usize;
+    let mut buffer = [0u8; 8192];
+    if let Some(pipe) = pipe.as_mut() {
+        loop {
+            let read = pipe.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let retained = std::cmp::min(max_bytes.saturating_sub(bytes.len()), read);
+            bytes.extend_from_slice(&buffer[..retained]);
+            bytes_dropped = bytes_dropped.saturating_add(read.saturating_sub(retained));
+        }
+    }
+    Ok(CapturedPipeOutput {
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+        bytes_dropped,
+    })
 }
 
 /// Defines the `McpActionExecutor` behavior contract for this subsystem.
@@ -616,8 +829,8 @@ fn postprocess_semantic_shell_output(
     let decoded = decode_shell_output_transport_with_diagnostics(&output.stdout);
     if decoded.diagnostics.saw_begin_marker {
         output.stdout = decoded.output;
+        output.transport_diagnostics = decoded.diagnostics;
     }
-    output.transport_diagnostics = decoded.diagnostics;
     if output.exit_code != Some(0) || output.timed_out || output.interrupted {
         return Ok(output);
     }
