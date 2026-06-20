@@ -120,6 +120,133 @@ impl LocalExecutionTransport {
     }
 }
 
+/// Reports whether a pane shell environment is equivalent to native runtime execution.
+///
+/// Native local execution uses this state for launch-time diagnostics so users
+/// can see when local actions may target a different host or filesystem view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentEquivalence {
+    /// Required identity fields match and no uncertainty remains.
+    Equivalent,
+    /// Some evidence matches, but required proof is incomplete.
+    ProbablyEquivalent,
+    /// Required identity fields differ.
+    Different,
+    /// The runtime lacks enough evidence to compare the environments.
+    Unknown,
+}
+
+impl EnvironmentEquivalence {
+    /// Returns the stable string used in diagnostics and structured results.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Equivalent => "equivalent",
+            Self::ProbablyEquivalent => "probably_equivalent",
+            Self::Different => "different",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Records the evidence used by native environment-equivalence diagnostics.
+///
+/// The diagnostic intentionally names the compared fields instead of reducing
+/// failures to a boolean so pane-visible warnings can explain why native
+/// execution may not match the pane shell environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentEquivalenceProbe {
+    /// Final equivalence state derived from the required comparisons.
+    pub equivalence: EnvironmentEquivalence,
+    /// Human-readable comparison details safe for model-facing diagnostics.
+    pub diagnostics: Vec<String>,
+}
+
+impl EnvironmentEquivalenceProbe {
+    /// Compares the pane bootstrap signature with the native runtime context.
+    pub fn compare(
+        pane_signature: Option<&EnvironmentSignature>,
+        native_working_directory: &std::path::Path,
+    ) -> Self {
+        let Some(pane_signature) = pane_signature else {
+            return Self::new(
+                EnvironmentEquivalence::Unknown,
+                vec!["pane environment signature is unavailable".to_string()],
+            );
+        };
+        if pane_signature.is_unknown() {
+            return Self::new(
+                EnvironmentEquivalence::Unknown,
+                vec!["pane environment signature is unknown".to_string()],
+            );
+        }
+
+        let native_cwd = match native_working_directory.canonicalize() {
+            Ok(path) => path,
+            Err(error) => {
+                return Self::new(
+                    EnvironmentEquivalence::Unknown,
+                    vec![format!(
+                        "native working directory cannot be resolved: {error}"
+                    )],
+                );
+            }
+        };
+        let pane_cwd = match std::path::Path::new(&pane_signature.working_directory).canonicalize()
+        {
+            Ok(path) => path,
+            Err(error) => {
+                return Self::new(
+                    EnvironmentEquivalence::Unknown,
+                    vec![format!(
+                        "pane working directory cannot be resolved: {error}"
+                    )],
+                );
+            }
+        };
+
+        if native_cwd != pane_cwd {
+            return Self::new(
+                EnvironmentEquivalence::Different,
+                vec![format!(
+                    "working_directory mismatch: pane={} native={}",
+                    pane_cwd.display(),
+                    native_cwd.display()
+                )],
+            );
+        }
+
+        let native_os = std::env::consts::OS;
+        let native_arch = std::env::consts::ARCH;
+        let mut diagnostics = vec![format!("working_directory={}", native_cwd.display())];
+        let mut different = Vec::new();
+        if !pane_signature.os.eq_ignore_ascii_case(native_os) {
+            different.push(format!(
+                "os mismatch: pane={} native={native_os}",
+                pane_signature.os
+            ));
+        }
+        if !pane_signature.arch.eq_ignore_ascii_case(native_arch) {
+            different.push(format!(
+                "arch mismatch: pane={} native={native_arch}",
+                pane_signature.arch
+            ));
+        }
+        if !different.is_empty() {
+            return Self::new(EnvironmentEquivalence::Different, different);
+        }
+        diagnostics.push(format!("os={native_os}"));
+        diagnostics.push(format!("arch={native_arch}"));
+        Self::new(EnvironmentEquivalence::Equivalent, diagnostics)
+    }
+
+    fn new(equivalence: EnvironmentEquivalence, diagnostics: Vec<String>) -> Self {
+        Self {
+            equivalence,
+            diagnostics,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries transport-neutral local action execution request state.
 ///

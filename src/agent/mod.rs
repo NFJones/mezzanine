@@ -86,11 +86,12 @@ mod turn;
 
 pub(crate) use actions::apply_default_action_gates;
 pub use actions::{
-    AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, LocalActionExecutor,
-    LocalExecutionOutput, LocalExecutionRequest, LocalExecutionTransport, McpActionExecutor,
-    NativeShellLocalExecutor, PaneShellExecutor, PaneShellLocalExecutor, ShellExecutionOutput,
-    ShellExecutionRequest, ShellReadObservation, ShellReadObservationKind, ShellReadRange,
-    ShellTransportDecodeResult, ShellTransportDiagnostics, action_result_context_content,
+    AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, EnvironmentEquivalence,
+    EnvironmentEquivalenceProbe, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
+    LocalExecutionTransport, McpActionExecutor, NativeShellLocalExecutor, PaneShellExecutor,
+    PaneShellLocalExecutor, ShellExecutionOutput, ShellExecutionRequest, ShellReadObservation,
+    ShellReadObservationKind, ShellReadRange, ShellTransportDecodeResult,
+    ShellTransportDiagnostics, action_result_context_content,
     assistant_context_content_for_execution, decode_shell_output_transport,
     decode_shell_output_transport_with_diagnostics, discover_tools_through_pane_shell,
     execute_local_action, execute_mcp_action_through_runtime,

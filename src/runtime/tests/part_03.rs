@@ -1894,6 +1894,48 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
     );
 }
 
+/// Verifies native local execution warns at agent-shell launch when the pane
+/// host cannot be proven to match the native runtime host.
+///
+/// Native mode is useful when the pane shell is unavailable, such as from an
+/// alternate-screen program, so unknown host equivalence should be visible to
+/// the user without blocking later native local actions or falling back to the
+/// pane shell.
+#[test]
+fn runtime_agent_shell_entry_warns_for_unknown_native_environment_equivalence() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    service
+        .pane_current_working_directories
+        .insert("%1".to_string(), cwd);
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
+    service.pane_environment_signatures.remove("%1");
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    assert!(show.contains("visibility=visible"), "{show}");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let compact_pane_text = pane_text.replace("\n▐ ", "");
+    assert!(
+        pane_text.contains("agent warning: native local execution is enabled"),
+        "{pane_text}"
+    );
+    assert!(
+        compact_pane_text.contains("actions will execute on the Mezzanine host"),
+        "{pane_text}"
+    );
+    assert!(compact_pane_text.contains("equivalence=unknown"), "{pane_text}");
+}
+
 /// Verifies that showing agent mode starts a pane-local subshell and hiding it
 /// exits that subshell instead of sending redraw traffic to the user's original
 /// interactive shell. This protects prompt, option, and environment mutations

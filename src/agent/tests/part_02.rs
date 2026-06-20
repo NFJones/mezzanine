@@ -1680,6 +1680,46 @@ fn native_shell_command_executor_captures_output_without_pane_dispatch() {
     assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
 }
 
+/// Verifies native environment probing reports whether pane bootstrap identity
+/// matches the native runtime identity.
+///
+/// Native mode now warns and proceeds when equivalence is unknown or different,
+/// so the probe must keep returning specific diagnostic states without becoming
+/// a hard execution gate.
+#[test]
+fn native_environment_equivalence_probe_reports_matching_identity() {
+    let cwd = std::env::current_dir().unwrap();
+    let pane = test_env_signature(
+        "pane-host",
+        "pane-user",
+        "/bin/sh",
+        cwd.to_str().unwrap(),
+    );
+
+    let equivalent = EnvironmentEquivalenceProbe::compare(Some(&pane), &cwd);
+    assert_eq!(equivalent.equivalence, EnvironmentEquivalence::Equivalent);
+
+    let unknown = EnvironmentEquivalenceProbe::compare(None, &cwd);
+    assert_eq!(unknown.equivalence, EnvironmentEquivalence::Unknown);
+    assert!(
+        unknown
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("pane environment signature is unavailable")),
+        "{unknown:?}"
+    );
+
+    let different = EnvironmentEquivalenceProbe::compare(Some(&pane), &cwd.join("target"));
+    assert_eq!(different.equivalence, EnvironmentEquivalence::Different);
+    assert!(
+        different
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("working_directory mismatch")),
+        "{different:?}"
+    );
+}
+
 /// Verifies native shell_command execution refuses unsupported pane-state
 /// semantics before spawning any command.
 ///

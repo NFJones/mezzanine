@@ -2872,9 +2872,12 @@ For local system interaction, agents MUST emit the same model-visible MAAP
 local actions regardless of runtime transport. In the default
 `agents.local_action_executor = "pane_shell"` mode, Mezzanine MUST service those
 actions through the pane shell. In `agents.local_action_executor = "native"`
-mode, Mezzanine MAY service eligible local actions through a strict native
-runtime executor while preserving the same action schema, permission checks,
-bounded output/result contracts, and audit trail. A Mezzanine agent MUST NOT
+mode, Mezzanine MAY service eligible local actions through a native runtime
+executor while preserving the same action schema, permission checks, bounded
+output/result contracts, and audit trail. If Mezzanine cannot prove that the
+pane shell environment matches the native runtime environment when the agent
+shell is launched, it MUST surface a visible warning in the pane and continue
+to execute eligible local actions through the native executor. A Mezzanine agent MUST NOT
 receive hidden host-side capabilities for local file system access, local
 process execution, or local system mutation outside the declared local action
 executor.
@@ -4256,9 +4259,12 @@ When `agents.local_action_executor = "pane_shell"`, shell actions MUST be
 executed by sending input to the pane shell. When
 `agents.local_action_executor = "native"`, non-interactive, non-stateful shell
 actions MAY execute through the native runtime executor and MUST report
-`execution_transport = "native"` and `sent_to_pane = false`. The harness MUST
-NOT execute local shell actions through an undeclared host-side command runner
-or silently fall back from native mode to pane-shell execution.
+`execution_transport = "native"` and `sent_to_pane = false`. If pane/native
+environment equivalence is unknown or different at agent-shell launch,
+Mezzanine MUST warn that native actions execute on the Mezzanine host and may
+target a different environment. The harness MUST NOT execute local shell
+actions through an undeclared host-side command runner or silently fall back
+from native mode to pane-shell execution.
 
 For non-interactive shell actions, the harness SHOULD send a complete command
 followed by the pane's configured submit sequence.
