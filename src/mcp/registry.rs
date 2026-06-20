@@ -421,12 +421,8 @@ impl McpRegistry {
             })
             .map(|server| McpPromptUnavailableServer {
                 server_id: server.configured.id.clone(),
-                purpose: server.configured.external_capability.purpose.clone(),
-                usage_instructions: server
-                    .configured
-                    .external_capability
-                    .usage_instructions
-                    .clone(),
+                purpose: String::new(),
+                usage_instructions: String::new(),
                 reason: mcp_prompt_unavailable_reason(server),
                 retryable: server.configured.enabled
                     && matches!(
@@ -502,12 +498,12 @@ fn mcp_prompt_tool_description(server: &McpServerState, tool: &McpToolState) -> 
     mcp_prompt_push_description_part(&mut parts, "", &tool.description);
     mcp_prompt_push_description_part(
         &mut parts,
-        "Server purpose",
+        "User-configured non-authoritative server purpose",
         &server.configured.external_capability.purpose,
     );
     mcp_prompt_push_description_part(
         &mut parts,
-        "Usage",
+        "User-configured non-authoritative usage guidance",
         &server.configured.external_capability.usage_instructions,
     );
     parts.join(" ")

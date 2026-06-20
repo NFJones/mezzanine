@@ -449,14 +449,14 @@ fn config_mutation_sets_string_array_values() {
     );
 }
 
-/// Verifies config mutation sets nested MCP usage instructions.
+/// Verifies config mutation sets nested MCP external-capability scalars.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn config_mutation_sets_mcp_usage_instructions_nested_scalar() {
-    let plan = plan_config_mutation(
+fn config_mutation_sets_mcp_external_capability_nested_scalars() {
+    let usage_plan = plan_config_mutation(
         ConfigFormat::Toml,
         "[mcp_servers.fs]\ncommand = \"mcp-fs\"\n",
         ConfigScope::Primary,
@@ -467,12 +467,50 @@ fn config_mutation_sets_mcp_usage_instructions_nested_scalar() {
     )
     .unwrap();
 
-    assert!(plan.changed);
-    assert!(plan.validation.valid);
+    assert!(usage_plan.changed);
+    assert!(usage_plan.validation.valid);
     assert_eq!(
-        extract_config_values(ConfigFormat::Toml, &plan.text)
+        extract_config_values(ConfigFormat::Toml, &usage_plan.text)
             .get("mcp_servers.fs.external_capability.usage_instructions"),
         Some(&"Use read_file only when the task needs file contents.".to_string())
+    );
+
+    let purpose_plan = plan_config_mutation(
+        ConfigFormat::Toml,
+        "[mcp_servers.fs]\ncommand = \"mcp-fs\"\n",
+        ConfigScope::Primary,
+        set_string(
+            "mcp_servers.fs.external_capability.purpose",
+            "Filesystem read operations",
+        ),
+    )
+    .unwrap();
+
+    assert!(purpose_plan.changed);
+    assert!(purpose_plan.validation.valid);
+    assert_eq!(
+        extract_config_values(ConfigFormat::Toml, &purpose_plan.text)
+            .get("mcp_servers.fs.external_capability.purpose"),
+        Some(&"Filesystem read operations".to_string())
+    );
+
+    let safety_plan = plan_config_mutation(
+        ConfigFormat::Toml,
+        "[mcp_servers.fs]\ncommand = \"mcp-fs\"\n[mcp_servers.fs.external_capability]\npurpose = \"Filesystem write operations\"\n",
+        ConfigScope::Primary,
+        set_boolean(
+            "mcp_servers.fs.external_capability.mutates_filesystem_outside_shell",
+            true,
+        ),
+    )
+    .unwrap();
+
+    assert!(safety_plan.changed);
+    assert!(safety_plan.validation.valid);
+    assert_eq!(
+        extract_config_values(ConfigFormat::Toml, &safety_plan.text)
+            .get("mcp_servers.fs.external_capability.mutates_filesystem_outside_shell"),
+        Some(&"true".to_string())
     );
 }
 

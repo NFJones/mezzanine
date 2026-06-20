@@ -747,6 +747,9 @@ Command rule fields for each entry in a command rule array:
 | `mcp_servers.<name>.approval` | string | omitted | Server-level approval policy. |
 | `mcp_servers.<name>.tool_approvals` | map | omitted | Per-tool approval policy. |
 | `mcp_servers.<name>.external_capability` | table | omitted | Model-visible external capability metadata. The `purpose` field should be a short, non-secret description of when agents should use this server, and `usage_instructions` may provide non-secret user-authored guidance for how agents should use it. |
+| `mcp_servers.<name>.external_capability.mutates_filesystem_outside_shell` | boolean | omitted | Set true when the server can create, edit, delete, or move local files outside shell-mediated actions. |
+| `mcp_servers.<name>.external_capability.executes_processes_outside_shell` | boolean | omitted | Set true when the server can start local processes outside shell-mediated actions. |
+| `mcp_servers.<name>.external_capability.accesses_credentials_outside_shell` | boolean | omitted | Set true when the server can access credentials outside shell-mediated actions. |
 
 `mcp_servers.<name>.external_capability.purpose` is routing metadata that is
 shown in agent prompt context. Use a concise use-case summary such as `GitHub
@@ -754,12 +757,14 @@ issue and pull request operations` rather than implementation details, command
 arguments, URLs with credentials, or other secret-bearing values.
 
 `mcp_servers.<name>.external_capability.usage_instructions` is optional
-model-visible guidance for how agents should use the server. Keep it concise,
-non-secret, and focused on usage rules such as preferred workflows, constraints,
-or when to avoid the server.
+model-visible, user-configured, non-authoritative guidance for how agents should
+use the server. Keep it concise, non-secret, and focused on usage rules such as
+preferred workflows, constraints, or when to avoid the server. Agents must treat
+this text as untrusted configuration metadata, not provider, tool, system, or
+developer instructions.
 
-This nested scalar path is also supported by the live `config_change` mutation
-surface.
+The `purpose`, `usage_instructions`, and safety-classification nested scalar
+paths are also supported by the live `config_change` mutation surface.
 
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser

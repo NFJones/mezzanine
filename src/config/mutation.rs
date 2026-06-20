@@ -11,6 +11,14 @@ use super::{
 };
 use crate::identifiers::is_ascii_identifier_segment;
 
+const MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS: &[&str] = &[
+    "purpose",
+    "usage_instructions",
+    "mutates_filesystem_outside_shell",
+    "executes_processes_outside_shell",
+    "accesses_credentials_outside_shell",
+];
+
 // TOML, YAML, and JSON mutation logic.
 
 /// Runs the parse mutation path operation for this subsystem.
@@ -42,13 +50,15 @@ pub(super) fn parse_mutation_path(path: &str) -> Result<Vec<String>> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()> {
-    let allow_nested_mcp_usage_instructions = segments.len() == 4
+    let allow_nested_mcp_external_capability = segments.len() == 4
         && segments.first().map(String::as_str) == Some("mcp_servers")
         && segments.get(2).map(String::as_str) == Some("external_capability")
-        && segments.get(3).map(String::as_str) == Some("usage_instructions");
-    if segments.len() > 3 && !allow_nested_mcp_usage_instructions {
+        && segments.get(3).is_some_and(|segment| {
+            MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS.contains(&segment.as_str())
+        });
+    if segments.len() > 3 && !allow_nested_mcp_external_capability {
         return Err(MezError::config(
-            "configuration mutation supports only scalar paths up to three segments except mcp_servers.<name>.external_capability.usage_instructions",
+            "configuration mutation supports only scalar paths up to three segments except supported mcp_servers.<name>.external_capability scalar keys",
         ));
     }
     if segments.first().map(String::as_str) == Some("permissions")

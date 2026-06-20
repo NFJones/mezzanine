@@ -130,7 +130,14 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             pattern: "mcp_servers.<name>.<key>",
             purpose: "Enable, disable, or retarget a named MCP server without editing config files manually.",
             value_type: "string, integer, boolean, or string array",
-            format: "`<name>` is the server identifier; supported keys exclude env, headers, tool approvals, and nested external capability fields except the dedicated usage_instructions path below.",
+            format: "`<name>` is the server identifier; supported keys exclude env, headers, tool approvals, and nested external capability fields except the dedicated paths below.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
+            pattern: "mcp_servers.<name>.external_capability.purpose",
+            purpose: "Adjust concise model-visible MCP server purpose metadata without editing config files manually.",
+            value_type: "string",
+            format: "`<name>` is the server identifier; keep the value concise, non-secret, and focused on when agents should use the server.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -138,6 +145,13 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             purpose: "Adjust model-visible MCP usage guidance for a named server without editing config files manually.",
             value_type: "string",
             format: "`<name>` is the server identifier; keep the value concise, non-secret, and focused on MCP usage rules.",
+            operations: CONFIG_CHANGE_OPERATION_NAMES,
+        },
+        ConfigChangePathAnnotation {
+            pattern: "mcp_servers.<name>.external_capability.<safety_flag>",
+            purpose: "Classify MCP servers whose effects can bypass shell-mediated filesystem, process, or credential boundaries.",
+            value_type: "boolean",
+            format: "`<safety_flag>` is one of mutates_filesystem_outside_shell, executes_processes_outside_shell, or accesses_credentials_outside_shell.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -227,7 +241,7 @@ pub fn config_change_setting_path_annotations_markdown() -> String {
 /// model profile name, provider name, MCP server name, hook name, or theme alias.
 pub fn config_change_setting_path_description() -> String {
     format!(
-        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments, plus mcp_servers.<name>.external_capability.usage_instructions; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; mcp_servers.<name>.external_capability.usage_instructions (string); auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
+        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments, plus mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
         TERMINAL_KEYS.join(", "),
         KEY_BINDING_KEYS.join(", "),
         WINDOW_FRAME_KEYS.join(", "),

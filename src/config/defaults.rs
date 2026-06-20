@@ -426,6 +426,9 @@ bypass_mode = false
 # [mcp_servers.example.external_capability]
 # purpose = "Issue and pull request operations"
 # usage_instructions = "Use for issue triage and pull request review tasks."
+# mutates_filesystem_outside_shell = false
+# executes_processes_outside_shell = false
+# accesses_credentials_outside_shell = false
 
 [auth]
 provider_refresh_leeway_seconds = 86400

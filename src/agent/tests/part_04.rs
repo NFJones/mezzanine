@@ -2894,6 +2894,206 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
     assert_eq!(ledger.turns()[0].state, AgentTurnState::Failed);
 }
 
+/// Verifies that MCP tool arguments are checked against required fields in
+/// the advertised input schema before action planning.
+///
+/// This keeps provider-side schema gaps from reaching external integrations as
+/// live tool calls when the runtime already knows the tool's input contract.
+#[test]
+fn turn_runner_rejects_mcp_actions_missing_required_schema_arguments_before_planning() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Mcp,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![AgentAction {
+                    id: "mcp-1".to_string(),
+                    rationale: "read requested file through external integration".to_string(),
+                    payload: AgentActionPayload::McpCall {
+                        server: "fs".to_string(),
+                        tool: "read_file".to_string(),
+                        arguments_json: "{}".to_string(),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let tools = vec![McpPromptTool {
+        server_id: "fs".to_string(),
+        tool_name: "read_file".to_string(),
+        description: "Read file".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}"#
+            .to_string(),
+    }];
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: vec!["fs".to_string()],
+        available_mcp_tools: &tools,
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "read file".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert!(execution.action_results.is_empty());
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("maap_validation_error"),
+        "{}",
+        execution.response.raw_text
+    );
+    assert!(
+        execution
+            .response
+            .raw_text
+            .contains("missing required field `path`"),
+        "{}",
+        execution.response.raw_text
+    );
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Failed);
+}
+
+/// Verifies that MCP calls with arguments matching the advertised schema are
+/// accepted by MAAP validation and can proceed to runtime planning.
+///
+/// This pairs with the missing-required-field regression so the runtime gate
+/// rejects malformed calls without blocking valid MCP usage.
+#[test]
+fn turn_runner_accepts_mcp_actions_matching_input_schema_arguments() {
+    let turn = turn();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Mcp,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![AgentAction {
+                    id: "mcp-1".to_string(),
+                    rationale: "read requested file through external integration".to_string(),
+                    payload: AgentActionPayload::McpCall {
+                        server: "fs".to_string(),
+                        tool: "read_file".to_string(),
+                        arguments_json: r#"{"path":"README.md"}"#.to_string(),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let tools = vec![McpPromptTool {
+        server_id: "fs".to_string(),
+        tool_name: "read_file".to_string(),
+        description: "Read file".to_string(),
+        approval_required: false,
+        input_schema_json: r#"{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}"#
+            .to_string(),
+    }];
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: vec!["fs".to_string()],
+        available_mcp_tools: &tools,
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "read file".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""server":"fs""#), "{structured}");
+    assert!(structured.contains(r#""tool":"read_file""#), "{structured}");
+    assert!(
+        structured.contains(r#""arguments":{"path":"README.md"}"#),
+        "{structured}"
+    );
+    assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
+}
+
 /// Verifies that MAAP validation failures are repaired through a bounded ephemeral
 /// provider retry before the runtime records a failed turn. The correction
 /// instruction must be present only in the retry request; the returned

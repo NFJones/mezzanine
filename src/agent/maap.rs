@@ -7,6 +7,7 @@
 use super::semantic::{apply_patch_touched_paths, try_convert_unified_diff_to_mez_patch};
 use super::shell::validate_agent_authored_shell_command;
 use super::{AgentCapability, AgentTurnRecord, BTreeSet, McpPromptTool, MezError, Result};
+use serde_json::Value;
 
 // MAAP action and result data structures.
 
@@ -899,7 +900,11 @@ impl AgentAction {
                 validate_non_empty("config setting path", setting_path)?;
                 validate_non_empty("config operation", operation)
             }
-            AgentActionPayload::McpCall { server, tool, .. } => {
+            AgentActionPayload::McpCall {
+                server,
+                tool,
+                arguments_json,
+            } => {
                 validate_non_empty("mcp server", server)?;
                 validate_non_empty("mcp tool", tool)?;
                 if !available_mcp_servers
@@ -910,14 +915,14 @@ impl AgentAction {
                         "mcp action references an unavailable server",
                     ));
                 }
-                if !available_mcp_tools
-                    .iter()
-                    .any(|available| available.server_id == *server && available.tool_name == *tool)
-                {
+                let Some(available_tool) = available_mcp_tools.iter().find(|available| {
+                    available.server_id == *server && available.tool_name == *tool
+                }) else {
                     return Err(MezError::invalid_args(
                         "mcp action references an unavailable or disabled tool",
                     ));
-                }
+                };
+                validate_mcp_call_arguments(arguments_json, &available_tool.input_schema_json)?;
                 Ok(())
             }
             AgentActionPayload::Complete => Ok(()),
@@ -937,6 +942,108 @@ fn validate_runtime_http_url(field: &str, value: &str) -> Result<()> {
     Err(MezError::invalid_args(format!(
         "{field} must be an http:// or https:// URL; use shell_command for local paths or file:// URLs"
     )))
+}
+
+/// Validates MCP tool arguments against the advertised object input schema.
+///
+/// MCP servers advertise JSON-schema-like input contracts. Runtime MAAP
+/// validation rechecks the common object-shape contract before execution so a
+/// provider response that bypasses native schema enforcement cannot reach the
+/// external integration with missing or clearly mistyped required fields.
+fn validate_mcp_call_arguments(arguments_json: &str, input_schema_json: &str) -> Result<()> {
+    let arguments: Value = serde_json::from_str(arguments_json).map_err(|error| {
+        MezError::invalid_args(format!("mcp action arguments must be valid JSON: {error}"))
+    })?;
+    let Value::Object(argument_object) = &arguments else {
+        return Err(MezError::invalid_args(
+            "mcp action arguments must be a JSON object",
+        ));
+    };
+    let schema: Value = serde_json::from_str(input_schema_json).map_err(|error| {
+        MezError::invalid_args(format!(
+            "mcp tool input schema is not valid JSON for runtime validation: {error}"
+        ))
+    })?;
+    let Value::Object(schema_object) = &schema else {
+        return Err(MezError::invalid_args(
+            "mcp tool input schema must be a JSON object",
+        ));
+    };
+    if let Some(schema_type) = schema_object.get("type") {
+        validate_json_schema_type("mcp tool input schema", schema_type, &arguments)?;
+    }
+    if let Some(Value::Array(required)) = schema_object.get("required") {
+        for required_field in required {
+            let Some(field_name) = required_field.as_str() else {
+                return Err(MezError::invalid_args(
+                    "mcp tool input schema required entries must be strings",
+                ));
+            };
+            if !argument_object.contains_key(field_name) {
+                return Err(MezError::invalid_args(format!(
+                    "mcp action arguments missing required field `{field_name}`"
+                )));
+            }
+        }
+    }
+    if let Some(Value::Object(properties)) = schema_object.get("properties") {
+        for (field_name, property_schema) in properties {
+            if let Some(argument_value) = argument_object.get(field_name)
+                && let Some(property_type) = property_schema.get("type")
+            {
+                validate_json_schema_type(
+                    &format!("mcp action argument `{field_name}`"),
+                    property_type,
+                    argument_value,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates one JSON value against a simple JSON Schema `type` clause.
+fn validate_json_schema_type(field: &str, schema_type: &Value, value: &Value) -> Result<()> {
+    let expected_types = match schema_type {
+        Value::String(expected) => vec![expected.as_str()],
+        Value::Array(expected) => expected
+            .iter()
+            .map(|entry| {
+                entry.as_str().ok_or_else(|| {
+                    MezError::invalid_args("mcp tool input schema type entries must be strings")
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        _ => {
+            return Err(MezError::invalid_args(
+                "mcp tool input schema type must be a string or string array",
+            ));
+        }
+    };
+    if expected_types
+        .iter()
+        .any(|expected| json_value_matches_schema_type(value, expected))
+    {
+        return Ok(());
+    }
+    Err(MezError::invalid_args(format!(
+        "{field} does not match MCP tool input schema type {}",
+        expected_types.join("|")
+    )))
+}
+
+/// Reports whether a JSON value matches one JSON Schema primitive type name.
+fn json_value_matches_schema_type(value: &Value, expected: &str) -> bool {
+    match expected {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "null" => value.is_null(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => false,
+    }
 }
 
 /// Returns true when a model-authored patch uses Mezzanine's patch block format.

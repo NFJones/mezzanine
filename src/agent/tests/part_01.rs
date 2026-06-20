@@ -3048,6 +3048,20 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
             .content
             .contains("unavailable_server=gitlab")
     );
+    assert!(
+        !context.blocks[0]
+            .content
+            .contains("GitLab issue and merge request operations"),
+        "{}",
+        context.blocks[0].content
+    );
+    assert!(
+        !context.blocks[0]
+            .content
+            .contains("Use for GitLab issue and merge request tasks."),
+        "{}",
+        context.blocks[0].content
+    );
     assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
 }
 

@@ -4802,6 +4802,14 @@ fn openai_responses_request_body_describes_config_change_schema() {
         "{path_description}"
     );
     assert!(
+        path_description.contains("mcp_servers.<name>.external_capability.purpose"),
+        "{path_description}"
+    );
+    assert!(
+        path_description.contains("mutates_filesystem_outside_shell"),
+        "{path_description}"
+    );
+    assert!(
         path_description.contains("Runtime validation still rejects secrets"),
         "{path_description}"
     );
