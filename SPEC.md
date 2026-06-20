@@ -1131,20 +1131,23 @@ variation-selector sequences as one display cell while preserving the normal
 two-cell width of complex emoji clusters such as regional-indicator flags,
 skin-tone modifier sequences, and ZWJ emoji.
 
-The default terminal compatibility profile MUST target xterm-compatible
-behavior.
+The default terminal compatibility profile MUST target Mezzanine's bounded
+xterm-compatible behavior. This profile is an implemented compatibility subset,
+not a claim that Mezzanine behaves identically to a complete xterm emulator.
 
 Terminal compatibility MUST be represented as a named profile with explicit
 capabilities. The profile abstraction MUST allow future profiles to add, remove,
 or refine terminal capabilities without changing unrelated multiplexer or agent
 semantics.
 
-The xterm-compatible profile MUST define behavior for at least C0 controls,
-ESC, CSI, OSC, DCS string controls, SGR attributes, DEC private modes,
-alternate screen buffers, application cursor and keypad modes, bracketed paste,
-focus events when supported by the host terminal, mouse tracking including SGR
-mouse encoding, title setting, clipboard sequences when enabled by policy, and
-save/restore mode behavior.
+The xterm-compatible profile MUST define behavior for the implemented subset of
+C0 controls, ESC sequences, CSI sequences, OSC string controls, SGR attributes,
+DEC private modes, alternate screen buffers, application cursor and keypad modes,
+bracketed paste, focus events when supported by the host terminal, mouse tracking
+including SGR mouse encoding, title setting, clipboard sequences when enabled by
+policy, and save/restore mode behavior. The profile MUST explicitly mark DCS
+string controls and any other unimplemented xterm capabilities as unsupported
+unless Mezzanine implements, documents, and tests them.
 
 Mezzanine MUST set the `TERM` value visible to panes to a value consistent with
 the active terminal compatibility profile.
@@ -1154,12 +1157,12 @@ provide `mez-256color` and `mezzanine-256color` as custom terminfo names for
 users who explicitly select them.
 
 The `mez-256color` and `mezzanine-256color` terminal descriptions MUST map to
-the xterm-compatible Mezzanine terminal profile. They MUST advertise the
+the xterm-compatible Mezzanine terminal profile. They MUST advertise only the
 xterm-compatible capabilities implemented by Mezzanine, including 256-color
 SGR, alternate screen entry and exit, cursor movement, keypad and cursor
-application modes, bracketed paste, SGR mouse reporting, and title setting
-when enabled. They MUST NOT advertise capabilities that Mezzanine does not
-implement or intentionally pass through.
+application modes, bracketed paste, SGR mouse reporting, and title setting when
+enabled. They MUST NOT advertise capabilities that Mezzanine does not implement
+or intentionally pass through.
 
 The Mezzanine-specific terminfo entry SHOULD be derived from the system
 `xterm-256color` entry by removing unsupported capabilities and adding
@@ -1229,9 +1232,8 @@ alternate-screen cell contents.
 User-facing commands and mouse text selection MAY provide an explicit
 visible-screen capture mode for the active alternate screen, but visible
 alternate-screen content MUST NOT appear in history-inclusive capture, copy-mode
-history, or default agent context. Alternate-screen rows already recorded as
-full-region scroll-off history MAY appear through normal history, copy-mode, and
-history-inclusive capture paths.
+history, or default agent context. Alternate-screen rows MUST NOT be recorded as
+normal scrollback history.
 
 Mezzanine MUST preserve compatibility with programs that expect a multiplexed
 xterm-compatible terminal: full-screen programs MUST be able to enter and leave
@@ -7737,7 +7739,9 @@ compatibility test suite.
 The test suite MUST be organized by terminal compatibility profile. The default
 test suite MUST cover the xterm-compatible profile.
 
-The test suite MUST cover:
+The test suite MUST cover the profile's advertised capabilities, and unsupported
+capabilities MUST be represented by explicit capability declarations or tests
+that verify they are ignored safely. The test suite MUST cover:
 
 - UTF-8 decoding, invalid byte handling, combining characters, and wide
   characters.

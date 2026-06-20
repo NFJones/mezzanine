@@ -21,6 +21,9 @@ reference documentation.
 
 - [configuration-reference.md](configuration-reference.md): generated default
   configuration, supported fields, and layer behavior.
+- [terminal-compatibility-matrix.md](terminal-compatibility-matrix.md):
+  advertised terminal capabilities, current regression coverage, unsupported
+  behavior, and full-screen TUI fixture backlog.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.

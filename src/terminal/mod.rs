@@ -1,9 +1,10 @@
 //! Terminal-state primitives.
 //!
-//! The full terminal parser and renderer are still pending. This module provides
-//! bounded history behavior, alternate-screen history exclusion, TERM fallback
-//! selection, and a small xterm-compatible screen core for common line-oriented
-//! output and control sequences.
+//! This module provides bounded history behavior, alternate-screen history
+//! exclusion, TERM fallback selection, and Mezzanine's bounded
+//! xterm-compatible screen core for common line-oriented output and terminal UI
+//! control sequences. Unsupported terminal capabilities are kept explicit in
+//! the profile layer instead of being advertised as full xterm emulation.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::os::fd::RawFd;

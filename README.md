@@ -242,6 +242,11 @@ host clipboard when clipboard integration is available. Drag selection over a
 full-screen alternate-screen pane copies the visible pane text without adding it
 to scrollback or default agent context.
 
+Terminal compatibility is tracked as a bounded implemented subset rather than a
+blanket xterm claim. See the [Terminal Compatibility Matrix](docs/terminal-compatibility-matrix.md)
+for the current capability coverage, known unsupported behavior, and full-screen
+TUI fixture backlog.
+
 The Mezzanine command prompt accepts commands such as `new-window`,
 `split-window`, `select-pane`, `synchronize-panes`, `set-theme`, `list-keys`,
 `show-options`, `refresh-provider-info`, and `exit`. Commands entered there are parsed

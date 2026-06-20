@@ -101,7 +101,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. Valid defaults include `xterm-compatible` and `dumb`. |
+| `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. `xterm-compatible` is Mezzanine's bounded implemented subset, not a full xterm-emulator claim; valid defaults include `xterm-compatible` and `dumb`. |
 | `terminal.term` | string | `"screen-256color"` | `TERM` value exposed to panes; must not claim host identity such as `xterm-256color`. |
 | `terminal.true_color` | boolean | `true` | Enable true-color presentation where supported. |
 | `terminal.mouse` | boolean | `true` | Enable mouse reporting, selection, scrolling, UI clicks, and explicit visible alternate-screen selection when pane applications have not captured mouse input. |
