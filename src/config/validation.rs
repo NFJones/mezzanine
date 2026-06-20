@@ -394,6 +394,13 @@ pub fn validate_config_text(
                 path,
                 message: "unsupported subagent wait policy; use join or detach".to_string(),
             });
+        } else if path == "agents.local_action_executor"
+            && !matches!(value.as_str(), "pane_shell" | "native")
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "unsupported local action executor; use pane_shell or native".to_string(),
+            });
         } else if path == "agents.auto_sizing.fallback_policy" && value != "use-default-profile" {
             diagnostics.push(ConfigDiagnostic {
                 path,

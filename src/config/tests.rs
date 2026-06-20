@@ -863,7 +863,7 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 16"));
+    assert!(plan.text.contains("version = 17"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(!plan.text.contains("detach_behavior"));
     assert!(!plan.text.contains("integration_mode"));
@@ -941,7 +941,7 @@ approval = "legacy-fast-approval"
     assert_eq!(plan.from_version, 13);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert_eq!(values.get("version"), Some(&"16".to_string()));
+    assert_eq!(values.get("version"), Some(&"17".to_string()));
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"3600".to_string())
@@ -1060,7 +1060,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"16".to_string()));
+    assert_eq!(values.get("version"), Some(&"17".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1138,7 +1138,7 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"16".to_string()));
+    assert_eq!(values.get("version"), Some(&"17".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1186,7 +1186,7 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"16".to_string()));
+    assert_eq!(values.get("version"), Some(&"17".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1217,10 +1217,14 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"16".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"17".to_string()));
     assert_eq!(
         missing_values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
+    );
+    assert_eq!(
+        missing_values.get("agents.local_action_executor"),
+        Some(&"pane_shell".to_string())
     );
 
     let explicit = migrate_config_text(
@@ -1229,10 +1233,44 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"16".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"17".to_string()));
     assert_eq!(
         explicit_values.get("terminal.emoji_width"),
         Some(&"narrow".to_string())
+    );
+}
+
+/// Verifies the v17 local-action executor migration backfills the conservative
+/// pane-shell default without overriding an explicit native setting.
+///
+/// The executor setting changes how accepted local MAAP actions reach the host
+/// filesystem or process table, so legacy primary configs must migrate to the
+/// existing pane-shell behavior unless the user has already made an explicit
+/// selection.
+#[test]
+fn migrates_local_action_executor_default_to_current_schema() {
+    let missing = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 16\n[agents]\nrouting = true\n",
+    )
+    .unwrap();
+    let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
+    assert_eq!(missing_values.get("version"), Some(&"17".to_string()));
+    assert_eq!(
+        missing_values.get("agents.local_action_executor"),
+        Some(&"pane_shell".to_string())
+    );
+
+    let explicit = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 16\n[agents]\nlocal_action_executor = \"native\"\n",
+    )
+    .unwrap();
+    let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
+    assert_eq!(explicit_values.get("version"), Some(&"17".to_string()));
+    assert_eq!(
+        explicit_values.get("agents.local_action_executor"),
+        Some(&"native".to_string())
     );
 }
 
@@ -1955,6 +1993,32 @@ fn rejects_invalid_subagent_wait_policy_values() {
         validation.diagnostics[0]
             .message
             .contains("unsupported subagent wait policy")
+    );
+}
+
+/// Verifies rejects unsupported local action executor values.
+///
+/// The executor setting controls whether accepted local MAAP actions are sent
+/// through the pane shell or through a strict native transport. Validation must
+/// reject typos so local file and process effects cannot silently use the wrong
+/// execution boundary.
+#[test]
+fn rejects_invalid_local_action_executor_values() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nlocal_action_executor = \"host\"\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(!validation.valid);
+    assert_eq!(
+        validation.diagnostics[0].path,
+        "agents.local_action_executor"
+    );
+    assert!(
+        validation.diagnostics[0]
+            .message
+            .contains("unsupported local action executor")
     );
 }
 

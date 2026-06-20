@@ -556,6 +556,60 @@ impl RuntimeSessionService {
                 execution.action_results[index] = result;
                 continue;
             }
+            if self.agent_local_action_executor == RuntimeLocalActionExecutor::Native {
+                let marker = runtime_marker_for_action(turn, &action.id)?;
+                let Some(working_directory) = self.pane_current_working_directory(&turn.pane_id)
+                else {
+                    let error = MezError::invalid_state(format!(
+                        "native local action executor has no working directory for pane {}",
+                        turn.pane_id
+                    ));
+                    execution.action_results[index] = self.shell_action_runtime_error_result(
+                        turn,
+                        action,
+                        command,
+                        "native_local_action_cwd",
+                        &error,
+                    )?;
+                    continue;
+                };
+                if !self
+                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
+                {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        &runtime_agent_shell_status(action, "native local action"),
+                    )?;
+                }
+                let mut native_executor =
+                    NativeShellLocalExecutor::new(self.session.shell.path(), &working_directory);
+                let result = match execute_local_action(turn, action, marker, &mut native_executor)
+                {
+                    Ok(result) => result,
+                    Err(error) => self.shell_action_runtime_error_result(
+                        turn,
+                        action,
+                        command,
+                        "native_local_action",
+                        &error,
+                    )?,
+                };
+                execution.action_results[index] = result;
+                self.append_action_result_context_if_absent(
+                    &turn.turn_id,
+                    &execution.action_results[index],
+                )?;
+                dispatched = dispatched.saturating_add(1);
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!(
+                        "action {} executed native_local_action executed_count={}",
+                        action.id, dispatched
+                    ),
+                )?;
+                continue;
+            }
             match self.pane_readiness_state(&turn.pane_id) {
                 PaneReadinessState::Ready => {}
                 PaneReadinessState::Unknown

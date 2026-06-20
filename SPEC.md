@@ -2359,7 +2359,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 16 is the current configuration schema version for this
+schema version 17 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2423,6 +2423,10 @@ configuration keys that had no runtime effect, including the former `session`,
 plus obsolete no-op fields such as `history.search_mode`, memory storage path
 and injection placeholders, `issues.storage`, `agents.prompt_profile`,
 `agents.default_agent_role`, and `audit.redact_secrets`.
+
+The version 16 to version 17 primary-config migration MUST add
+`agents.local_action_executor = "pane_shell"` when absent and MUST preserve an
+explicit existing `agents.local_action_executor` value.
 
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with
@@ -2501,7 +2505,7 @@ The `memory` table MUST support `enabled`, `max_records`, `max_bytes`,
 The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
-`shell_only`, `compaction_raw_retention_percent`, `routing`,
+`shell_only`, `local_action_executor`, `compaction_raw_retention_percent`, `routing`,
 `action_failure_retry_limit`, `implementation_pressure_after_shell_actions`,
 `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
@@ -2527,6 +2531,13 @@ greater of `10` or three times the configured threshold.
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
 reached.
+`agents.local_action_executor` MUST accept `pane_shell` and `native`, and MUST
+default to `pane_shell`. `pane_shell` MUST execute local actions through the
+active pane shell as defined by the shell-transaction contract. `native` MUST
+execute eligible local actions through Mezzanine's native runtime executor,
+MUST record the native transport in structured action results, and MUST fail
+the action rather than silently falling back to pane-shell execution when native
+execution is unavailable for that action.
 
 The `/loop` slash command MUST describe itself in help output as an iterative
 work command rather than a generic slash-command placeholder. By default,
@@ -2857,10 +2868,16 @@ state MUST NOT cause pane contents to be passively injected into model context.
 The agent harness MUST be able to send commands to the pane and observe the
 effects of those harness-initiated commands through terminal output.
 
-For local system interaction, agents MUST interact through the pane shell. A
-Mezzanine agent MUST NOT receive hidden host-side capabilities for local file
-system access, local process execution, or local system mutation that bypass the
-pane shell.
+For local system interaction, agents MUST emit the same model-visible MAAP
+local actions regardless of runtime transport. In the default
+`agents.local_action_executor = "pane_shell"` mode, Mezzanine MUST service those
+actions through the pane shell. In `agents.local_action_executor = "native"`
+mode, Mezzanine MAY service eligible local actions through a strict native
+runtime executor while preserving the same action schema, permission checks,
+bounded output/result contracts, and audit trail. A Mezzanine agent MUST NOT
+receive hidden host-side capabilities for local file system access, local
+process execution, or local system mutation outside the declared local action
+executor.
 
 The previous requirement does not prohibit the harness from performing
 control-plane operations such as model-provider requests, credential handling,
@@ -3957,15 +3974,15 @@ the action's non-empty `rationale` before validation and display. An explicitly
 empty or non-string `summary` MUST remain invalid.
 
 Semantic actions MUST include only the type-specific data needed to perform the
-operation. For shell-backed semantic local actions, Mezzanine MUST synthesize
-the concrete pane shell command, policy-classification command, local action
-identity, timeout defaults, and user-facing summary. `apply_patch` is the only
-baseline shell-backed semantic local action. For mutating filesystem semantic
-actions, Mezzanine MUST also synthesize the bounded user-facing change preview
-described in Section 7.4, so models do not need to generate or format diffs
-themselves. Mutating filesystem semantic actions that carry generated content
-through pane shell input MUST encode that content in bounded physical shell
-lines that remain comfortably below common PTY canonical-line limits.
+operation. For semantic local actions, Mezzanine MUST synthesize the concrete
+local action plan, policy-classification command, local action identity,
+timeout defaults, and user-facing summary. `apply_patch` is the only baseline
+semantic local action. For mutating filesystem semantic actions, Mezzanine MUST
+also synthesize the bounded user-facing change preview described in Section
+7.4, so models do not need to generate or format diffs themselves. Mutating
+filesystem semantic actions that carry generated content through pane shell
+input MUST encode that content in bounded physical shell lines that remain
+comfortably below common PTY canonical-line limits.
 Non-stateful shell-action stdout and stderr intended for model context MUST use
 a tagged printable base64 transport in the reverse direction before Mezzanine
 decodes them into action results. For generated shell transactions with large
@@ -4166,13 +4183,16 @@ The baseline error codes MUST include `invalid_action`, `unavailable_capability`
 `command_timeout`, `user_interrupted`, `transport_error`, `mcp_protocol_error`,
 `mcp_tool_error`, `spawn_failed`, and `internal_error`.
 
-For shell-backed local actions, including `shell_command` and semantic local
-actions lowered by Mezzanine, `structured_content` MUST include:
+For local actions, including `shell_command` and semantic local actions lowered
+by Mezzanine, `structured_content` MUST include:
 
 - `kind`: The original MAAP action type.
 - `summary`: The user-facing action summary supplied by the model or
   synthesized by Mezzanine for semantic local actions.
-- `command`: The exact shell input sent or proposed for pane execution.
+- `execution_transport`: The local action transport, either `pane_shell` or
+  `native`.
+- `command`: The exact shell input sent, proposed for pane execution, or used
+  as the native shell command for shell-command actions.
 - `sent_to_pane`: Whether any input was sent to the pane shell.
 - `stateful`: Whether the action intentionally changes pane shell state.
 - `approval`: Approval state, request identity, decision, and scope when
@@ -4232,8 +4252,13 @@ through the pane shell in normal mode using the bounded command preview rules.
 If the primary client rejects an action, the harness MUST record the rejection
 and MUST return a `maap/1` action result to the agent.
 
-Shell actions MUST be executed by sending input to the pane shell. The harness
-MUST NOT execute local shell actions through a hidden host-side command runner.
+When `agents.local_action_executor = "pane_shell"`, shell actions MUST be
+executed by sending input to the pane shell. When
+`agents.local_action_executor = "native"`, non-interactive, non-stateful shell
+actions MAY execute through the native runtime executor and MUST report
+`execution_transport = "native"` and `sent_to_pane = false`. The harness MUST
+NOT execute local shell actions through an undeclared host-side command runner
+or silently fall back from native mode to pane-shell execution.
 
 For non-interactive shell actions, the harness SHOULD send a complete command
 followed by the pane's configured submit sequence.

@@ -706,7 +706,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
     let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
 
     assert_eq!(layers.len(), 1);
-    assert_eq!(effective.get("version"), Some("16"));
+    assert_eq!(effective.get("version"), Some("17"));
     assert_eq!(
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
@@ -715,7 +715,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
         effective.get("agents.implementation_pressure_after_shell_actions"),
         Some("3")
     );
-    assert!(migrated.contains("version = 16"));
+    assert!(migrated.contains("version = 17"));
     assert!(migrated.contains("emoji_width = \"wide\""));
     assert!(migrated.contains("provider_refresh_leeway_seconds = 86400"));
     assert!(migrated.contains("implementation_pressure_after_shell_actions = 3"));
@@ -743,12 +743,12 @@ fn startup_config_layers_discover_project_overlays_and_apply_trust() {
     fs::create_dir_all(project.join(".mezzanine")).unwrap();
     fs::write(
         project.join(".mezzanine/config.toml"),
-        "version = 16\n[history]\nlines = 7\n",
+        "version = 17\n[history]\nlines = 7\n",
     )
     .unwrap();
     fs::write(
         nested.join(".mezzanine/config.toml"),
-        "version = 16\n[history]\nlines = 11\n",
+        "version = 17\n[history]\nlines = 11\n",
     )
     .unwrap();
 
@@ -4172,7 +4172,7 @@ fn memory_cli_manages_lifecycle_metadata_and_retention() {
     fs::create_dir_all(paths.root()).unwrap();
     fs::write(
         paths.root().join("config.toml"),
-        "version = 16\n[memory]\nmax_records = 2\narchive_before_prune = true\n",
+        "version = 17\n[memory]\nmax_records = 2\narchive_before_prune = true\n",
     )
     .unwrap();
 

@@ -112,6 +112,28 @@ pub(in crate::runtime) fn runtime_agent_loop_limit_from_config(root: &Value) -> 
     runtime_positive_agents_usize_from_config(root, "loop_limit", DEFAULT_AGENT_LOOP_LIMIT)
 }
 
+/// Parses the configured local action executor from `[agents]`.
+pub(in crate::runtime) fn runtime_agent_local_action_executor_from_config(
+    root: &Value,
+) -> Result<RuntimeLocalActionExecutor> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(DEFAULT_AGENT_LOCAL_ACTION_EXECUTOR);
+    };
+    let Some(value) = agents.get("local_action_executor") else {
+        return Ok(DEFAULT_AGENT_LOCAL_ACTION_EXECUTOR);
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| MezError::config("agents.local_action_executor must be a string"))?;
+    match value {
+        "pane_shell" => Ok(RuntimeLocalActionExecutor::PaneShell),
+        "native" => Ok(RuntimeLocalActionExecutor::Native),
+        _ => Err(MezError::config(
+            "agents.local_action_executor must be pane_shell or native",
+        )),
+    }
+}
+
 /// Parses automatic turn model-sizing configuration from `[agents.auto_sizing]`.
 pub(in crate::runtime) fn runtime_agent_auto_sizing_from_config(
     root: &Value,

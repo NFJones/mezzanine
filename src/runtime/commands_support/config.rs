@@ -767,6 +767,7 @@ pub(in crate::runtime) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.implementation_pressure_after_shell_actions"
                 | "agents.loop_limit"
                 | "agents.shell_only"
+                | "agents.local_action_executor"
                 | "agents.subagent_placement"
                 | "agents.subagent_wait_policy"
                 | "frames.window.enabled"

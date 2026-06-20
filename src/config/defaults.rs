@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 16
+version = 17
 
 [terminal]
 profile = "xterm-compatible"
@@ -167,6 +167,7 @@ database_path = ""
 default_provider = "openai"
 default_model_profile = "default"
 shell_only = true
+local_action_executor = "pane_shell"
 compaction_raw_retention_percent = 10
 routing = false
 action_failure_retry_limit = 5

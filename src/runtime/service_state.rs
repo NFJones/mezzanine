@@ -58,6 +58,9 @@ pub const DEFAULT_SUBAGENT_WAIT_POLICY: SubagentWaitPolicy = SubagentWaitPolicy:
 pub const DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT: usize = 10;
 /// Whether agent turns use automatic model and reasoning sizing by default.
 pub const DEFAULT_AGENT_ROUTING: bool = false;
+/// Default local action executor used for model-authored shell and patch work.
+pub const DEFAULT_AGENT_LOCAL_ACTION_EXECUTOR: RuntimeLocalActionExecutor =
+    RuntimeLocalActionExecutor::PaneShell;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 /// Default number of successive shell commands before nudging implementation.
@@ -74,6 +77,16 @@ pub const DEFAULT_AUTO_SIZING_MEDIUM_PROFILE: &str = "auto-size-medium";
 pub const DEFAULT_AUTO_SIZING_LARGE_PROFILE: &str = "auto-size-large";
 /// Default fallback policy for failed automatic model sizing decisions.
 pub const DEFAULT_AUTO_SIZING_FALLBACK_POLICY: &str = "use-default-profile";
+
+/// Selects the runtime transport used for local agent actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeLocalActionExecutor {
+    /// Dispatch local actions through the active pane shell.
+    PaneShell,
+    /// Execute eligible local actions directly through the runtime process.
+    Native,
+}
+
 /// Runtime-owned diagnostics for provider, prompt-cache, turn, and shell work.
 ///
 /// The async runtime actor records serialized actor activity separately. This
@@ -1938,6 +1951,8 @@ pub struct RuntimeSessionService {
     pub(super) agent_implementation_pressure_after_shell_actions: usize,
     /// Maximum number of work iterations for one `/loop` command.
     pub(super) agent_loop_limit: usize,
+    /// Configured transport for model-authored local actions.
+    pub(super) agent_local_action_executor: RuntimeLocalActionExecutor,
     /// Active `/loop` controller state keyed by pane id.
     pub(super) agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
     /// Loop metadata keyed by runtime agent turn id.
