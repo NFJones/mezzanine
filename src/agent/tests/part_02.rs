@@ -1861,6 +1861,76 @@ fn native_shell_command_executor_times_out_when_descendant_holds_pipe_open() {
     assert!(structured.contains(r#""timed_out":true"#), "{structured}");
 }
 
+/// Verifies native shell_command timeout ignores escaped descendants that keep
+/// inherited stdio open from a different session.
+///
+/// This regression protects the timeout cleanup path from hanging when the
+/// direct shell is terminated but a new-session descendant still owns stdout
+/// or stderr. Native completion must not depend on EOF from that escaped
+/// process tree.
+#[test]
+fn native_shell_command_timeout_does_not_wait_for_escaped_descendant_stdio() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-escaped-descendant-timeout");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = r#"python3 -c 'import subprocess,sys,time; subprocess.Popen(["python3","-c","import time; time.sleep(5)"], stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); time.sleep(1)'"#.to_string();
+        *timeout_ms = Some(100);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+    let started = std::time::Instant::now();
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::TimedOut);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(900),
+        "native timeout waited too long for escaped descendant: {:?}",
+        started.elapsed()
+    );
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""timed_out":true"#), "{structured}");
+}
+
+/// Verifies native shell_command success does not wait for escaped descendants
+/// that inherit stdout or stderr from a new session.
+///
+/// This regression protects the normal exit path from hanging after the direct
+/// shell has already completed. Native execution should report success once it
+/// has drained buffered output and stopped waiting for escaped descendants.
+#[test]
+fn native_shell_command_success_does_not_wait_for_escaped_descendant_stdio() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-escaped-descendant-success");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = r#"python3 -c 'import subprocess,sys; subprocess.Popen(["python3","-c","import time; time.sleep(5)"], stdout=sys.stdout, stderr=sys.stderr, start_new_session=True); print("done")'"#.to_string();
+        *timeout_ms = Some(1000);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+    let started = std::time::Instant::now();
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(900),
+        "native success waited too long for escaped descendant: {:?}",
+        started.elapsed()
+    );
+    assert!(result.content_text().contains("done"), "{}", result.content_text());
+}
+
 /// Verifies native apply_patch execution applies a Mezzanine patch through the
 /// existing MAAP action and result path without pane dispatch.
 ///

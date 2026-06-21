@@ -17,9 +17,11 @@ use super::{
     ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
     shell_command_structured_content_json,
 };
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
 use std::io::Read;
+use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -33,6 +35,8 @@ const NATIVE_SHELL_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 const NATIVE_SHELL_POLL_INTERVAL_MS: u64 = 10;
 /// Grace period between TERM and KILL when timing out a native command.
 const NATIVE_SHELL_TIMEOUT_KILL_GRACE_MS: u64 = 100;
+/// Grace period that lets native pipe readers drain buffered output after exit.
+const NATIVE_SHELL_READER_SHUTDOWN_GRACE_MS: u64 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries shell execution request state for this subsystem.
@@ -481,13 +485,13 @@ fn execute_native_shell_command(
         )
     })?;
     let (done_tx, done_rx) = mpsc::channel();
-    let stdout_reader = spawn_child_pipe_reader(
+    let (stdout_cancel_tx, stdout_reader) = spawn_child_pipe_reader(
         NativePipeStream::Stdout,
         child.stdout.take(),
         NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
         done_tx.clone(),
     );
-    let stderr_reader = spawn_child_pipe_reader(
+    let (stderr_cancel_tx, stderr_reader) = spawn_child_pipe_reader(
         NativePipeStream::Stderr,
         child.stderr.take(),
         NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
@@ -498,13 +502,18 @@ fn execute_native_shell_command(
         .timeout_ms
         .map(|timeout_ms| Instant::now() + Duration::from_millis(timeout_ms));
     let poll_interval = Duration::from_millis(NATIVE_SHELL_POLL_INTERVAL_MS);
+    let reader_shutdown_grace = Duration::from_millis(NATIVE_SHELL_READER_SHUTDOWN_GRACE_MS);
+    let process_group_leader = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
     let mut exit_status = None;
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut timed_out = false;
     loop {
         drain_child_pipe_completions(&done_rx, &mut stdout_done, &mut stderr_done);
-        if exit_status.is_some() && stdout_done && stderr_done {
+        if exit_status.is_some()
+            && (stdout_done && stderr_done
+                || native_child_process_group_exited(process_group_leader)?)
+        {
             break;
         }
         if let Some(deadline) = deadline {
@@ -544,6 +553,24 @@ fn execute_native_shell_command(
         if exit_status.is_none() {
             exit_status = Some(child.wait()?);
         }
+    }
+    let shutdown_deadline = Instant::now() + reader_shutdown_grace;
+    while !(stdout_done && stderr_done) {
+        let now = Instant::now();
+        if now >= shutdown_deadline {
+            break;
+        }
+        let wait = std::cmp::min(
+            shutdown_deadline.saturating_duration_since(now),
+            poll_interval,
+        );
+        wait_for_child_pipe_completion(&done_rx, wait, &mut stdout_done, &mut stderr_done);
+    }
+    if !stdout_done {
+        request_child_pipe_reader_shutdown(&stdout_cancel_tx);
+    }
+    if !stderr_done {
+        request_child_pipe_reader_shutdown(&stderr_cancel_tx);
     }
     let stdout = join_child_pipe_reader(NativePipeStream::Stdout, stdout_reader)?;
     let stderr = join_child_pipe_reader(NativePipeStream::Stderr, stderr_reader)?;
@@ -593,15 +620,20 @@ fn spawn_child_pipe_reader<R>(
     pipe: Option<R>,
     max_bytes: usize,
     done_tx: mpsc::Sender<NativePipeStream>,
-) -> thread::JoinHandle<Result<CapturedPipeOutput>>
+) -> (
+    mpsc::Sender<()>,
+    thread::JoinHandle<Result<CapturedPipeOutput>>,
+)
 where
-    R: Read + Send + 'static,
+    R: Read + AsFd + Send + 'static,
 {
-    thread::spawn(move || {
-        let result = read_child_pipe(pipe, max_bytes);
+    let (cancel_tx, cancel_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let result = read_child_pipe(stream, pipe, max_bytes, cancel_rx);
         let _ = done_tx.send(stream);
         result
-    })
+    });
+    (cancel_tx, reader)
 }
 
 /// Drains any completed reader notifications without blocking.
@@ -641,6 +673,11 @@ fn record_child_pipe_completion(
     }
 }
 
+/// Requests that one native pipe reader stop waiting for additional bytes.
+fn request_child_pipe_reader_shutdown(cancel_tx: &mpsc::Sender<()>) {
+    let _ = cancel_tx.send(());
+}
+
 /// Joins one native reader thread and converts panics into typed errors.
 fn join_child_pipe_reader(
     stream: NativePipeStream,
@@ -656,6 +693,50 @@ fn join_child_pipe_reader(
             ),
         )),
     }
+}
+
+/// Reports whether the native child process group has fully exited.
+fn native_child_process_group_exited(process_group_leader: Option<Pid>) -> Result<bool> {
+    let Some(process_group_leader) = process_group_leader else {
+        return Ok(false);
+    };
+    match test_kill_process_group(process_group_leader) {
+        Ok(()) => Ok(false),
+        Err(Errno::SRCH) => Ok(true),
+        Err(error) => Err(MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!(
+                "failed to probe native child process group {}: {error}",
+                process_group_leader.as_raw_nonzero().get(),
+            ),
+        )),
+    }
+}
+
+/// Enables nonblocking reads on one native child pipe.
+fn configure_child_pipe_nonblocking<R: AsFd>(stream: NativePipeStream, pipe: &R) -> Result<()> {
+    let borrowed = pipe.as_fd();
+    let flags = fcntl_getfl(borrowed).map_err(|error| {
+        MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!(
+                "failed to inspect native shell_command {} pipe flags: {error}",
+                stream.label()
+            ),
+        )
+    })?;
+    if !flags.contains(OFlags::NONBLOCK) {
+        fcntl_setfl(borrowed, flags | OFlags::NONBLOCK).map_err(|error| {
+            MezError::new(
+                crate::error::MezErrorKind::Io,
+                format!(
+                    "failed to enable nonblocking mode for native shell_command {} pipe: {error}",
+                    stream.label()
+                ),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Signals the timed-out native child session and its descendants.
@@ -685,19 +766,39 @@ fn send_signal_to_process_group(process_group_leader: Pid, signal: Signal) -> Re
 }
 
 /// Drains one native child pipe while bounding retained bytes.
-fn read_child_pipe<R: Read>(mut pipe: Option<R>, max_bytes: usize) -> Result<CapturedPipeOutput> {
+fn read_child_pipe<R: Read + AsFd>(
+    stream: NativePipeStream,
+    mut pipe: Option<R>,
+    max_bytes: usize,
+    cancel_rx: mpsc::Receiver<()>,
+) -> Result<CapturedPipeOutput> {
     let mut bytes = Vec::new();
     let mut bytes_dropped = 0usize;
     let mut buffer = [0u8; 8192];
     if let Some(pipe) = pipe.as_mut() {
+        configure_child_pipe_nonblocking(stream, pipe)?;
         loop {
-            let read = pipe.read(&mut buffer)?;
-            if read == 0 {
-                break;
+            match cancel_rx.try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {}
             }
-            let retained = std::cmp::min(max_bytes.saturating_sub(bytes.len()), read);
-            bytes.extend_from_slice(&buffer[..retained]);
-            bytes_dropped = bytes_dropped.saturating_add(read.saturating_sub(retained));
+            match pipe.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let retained = std::cmp::min(max_bytes.saturating_sub(bytes.len()), read);
+                    bytes.extend_from_slice(&buffer[..retained]);
+                    bytes_dropped = bytes_dropped.saturating_add(read.saturating_sub(retained));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    match cancel_rx
+                        .recv_timeout(Duration::from_millis(NATIVE_SHELL_POLL_INTERVAL_MS))
+                    {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
     }
     Ok(CapturedPipeOutput {
