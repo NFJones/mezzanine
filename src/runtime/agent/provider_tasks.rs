@@ -385,6 +385,9 @@ impl RuntimeSessionService {
             turn_id,
             "provider_task claimed reason=async_provider_worker",
         )?;
+        let local_action_executor = self.agent_local_action_executor_for_pane(&turn.pane_id);
+        let native_shell_path = self.session.shell.path().to_path_buf();
+        let native_working_directory = self.pane_current_working_directory(&turn.pane_id);
         Ok(Some(RuntimeAgentProviderDispatch {
             turn,
             context,
@@ -401,6 +404,9 @@ impl RuntimeSessionService {
             available_mcp_tools: mcp_summary.available_tools,
             memory_actions_enabled: self.runtime_persistent_memory_enabled(),
             issue_actions_enabled: super::issues::runtime_issues_enabled(self),
+            local_action_executor,
+            native_shell_path,
+            native_working_directory,
             loop_turn: self.agent_loop_turns.get(turn_id).cloned(),
         }))
     }

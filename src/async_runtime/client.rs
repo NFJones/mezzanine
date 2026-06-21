@@ -22,15 +22,16 @@ use super::{
 };
 use crate::agent::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
-    AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderErrorRetryClass, ReqwestProviderHttpTransport,
-    execute_network_action_with_transport_async, provider_error_retry_class,
+    AgentTurnState, AsyncModelProvider, ContextSourceKind, MarkerToken, ModelMessage,
+    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, NativeShellLocalExecutor, ProviderErrorRetryClass,
+    ReqwestProviderHttpTransport, execute_local_action,
+    execute_network_action_with_transport_async, local_action_plan, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
 use crate::ids::AgentId;
-use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
+use crate::runtime::{RuntimeLocalActionExecutor, runtime_execute_auto_sizing_with_async_provider};
 use crate::terminal::{TerminalFdInterest, TerminalStyleSpan};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -1438,6 +1439,9 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_tools,
         memory_actions_enabled,
         issue_actions_enabled,
+        local_action_executor,
+        native_shell_path,
+        native_working_directory,
         loop_turn: _,
     } = dispatch;
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
@@ -1570,6 +1574,13 @@ async fn execute_runtime_agent_provider_dispatch(
                     loop_allowed_actions.clone(),
                 )
                 .await?;
+            let execution = execute_provider_worker_native_local_actions(
+                &turn,
+                execution,
+                local_action_executor,
+                &native_shell_path,
+                native_working_directory.as_deref(),
+            )?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(execution)
@@ -1596,6 +1607,13 @@ async fn execute_runtime_agent_provider_dispatch(
                     loop_allowed_actions.clone(),
                 )
                 .await?;
+            let execution = execute_provider_worker_native_local_actions(
+                &turn,
+                execution,
+                local_action_executor,
+                &native_shell_path,
+                native_working_directory.as_deref(),
+            )?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(execution)
@@ -1622,6 +1640,13 @@ async fn execute_runtime_agent_provider_dispatch(
                     loop_allowed_actions.clone(),
                 )
                 .await?;
+            let execution = execute_provider_worker_native_local_actions(
+                &turn,
+                execution,
+                local_action_executor,
+                &native_shell_path,
+                native_working_directory.as_deref(),
+            )?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(execution)
@@ -1651,6 +1676,101 @@ fn runtime_provider_dispatch_after_auto_sizing(
         return (target_provider, selected_profile);
     }
     (provider, current_profile)
+}
+
+/// Executes native local actions before returning provider work to the actor.
+///
+/// Native shell mode is intentionally host-runtime backed. Running eligible
+/// local actions here keeps long commands off the serialized runtime actor
+/// while still returning ordinary action results for actor-owned presentation,
+/// transcript persistence, continuation, and scheduler state.
+fn execute_provider_worker_native_local_actions(
+    turn: &AgentTurnRecord,
+    mut execution: AgentTurnExecution,
+    local_action_executor: RuntimeLocalActionExecutor,
+    native_shell_path: &std::path::Path,
+    native_working_directory: Option<&std::path::Path>,
+) -> Result<AgentTurnExecution> {
+    if local_action_executor != RuntimeLocalActionExecutor::Native
+        || execution.terminal_state != AgentTurnState::Running
+    {
+        return Ok(execution);
+    }
+    let Some(batch) = execution.response.action_batch.clone() else {
+        return Ok(execution);
+    };
+    for index in 0..execution.action_results.len() {
+        if execution.action_results[index].status != ActionStatus::Running {
+            continue;
+        }
+        let action_id = execution.action_results[index].action_id.clone();
+        let action = batch
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state("running native local result does not match an action")
+            })?;
+        match local_action_plan(&action) {
+            Ok(Some(_)) => {}
+            Ok(None) => continue,
+            Err(error) => {
+                execution.action_results[index] = ActionResult::failed(
+                    turn,
+                    &action,
+                    ActionStatus::Failed,
+                    "local_action_plan",
+                    error.message(),
+                )?;
+                continue;
+            }
+        }
+        let Some(working_directory) = native_working_directory else {
+            execution.action_results[index] = ActionResult::failed(
+                turn,
+                &action,
+                ActionStatus::Failed,
+                "native_local_action_cwd",
+                format!(
+                    "native local action executor has no working directory for pane {}",
+                    turn.pane_id
+                ),
+            )?;
+            continue;
+        };
+        let marker = async_native_local_action_marker(turn, &action.id)?;
+        let mut native_executor =
+            NativeShellLocalExecutor::new(native_shell_path, working_directory);
+        execution.action_results[index] =
+            execute_local_action(turn, &action, marker, &mut native_executor).or_else(|error| {
+                ActionResult::failed(
+                    turn,
+                    &action,
+                    ActionStatus::Failed,
+                    "native_local_action",
+                    error.message(),
+                )
+            })?;
+    }
+    execution.terminal_state =
+        async_agent_turn_state_from_action_results(&execution.action_results, execution.final_turn);
+    Ok(execution)
+}
+
+/// Builds a valid local-action marker for off-actor native execution.
+fn async_native_local_action_marker(
+    turn: &AgentTurnRecord,
+    action_id: &str,
+) -> Result<MarkerToken> {
+    let material = format!(
+        "{}\0{}\0{}\0{}",
+        turn.turn_id, turn.agent_id, turn.pane_id, action_id
+    );
+    MarkerToken::new(crate::permissions::exact_command_sha256(
+        "native-local-action",
+        &material,
+    ))
 }
 
 /// Executes runtime-owned network actions before returning provider work to the
@@ -1893,8 +2013,9 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 mod tests {
     use super::*;
     use crate::agent::{
-        AgentContext, AgentTurnRecord, AgentTurnState, AgentTurnTrigger, ContextBlock,
-        ContextSourceKind, ModelInteractionKind, ModelRequest, ModelResponse,
+        ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext,
+        AgentTurnExecution, AgentTurnRecord, AgentTurnState, AgentTurnTrigger, ContextBlock,
+        ContextSourceKind, MaapBatch, ModelInteractionKind, ModelRequest, ModelResponse,
     };
     use crate::runtime::{
         RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
@@ -1903,6 +2024,114 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+
+    /// Verifies the provider worker settles native local actions before an actor
+    /// completion event can apply them.
+    ///
+    /// Native shell mode must keep host-side commands off the serialized
+    /// runtime actor. This regression runs a deliberately delayed local shell
+    /// action through the provider-worker helper and asserts the resulting
+    /// execution already contains a completed action result, leaving the actor
+    /// to present and continue the turn instead of executing the command inline.
+    #[test]
+    fn provider_worker_executes_native_local_actions_before_actor_completion() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let work_dir = std::env::temp_dir().join(format!(
+            "mez-native-local-action-worker-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let marker_path = work_dir.join("marker");
+        let turn = AgentTurnRecord {
+            turn_id: "turn-native-worker".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+        };
+        let action = AgentAction {
+            id: "native-worker-shell".to_string(),
+            rationale: "prove native worker execution".to_string(),
+            payload: AgentActionPayload::ShellCommand {
+                summary: "Run a delayed native command".to_string(),
+                command: "sleep 1; printf native-worker-done > marker".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: None,
+            },
+        };
+        let execution = AgentTurnExecution {
+            request: ModelRequest {
+                provider: "test".to_string(),
+                model: "test".to_string(),
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: false,
+                interaction_kind: ModelInteractionKind::ActionExecution,
+                allowed_actions: crate::agent::AllowedActionSet::say_only(),
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "test".to_string(),
+                model: "test".to_string(),
+                raw_text: "native worker shell".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: Some(MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "test native worker shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: BTreeMap::new(),
+            action_results: vec![ActionResult::running(&turn, &action, Vec::new(), None)],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+
+        let execution = execute_provider_worker_native_local_actions(
+            &turn,
+            execution,
+            RuntimeLocalActionExecutor::Native,
+            std::path::Path::new("/bin/sh"),
+            Some(&work_dir),
+        )
+        .unwrap();
+
+        assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+        assert_eq!(execution.terminal_state, AgentTurnState::Running);
+        assert_eq!(
+            std::fs::read_to_string(&marker_path).unwrap(),
+            "native-worker-done"
+        );
+        let _ = std::fs::remove_dir_all(work_dir);
+    }
 
     /// Records async provider requests and returns a valid auto-sizing router
     /// decision. This isolates same-provider routing from network transport so
