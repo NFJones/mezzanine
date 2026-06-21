@@ -270,7 +270,7 @@ Useful slash commands include:
 | Command        | Purpose                                               |
 | -------------- | ----------------------------------------------------- |
 | `/help`        | Show agent shell help.                                |
-| `/status`      | Show the current pane agent session plus all-session token usage. |
+| `/status`      | Show the current pane agent session, pane-lifetime token usage, and mez-session totals. |
 | `/model`       | Inspect or change model selection.                    |
 | `/thinking`    | Toggle provider thinking mode when supported.         |
 | `/approval`    | Inspect or change approval mode.                      |

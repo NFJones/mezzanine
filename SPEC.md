@@ -5034,9 +5034,12 @@ The baseline command capabilities are:
   roots, context usage, and cumulative provider token counters. The status
   display SHOULD be `text/markdown; charset=utf-8` and SHOULD present the main
   status data as a markdown table. When per-model token usage is available,
-  `/status` MUST render the current session provider/model accounting table and
-  then a separate mez-instance-wide provider/model accounting table beneath it
-  aggregated across all active agent sessions and panes using the same
+  `/status` MUST render a current-pane provider/model accounting table using
+  pane-lifetime totals retained across conversation switches in that pane. It
+  MUST then render a separate mez-session-wide provider/model accounting table
+  beneath it aggregated across all retained agent conversations for the running
+  Mezzanine process, including conversations whose panes or active agent
+  sessions have been closed or replaced. Both tables MUST use the same
   per-model columns, including cache hit percentage. If a provider omits
   cached-token accounting, the status display SHOULD show that counter as
   unknown rather than as zero. Provider token counters MUST include auxiliary

@@ -352,18 +352,12 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Aggregates provider/model token accounting across active pane sessions.
+    /// Aggregates provider/model token accounting across retained conversations.
     fn runtime_agent_instance_provider_token_usage_by_model(
         &self,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
         let mut usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage> = BTreeMap::new();
-        for session in self.agent_shell_store.sessions() {
-            let Some(session_usage) = self
-                .agent_token_usage_by_conversation
-                .get(&session.session_id)
-            else {
-                continue;
-            };
+        for session_usage in self.agent_token_usage_by_conversation.values() {
             for (key, usage) in session_usage {
                 if usage.is_zero() {
                     continue;
