@@ -393,6 +393,50 @@ where
                 .actions
                 .iter()
                 .any(|action| matches!(action, TerminalClientLoopAction::ForwardToPane(_)));
+        let apply_primary_step_before_output = !step.output_lines.is_empty()
+            && request.role == ClientViewRole::Primary
+            && !step.actions.is_empty()
+            && request.primary_client_id.as_ref() == Some(&request.client_id);
+        let primary_step_application = if apply_primary_step_before_output {
+            let primary_client_id = request.client_id.clone();
+            let application_result = match pane_io_mode {
+                AsyncAttachedTerminalPaneIoMode::Inline => {
+                    handle
+                        .apply_attached_terminal_step_plan_inline_pane_io(
+                            primary_client_id,
+                            step.clone(),
+                        )
+                        .await
+                }
+                AsyncAttachedTerminalPaneIoMode::Deferred => {
+                    handle
+                        .apply_attached_terminal_step_plan(primary_client_id, step.clone())
+                        .await
+                }
+            };
+            Some(match application_result {
+                Ok(application) => application,
+                Err(error) => {
+                    recover_attached_terminal_error(
+                        handle,
+                        io,
+                        AsyncAttachedTerminalErrorRecovery {
+                            client_id: request.client_id.clone(),
+                            error,
+                            client_size: request.client_size,
+                            terminal_config: frame.config.clone(),
+                            cursor_blink_epoch,
+                            output_writable,
+                        },
+                        &mut report,
+                    )
+                    .await?;
+                    return Ok(report);
+                }
+            })
+        } else {
+            None
+        };
         if !step.output_lines.is_empty() && !agent_prompt_input_action {
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
@@ -434,7 +478,9 @@ where
                 break;
             }
         }
-        if request.role == ClientViewRole::Primary
+        let primary_step_application = if primary_step_application.is_some() {
+            primary_step_application
+        } else if request.role == ClientViewRole::Primary
             && !step.actions.is_empty()
             && let Some(primary_client_id) = request.primary_client_id.as_ref()
         {
@@ -453,7 +499,7 @@ where
                         .await
                 }
             };
-            let application = match application_result {
+            Some(match application_result {
                 Ok(application) => application,
                 Err(error) => {
                     recover_attached_terminal_error(
@@ -472,7 +518,11 @@ where
                     .await?;
                     return Ok(report);
                 }
-            };
+            })
+        } else {
+            None
+        };
+        if let Some(application) = primary_step_application {
             if application.full_redraw_required {
                 io.invalidate_output_frame().await?;
             }
