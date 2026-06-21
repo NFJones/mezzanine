@@ -305,6 +305,8 @@ where
         request.terminal_config.host_bracketed_paste_active = batch.host_bracketed_paste_active;
         request.terminal_config.host_bracketed_paste_buffer =
             batch.host_bracketed_paste_buffer.clone();
+        request.terminal_config.host_bracketed_paste_started_at =
+            batch.host_bracketed_paste_started_at;
         merge_attached_terminal_loop_report(&mut report.loop_report, batch);
         if batch_output_frames > 0 {
             render_limiter.mark_flushed();

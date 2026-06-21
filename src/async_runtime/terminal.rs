@@ -320,11 +320,14 @@ where
         error_roles: Vec::new(),
         host_bracketed_paste_active: request.terminal_config.host_bracketed_paste_active,
         host_bracketed_paste_buffer: request.terminal_config.host_bracketed_paste_buffer.clone(),
+        host_bracketed_paste_started_at: request.terminal_config.host_bracketed_paste_started_at,
     };
     let cursor_blink_epoch = std::time::Instant::now();
     let mut host_bracketed_paste_active = request.terminal_config.host_bracketed_paste_active;
     let mut host_bracketed_paste_buffer =
         request.terminal_config.host_bracketed_paste_buffer.clone();
+    let mut host_bracketed_paste_started_at =
+        request.terminal_config.host_bracketed_paste_started_at;
 
     for _ in 0..request.loop_config.max_iterations {
         let readiness = io.poll_readiness().await?;
@@ -370,11 +373,15 @@ where
             frame.view.as_ref(),
             status.as_ref(),
             &frame.config,
-            &mut host_bracketed_paste_active,
-            &mut host_bracketed_paste_buffer,
+            &mut crate::terminal::HostBracketedPasteBufferState {
+                active: &mut host_bracketed_paste_active,
+                buffer: &mut host_bracketed_paste_buffer,
+                started_at: &mut host_bracketed_paste_started_at,
+            },
         )?;
         report.host_bracketed_paste_active = host_bracketed_paste_active;
         report.host_bracketed_paste_buffer = host_bracketed_paste_buffer.clone();
+        report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
 
         let agent_prompt_input_action = request.role == ClientViewRole::Primary
             && frame

@@ -2747,6 +2747,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
         .attach_primary("primary", true, Size::new(160, 60).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -2833,6 +2834,24 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
             )),
         "file actions should dispatch through pane shell transactions"
     );
+    let marker = service
+        .running_shell_transactions
+        .keys()
+        .next()
+        .cloned()
+        .expect("apply_patch transaction should be running");
+    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
+    transaction.observed_output_preview = format!(
+        "diff -- apply patch\n--- /dev/null\n+++ b/{target_rel}\n@@ -0,0 +1,2 @@\n+alpha\n+beta\n"
+    );
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
     poll_until_turn_state(&mut service, "turn-1", AgentTurnState::Completed);
 
     let pane_text = service

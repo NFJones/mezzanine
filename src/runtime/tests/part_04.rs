@@ -2067,6 +2067,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

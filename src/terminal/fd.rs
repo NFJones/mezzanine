@@ -15,7 +15,8 @@ use crate::readline::ReadlinePrompt;
 #[cfg(test)]
 use rustix::event::{PollFd as RustixPollFd, PollFlags, Timespec, poll as rustix_poll};
 #[cfg(test)]
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 // Raw mode and attached terminal file-descriptor helpers.
 
@@ -367,6 +368,12 @@ pub struct TerminalClientLoopConfig {
     /// terminal pastes are forwarded to the pane as one ordered payload instead
     /// of trickling partial heredoc contents ahead of the paste terminator.
     pub host_bracketed_paste_buffer: Vec<u8>,
+    /// Monotonic time at which the current host bracketed-paste buffer began.
+    ///
+    /// This timestamp lets the client recover when a host sends the opening
+    /// delimiter but never sends the matching close delimiter. It is internal
+    /// runtime state, not persisted user configuration.
+    pub host_bracketed_paste_started_at: Option<Instant>,
     /// Stores the resize debounce ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -439,6 +446,7 @@ impl Default for TerminalClientLoopConfig {
             pane_bracketed_paste_mode: false,
             host_bracketed_paste_active: false,
             host_bracketed_paste_buffer: Vec::new(),
+            host_bracketed_paste_started_at: None,
             resize_debounce_ms: 200,
             render_rate_limit_fps: 5,
             ui_theme: UiTheme::default(),

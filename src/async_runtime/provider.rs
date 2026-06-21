@@ -50,6 +50,7 @@ pub(super) fn empty_attached_terminal_loop_report() -> AttachedTerminalClientLoo
         error_roles: Vec::new(),
         host_bracketed_paste_active: false,
         host_bracketed_paste_buffer: Vec::new(),
+        host_bracketed_paste_started_at: None,
     }
 }
 
@@ -73,6 +74,7 @@ pub(super) fn merge_attached_terminal_loop_report(
     total.error_roles.extend(batch.error_roles);
     total.host_bracketed_paste_active = batch.host_bracketed_paste_active;
     total.host_bracketed_paste_buffer = batch.host_bracketed_paste_buffer;
+    total.host_bracketed_paste_started_at = batch.host_bracketed_paste_started_at;
 }
 
 /// Runs the is terminal runtime lifecycle state operation for this subsystem.

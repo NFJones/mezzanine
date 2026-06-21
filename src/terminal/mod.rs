@@ -79,7 +79,6 @@ mod screen;
 /// declaration makes the boundary available to the crate.
 mod theme;
 
-pub(crate) use client_loop::plan_attached_terminal_client_step_with_host_paste_buffer;
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
@@ -96,6 +95,9 @@ pub(crate) use client_loop::{
     AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
     attached_terminal_restore_presentation_frame,
     encode_attached_terminal_output_update_frame_with_styles,
+};
+pub(crate) use client_loop::{
+    HostBracketedPasteBufferState, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
 pub(crate) use copy::{
     AGENT_COPY_SKIP_LINE, AGENT_COPY_WRAP_CONTINUATION, encode_agent_copy_source_line,

@@ -2682,6 +2682,44 @@ fn client_loop_recovers_from_oversized_unterminated_host_bracketed_paste() {
     assert!(paste_buffer.is_empty());
 }
 
+/// Verifies stale malformed host bracketed paste frames release later input.
+///
+/// A host terminal can emit the paste start delimiter and then never deliver
+/// the matching close delimiter. Once the buffered frame is old enough to be
+/// considered stale, ordinary input must be routed again instead of being
+/// swallowed into the retained paste buffer indefinitely.
+#[test]
+fn client_loop_recovers_from_stale_unterminated_host_bracketed_paste() {
+    let config = TerminalClientLoopConfig {
+        host_bracketed_paste_started_at: Some(
+            std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap(),
+        ),
+        ..TerminalClientLoopConfig::default()
+    };
+    let mut paste_active = true;
+    let mut paste_buffer = b"\x1b[200~unterminated".to_vec();
+
+    let actions = route_client_input_actions_with_host_paste_buffer(
+        b"echo recovered\n",
+        &config,
+        &mut paste_active,
+        &mut paste_buffer,
+    )
+    .unwrap();
+
+    assert_eq!(
+        actions,
+        vec![
+            TerminalClientLoopAction::ForwardToPane(b"\x1b[200~unterminated".to_vec()),
+            TerminalClientLoopAction::ForwardToPane(b"echo recovered\n".to_vec()),
+        ]
+    );
+    assert!(!paste_active);
+    assert!(paste_buffer.is_empty());
+}
+
 /// Verifies that a single terminal read containing multiple SGR mouse packets is
 /// split into separate mux actions instead of being forwarded as pane input. Drag
 /// reporting commonly arrives batched, and forwarding a malformed aggregate

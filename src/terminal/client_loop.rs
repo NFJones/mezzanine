@@ -5,7 +5,6 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use std::io::ErrorKind;
-#[cfg(test)]
 use std::time::{Duration, Instant};
 
 use super::keys::classify_prefix_binding;
@@ -622,6 +621,18 @@ pub struct AttachedTerminalClientLoopReport {
     pub host_bracketed_paste_active: bool,
     /// Buffered host bracketed-paste bytes retained for the next loop.
     pub host_bracketed_paste_buffer: Vec<u8>,
+    /// Monotonic time at which the current buffered host paste began.
+    pub host_bracketed_paste_started_at: Option<Instant>,
+}
+
+/// Mutable host bracketed-paste state carried while routing terminal input.
+pub(crate) struct HostBracketedPasteBufferState<'a> {
+    /// Whether the router is currently buffering a host bracketed-paste frame.
+    pub active: &'a mut bool,
+    /// Bytes retained until the paste close delimiter arrives or recovery runs.
+    pub buffer: &'a mut Vec<u8>,
+    /// Monotonic start time for stale malformed-paste recovery.
+    pub started_at: &'a mut Option<Instant>,
 }
 
 /// Defines the Attached Terminal Client Loop Io behavior contract for this subsystem.
@@ -2576,14 +2587,31 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
 /// That preserves shell heredoc ordering for very large pastes by preventing a
 /// partial clipboard body from entering the pane before the terminal has
 /// delivered the complete paste frame.
+#[cfg(test)]
 pub(crate) fn route_client_input_actions_with_host_paste_buffer(
     input: &[u8],
     config: &TerminalClientLoopConfig,
     host_bracketed_paste_active: &mut bool,
     host_bracketed_paste_buffer: &mut Vec<u8>,
 ) -> Result<Vec<TerminalClientLoopAction>> {
+    let mut host_bracketed_paste_started_at = config.host_bracketed_paste_started_at;
+    let mut host_paste = HostBracketedPasteBufferState {
+        active: host_bracketed_paste_active,
+        buffer: host_bracketed_paste_buffer,
+        started_at: &mut host_bracketed_paste_started_at,
+    };
+    route_client_input_actions_with_host_paste_buffer_state(input, config, &mut host_paste)
+}
+
+/// Splits attached-terminal input while carrying buffered host paste timing.
+fn route_client_input_actions_with_host_paste_buffer_state(
+    input: &[u8],
+    config: &TerminalClientLoopConfig,
+    host_paste: &mut HostBracketedPasteBufferState<'_>,
+) -> Result<Vec<TerminalClientLoopAction>> {
     const HOST_BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
     const HOST_BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
+    const HOST_BRACKETED_PASTE_STALE_AFTER: Duration = Duration::from_millis(500);
 
     let mut remaining = input;
     let mut actions = Vec::new();
@@ -2591,33 +2619,43 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
     let prefix = key_chord_input_bytes(config.bindings.escape);
 
     while !remaining.is_empty() {
-        if *host_bracketed_paste_active {
+        if *host_paste.active {
             config.prefix_key_pending = false;
-            host_bracketed_paste_buffer.extend_from_slice(remaining);
-            if host_bracketed_paste_buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
-                let buffered = std::mem::take(host_bracketed_paste_buffer);
-                *host_bracketed_paste_active = false;
+            if host_paste
+                .started_at
+                .is_some_and(|started_at| started_at.elapsed() >= HOST_BRACKETED_PASTE_STALE_AFTER)
+            {
+                let buffered = std::mem::take(host_paste.buffer);
+                *host_paste.active = false;
+                *host_paste.started_at = None;
+                if !buffered.is_empty() {
+                    actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
+                }
+                continue;
+            }
+            host_paste.buffer.extend_from_slice(remaining);
+            if host_paste.buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
+                let buffered = std::mem::take(host_paste.buffer);
+                *host_paste.active = false;
+                *host_paste.started_at = None;
                 actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
                 return Ok(actions);
             }
-            let Some(end_start) =
-                input_sequence_start(host_bracketed_paste_buffer, HOST_BRACKETED_PASTE_END)
+            let Some(end_start) = input_sequence_start(host_paste.buffer, HOST_BRACKETED_PASTE_END)
             else {
                 return Ok(actions);
             };
             let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
-            let suffix = host_bracketed_paste_buffer[consumed..].to_vec();
+            let suffix = host_paste.buffer[consumed..].to_vec();
             actions.push(TerminalClientLoopAction::ForwardToPane(
-                host_bracketed_paste_buffer[..consumed].to_vec(),
+                host_paste.buffer[..consumed].to_vec(),
             ));
-            host_bracketed_paste_buffer.clear();
-            *host_bracketed_paste_active = false;
+            host_paste.buffer.clear();
+            *host_paste.active = false;
+            *host_paste.started_at = None;
             if !suffix.is_empty() {
-                actions.extend(route_client_input_actions_with_host_paste_buffer(
-                    &suffix,
-                    &config,
-                    host_bracketed_paste_active,
-                    host_bracketed_paste_buffer,
+                actions.extend(route_client_input_actions_with_host_paste_buffer_state(
+                    &suffix, &config, host_paste,
                 )?);
             }
             return Ok(actions);
@@ -2634,13 +2672,15 @@ pub(crate) fn route_client_input_actions_with_host_paste_buffer(
                 remaining = &remaining[consumed..];
                 continue;
             }
-            host_bracketed_paste_buffer.extend_from_slice(remaining);
-            if host_bracketed_paste_buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
-                let buffered = std::mem::take(host_bracketed_paste_buffer);
+            host_paste.buffer.extend_from_slice(remaining);
+            if host_paste.buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
+                let buffered = std::mem::take(host_paste.buffer);
+                *host_paste.started_at = None;
                 actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
                 break;
             }
-            *host_bracketed_paste_active = true;
+            *host_paste.active = true;
+            *host_paste.started_at = Some(Instant::now());
             break;
         }
 
@@ -3093,14 +3133,19 @@ pub fn plan_attached_terminal_client_step(
 ) -> Result<AttachedTerminalClientStepPlan> {
     let mut host_bracketed_paste_active = config.host_bracketed_paste_active;
     let mut host_bracketed_paste_buffer = config.host_bracketed_paste_buffer.clone();
+    let mut host_bracketed_paste_started_at = config.host_bracketed_paste_started_at;
+    let mut host_paste = HostBracketedPasteBufferState {
+        active: &mut host_bracketed_paste_active,
+        buffer: &mut host_bracketed_paste_buffer,
+        started_at: &mut host_bracketed_paste_started_at,
+    };
     plan_attached_terminal_client_step_with_host_paste_buffer(
         readiness,
         input,
         view,
         status,
         config,
-        &mut host_bracketed_paste_active,
-        &mut host_bracketed_paste_buffer,
+        &mut host_paste,
     )
 }
 
@@ -3112,8 +3157,7 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
     view: Option<&RenderedClientView>,
     status: Option<&ClientStatusLine>,
     config: &TerminalClientLoopConfig,
-    host_bracketed_paste_active: &mut bool,
-    host_bracketed_paste_buffer: &mut Vec<u8>,
+    host_paste: &mut HostBracketedPasteBufferState<'_>,
 ) -> Result<AttachedTerminalClientStepPlan> {
     let input_readable = readiness
         .iter()
@@ -3140,11 +3184,8 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
         if view.is_some_and(|view| view.primary_prompt_active) {
             actions.push(TerminalClientLoopAction::ForwardToPane(input.to_vec()));
         } else {
-            actions.extend(route_client_input_actions_with_host_paste_buffer(
-                input,
-                config,
-                host_bracketed_paste_active,
-                host_bracketed_paste_buffer,
+            actions.extend(route_client_input_actions_with_host_paste_buffer_state(
+                input, config, host_paste,
             )?);
         }
     }
@@ -3212,10 +3253,12 @@ where
         error_roles: Vec::new(),
         host_bracketed_paste_active: terminal_config.host_bracketed_paste_active,
         host_bracketed_paste_buffer: terminal_config.host_bracketed_paste_buffer.clone(),
+        host_bracketed_paste_started_at: terminal_config.host_bracketed_paste_started_at,
     };
     let cursor_blink_epoch = Instant::now();
     let mut host_bracketed_paste_active = terminal_config.host_bracketed_paste_active;
     let mut host_bracketed_paste_buffer = terminal_config.host_bracketed_paste_buffer.clone();
+    let mut host_bracketed_paste_started_at = terminal_config.host_bracketed_paste_started_at;
 
     for _ in 0..loop_config.max_iterations {
         let readiness = io.poll_readiness()?;
@@ -3245,11 +3288,15 @@ where
             view,
             status,
             terminal_config,
-            &mut host_bracketed_paste_active,
-            &mut host_bracketed_paste_buffer,
+            &mut HostBracketedPasteBufferState {
+                active: &mut host_bracketed_paste_active,
+                buffer: &mut host_bracketed_paste_buffer,
+                started_at: &mut host_bracketed_paste_started_at,
+            },
         )?;
         report.host_bracketed_paste_active = host_bracketed_paste_active;
         report.host_bracketed_paste_buffer = host_bracketed_paste_buffer.clone();
+        report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
 
         if readiness
             .iter()
