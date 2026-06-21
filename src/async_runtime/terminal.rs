@@ -602,17 +602,23 @@ where
         };
         if let Some(application) = primary_step_application {
             if application.full_redraw_required {
-                io.invalidate_output_frame().await?;
+                await_attached_terminal_step(
+                    "output frame invalidation",
+                    io.invalidate_output_frame(),
+                )
+                .await?;
             }
             if application.view_refresh_required && output_writable {
-                let refreshed = handle
-                    .render_client_frame(
+                let refreshed = await_attached_terminal_step(
+                    "refreshed client frame render",
+                    handle.render_client_frame(
                         request.role,
                         request.client_size,
                         frame.config.clone(),
                         true,
-                    )
-                    .await?;
+                    ),
+                )
+                .await?;
                 if let Some(view) = refreshed.view.as_ref() {
                     let (lines, spans) =
                         compose_client_presentation_with_styles(view, status.as_ref());
@@ -634,14 +640,17 @@ where
                         cursor_row: view.cursor_row,
                         cursor_column: view.cursor_column,
                     };
-                    let flush = queue_and_flush_async_attached_terminal_output(
-                        handle,
-                        io,
-                        request.client_id.clone(),
-                        request.role == ClientViewRole::Primary,
-                        lines,
-                        spans,
-                        output_modes,
+                    let flush = await_attached_terminal_step(
+                        "refreshed output flush",
+                        queue_and_flush_async_attached_terminal_output(
+                            handle,
+                            io,
+                            request.client_id.clone(),
+                            request.role == ClientViewRole::Primary,
+                            lines,
+                            spans,
+                            output_modes,
+                        ),
                     )
                     .await?;
                     merge_attached_terminal_flush_report(&mut report, &flush);
