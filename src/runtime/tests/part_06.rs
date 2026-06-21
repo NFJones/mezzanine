@@ -2785,6 +2785,7 @@ fn runtime_native_shell_command_logs_styled_execution_line() {
     let pane = service.pane_screen("%1").unwrap();
     let pane_text = pane.normal_content_lines().join("\n");
     assert!(pane_text.contains("▐ $ printf 'native output\\n'"), "{pane_text}");
+    assert!(pane_text.contains("native output"), "{pane_text}");
 }
 
 /// Verifies native `apply_patch` execution logs the same compact execution line

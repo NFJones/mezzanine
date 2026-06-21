@@ -1680,6 +1680,54 @@ fn native_shell_command_executor_captures_output_without_pane_dispatch() {
     assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
 }
 
+/// Verifies native shell_command execution reports cumulative output progress
+/// before command completion.
+///
+/// Native execution bypasses pane-shell transactions, so runtime live-output
+/// rendering depends on this callback receiving stdout while a command is
+/// still running instead of waiting for the final `LocalExecutionOutput`.
+#[test]
+fn native_shell_command_executor_reports_cumulative_output_progress() {
+    let turn = turn();
+    let mut action = shell_action("native-shell-progress");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command =
+            "printf 'native-progress-1\\n'; sleep 0.1; printf 'native-progress-2\\n'"
+                .to_string();
+        *timeout_ms = Some(1_000);
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let mut progress_updates = Vec::new();
+
+    {
+        let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd)
+            .with_output_progress(|output| {
+                progress_updates.push(output.to_string());
+                Ok(())
+            });
+        let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert_eq!(result.content_text(), "native-progress-1\nnative-progress-2\n");
+    }
+
+    assert!(
+        progress_updates
+            .iter()
+            .any(|output| output == "native-progress-1\n"),
+        "{progress_updates:?}"
+    );
+    assert_eq!(
+        progress_updates.last().map(String::as_str),
+        Some("native-progress-1\nnative-progress-2\n")
+    );
+}
+
 /// Verifies native environment probing reports whether pane bootstrap identity
 /// matches the native runtime identity.
 ///

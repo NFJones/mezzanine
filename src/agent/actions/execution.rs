@@ -384,14 +384,19 @@ where
     }
 }
 
+/// Receives a bounded cumulative preview of native shell output while a
+/// command is still running.
+type NativeShellOutputProgressCallback<'a> = dyn FnMut(&str) -> Result<()> + 'a;
+
 /// Executes native-eligible local actions without dispatching through the pane
 /// shell.
-pub struct NativeShellLocalExecutor {
+pub struct NativeShellLocalExecutor<'a> {
     shell_path: std::path::PathBuf,
     working_directory: std::path::PathBuf,
+    output_progress: Option<Box<NativeShellOutputProgressCallback<'a>>>,
 }
 
-impl NativeShellLocalExecutor {
+impl<'a> NativeShellLocalExecutor<'a> {
     /// Builds a native shell-command executor rooted at one working directory.
     pub fn new(
         shell_path: impl Into<std::path::PathBuf>,
@@ -400,11 +405,22 @@ impl NativeShellLocalExecutor {
         Self {
             shell_path: shell_path.into(),
             working_directory: working_directory.as_ref().to_path_buf(),
+            output_progress: None,
         }
+    }
+
+    /// Installs a progress callback that receives cumulative native shell
+    /// output previews while shell commands are still running.
+    pub fn with_output_progress(
+        mut self,
+        output_progress: impl FnMut(&str) -> Result<()> + 'a,
+    ) -> Self {
+        self.output_progress = Some(Box::new(output_progress));
+        self
     }
 }
 
-impl LocalActionExecutor for NativeShellLocalExecutor {
+impl LocalActionExecutor for NativeShellLocalExecutor<'_> {
     fn execute_local_action(
         &mut self,
         request: &LocalExecutionRequest,
@@ -421,8 +437,13 @@ impl LocalActionExecutor for NativeShellLocalExecutor {
                         "native shell_command execution does not support stateful actions",
                     ));
                 }
-                execute_native_shell_command(&self.shell_path, &self.working_directory, request)
-                    .map(LocalExecutionOutput::native)
+                execute_native_shell_command(
+                    &self.shell_path,
+                    &self.working_directory,
+                    request,
+                    self.output_progress.as_deref_mut(),
+                )
+                .map(LocalExecutionOutput::native)
             }
             LocalActionKind::ApplyPatch => {
                 execute_native_apply_patch(&request.action, &self.working_directory)
@@ -463,6 +484,7 @@ fn execute_native_shell_command(
     shell_path: &std::path::Path,
     working_directory: &std::path::Path,
     request: &LocalExecutionRequest,
+    output_progress: Option<&mut NativeShellOutputProgressCallback<'_>>,
 ) -> Result<ShellExecutionOutput> {
     let mut command = Command::new(shell_path);
     command
@@ -488,18 +510,18 @@ fn execute_native_shell_command(
             ),
         )
     })?;
-    let (done_tx, done_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
     let (stdout_cancel_tx, stdout_reader) = spawn_child_pipe_reader(
         NativePipeStream::Stdout,
         child.stdout.take(),
         NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
-        done_tx.clone(),
+        event_tx.clone(),
     );
     let (stderr_cancel_tx, stderr_reader) = spawn_child_pipe_reader(
         NativePipeStream::Stderr,
         child.stderr.take(),
         NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
-        done_tx,
+        event_tx,
     );
     let deadline = Instant::now() + Duration::from_millis(request.effective_timeout_ms.max(1));
     let poll_interval = Duration::from_millis(NATIVE_SHELL_POLL_INTERVAL_MS);
@@ -509,8 +531,9 @@ fn execute_native_shell_command(
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut timed_out = false;
+    let mut progress = NativeShellOutputProgress::new(output_progress);
     loop {
-        drain_child_pipe_completions(&done_rx, &mut stdout_done, &mut stderr_done);
+        drain_child_pipe_events(&event_rx, &mut stdout_done, &mut stderr_done, &mut progress)?;
         if exit_status.is_some()
             && (stdout_done && stderr_done
                 || native_child_process_group_exited(process_group_leader)?)
@@ -528,7 +551,13 @@ fn execute_native_shell_command(
                 exit_status = Some(status);
             }
         } else {
-            wait_for_child_pipe_completion(&done_rx, wait, &mut stdout_done, &mut stderr_done);
+            wait_for_child_pipe_event(
+                &event_rx,
+                wait,
+                &mut stdout_done,
+                &mut stderr_done,
+                &mut progress,
+            )?;
         }
         if Instant::now() >= deadline && !(exit_status.is_some() && stdout_done && stderr_done) {
             timed_out = true;
@@ -551,7 +580,13 @@ fn execute_native_shell_command(
             shutdown_deadline.saturating_duration_since(now),
             poll_interval,
         );
-        wait_for_child_pipe_completion(&done_rx, wait, &mut stdout_done, &mut stderr_done);
+        wait_for_child_pipe_event(
+            &event_rx,
+            wait,
+            &mut stdout_done,
+            &mut stderr_done,
+            &mut progress,
+        )?;
     }
     if !stdout_done {
         request_child_pipe_reader_shutdown(&stdout_cancel_tx);
@@ -601,12 +636,51 @@ struct CapturedPipeOutput {
     bytes_dropped: usize,
 }
 
+/// Reports native child pipe reader events to the parent monitor loop.
+enum NativePipeEvent {
+    /// Retained output bytes read from one pipe.
+    Output(Vec<u8>),
+    /// One pipe reader reached EOF or stopped after cancellation.
+    Done(NativePipeStream),
+}
+
+/// Maintains and reports the cumulative native shell output preview.
+struct NativeShellOutputProgress<'callback, 'env> {
+    output_progress: Option<&'callback mut NativeShellOutputProgressCallback<'env>>,
+    preview: Vec<u8>,
+}
+
+impl<'callback, 'env> NativeShellOutputProgress<'callback, 'env> {
+    /// Builds progress state around an optional runtime callback.
+    fn new(
+        output_progress: Option<&'callback mut NativeShellOutputProgressCallback<'env>>,
+    ) -> Self {
+        Self {
+            output_progress,
+            preview: Vec::new(),
+        }
+    }
+
+    /// Appends retained bytes and reports the decoded cumulative preview.
+    fn record_output(&mut self, bytes: Vec<u8>) -> Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.preview.extend_from_slice(&bytes);
+        if let Some(output_progress) = self.output_progress.as_deref_mut() {
+            let text = String::from_utf8_lossy(&self.preview);
+            output_progress(&text)?;
+        }
+        Ok(())
+    }
+}
+
 /// Spawns a background reader that drains one native child pipe to EOF.
 fn spawn_child_pipe_reader<R>(
     stream: NativePipeStream,
     pipe: Option<R>,
     max_bytes: usize,
-    done_tx: mpsc::Sender<NativePipeStream>,
+    event_tx: mpsc::Sender<NativePipeEvent>,
 ) -> (
     mpsc::Sender<()>,
     thread::JoinHandle<Result<CapturedPipeOutput>>,
@@ -616,48 +690,54 @@ where
 {
     let (cancel_tx, cancel_rx) = mpsc::channel();
     let reader = thread::spawn(move || {
-        let result = read_child_pipe(stream, pipe, max_bytes, cancel_rx);
-        let _ = done_tx.send(stream);
+        let result = read_child_pipe(stream, pipe, max_bytes, cancel_rx, &event_tx);
+        let _ = event_tx.send(NativePipeEvent::Done(stream));
         result
     });
     (cancel_tx, reader)
 }
 
-/// Drains any completed reader notifications without blocking.
-fn drain_child_pipe_completions(
-    done_rx: &mpsc::Receiver<NativePipeStream>,
+/// Drains any available native pipe reader events without blocking.
+fn drain_child_pipe_events(
+    event_rx: &mpsc::Receiver<NativePipeEvent>,
     stdout_done: &mut bool,
     stderr_done: &mut bool,
-) {
-    while let Ok(stream) = done_rx.try_recv() {
-        record_child_pipe_completion(stream, stdout_done, stderr_done);
+    progress: &mut NativeShellOutputProgress<'_, '_>,
+) -> Result<()> {
+    while let Ok(event) = event_rx.try_recv() {
+        record_child_pipe_event(event, stdout_done, stderr_done, progress)?;
     }
+    Ok(())
 }
 
-/// Waits briefly for one reader notification and records any completions.
-fn wait_for_child_pipe_completion(
-    done_rx: &mpsc::Receiver<NativePipeStream>,
+/// Waits briefly for one reader event and records any immediately queued events.
+fn wait_for_child_pipe_event(
+    event_rx: &mpsc::Receiver<NativePipeEvent>,
     wait: Duration,
     stdout_done: &mut bool,
     stderr_done: &mut bool,
-) {
-    match done_rx.recv_timeout(wait) {
-        Ok(stream) => record_child_pipe_completion(stream, stdout_done, stderr_done),
+    progress: &mut NativeShellOutputProgress<'_, '_>,
+) -> Result<()> {
+    match event_rx.recv_timeout(wait) {
+        Ok(event) => record_child_pipe_event(event, stdout_done, stderr_done, progress)?,
         Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
     }
-    drain_child_pipe_completions(done_rx, stdout_done, stderr_done);
+    drain_child_pipe_events(event_rx, stdout_done, stderr_done, progress)
 }
 
-/// Records that one native pipe reader has reached EOF.
-fn record_child_pipe_completion(
-    stream: NativePipeStream,
+/// Records one native pipe reader event.
+fn record_child_pipe_event(
+    event: NativePipeEvent,
     stdout_done: &mut bool,
     stderr_done: &mut bool,
-) {
-    match stream {
-        NativePipeStream::Stdout => *stdout_done = true,
-        NativePipeStream::Stderr => *stderr_done = true,
+    progress: &mut NativeShellOutputProgress<'_, '_>,
+) -> Result<()> {
+    match event {
+        NativePipeEvent::Output(bytes) => progress.record_output(bytes)?,
+        NativePipeEvent::Done(NativePipeStream::Stdout) => *stdout_done = true,
+        NativePipeEvent::Done(NativePipeStream::Stderr) => *stderr_done = true,
     }
+    Ok(())
 }
 
 /// Requests that one native pipe reader stop waiting for additional bytes.
@@ -758,6 +838,7 @@ fn read_child_pipe<R: Read + AsFd>(
     mut pipe: Option<R>,
     max_bytes: usize,
     cancel_rx: mpsc::Receiver<()>,
+    event_tx: &mpsc::Sender<NativePipeEvent>,
 ) -> Result<CapturedPipeOutput> {
     let mut bytes = Vec::new();
     let mut bytes_dropped = 0usize;
@@ -773,7 +854,11 @@ fn read_child_pipe<R: Read + AsFd>(
                 Ok(0) => break,
                 Ok(read) => {
                     let retained = std::cmp::min(max_bytes.saturating_sub(bytes.len()), read);
-                    bytes.extend_from_slice(&buffer[..retained]);
+                    if retained > 0 {
+                        let retained_bytes = buffer[..retained].to_vec();
+                        bytes.extend_from_slice(&retained_bytes);
+                        let _ = event_tx.send(NativePipeEvent::Output(retained_bytes));
+                    }
                     bytes_dropped = bytes_dropped.saturating_add(read.saturating_sub(retained));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {

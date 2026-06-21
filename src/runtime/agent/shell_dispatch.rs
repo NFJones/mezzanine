@@ -13,6 +13,24 @@ use super::*;
 /// repeated shell dispatch or successful mutation.
 const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
 
+/// Returns the latest non-empty native shell output preview lines.
+fn native_shell_output_progress_lines(output: &str, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
+    let mut lines = output
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(max_lines)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    lines.reverse();
+    lines
+}
+
 /// Current action-pressure phase for one active turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeActionPressurePhase {
@@ -590,10 +608,34 @@ impl RuntimeSessionService {
                         )?;
                     }
                 }
-                let mut native_executor =
-                    NativeShellLocalExecutor::new(self.session.shell.path(), &working_directory);
-                let result = match execute_local_action(turn, action, marker, &mut native_executor)
-                {
+                let output_preview_lines = self.terminal_shell_output_preview_lines;
+                let progress_turn_id = turn.turn_id.clone();
+                let progress_action_id = action.id.clone();
+                let progress_pane_id = turn.pane_id.clone();
+                let native_result = {
+                    let mut native_executor = NativeShellLocalExecutor::new(
+                        self.session.shell.path(),
+                        &working_directory,
+                    )
+                    .with_output_progress(|output| {
+                        if self.agent_shell_transaction_action_shows_live_output(
+                            &progress_turn_id,
+                            &progress_action_id,
+                        ) {
+                            let lines =
+                                native_shell_output_progress_lines(output, output_preview_lines);
+                            if !lines.is_empty() {
+                                self.append_agent_shell_output_status_lines_to_terminal_buffer(
+                                    &progress_pane_id,
+                                    &lines,
+                                )?;
+                            }
+                        }
+                        Ok(())
+                    });
+                    execute_local_action(turn, action, marker, &mut native_executor)
+                };
+                let result = match native_result {
                     Ok(result) => result,
                     Err(error) => self.shell_action_runtime_error_result(
                         turn,
