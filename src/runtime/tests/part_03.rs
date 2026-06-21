@@ -4304,6 +4304,66 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     assert!(!response.contains("requires_runtime"), "{response}");
 }
 
+/// Verifies pane token usage is accumulated across conversations in one pane.
+///
+/// The `/status` pane token section is labeled as pane-scoped user-visible
+/// accounting. Starting a fresh conversation in the same pane must not hide
+/// earlier provider usage from that pane-lifetime total.
+#[test]
+fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let profile = runtime_model_profile("openai", "gpt-fast");
+    let first_usage = crate::agent::ModelTokenUsage {
+        input_tokens: 120,
+        output_tokens: 34,
+        reasoning_tokens: 9,
+        cached_input_tokens: Some(80),
+    };
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        first_usage,
+        first_usage,
+        Some(&profile),
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "status-pane-session-2", 0)
+        .unwrap();
+    let second_usage = crate::agent::ModelTokenUsage {
+        input_tokens: 40,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        cached_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        second_usage,
+        second_usage,
+        Some(&profile),
+    );
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-status-pane-tokens","method":"agent/shell/command","params":{"idempotency_key":"agent-status-pane-tokens","input":"/status"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains("### Pane Agent Token Usage"), "{response}");
+    assert!(
+        response.contains("| openai | gpt-fast | 80 | 80 | 34 | 9 | 50.00% |"),
+        "{response}"
+    );
+}
+
 /// Verifies runtime-wide metrics preserve provider token counters per model.
 ///
 /// Aggregate token counts remain available for operational totals, but the

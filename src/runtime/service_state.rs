@@ -2068,6 +2068,9 @@ pub struct RuntimeSessionService {
     /// Cumulative provider token usage keyed by conversation and provider/model.
     pub(super) agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
+    /// Cumulative provider token usage keyed by pane and provider/model.
+    pub(super) agent_token_usage_by_pane:
+        BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
     /// Latest provider-response input context usage percentage keyed by
     /// conversation id for terminal rendering and legacy persistence.
     pub(super) agent_context_usage_by_conversation: BTreeMap<String, String>,

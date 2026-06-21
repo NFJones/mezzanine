@@ -167,8 +167,8 @@ impl RuntimeSessionService {
             .map(|execution| execution.request.messages.len())
             .unwrap_or(0);
         let token_usage_by_model = self
-            .agent_token_usage_by_conversation
-            .get(&session.session_id)
+            .agent_token_usage_by_pane
+            .get(pane_id)
             .cloned()
             .unwrap_or_default();
         let instance_token_usage_by_model =

@@ -349,6 +349,7 @@ impl RuntimeSessionService {
             agent_auto_sizing: Default::default(),
             agent_auto_sizing_overrides: BTreeMap::new(),
             agent_token_usage_by_conversation: BTreeMap::new(),
+            agent_token_usage_by_pane: BTreeMap::new(),
             agent_context_usage_by_conversation: BTreeMap::new(),
             agent_context_usage_snapshot_by_conversation: BTreeMap::new(),
             agent_quota_usage_by_conversation: BTreeMap::new(),
@@ -2028,9 +2029,14 @@ impl RuntimeSessionService {
             if token_usage_by_model.is_empty() {
                 self.agent_token_usage_by_conversation
                     .remove(&metadata.conversation_id);
+                self.agent_token_usage_by_pane.remove(&metadata.pane_id);
             } else {
-                self.agent_token_usage_by_conversation
-                    .insert(metadata.conversation_id.clone(), token_usage_by_model);
+                self.agent_token_usage_by_conversation.insert(
+                    metadata.conversation_id.clone(),
+                    token_usage_by_model.clone(),
+                );
+                self.agent_token_usage_by_pane
+                    .insert(metadata.pane_id.clone(), token_usage_by_model);
             }
             self.record_pane_transcript_ref(
                 &metadata.pane_id,
@@ -2224,7 +2230,14 @@ impl RuntimeSessionService {
                     .remove(conversation_id);
             } else {
                 self.agent_token_usage_by_conversation
-                    .insert(conversation_id.to_string(), token_usage_by_model);
+                    .insert(conversation_id.to_string(), token_usage_by_model.clone());
+                let pane_usage = self
+                    .agent_token_usage_by_pane
+                    .entry(pane_id.to_string())
+                    .or_default();
+                for (key, usage) in token_usage_by_model {
+                    pane_usage.entry(key).or_default().add_assign(usage);
+                }
             }
             if let Some(context_usage) = metadata.context_usage {
                 self.agent_context_usage_by_conversation

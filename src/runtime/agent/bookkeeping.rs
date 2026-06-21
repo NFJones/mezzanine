@@ -328,6 +328,12 @@ impl RuntimeSessionService {
         self.agent_token_usage_by_conversation
             .entry(conversation_id.clone())
             .or_default()
+            .entry(token_usage_key.clone())
+            .or_default()
+            .add_assign(usage);
+        self.agent_token_usage_by_pane
+            .entry(pane_id.to_string())
+            .or_default()
             .entry(token_usage_key)
             .or_default()
             .add_assign(usage);
@@ -375,11 +381,19 @@ impl RuntimeSessionService {
             .agent_token_usage_by_conversation
             .entry(conversation_id)
             .or_default();
+        let pane_usage = self
+            .agent_token_usage_by_pane
+            .entry(pane_id.to_string())
+            .or_default();
         for (key, usage) in usage_by_model {
             if usage.is_zero() {
                 continue;
             }
             conversation_usage
+                .entry(key.clone())
+                .or_default()
+                .add_assign(*usage);
+            pane_usage
                 .entry(key.clone())
                 .or_default()
                 .add_assign(*usage);
