@@ -318,10 +318,15 @@ const AGENT_SUBSHELL_PROMPT_ENV: &[(&str, &str)] = &[
 /// generated line modest avoids shell line-editor and transport edge cases on
 /// remote panes.
 pub(super) const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
+/// Maximum raw output bytes emitted through one base64 shell-output transport.
+pub(super) const SHELL_OUTPUT_BASE64_MAX_RAW_BYTES: usize = 256 * 1024;
 /// Marker that begins one base64-encoded shell-output transport block.
 pub(super) const SHELL_OUTPUT_BASE64_BEGIN_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__";
 /// Marker that ends one base64-encoded shell-output transport block.
 pub(super) const SHELL_OUTPUT_BASE64_END_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_END__";
+/// Marker that reports raw bytes dropped before base64 output emission.
+pub(super) const SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER: &str =
+    "__MEZ_SHELL_OUTPUT_BASE64_DROPPED_BYTES__";
 
 /// Output transport used by isolated shell transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,6 +351,7 @@ fn posix_child_command_invocation_lines(
     let mut lines = Vec::new();
     if transport == ShellTransactionOutputTransport::Base64 {
         lines.push("MEZ_OUTPUT_FILE=".to_string());
+        lines.push("MEZ_OUTPUT_DROPPED=0".to_string());
         lines.push(
             "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_OUTPUT_FILE=$(mktemp) || MEZ_WRITE_STATUS=1; fi"
                 .to_string(),
@@ -383,10 +389,25 @@ fn posix_child_command_invocation_lines(
                 "  printf '\\n%s\\n' {}",
                 shell_quote(SHELL_OUTPUT_BASE64_BEGIN_MARKER)
             ),
-            "  if [ -n \"$MEZ_OUTPUT_FILE\" ]; then base64 < \"$MEZ_OUTPUT_FILE\"; fi".to_string(),
+            "  if [ -n \"$MEZ_OUTPUT_FILE\" ]; then".to_string(),
+            "    MEZ_OUTPUT_BYTES=$(wc -c < \"$MEZ_OUTPUT_FILE\" 2>/dev/null || printf 0)".to_string(),
+            format!(
+                "    if [ \"$MEZ_OUTPUT_BYTES\" -gt {} ] 2>/dev/null; then MEZ_OUTPUT_DROPPED=$((MEZ_OUTPUT_BYTES - {})); else MEZ_OUTPUT_DROPPED=0; fi",
+                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
+                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+            ),
+            format!(
+                "    dd if=\"$MEZ_OUTPUT_FILE\" bs={} count=1 2>/dev/null | base64",
+                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+            ),
+            "  fi".to_string(),
             format!(
                 "  printf '%s\\n' {}",
                 shell_quote(SHELL_OUTPUT_BASE64_END_MARKER)
+            ),
+            format!(
+                "  if [ \"${{MEZ_OUTPUT_DROPPED:-0}}\" -gt 0 ] 2>/dev/null; then printf '%s %s\\n' {} \"$MEZ_OUTPUT_DROPPED\"; fi",
+                shell_quote(SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER)
             ),
         ]);
     }
@@ -433,6 +454,7 @@ fn fish_child_command_invocation_lines(
     let mut lines = Vec::new();
     if transport == ShellTransactionOutputTransport::Base64 {
         lines.push("set -l MEZ_OUTPUT_FILE ''".to_string());
+        lines.push("set -l MEZ_OUTPUT_DROPPED 0".to_string());
         lines.push("if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string());
         lines.push("set MEZ_OUTPUT_FILE (mktemp); or set MEZ_WRITE_STATUS 1".to_string());
         lines.push("end".to_string());
@@ -474,11 +496,30 @@ fn fish_child_command_invocation_lines(
                 fish_quote(SHELL_OUTPUT_BASE64_BEGIN_MARKER)
             ),
             "if test -n \"$MEZ_OUTPUT_FILE\"".to_string(),
-            "base64 < \"$MEZ_OUTPUT_FILE\"".to_string(),
+            "set -l MEZ_OUTPUT_BYTES (wc -c < \"$MEZ_OUTPUT_FILE\" 2>/dev/null); or set MEZ_OUTPUT_BYTES 0".to_string(),
+            format!(
+                "if test \"$MEZ_OUTPUT_BYTES\" -gt {} 2>/dev/null",
+                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+            ),
+            format!(
+                "set MEZ_OUTPUT_DROPPED (math \"$MEZ_OUTPUT_BYTES - {}\")",
+                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+            ),
+            "else".to_string(),
+            "set MEZ_OUTPUT_DROPPED 0".to_string(),
+            "end".to_string(),
+            format!(
+                "command dd if=\"$MEZ_OUTPUT_FILE\" bs={} count=1 2>/dev/null | base64",
+                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+            ),
             "end".to_string(),
             format!(
                 "printf '%s\\n' {}",
                 fish_quote(SHELL_OUTPUT_BASE64_END_MARKER)
+            ),
+            format!(
+                "if test \"$MEZ_OUTPUT_DROPPED\" -gt 0 2>/dev/null; printf '%s %s\\n' {} \"$MEZ_OUTPUT_DROPPED\"; end",
+                fish_quote(SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER)
             ),
         ]);
     }

@@ -1762,6 +1762,35 @@ fn native_shell_command_executor_rejects_interactive_and_stateful_actions() {
     );
 }
 
+/// Verifies native shell_command execution inherits a finite turn timeout when
+/// the action omits `timeout_ms`.
+///
+/// This regression prevents native local execution from entering the no-deadline
+/// wait path when the model leaves the per-action timeout unset.
+#[test]
+fn native_shell_command_executor_times_out_without_explicit_timeout() {
+    let turn = AgentTurnRecord {
+        started_at_unix_seconds: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs().saturating_sub(30 * 60))
+            .unwrap_or(0),
+        ..turn()
+    };
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-inherited-timeout");
+    if let AgentActionPayload::ShellCommand { command, timeout_ms, .. } = &mut action.payload {
+        *command = "sleep 1".to_string();
+        *timeout_ms = None;
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::TimedOut);
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""timed_out":true"#), "{structured}");
+}
+
 /// Verifies native shell_command drains large mixed output before the timeout.
 ///
 /// This regression protects the native executor from deadlocking on a full

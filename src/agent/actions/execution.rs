@@ -26,7 +26,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wait_timeout::ChildExt;
 
 /// Maximum bytes retained from one native stdout or stderr stream.
@@ -37,6 +37,8 @@ const NATIVE_SHELL_POLL_INTERVAL_MS: u64 = 10;
 const NATIVE_SHELL_TIMEOUT_KILL_GRACE_MS: u64 = 100;
 /// Grace period that lets native pipe readers drain buffered output after exit.
 const NATIVE_SHELL_READER_SHUTDOWN_GRACE_MS: u64 = 100;
+/// Default turn-wide shell action timeout used by transport-neutral execution.
+const LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries shell execution request state for this subsystem.
@@ -281,6 +283,8 @@ pub struct LocalExecutionRequest {
     pub pane_id: String,
     /// Planned local action semantics selected before transport dispatch.
     pub plan: LocalActionPlan,
+    /// Effective finite timeout after applying the enclosing turn budget.
+    pub effective_timeout_ms: u64,
     /// Runtime transport selected for this local action.
     pub transport: LocalExecutionTransport,
     /// Marker token used by transports that need a command-output boundary.
@@ -370,7 +374,7 @@ where
         let shell_request = ShellExecutionRequest {
             action_id: request.action_id.clone(),
             transaction,
-            timeout_ms: request.plan.timeout_ms,
+            timeout_ms: Some(request.effective_timeout_ms),
             interactive: request.plan.interactive,
             stateful: request.plan.stateful,
         };
@@ -497,10 +501,7 @@ fn execute_native_shell_command(
         NATIVE_SHELL_OUTPUT_LIMIT_BYTES,
         done_tx,
     );
-    let deadline = request
-        .plan
-        .timeout_ms
-        .map(|timeout_ms| Instant::now() + Duration::from_millis(timeout_ms));
+    let deadline = Instant::now() + Duration::from_millis(request.effective_timeout_ms.max(1));
     let poll_interval = Duration::from_millis(NATIVE_SHELL_POLL_INTERVAL_MS);
     let reader_shutdown_grace = Duration::from_millis(NATIVE_SHELL_READER_SHUTDOWN_GRACE_MS);
     let process_group_leader = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
@@ -516,36 +517,22 @@ fn execute_native_shell_command(
         {
             break;
         }
-        if let Some(deadline) = deadline {
-            let now = Instant::now();
-            if now >= deadline {
-                timed_out = true;
-                break;
-            }
-            let wait = std::cmp::min(deadline.saturating_duration_since(now), poll_interval);
-            if exit_status.is_none() {
-                if let Some(status) = child.wait_timeout(wait)? {
-                    exit_status = Some(status);
-                }
-            } else {
-                wait_for_child_pipe_completion(&done_rx, wait, &mut stdout_done, &mut stderr_done);
-            }
-            if Instant::now() >= deadline && !(exit_status.is_some() && stdout_done && stderr_done)
-            {
-                timed_out = true;
-                break;
-            }
-        } else if exit_status.is_none() {
-            if let Some(status) = child.wait_timeout(poll_interval)? {
+        let now = Instant::now();
+        if now >= deadline {
+            timed_out = true;
+            break;
+        }
+        let wait = std::cmp::min(deadline.saturating_duration_since(now), poll_interval);
+        if exit_status.is_none() {
+            if let Some(status) = child.wait_timeout(wait)? {
                 exit_status = Some(status);
             }
         } else {
-            wait_for_child_pipe_completion(
-                &done_rx,
-                poll_interval,
-                &mut stdout_done,
-                &mut stderr_done,
-            );
+            wait_for_child_pipe_completion(&done_rx, wait, &mut stdout_done, &mut stderr_done);
+        }
+        if Instant::now() >= deadline && !(exit_status.is_some() && stdout_done && stderr_done) {
+            timed_out = true;
+            break;
         }
     }
     if timed_out {
@@ -867,6 +854,7 @@ pub fn execute_local_action(
             "local execution requires a local action",
         ));
     };
+    let effective_timeout_ms = local_execution_shell_timeout_ms(turn, plan.timeout_ms);
     let request = LocalExecutionRequest {
         action_id: action.id.clone(),
         action: action.clone(),
@@ -874,12 +862,38 @@ pub fn execute_local_action(
         agent_id: turn.agent_id.clone(),
         pane_id: turn.pane_id.clone(),
         plan,
+        effective_timeout_ms,
         transport: LocalExecutionTransport::PaneShell,
         marker: marker.clone(),
     };
     let mut output = executor.execute_local_action(&request)?;
     output.shell_output = postprocess_semantic_shell_output(action, output.shell_output)?;
     local_output_to_action_result(turn, action, output, marker)
+}
+
+/// Returns the remaining turn-wide timeout budget for transport-neutral local execution.
+fn local_execution_turn_remaining_timeout_ms(turn: &AgentTurnRecord) -> u64 {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0);
+    if turn.started_at_unix_seconds < 946_684_800 {
+        return LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS;
+    }
+    let started_at_ms = turn.started_at_unix_seconds.saturating_mul(1000);
+    let elapsed_ms = now_ms.saturating_sub(started_at_ms);
+    LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS
+        .saturating_sub(elapsed_ms)
+        .max(1)
+}
+
+/// Returns the finite shell timeout for one local execution request.
+fn local_execution_shell_timeout_ms(turn: &AgentTurnRecord, timeout_ms: Option<u64>) -> u64 {
+    let remaining = local_execution_turn_remaining_timeout_ms(turn);
+    timeout_ms
+        .map(|timeout_ms| timeout_ms.min(remaining))
+        .unwrap_or(remaining)
+        .max(1)
 }
 
 /// Applies native success-output shaping for shell-backed semantic actions.

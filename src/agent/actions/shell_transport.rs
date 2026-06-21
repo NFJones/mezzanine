@@ -5,7 +5,10 @@
 //! wrapper scaffolding. This module keeps that decoding separate from turn
 //! execution and action-result construction.
 
-use super::super::shell::{SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_END_MARKER};
+use super::super::shell::{
+    SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
+    SHELL_OUTPUT_BASE64_END_MARKER,
+};
 use base64::Engine;
 
 const OUTSIDE_FRAME_PREVIEW_LIMIT: usize = 160;
@@ -137,6 +140,13 @@ fn decode_base64_transport_output(
             }
             continue;
         }
+        if !in_block && let Some(dropped) = parse_dropped_bytes_marker(marker_candidate) {
+            result.diagnostics.output_bytes_dropped = result
+                .diagnostics
+                .output_bytes_dropped
+                .saturating_add(dropped);
+            continue;
+        }
         if in_block {
             block.push_str(marker_candidate.trim());
         } else {
@@ -155,6 +165,14 @@ fn decode_base64_transport_output(
         result.diagnostics.missing_frame = true;
     }
     result
+}
+
+/// Parses the optional dropped-byte marker emitted after a bounded transport frame.
+fn parse_dropped_bytes_marker(line: &str) -> Option<usize> {
+    let value = line
+        .strip_prefix(SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER)?
+        .trim();
+    value.parse::<usize>().ok()
 }
 
 /// Records non-whitespace text observed outside a base64 transport frame.

@@ -758,6 +758,29 @@ fn shell_output_transport_counts_partial_base64_bytes() {
     assert!(decoded.diagnostics.missing_end_marker);
 }
 
+/// Verifies base64 transport dropped-byte markers become structured truncation
+/// diagnostics rather than command output or wrapper noise.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn shell_output_transport_records_dropped_byte_marker_as_truncation() {
+    let stdout = format!(
+        "{}\nZm9v\n{}\n{} 17\n",
+        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        super::shell::SHELL_OUTPUT_BASE64_END_MARKER,
+        super::shell::SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
+    );
+
+    let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+    assert_eq!(decoded.output, "foo");
+    assert_eq!(decoded.diagnostics.output_bytes_dropped, 17);
+    assert!(decoded.diagnostics.output_truncated());
+    assert_eq!(decoded.diagnostics.outside_frame_bytes, 0);
+}
+
 /// Verifies large command payloads are streamed after the receiver starts.
 ///
 /// The persistent pane shell should only parse a bounded wrapper before it can
@@ -1373,7 +1396,10 @@ fn turn() -> AgentTurnRecord {
         agent_id: "agent-1".to_string(),
         pane_id: "%1".to_string(),
         trigger: AgentTurnTrigger::UserPrompt,
-        started_at_unix_seconds: 100,
+        started_at_unix_seconds: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
         policy_profile: "ask".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,

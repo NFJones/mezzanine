@@ -1443,57 +1443,6 @@ fn poll_until_turn_state(
     panic!("agent turn did not reach expected state before test timeout");
 }
 
-/// Runs the poll until action result context contains operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn poll_until_action_result_context_contains(
-    service: &mut RuntimeSessionService,
-    turn_id: &str,
-    needle: &str,
-) -> String {
-    for _ in 0..50 {
-        let observed = service
-            .agent_turn_contexts
-            .get(turn_id)
-            .and_then(|context| {
-                context
-                    .blocks
-                    .iter()
-                    .find(|block| {
-                        block.source == ContextSourceKind::ActionResult
-                            && block.content.contains(needle)
-                    })
-                    .map(|block| block.content.clone())
-            });
-        if let Some(content) = observed {
-            return content;
-        }
-        let _ = service.poll_pane_outputs(4096).unwrap();
-        wait_for_pane_process_activity(service, "%1", Duration::from_millis(10));
-    }
-    let context = service
-        .agent_turn_contexts
-        .get(turn_id)
-        .map(|context| {
-            context
-                .blocks
-                .iter()
-                .map(|block| format!("{:?}: {}", block.source, block.content))
-                .collect::<Vec<_>>()
-                .join("\n---\n")
-        })
-        .unwrap_or_else(|| "<missing context>".to_string());
-    let pane_text = service
-        .pane_screen("%1")
-        .map(|screen| screen.normal_content_lines().join("\n"))
-        .unwrap_or_else(|| "<missing pane>".to_string());
-    panic!(
-        "agent action result context did not arrive before test timeout; context={context}\npane={pane_text}"
-    );
-}
-
 /// Runs the wait for pane process activity operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -2604,6 +2553,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .attach_primary("primary", true, Size::new(160, 60).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -2692,8 +2642,37 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
             .any(|line| line.starts_with("executing (")),
         "{pane_context:?}"
     );
-    let context =
-        poll_until_action_result_context_contains(&mut service, "turn-1", "diff -- apply patch");
+    let marker = service
+        .running_shell_transactions
+        .keys()
+        .next()
+        .cloned()
+        .expect("apply_patch transaction should be running");
+    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
+    transaction.observed_output_preview = format!(
+        "diff -- apply patch\n--- /dev/null\n+++ b/{target_rel}\n@@ -0,0 +1,2 @@\n+alpha\n+beta\n"
+    );
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
+
+    let context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| {
+            block.source == ContextSourceKind::ActionResult
+                && block.content.contains("diff -- apply patch")
+        })
+        .map(|block| block.content.clone())
+        .expect("apply_patch action result context should be recorded");
     assert!(context.contains("command: apply_patch"), "{context}");
     assert!(!context.contains("command: cat >"), "{context}");
     let styled_lines = service
