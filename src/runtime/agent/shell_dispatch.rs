@@ -559,6 +559,51 @@ impl RuntimeSessionService {
             if self.agent_local_action_executor_for_pane(&turn.pane_id)
                 == RuntimeLocalActionExecutor::Native
             {
+                if let state @ (PaneReadinessState::FullScreen
+                | PaneReadinessState::PasswordPrompt
+                | PaneReadinessState::InteractiveBlocked
+                | PaneReadinessState::Unknown
+                | PaneReadinessState::PromptCandidate
+                | PaneReadinessState::Degraded
+                | PaneReadinessState::Busy
+                | PaneReadinessState::Probing) = self.pane_readiness_state(&turn.pane_id)
+                {
+                    let message = format!(
+                        "pane {} is not ready for agent shell input: {}",
+                        turn.pane_id,
+                        runtime_pane_readiness_state_name(state)
+                    );
+                    let mut result = ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Failed,
+                        "pane_not_ready",
+                        message.clone(),
+                    )?;
+                    result.structured_content_json = Some(
+                        serde_json::json!({
+                            "state": "not_ready",
+                            "readiness_state": runtime_pane_readiness_state_name(state),
+                            "command": runtime_agent_context_command(action, command)
+                        })
+                        .to_string(),
+                    );
+                    execution.action_results[index] = result;
+                    self.append_agent_error_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        &format!("agent: {message}"),
+                    )?;
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "action {} failed reason=native_local_action_readiness readiness={}",
+                            action.id,
+                            runtime_pane_readiness_state_name(state)
+                        ),
+                    )?;
+                    continue;
+                }
                 let marker = runtime_marker_for_action(turn, &action.id)?;
                 let Some(working_directory) = self.pane_current_working_directory(&turn.pane_id)
                 else {

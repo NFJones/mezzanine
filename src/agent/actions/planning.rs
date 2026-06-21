@@ -60,10 +60,9 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         "local action plan was unavailable after local action match",
                     ));
                 };
-                if self.permissions.approval_policy
-                    != crate::permissions::ApprovalPolicy::FullAccess
-                    && let Some(scope) = self.subagent_scope
-                    && let Some(message) = scope.shell_command_violation(&plan.policy_command)?
+                if let Some(scope) = self.subagent_scope
+                    && let Some(message) =
+                        subagent_scope_violation(scope, action, &plan.policy_command)?
                 {
                     return ActionResult::failed(
                         turn,
@@ -83,10 +82,10 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     RuleDecision::Allow => Ok(ActionResult::running(
                         turn,
                         action,
-                        vec!["local action accepted for pane execution".to_string()],
+                        vec!["local action accepted for local dispatch".to_string()],
                         Some(shell_command_structured_content_json(
                             action,
-                            Some("pane_shell"),
+                            Some("pending_local_dispatch"),
                             false,
                             serde_json::Value::Null,
                             &[],
@@ -108,7 +107,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                             ],
                             Some(shell_command_structured_content_json(
                                 action,
-                                Some("pane_shell"),
+                                Some("pending_local_dispatch"),
                                 false,
                                 auto_allow_approval_json(action, action.action_type()),
                                 &[],
@@ -122,7 +121,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         vec!["approval required before executing local action".to_string()],
                         shell_command_structured_content_json(
                             action,
-                            Some("pane_shell"),
+                            Some("pending_local_dispatch"),
                             false,
                             serde_json::json!({
                                 "state": "pending",
@@ -400,6 +399,19 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             .unwrap_or(true)
     }
 }
+
+/// Returns a delegated subagent scope violation for one local action.
+fn subagent_scope_violation(
+    scope: &crate::subagent::SubagentScopeDeclaration,
+    action: &AgentAction,
+    policy_command: &str,
+) -> Result<Option<String>> {
+    match &action.payload {
+        AgentActionPayload::ApplyPatch { patch, .. } => scope.apply_patch_violation(patch),
+        _ => scope.shell_command_violation(policy_command),
+    }
+}
+
 /// Executes the `action_supports_auto_allow` operation for the owning subsystem.
 ///
 /// Callers receive a typed result or error with context from the underlying

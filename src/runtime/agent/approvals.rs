@@ -361,10 +361,9 @@ impl RuntimeSessionService {
                 let command = plan.command.as_str();
                 let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
                 let permission_policy = self.permission_policy_for_turn(&turn);
-                if permission_policy.approval_policy
-                    != crate::permissions::ApprovalPolicy::FullAccess
-                    && let Some(scope) = subagent_scope.as_ref()
-                    && let Some(message) = scope.shell_command_violation(&plan.policy_command)?
+                if let Some(scope) = subagent_scope.as_ref()
+                    && let Some(message) =
+                        runtime_subagent_scope_violation(scope, &action, &plan.policy_command)?
                 {
                     return Err(MezError::forbidden(message));
                 }
@@ -397,10 +396,10 @@ impl RuntimeSessionService {
                 execution.action_results[result_index] = ActionResult::running(
                     &turn,
                     &action,
-                    vec!["approved local action accepted for pane execution".to_string()],
+                    vec!["approved local action accepted for local dispatch".to_string()],
                     Some(shell_command_structured_content_json(
                         &action,
-                        Some("pane_shell"),
+                        Some("pending_local_dispatch"),
                         false,
                         serde_json::json!({
                             "state": "approved",
@@ -798,5 +797,19 @@ impl RuntimeSessionService {
             }
             crate::permissions::ApprovalDecision::Approve => Ok(None),
         }
+    }
+}
+
+/// Returns a delegated subagent scope violation for one runtime local action.
+fn runtime_subagent_scope_violation(
+    scope: &crate::subagent::SubagentScopeDeclaration,
+    action: &crate::agent::AgentAction,
+    policy_command: &str,
+) -> Result<Option<String>> {
+    match &action.payload {
+        crate::agent::AgentActionPayload::ApplyPatch { patch, .. } => {
+            scope.apply_patch_violation(patch)
+        }
+        _ => scope.shell_command_violation(policy_command),
     }
 }

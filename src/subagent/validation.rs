@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
+use crate::agent::apply_patch_touched_paths;
 use crate::error::{MezError, Result};
 use crate::permissions::{EffectiveCommandEffects, classify_shell_command};
 
@@ -165,6 +166,27 @@ impl SubagentScopeDeclaration {
         for effect in effects {
             if let Some(message) = self.effect_violation(&effect) {
                 return Ok(Some(message));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Returns a user-facing violation when an `apply_patch` action touches
+    /// paths outside the child agent's declared write scope.
+    pub fn apply_patch_violation(&self, patch: &str) -> Result<Option<String>> {
+        if self.cooperation_mode == CooperationMode::Unrestricted {
+            return Ok(None);
+        }
+        for path in apply_patch_touched_paths(patch)? {
+            if self.cooperation_mode == CooperationMode::ExploreOnly {
+                return Ok(Some(format!(
+                    "explore-only subagent cannot write path `{path}`"
+                )));
+            }
+            if !path_in_declared_scopes(&self.current_directory, &path, &self.write_scopes) {
+                return Ok(Some(format!(
+                    "subagent write path `{path}` is outside declared write scopes"
+                )));
             }
         }
         Ok(None)

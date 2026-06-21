@@ -4166,15 +4166,13 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
 }
 
-/// Verifies full-access sessions do not treat subagent read scopes as hard
-/// command denials.
+/// Verifies full-access sessions still enforce subagent read scopes.
 ///
-/// Scope declarations still describe the child agent's intended work area, but
-/// full-access mode is the user's explicit choice to avoid whitelist and scope
-/// prompts. The runner must therefore route concrete read commands through the
-/// normal permission policy instead of failing before policy evaluation.
+/// Full-access mode can bypass ordinary approval prompts, but it must not widen
+/// a delegated subagent beyond the parent-declared scope. Concrete read escapes
+/// therefore become hard denials before local dispatch even under FullAccess.
 #[test]
-fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
+fn turn_runner_full_access_denies_out_of_scope_subagent_shell_command() {
     let mut turn = turn();
     turn.agent_id = "agent-%2".to_string();
     turn.pane_id = "%2".to_string();
@@ -4254,8 +4252,104 @@ fn turn_runner_full_access_treats_subagent_read_scopes_as_advisory() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0].error.as_ref().unwrap().code,
+        "subagent_scope_violation"
+    );
+}
+
+/// Verifies full-access sessions still enforce subagent write scopes.
+///
+/// A delegated subagent that emits `apply_patch` must remain within its declared
+/// writable paths even when normal approval policy is FullAccess. This protects
+/// native local execution from bypassing scope checks during planning.
+#[test]
+fn turn_runner_full_access_denies_out_of_scope_subagent_apply_patch() {
+    let mut turn = turn();
+    turn.agent_id = "agent-%2".to_string();
+    turn.pane_id = "%2".to_string();
+    let provider = CapabilityBatchProvider::new(
+        AgentCapability::Shell,
+        ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "patch action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![AgentAction {
+                    id: "a1".to_string(),
+                    rationale: "patch out-of-scope file".to_string(),
+                    payload: AgentActionPayload::ApplyPatch {
+                        patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
+                            .to_string(),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    );
+    let policy = PermissionPolicy::default()
+        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let approvals = SessionApprovalStore::default();
+    let subagent_scope = crate::subagent::SubagentScopeDeclaration {
+        cooperation_mode: crate::subagent::CooperationMode::OwnedWrite,
+        current_directory: "/repo".to_string(),
+        read_scopes: vec!["/repo/src/lib.rs".to_string()],
+        write_scopes: vec!["/repo/docs".to_string()],
+        permission_preset: None,
+    };
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: Some(&subagent_scope),
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "patch a file".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0].error.as_ref().unwrap().code,
+        "subagent_scope_violation"
+    );
 }
 
 /// Verifies that model-supplied action ids are ignored at the MAAP boundary.
@@ -4435,20 +4529,14 @@ fn turn_runner_accepts_allowed_shell_actions() {
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
-    assert!(
-        execution.action_results[0]
-            .structured_content_json
-            .as_deref()
-            .unwrap()
-            .contains(r#""sent_to_pane":false"#)
-    );
-    assert!(
-        execution.action_results[0]
-            .structured_content_json
-            .as_deref()
-            .unwrap()
-            .contains(r#""terminal_observation":{"state":"pending_dispatch"}"#)
-    );
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""execution_transport":"pending_local_dispatch""#));
+    assert!(!structured.contains(r#""execution_transport":"pane_shell""#));
+    assert!(structured.contains(r#""sent_to_pane":false"#));
+    assert!(structured.contains(r#""terminal_observation":{"state":"pending_dispatch"}"#));
 }
 
 /// Verifies turn runner keeps final shell action running until observed.
