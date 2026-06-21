@@ -579,9 +579,9 @@ impl RuntimeSessionService {
                     .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
                 {
                     if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
-                        self.append_agent_status_text_to_terminal_buffer(
+                        self.append_agent_command_preview_to_terminal_buffer(
                             &turn.pane_id,
-                            &format!("$ {}", runtime_agent_terminal_preview(command)),
+                            command,
                         )?;
                     } else {
                         self.append_agent_status_text_to_terminal_buffer(

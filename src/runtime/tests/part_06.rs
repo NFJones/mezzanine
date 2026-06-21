@@ -2684,6 +2684,109 @@ fn runtime_native_local_action_runs_when_pane_is_not_ready() {
     );
 }
 
+/// Verifies native `shell_command` execution logs the same wrapped command
+/// preview used by pane-shell mode.
+///
+/// Native execution bypasses the pane transport, but the normal-mode transcript
+/// should still reuse the pane-mode command preview styling and wrapping rules
+/// instead of falling back to a plain unstyled status line.
+#[test]
+fn runtime_native_shell_command_logs_styled_execution_line() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
+        .unwrap();
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+    let cwd = temp_root("native-shell-command-logging");
+    service
+        .pane_current_working_directories
+        .insert("%1".to_string(), cwd.clone());
+    let turn = crate::agent::AgentTurnRecord {
+        turn_id: "turn-native-shell-log".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "runtime".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: AgentTurnState::Running,
+    };
+    service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
+    let action = crate::agent::AgentAction {
+        id: "native-shell-log".to_string(),
+        rationale: "prove native shell logging".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Log a native shell command".to_string(),
+            command: "printf 'native output\\n'".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native shell".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test native shell logging".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![crate::agent::ActionResult {
+            protocol: "maap/1".to_string(),
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            action_id: action.id.clone(),
+            action_type: "shell_command",
+            status: ActionStatus::Running,
+            content: Vec::new(),
+            structured_content_json: None,
+            is_error: false,
+            error: None,
+        }],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .agent_turn_executions
+        .insert(turn.turn_id.clone(), execution);
+    service.agent_turn_contexts.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentContext::new(vec![crate::agent::ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: "test context".to_string(),
+            content: "present".to_string(),
+        }])
+        .unwrap(),
+    );
+
+    let dispatched = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+    assert!(dispatched.is_some());
+
+    let pane = service.pane_screen("%1").unwrap();
+    let pane_text = pane.normal_content_lines().join("\n");
+    assert!(pane_text.contains("▐ $ printf 'native output\\n'"), "{pane_text}");
+}
+
 /// Verifies native `apply_patch` execution logs the same compact execution line
 /// and diff preview as pane-shell mode.
 ///
