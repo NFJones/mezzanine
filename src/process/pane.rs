@@ -56,6 +56,29 @@ mod tests {
     fn sync_pane_input_write_timeout_is_ten_seconds() {
         assert_eq!(PANE_INPUT_WRITE_STALL_TIMEOUT, Duration::from_secs(10));
     }
+
+    /// Verifies repeated interrupted PTY polls consume the original timeout
+    /// budget instead of restarting it after each signal.
+    ///
+    /// Pane shutdown and blocking input writes both rely on bounded PTY poll
+    /// waits. Simulating several EINTR wakeups through elapsed-time accounting
+    /// ensures signal storms cannot extend those waits indefinitely.
+    #[test]
+    fn pty_poll_timeout_budget_is_preserved_after_repeated_eintr() {
+        let timeout = Duration::from_millis(100);
+        let mut elapsed = Duration::ZERO;
+
+        for interrupted_after in [10, 30, 40].map(Duration::from_millis) {
+            elapsed += interrupted_after;
+            assert_eq!(
+                remaining_pty_poll_timeout(timeout, elapsed),
+                Some(timeout - elapsed)
+            );
+        }
+
+        elapsed += Duration::from_millis(30);
+        assert_eq!(remaining_pty_poll_timeout(timeout, elapsed), None);
+    }
 }
 
 /// Carries Pane Process state for this subsystem.
@@ -568,16 +591,36 @@ fn wait_for_pty_fd_events(fd: Option<RawFd>, flags: PollFlags, timeout: Duration
         return Ok(false);
     };
     let mut poll_fd = [PollFd::from_borrowed_fd(borrow_raw_pty_fd(fd), flags)];
-    let timeout_spec = duration_to_timespec(timeout)?;
+    let started = Instant::now();
+    let mut remaining = timeout;
     loop {
+        let timeout_spec = duration_to_timespec(remaining)?;
         match rustix_poll(&mut poll_fd, Some(&timeout_spec)) {
             Ok(_) => {
                 let revents = poll_fd[0].revents();
                 return Ok(revents.intersects(flags | PollFlags::HUP | PollFlags::ERR));
             }
-            Err(Errno::INTR) => continue,
+            Err(Errno::INTR) => {}
             Err(error) => return Err(io::Error::from(error).into()),
         }
+
+        let Some(next_remaining) = remaining_pty_poll_timeout(timeout, started.elapsed()) else {
+            return Ok(false);
+        };
+        remaining = next_remaining;
+    }
+}
+
+/// Computes the remaining PTY poll timeout after an interrupted wait.
+///
+/// Returning `None` means the original timeout budget has already elapsed and
+/// callers should treat the poll as timed out rather than issuing another
+/// blocking wait with a refreshed full timeout.
+fn remaining_pty_poll_timeout(timeout: Duration, elapsed: Duration) -> Option<Duration> {
+    if elapsed >= timeout {
+        None
+    } else {
+        Some(timeout - elapsed)
     }
 }
 
