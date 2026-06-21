@@ -892,6 +892,10 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {
+        if self.agent_local_action_executor_for_pane(pane_id) == RuntimeLocalActionExecutor::Native
+        {
+            return Ok(false);
+        }
         if self.agent_subshell_panes.contains(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
         {
@@ -931,6 +935,13 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<bool> {
         if !self.agent_subshell_panes.contains(pane_id) {
+            return Ok(false);
+        }
+        if self.agent_local_action_executor_for_pane(pane_id) == RuntimeLocalActionExecutor::Native
+        {
+            self.agent_subshell_panes.remove(pane_id);
+            self.agent_subshell_command_exit_panes.remove(pane_id);
+            self.clear_shell_output_filters_for_foreground_input(pane_id);
             return Ok(false);
         }
         if self
