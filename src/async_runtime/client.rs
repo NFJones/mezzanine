@@ -207,6 +207,7 @@ where
             handle,
             io,
             &request.client_id,
+            request.role == super::ClientViewRole::Primary,
             render_requested,
             &mut render_limiter,
             &mut lifecycle_watcher,
@@ -510,6 +511,7 @@ async fn wait_for_attached_terminal_batch_readiness<I>(
     handle: &AsyncRuntimeSessionHandle,
     io: &mut I,
     client_id: &super::ClientId,
+    poll_terminal_size: bool,
     render_requested: bool,
     render_limiter: &mut AttachedTerminalRenderRateLimiter,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
@@ -577,7 +579,7 @@ where
                         });
                     }
                 }
-                _ = sleep(DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT) => {
+                _ = sleep(DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT), if poll_terminal_size => {
                     return Ok(AttachedTerminalBatchWake::TerminalSizeCheck);
                 }
             }
@@ -648,7 +650,7 @@ where
                 let _ = result;
                 return Ok(AttachedTerminalBatchWake::StateChanged);
             }
-            _ = sleep(DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT) => {
+            _ = sleep(DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT), if poll_terminal_size => {
                 return Ok(AttachedTerminalBatchWake::TerminalSizeCheck);
             }
         }

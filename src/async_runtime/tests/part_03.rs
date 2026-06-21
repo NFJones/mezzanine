@@ -2093,6 +2093,85 @@ async fn async_attached_terminal_loop_can_defer_pane_input_to_worker() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies that a stalled attached-terminal readiness await returns a typed
+/// loop error instead of monopolizing the foreground client service forever.
+/// The outer timeout is intentionally one millisecond longer than the loop
+/// step bound: without the production timeout, this regression fails by hitting
+/// the outer guard instead of observing the structured operation error.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_attached_terminal_loop_times_out_stalled_readiness_poll() {
+    struct StalledReadinessIo;
+
+    impl AsyncAttachedTerminalIo for StalledReadinessIo {
+        fn poll_readiness<'a>(
+            &'a mut self,
+        ) -> super::AsyncTerminalIoFuture<'a, Vec<AttachedTerminalFdReadiness>> {
+            Box::pin(std::future::pending())
+        }
+
+        fn read_input<'a>(
+            &'a mut self,
+            _max_bytes: usize,
+        ) -> super::AsyncTerminalIoFuture<'a, Vec<u8>> {
+            Box::pin(async {
+                Err(crate::error::MezError::invalid_state(
+                    "stalled readiness test should not read input",
+                ))
+            })
+        }
+
+        fn write_styled_output_with_modes<'a>(
+            &'a mut self,
+            _lines: &'a [String],
+            _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+            _modes: AttachedTerminalOutputModes,
+        ) -> super::AsyncTerminalIoFuture<'a, usize> {
+            Box::pin(async {
+                Err(crate::error::MezError::invalid_state(
+                    "stalled readiness test should not write output",
+                ))
+            })
+        }
+    }
+
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    let (handle, _actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut io = StalledReadinessIo;
+
+    let result = tokio::time::timeout(
+        Duration::from_millis(251),
+        run_async_attached_terminal_client_loop(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+            },
+            |_| Ok(None),
+        ),
+    )
+    .await
+    .expect("attached-terminal loop should return its own timeout before the test guard");
+    let error = result.unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "InvalidState: async attached terminal readiness poll timed out after 250 ms"
+    );
+}
+
 /// Verifies large foreground input is drained across bounded client reads.
 ///
 /// Host paste payloads can be larger than one attached-terminal read. The

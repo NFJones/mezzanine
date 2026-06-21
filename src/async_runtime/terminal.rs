@@ -13,6 +13,9 @@ use super::{
     run_async_client_output_flush_service,
 };
 use crate::terminal::{TerminalClientLoopAction, compose_client_presentation_with_styles};
+use std::future::Future;
+use std::time::Duration;
+use tokio::time::timeout;
 
 // Attached terminal loop handling.
 
@@ -61,6 +64,47 @@ pub enum AsyncAttachedTerminalPaneIoMode {
     Inline,
     /// Queue pane input as side effects for async pane process workers.
     Deferred,
+}
+
+/// Maximum time one attached-terminal loop step may spend in an awaited
+/// terminal, render, flush, or pane-I/O boundary before returning control.
+const ASYNC_ATTACHED_TERMINAL_STEP_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Awaits one attached-terminal operation with a bounded timeout.
+///
+/// This prevents a single stalled terminal I/O, actor render, output flush, or
+/// pane-input application future from monopolizing an attached-terminal client
+/// service batch indefinitely. On timeout, the caller receives a typed runtime
+/// error that names the stalled operation.
+async fn await_attached_terminal_step<T, F>(operation: &'static str, future: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    match timeout(ASYNC_ATTACHED_TERMINAL_STEP_TIMEOUT, future).await {
+        Ok(result) => result,
+        Err(_) => Err(MezError::invalid_state(format!(
+            "async attached terminal {operation} timed out after {} ms",
+            ASYNC_ATTACHED_TERMINAL_STEP_TIMEOUT.as_millis()
+        ))),
+    }
+}
+
+/// Awaits primary-client input without treating stale readiness as a fatal
+/// foreground-client error.
+///
+/// Real PTYs can report input readiness that is consumed before the foreground
+/// client read future observes bytes. For primary clients, an empty input batch
+/// preserves the foreground session and lets the service wait for the next
+/// readiness edge; observers and deterministic idle fakes still use the generic
+/// operation timeout so they cannot create periodic idle batches.
+async fn await_attached_terminal_primary_input_read<F>(future: F) -> Result<Vec<u8>>
+where
+    F: Future<Output = Result<Vec<u8>>>,
+{
+    match timeout(ASYNC_ATTACHED_TERMINAL_STEP_TIMEOUT, future).await {
+        Ok(result) => result,
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 /// Carries Async Attached Terminal Error Recovery state for this subsystem.
@@ -150,6 +194,7 @@ where
         handle,
         io,
         recovery.client_id,
+        true,
         lines,
         spans,
         output_modes,
@@ -177,6 +222,7 @@ async fn queue_and_flush_async_attached_terminal_output<I>(
     handle: &AsyncRuntimeSessionHandle,
     io: &mut I,
     client_id: ClientId,
+    schedule_render_timers: bool,
     lines: Vec<String>,
     line_style_spans: Vec<Vec<crate::terminal::TerminalStyleSpan>>,
     modes: AttachedTerminalOutputModes,
@@ -205,7 +251,7 @@ where
         |_, _| false,
     )
     .await?;
-    if report.flushed > 0 {
+    if schedule_render_timers && report.flushed > 0 {
         handle.ensure_client_render_timers(timer_client_id).await?;
     }
     Ok(report)
@@ -330,12 +376,27 @@ where
         request.terminal_config.host_bracketed_paste_started_at;
 
     for _ in 0..request.loop_config.max_iterations {
-        let readiness = io.poll_readiness().await?;
+        let readiness = if request.role == ClientViewRole::Primary {
+            await_attached_terminal_step("readiness poll", io.poll_readiness()).await?
+        } else {
+            io.poll_readiness().await?
+        };
         let input_readable = readiness
             .iter()
             .any(|ready| ready.role == AttachedTerminalFdRole::Input && ready.readable);
         let input = if input_readable {
-            let bytes = io.read_input(request.loop_config.max_input_bytes).await?;
+            let bytes = if request.role == ClientViewRole::Primary {
+                await_attached_terminal_primary_input_read(
+                    io.read_input(request.loop_config.max_input_bytes),
+                )
+                .await?
+            } else {
+                await_attached_terminal_step(
+                    "input read",
+                    io.read_input(request.loop_config.max_input_bytes),
+                )
+                .await?
+            };
             if request.role == ClientViewRole::Primary {
                 Some(bytes)
             } else {
@@ -348,14 +409,16 @@ where
             .iter()
             .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable);
         let frame = if input_readable || output_writable {
-            handle
-                .render_client_frame(
+            await_attached_terminal_step(
+                "client frame render",
+                handle.render_client_frame(
                     request.role,
                     request.client_size,
                     request.terminal_config.clone(),
                     output_writable,
-                )
-                .await?
+                ),
+            )
+            .await?
         } else {
             AsyncRenderedClientFrame {
                 config: request.terminal_config.clone(),
@@ -401,17 +464,21 @@ where
             let primary_client_id = request.client_id.clone();
             let application_result = match pane_io_mode {
                 AsyncAttachedTerminalPaneIoMode::Inline => {
-                    handle
-                        .apply_attached_terminal_step_plan_inline_pane_io(
+                    await_attached_terminal_step(
+                        "inline pane I/O apply",
+                        handle.apply_attached_terminal_step_plan_inline_pane_io(
                             primary_client_id,
                             step.clone(),
-                        )
-                        .await
+                        ),
+                    )
+                    .await
                 }
                 AsyncAttachedTerminalPaneIoMode::Deferred => {
-                    handle
-                        .apply_attached_terminal_step_plan(primary_client_id, step.clone())
-                        .await
+                    await_attached_terminal_step(
+                        "deferred pane I/O apply",
+                        handle.apply_attached_terminal_step_plan(primary_client_id, step.clone()),
+                    )
+                    .await
                 }
             };
             Some(match application_result {
@@ -464,13 +531,17 @@ where
                     .map(|view| view.cursor_column)
                     .unwrap_or(0),
             };
-            let flush = queue_and_flush_async_attached_terminal_output(
-                handle,
-                io,
-                request.client_id.clone(),
-                step.output_lines.clone(),
-                step.output_line_style_spans.clone(),
-                output_modes,
+            let flush = await_attached_terminal_step(
+                "output flush",
+                queue_and_flush_async_attached_terminal_output(
+                    handle,
+                    io,
+                    request.client_id.clone(),
+                    request.role == ClientViewRole::Primary,
+                    step.output_lines.clone(),
+                    step.output_line_style_spans.clone(),
+                    output_modes,
+                ),
             )
             .await?;
             merge_attached_terminal_flush_report(&mut report, &flush);
@@ -486,17 +557,24 @@ where
         {
             let application_result = match pane_io_mode {
                 AsyncAttachedTerminalPaneIoMode::Inline => {
-                    handle
-                        .apply_attached_terminal_step_plan_inline_pane_io(
+                    await_attached_terminal_step(
+                        "inline pane I/O apply",
+                        handle.apply_attached_terminal_step_plan_inline_pane_io(
                             primary_client_id.clone(),
                             step.clone(),
-                        )
-                        .await
+                        ),
+                    )
+                    .await
                 }
                 AsyncAttachedTerminalPaneIoMode::Deferred => {
-                    handle
-                        .apply_attached_terminal_step_plan(primary_client_id.clone(), step.clone())
-                        .await
+                    await_attached_terminal_step(
+                        "deferred pane I/O apply",
+                        handle.apply_attached_terminal_step_plan(
+                            primary_client_id.clone(),
+                            step.clone(),
+                        ),
+                    )
+                    .await
                 }
             };
             Some(match application_result {
@@ -560,6 +638,7 @@ where
                         handle,
                         io,
                         request.client_id.clone(),
+                        request.role == ClientViewRole::Primary,
                         lines,
                         spans,
                         output_modes,
