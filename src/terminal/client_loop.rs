@@ -39,6 +39,10 @@ pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
 /// grow without bound if the closing delimiter never arrives.
 pub const HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES: usize = 1024 * 1024;
 
+/// Maximum output bytes written during one attached-client loop pass.
+#[cfg(test)]
+const ATTACHED_TERMINAL_CLIENT_LOOP_OUTPUT_WRITE_LIMIT_BYTES: usize = 64 * 1024;
+
 /// Carries Terminal Client Loop Action state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -539,6 +543,35 @@ impl Default for AttachedTerminalClientLoopConfig {
     }
 }
 
+/// Result of one bounded attached-terminal output write attempt.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttachedTerminalOutputWriteReport {
+    /// Bytes written during this attempt.
+    pub bytes_written: usize,
+    /// Whether the output frame was fully written.
+    pub completed: bool,
+    /// Bytes still retained for later output flush attempts.
+    pub pending_bytes: usize,
+}
+
+#[cfg(test)]
+impl AttachedTerminalOutputWriteReport {
+    /// Returns a completed write report.
+    pub const fn completed(bytes_written: usize) -> Self {
+        Self {
+            bytes_written,
+            completed: true,
+            pending_bytes: 0,
+        }
+    }
+
+    /// Returns whether this write left bytes pending.
+    pub const fn is_partial(self) -> bool {
+        !self.completed || self.pending_bytes > 0
+    }
+}
+
 /// Carries Attached Terminal Client Loop Report state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -616,6 +649,19 @@ pub trait AttachedTerminalClientLoopIo {
     /// on duplicated control-flow logic.
     fn write_output(&mut self, lines: &[String]) -> Result<usize>;
 
+    /// Returns retained output bytes awaiting a later writable terminal pass.
+    fn pending_output_bytes(&self) -> usize {
+        0
+    }
+
+    /// Flushes retained output bytes without accepting a new rendered frame.
+    fn flush_pending_output(
+        &mut self,
+        _max_bytes: usize,
+    ) -> Result<AttachedTerminalOutputWriteReport> {
+        Ok(AttachedTerminalOutputWriteReport::completed(0))
+    }
+
     /// Runs the terminal size operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -659,6 +705,18 @@ pub trait AttachedTerminalClientLoopIo {
         modes: AttachedTerminalOutputModes,
     ) -> Result<usize> {
         self.write_output_with_modes(lines, modes)
+    }
+
+    /// Writes at most `max_bytes` of one styled terminal frame.
+    fn write_styled_output_with_modes_bounded(
+        &mut self,
+        lines: &[String],
+        line_style_spans: &[Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+        _max_bytes: usize,
+    ) -> Result<AttachedTerminalOutputWriteReport> {
+        let bytes_written = self.write_styled_output_with_modes(lines, line_style_spans, modes)?;
+        Ok(AttachedTerminalOutputWriteReport::completed(bytes_written))
     }
 }
 
@@ -709,6 +767,28 @@ pub struct AttachedTerminalFdLoopIo {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) presentation_active: bool,
+    /// Encoded output frame retained after a bounded write could not finish.
+    pub(super) pending_output_frame: Option<PendingAttachedTerminalOutputFrame>,
+}
+
+/// Encoded attached-terminal frame awaiting later output readiness.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingAttachedTerminalOutputFrame {
+    /// Encoded bytes still owned by the output endpoint.
+    bytes: Vec<u8>,
+    /// Number of bytes already written from `bytes`.
+    written: usize,
+    /// Frame state to commit once all bytes have reached the terminal.
+    next_state: AttachedTerminalOutputFrameState,
+}
+
+#[cfg(test)]
+impl PendingAttachedTerminalOutputFrame {
+    /// Returns the number of retained bytes not yet written.
+    fn remaining_bytes(&self) -> usize {
+        self.bytes.len().saturating_sub(self.written)
+    }
 }
 
 /// Last attached-terminal frame content retained for differential redraws.
@@ -801,6 +881,7 @@ impl AttachedTerminalFdLoopIo {
             application_keypad_mode: false,
             previous_output_frame: None,
             presentation_active: false,
+            pending_output_frame: None,
         })
     }
 
@@ -832,6 +913,89 @@ impl AttachedTerminalFdLoopIo {
         }
         self.presentation_active = false;
         Ok(())
+    }
+
+    /// Commits a fully flushed pending output frame as the next diff baseline.
+    fn commit_completed_pending_output_frame(&mut self) {
+        if let Some(pending) = self.pending_output_frame.take() {
+            self.previous_output_frame = Some(pending.next_state);
+        }
+    }
+
+    /// Flushes retained output bytes up to `max_bytes`.
+    fn flush_pending_output_bounded(
+        &mut self,
+        max_bytes: usize,
+    ) -> Result<AttachedTerminalOutputWriteReport> {
+        if max_bytes == 0 {
+            return Err(MezError::invalid_args(
+                "attached terminal output write limit must be greater than zero",
+            ));
+        }
+
+        let mut bytes_written = 0usize;
+        while bytes_written < max_bytes {
+            let Some(pending) = self.pending_output_frame.as_ref() else {
+                return Ok(AttachedTerminalOutputWriteReport::completed(bytes_written));
+            };
+            if pending.remaining_bytes() == 0 {
+                self.commit_completed_pending_output_frame();
+                continue;
+            }
+
+            let remaining_budget = max_bytes.saturating_sub(bytes_written);
+            let write_start = pending.written;
+            let write_end =
+                write_start.saturating_add(pending.remaining_bytes().min(remaining_budget));
+            let bytes = pending.bytes[write_start..write_end].to_vec();
+            let attempted_bytes = bytes.len();
+
+            let count = loop {
+                match rustix_write(borrow_raw_fd(self.output_fd), &bytes) {
+                    Ok(count) if count > 0 => break count,
+                    Ok(_) => {
+                        return Err(MezError::invalid_state(
+                            "attached terminal output write made no progress",
+                        ));
+                    }
+                    Err(Errno::INTR) => continue,
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        return Ok(AttachedTerminalOutputWriteReport {
+                            bytes_written,
+                            completed: false,
+                            pending_bytes: self.pending_output_bytes(),
+                        });
+                    }
+                    Err(error) => return Err(std::io::Error::from(error).into()),
+                }
+            };
+
+            let Some(pending) = self.pending_output_frame.as_mut() else {
+                return Err(MezError::invalid_state(
+                    "pending attached terminal output disappeared during write",
+                ));
+            };
+            pending.written = pending.written.saturating_add(count);
+            bytes_written = bytes_written.saturating_add(count);
+
+            if pending.remaining_bytes() == 0 {
+                self.commit_completed_pending_output_frame();
+                return Ok(AttachedTerminalOutputWriteReport::completed(bytes_written));
+            }
+            if count < attempted_bytes {
+                return Ok(AttachedTerminalOutputWriteReport {
+                    bytes_written,
+                    completed: false,
+                    pending_bytes: self.pending_output_bytes(),
+                });
+            }
+        }
+
+        Ok(AttachedTerminalOutputWriteReport {
+            bytes_written,
+            completed: false,
+            pending_bytes: self.pending_output_bytes(),
+        })
     }
 }
 
@@ -880,6 +1044,22 @@ impl AttachedTerminalClientLoopIo for AttachedTerminalFdLoopIo {
     /// on duplicated control-flow logic.
     fn write_output(&mut self, lines: &[String]) -> Result<usize> {
         self.write_output_with_modes(lines, AttachedTerminalOutputModes::default())
+    }
+
+    /// Returns retained output bytes awaiting a later writable terminal pass.
+    fn pending_output_bytes(&self) -> usize {
+        self.pending_output_frame
+            .as_ref()
+            .map(PendingAttachedTerminalOutputFrame::remaining_bytes)
+            .unwrap_or(0)
+    }
+
+    /// Flushes retained output bytes without accepting a new rendered frame.
+    fn flush_pending_output(
+        &mut self,
+        max_bytes: usize,
+    ) -> Result<AttachedTerminalOutputWriteReport> {
+        self.flush_pending_output_bounded(max_bytes)
     }
 
     /// Runs the terminal size operation for this subsystem.
@@ -945,6 +1125,43 @@ impl AttachedTerminalClientLoopIo for AttachedTerminalFdLoopIo {
             modes,
         ));
         Ok(frame.len())
+    }
+
+    /// Writes at most `max_bytes` of one styled terminal frame.
+    fn write_styled_output_with_modes_bounded(
+        &mut self,
+        lines: &[String],
+        line_style_spans: &[Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+        max_bytes: usize,
+    ) -> Result<AttachedTerminalOutputWriteReport> {
+        if max_bytes == 0 {
+            return Err(MezError::invalid_args(
+                "attached terminal output write limit must be greater than zero",
+            ));
+        }
+
+        let keypad_transition = if modes.application_keypad != self.application_keypad_mode {
+            self.application_keypad_mode = modes.application_keypad;
+            Some(modes.application_keypad)
+        } else {
+            None
+        };
+        let bytes = encode_attached_terminal_output_update_frame_with_styles(
+            lines,
+            line_style_spans,
+            keypad_transition,
+            modes,
+            self.previous_output_frame.as_ref(),
+        );
+        let next_state =
+            AttachedTerminalOutputFrameState::new_with_modes(lines, line_style_spans, modes);
+        self.pending_output_frame = Some(PendingAttachedTerminalOutputFrame {
+            bytes,
+            written: 0,
+            next_state,
+        });
+        self.flush_pending_output_bounded(max_bytes)
     }
 }
 
@@ -3034,33 +3251,53 @@ where
         report.host_bracketed_paste_active = host_bracketed_paste_active;
         report.host_bracketed_paste_buffer = host_bracketed_paste_buffer.clone();
 
-        if !step.output_lines.is_empty() {
-            let output_modes = AttachedTerminalOutputModes {
-                application_keypad: terminal_config.mouse_policy.pane_application_keypad_mode,
-                bracketed_paste: terminal_config.pane_bracketed_paste_mode,
-                focus_events: view.is_some_and(|view| view.focus_events),
-                alternate_screen: view.is_some_and(|view| view.alternate_screen),
-                host_mouse_reporting: terminal_config.mouse_policy.enabled,
-                cursor_style: terminal_config.cursor_style,
-                cursor_blink: terminal_config.cursor_blink,
-                cursor_blink_interval_ms: terminal_config.cursor_blink_interval_ms,
-                cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
-                animation_refresh_interval_ms: view
-                    .map(|view| view.animation_refresh_interval_ms)
-                    .unwrap_or(0),
-                cursor_visible: view.is_some_and(|view| view.cursor_visible),
-                cursor_row: view.map(|view| view.cursor_row).unwrap_or(0),
-                cursor_column: view.map(|view| view.cursor_column).unwrap_or(0),
-            };
-            report.bytes_written =
-                report
-                    .bytes_written
-                    .saturating_add(io.write_styled_output_with_modes(
-                        &step.output_lines,
-                        &step.output_line_style_spans,
-                        output_modes,
-                    )?);
-            report.output_frames = report.output_frames.saturating_add(1);
+        if readiness
+            .iter()
+            .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable)
+        {
+            if io.pending_output_bytes() > 0 {
+                let flush = io
+                    .flush_pending_output(ATTACHED_TERMINAL_CLIENT_LOOP_OUTPUT_WRITE_LIMIT_BYTES)?;
+                report.bytes_written = report.bytes_written.saturating_add(flush.bytes_written);
+                report.pending_output_bytes = flush.pending_bytes;
+                if flush.is_partial() {
+                    report.partial_writes = report.partial_writes.saturating_add(1);
+                }
+            } else if !step.output_lines.is_empty() {
+                let output_modes = AttachedTerminalOutputModes {
+                    application_keypad: terminal_config.mouse_policy.pane_application_keypad_mode,
+                    bracketed_paste: terminal_config.pane_bracketed_paste_mode,
+                    focus_events: view.is_some_and(|view| view.focus_events),
+                    alternate_screen: view.is_some_and(|view| view.alternate_screen),
+                    host_mouse_reporting: terminal_config.mouse_policy.enabled,
+                    cursor_style: terminal_config.cursor_style,
+                    cursor_blink: terminal_config.cursor_blink,
+                    cursor_blink_interval_ms: terminal_config.cursor_blink_interval_ms,
+                    cursor_blink_elapsed_ms: cursor_blink_elapsed_ms(cursor_blink_epoch),
+                    animation_refresh_interval_ms: view
+                        .map(|view| view.animation_refresh_interval_ms)
+                        .unwrap_or(0),
+                    cursor_visible: view.is_some_and(|view| view.cursor_visible),
+                    cursor_row: view.map(|view| view.cursor_row).unwrap_or(0),
+                    cursor_column: view.map(|view| view.cursor_column).unwrap_or(0),
+                };
+                let write = io.write_styled_output_with_modes_bounded(
+                    &step.output_lines,
+                    &step.output_line_style_spans,
+                    output_modes,
+                    ATTACHED_TERMINAL_CLIENT_LOOP_OUTPUT_WRITE_LIMIT_BYTES,
+                )?;
+                report.bytes_written = report.bytes_written.saturating_add(write.bytes_written);
+                report.pending_output_bytes = write.pending_bytes;
+                if write.is_partial() {
+                    report.partial_writes = report.partial_writes.saturating_add(1);
+                }
+                report.output_frames = report.output_frames.saturating_add(1);
+            } else {
+                report.pending_output_bytes = 0;
+            }
+        } else {
+            report.pending_output_bytes = io.pending_output_bytes();
         }
         report.actions.extend(step.actions);
         if step.input_hangup {
