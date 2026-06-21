@@ -2567,14 +2567,14 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
     assert!(!pane_text.contains("Inspect owner two."), "{pane_text}");
 }
 
-/// Verifies native local execution still honors pane readiness before starting
-/// a host-side child process.
+/// Verifies native local execution bypasses pane readiness before starting a
+/// host-side child process.
 ///
-/// Native mode does not send input to the pane shell, but it is still scoped to
-/// the pane lifecycle. A non-ready pane must therefore fail before native
-/// process launch rather than bypassing the safe-boundary gate.
+/// Native mode does not send input to the pane shell, so alternate-screen TUIs
+/// and other non-ready pane states must not block model-authored local actions
+/// once the native executor has the pane working directory needed for scoping.
 #[test]
-fn runtime_native_local_action_requires_ready_pane_before_execution() {
+fn runtime_native_local_action_runs_when_pane_is_not_ready() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -2670,9 +2670,127 @@ fn runtime_native_local_action_requires_ready_pane_before_execution() {
             .error
             .as_ref()
             .map(|error| error.code.as_str()),
-        Some("pane_not_ready")
+        None
     );
-    assert!(!marker_path.exists());
+    assert!(marker_path.exists());
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains(&format!("$ touch {}", marker_path.display())),
+        "{pane_text}"
+    );
+}
+
+/// Verifies native `apply_patch` execution logs the same compact execution line
+/// and diff preview as pane-shell mode.
+///
+/// Native patch execution mutates files without a pane shell transaction, but
+/// users still need the normal-mode transcript to show the model-authored file
+/// action and the resulting diff just like pane-mode semantic mutations do.
+#[test]
+fn runtime_native_apply_patch_logs_execution_and_diff_preview() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
+        .unwrap();
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+    let cwd = temp_root("native-apply-patch-logging");
+    service
+        .pane_current_working_directories
+        .insert("%1".to_string(), cwd.clone());
+    let turn = crate::agent::AgentTurnRecord {
+        turn_id: "turn-native-patch-log".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "runtime".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: AgentTurnState::Running,
+    };
+    service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
+    let action = crate::agent::AgentAction {
+        id: "native-patch-log".to_string(),
+        rationale: "prove native patch logging".to_string(),
+        payload: crate::agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: note.txt\n+alpha\n+beta\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "native patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test native patch logging".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![crate::agent::ActionResult {
+            protocol: "maap/1".to_string(),
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            action_id: action.id.clone(),
+            action_type: "apply_patch",
+            status: ActionStatus::Running,
+            content: Vec::new(),
+            structured_content_json: None,
+            is_error: false,
+            error: None,
+        }],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .agent_turn_executions
+        .insert(turn.turn_id.clone(), execution);
+    service.agent_turn_contexts.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentContext::new(vec![crate::agent::ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: "test context".to_string(),
+            content: "present".to_string(),
+        }])
+        .unwrap(),
+    );
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap()
+        .expect("execution should still be present");
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(std::fs::read_to_string(cwd.join("note.txt")).unwrap(), "alpha\nbeta\n");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("apply patch: note.txt"), "{pane_text}");
+    assert!(pane_text.contains("diff -- apply patch"), "{pane_text}");
+    assert!(pane_text.contains("+alpha"), "{pane_text}");
+    assert!(pane_text.contains("+beta"), "{pane_text}");
 }
 
 /// Verifies pre-execution `apply_patch` transport failures are model

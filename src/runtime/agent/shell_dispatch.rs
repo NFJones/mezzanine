@@ -559,51 +559,6 @@ impl RuntimeSessionService {
             if self.agent_local_action_executor_for_pane(&turn.pane_id)
                 == RuntimeLocalActionExecutor::Native
             {
-                if let state @ (PaneReadinessState::FullScreen
-                | PaneReadinessState::PasswordPrompt
-                | PaneReadinessState::InteractiveBlocked
-                | PaneReadinessState::Unknown
-                | PaneReadinessState::PromptCandidate
-                | PaneReadinessState::Degraded
-                | PaneReadinessState::Busy
-                | PaneReadinessState::Probing) = self.pane_readiness_state(&turn.pane_id)
-                {
-                    let message = format!(
-                        "pane {} is not ready for agent shell input: {}",
-                        turn.pane_id,
-                        runtime_pane_readiness_state_name(state)
-                    );
-                    let mut result = ActionResult::failed(
-                        turn,
-                        action,
-                        ActionStatus::Failed,
-                        "pane_not_ready",
-                        message.clone(),
-                    )?;
-                    result.structured_content_json = Some(
-                        serde_json::json!({
-                            "state": "not_ready",
-                            "readiness_state": runtime_pane_readiness_state_name(state),
-                            "command": runtime_agent_context_command(action, command)
-                        })
-                        .to_string(),
-                    );
-                    execution.action_results[index] = result;
-                    self.append_agent_error_text_to_terminal_buffer(
-                        &turn.pane_id,
-                        &format!("agent: {message}"),
-                    )?;
-                    self.append_agent_trace_turn_event(
-                        &turn.pane_id,
-                        &turn.turn_id,
-                        &format!(
-                            "action {} failed reason=native_local_action_readiness readiness={}",
-                            action.id,
-                            runtime_pane_readiness_state_name(state)
-                        ),
-                    )?;
-                    continue;
-                }
                 let marker = runtime_marker_for_action(turn, &action.id)?;
                 let Some(working_directory) = self.pane_current_working_directory(&turn.pane_id)
                 else {
@@ -623,10 +578,17 @@ impl RuntimeSessionService {
                 if !self
                     .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
                 {
-                    self.append_agent_status_text_to_terminal_buffer(
-                        &turn.pane_id,
-                        &runtime_agent_shell_status(action, "native local action"),
-                    )?;
+                    if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
+                        self.append_agent_status_text_to_terminal_buffer(
+                            &turn.pane_id,
+                            &format!("$ {}", runtime_agent_terminal_preview(command)),
+                        )?;
+                    } else {
+                        self.append_agent_status_text_to_terminal_buffer(
+                            &turn.pane_id,
+                            &runtime_agent_shell_status(action, "native local action"),
+                        )?;
+                    }
                 }
                 let mut native_executor =
                     NativeShellLocalExecutor::new(self.session.shell.path(), &working_directory);
@@ -642,6 +604,17 @@ impl RuntimeSessionService {
                     )?,
                 };
                 execution.action_results[index] = result;
+                if self.agent_action_result_renders_in_normal_mode(action) {
+                    let result_text = execution.action_results[index].content_text();
+                    if !result_text.trim().is_empty() {
+                        self.append_agent_action_result_text_to_terminal_buffer(
+                            &turn.pane_id,
+                            action,
+                            &execution.action_results[index],
+                            &result_text,
+                        )?;
+                    }
+                }
                 self.append_action_result_context_if_absent(
                     &turn.turn_id,
                     &execution.action_results[index],
