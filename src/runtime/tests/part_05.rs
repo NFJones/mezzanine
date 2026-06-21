@@ -2471,6 +2471,38 @@ fn runtime_agent_context_reports_nonready_pane_readiness() {
     }));
 }
 
+/// Verifies native local execution keeps shell actions usable in prompt context
+/// even when the pane foreground is blocked.
+///
+/// Native mode executes local actions outside the pane shell, so the readiness
+/// hint must not tell the model to avoid `shell_command` or `apply_patch` just
+/// because an interactive foreground UI is active in the pane.
+#[test]
+fn runtime_agent_context_reports_native_local_actions_bypass_readiness() {
+    let mut service = test_runtime_service();
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "find the mezzanine config file", 0)
+        .unwrap();
+
+    assert!(context.blocks.iter().any(|block| {
+        block.label == "pane identity"
+            && block
+                .content
+                .contains("readiness_state=interactive-blocked")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint
+            && block.label == "pane readiness"
+            && block.content.contains(
+                "native local shell_command and apply_patch actions execute outside the pane shell",
+            )
+            && !block.content.contains("shell_command and apply_patch cannot execute")
+    }));
+}
+
 /// Verifies explicit `$create-skill` prompt syntax loads the built-in skill
 /// authoring workflow even when no user or project skills have been installed.
 /// This keeps the built-in workflow available as normal skill context instead

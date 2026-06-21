@@ -25,15 +25,16 @@ use super::{
     Envelope, EventKind, EventVisibility, HookEvent, MemoryRecord, MezError, PaneCaptureSource,
     PaneId, PaneProcessStart, PaneReadinessOverrideStore, PaneReadinessState, Path, PathBuf,
     ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig,
-    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
-    RuntimeSubagentLineage, RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry,
-    SenderIdentity, SessionRecord, SnapshotCreationContext, SnapshotRepository, SplitDirection,
-    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
-    append_memory_context, append_permission_policy_context, append_scheduler_context,
-    approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
-    default_trust_database_path, destination_target_checked_resolved, discover_project_root,
-    dispatch_control_request_cached, dispatch_control_request_for_client_with_agent_state,
+    RuntimeLifecycleState, RuntimeLocalActionExecutor, RuntimeRegistryUpdatePlan,
+    RuntimeSessionService, RuntimeSubagentLineage, RuntimeSubagentPlacement,
+    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotCreationContext,
+    SnapshotRepository, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
+    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision,
+    agent_state_control_method, append_memory_context, append_permission_policy_context,
+    append_scheduler_context, approval_decide_scope_persistence,
+    compare_permission_preset_authority, current_unix_seconds, default_trust_database_path,
+    destination_target_checked_resolved, discover_project_root, dispatch_control_request_cached,
+    dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
     dispatch_control_request_for_client_with_config_and_audit,
@@ -140,9 +141,11 @@ impl RuntimeSessionService {
                 runtime_pane_readiness_state_name(readiness_state)
             ),
         });
-        if let Some(readiness_hint) =
-            runtime_agent_pane_readiness_context_block(pane_id, readiness_state)
-        {
+        if let Some(readiness_hint) = runtime_agent_pane_readiness_context_block(
+            pane_id,
+            readiness_state,
+            self.agent_local_action_executor_for_pane(pane_id),
+        ) {
             blocks.push(readiness_hint);
         }
 
@@ -1104,6 +1107,7 @@ impl RuntimeSessionService {
 fn runtime_agent_pane_readiness_context_block(
     pane_id: &str,
     readiness_state: PaneReadinessState,
+    local_action_executor: RuntimeLocalActionExecutor,
 ) -> Option<ContextBlock> {
     if readiness_state == PaneReadinessState::Ready {
         return None;
@@ -1121,11 +1125,21 @@ fn runtime_agent_pane_readiness_context_block(
         ),
         PaneReadinessState::FullScreen
         | PaneReadinessState::PasswordPrompt
-        | PaneReadinessState::InteractiveBlocked => format!(
-            "pane_id={pane_id} readiness_state={state_name}\n\
-             Foreground interactive content is still active in this pane, so shell_command and apply_patch cannot execute until the user exits that UI or the pane readiness changes. \
-             If local shell work is required, report the blockage or tell the user to return the pane to its shell prompt instead of emitting shell-backed actions immediately."
-        ),
+        | PaneReadinessState::InteractiveBlocked => {
+            if local_action_executor == RuntimeLocalActionExecutor::Native {
+                format!(
+                    "pane_id={pane_id} readiness_state={state_name}\n\
+                     Foreground interactive content is still active in this pane, but native local shell_command and apply_patch actions execute outside the pane shell and are not blocked by pane readiness. \
+                     Do not send interactive or stateful pane-shell work until the user exits that UI or the pane readiness changes."
+                )
+            } else {
+                format!(
+                    "pane_id={pane_id} readiness_state={state_name}\n\
+                     Foreground interactive content is still active in this pane, so shell_command and apply_patch cannot execute until the user exits that UI or the pane readiness changes. \
+                     If local shell work is required, report the blockage or tell the user to return the pane to its shell prompt instead of emitting shell-backed actions immediately."
+                )
+            }
+        }
         PaneReadinessState::Ready => return None,
     };
     Some(ContextBlock {
