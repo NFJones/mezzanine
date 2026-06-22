@@ -3997,8 +3997,9 @@ Runtime pane-input writers MUST surface a bounded error instead of waiting
 indefinitely when the PTY stops accepting bytes.
 All Mezzanine-owned PTY input, including user paste bytes, terminal-command
 forwarding, agent shell transactions, readiness probes, bootstrap probes, and
-semantic file-action payloads, MUST pass through a bounded per-pane input
-transport. The transport MUST split input into conservative byte chunks, MUST
+semantic file-action payload bytes routed through the pane shell, MUST pass
+through a bounded per-pane input transport. The transport MUST split input into
+conservative byte chunks, MUST
 report partial byte progress before retrying any unsent remainder, MUST keep
 unsent remainders ahead of later queued input for the same pane, MUST reject
 zero-byte write progress as a bounded failure, and MUST leave enough
