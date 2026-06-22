@@ -4492,20 +4492,27 @@ mechanism.
 External connectors or tool protocols MUST be explicitly configured, visible to
 the user, and subject to the same permission model as other agent actions.
 
-### 10.2 Shell-Only Local Interaction
+### 10.2 Visible Local Interaction
 
-An agent MUST use the pane shell for local file reads, file writes, command
-execution, process inspection, package management, version control operations,
-and other local system interactions.
+An agent MUST use Mezzanine-visible local MAAP actions for local file reads, file
+writes, command execution, process inspection, package management, version
+control operations, and other local system interactions. In
+`agents.local_action_executor = "pane_shell"` mode, Mezzanine MUST service
+those actions through the pane shell. In `agents.local_action_executor =
+"native"` mode, eligible local actions MAY execute through the native runtime
+executor instead of pane input, and MUST report `execution_transport =
+"native"` and `sent_to_pane = false`.
 
-This shell-only rule applies to the agent's native local interaction path. MCP
-servers and other explicitly configured connectors are external integrations,
-not hidden local shell tools. An agent MAY request an MCP tool call only through
-the configured external-integration path, and Mezzanine MUST evaluate that call
-under the permission and audit rules for external integrations.
+This visible-local-action rule applies to the agent's native local interaction
+path. MCP servers and other explicitly configured connectors are external
+integrations, not hidden local shell tools. An agent MAY request an MCP tool
+call only through the configured external-integration path, and Mezzanine MUST
+evaluate that call under the permission and audit rules for external
+integrations.
 
-If an agent edits a file, it MUST do so by issuing shell commands or invoking
-programs available through the pane shell.
+If an agent edits a file, it MUST do so by emitting a visible local mutation
+action such as `apply_patch` or by running commands through `shell_command`; it
+MUST NOT receive direct hidden filesystem mutation APIs.
 
 The `/init` slash command is the only baseline exception to the shell-only file
 mutation rule. `/init` is a Mezzanine-owned project-instruction scaffold
@@ -6270,14 +6277,17 @@ for that operation.
 
 The prompt MUST state that local file access, local file mutation, process
 execution, package management, version control, build, test, and search work
-are pane-shell-backed local interactions. It MUST distinguish Mezzanine-generated
-semantic actions, which may internally use shell commands, from model-authored
-`shell_command` payloads.
+use visible local MAAP actions. It MUST distinguish pane-shell transport from
+native runtime transport, and MUST distinguish Mezzanine-generated semantic
+actions, which may internally use shell commands or native runtime code, from
+model-authored `shell_command` payloads.
 
-The prompt MUST state that shell commands in the pane are the only native local
-execution path. It MAY describe configured MCP servers and connectors as
-external integrations when they are enabled, visible to the user, and subject to
-policy.
+The prompt MUST state that `shell_command` runs through the pane shell by
+default, while configured native local execution may service eligible
+`shell_command` and `apply_patch` actions outside pane input and report
+`sent_to_pane = false`. It MAY describe configured MCP servers and connectors
+as external integrations when they are enabled, visible to the user, and subject
+to policy.
 
 The prompt MUST include detailed action-selection guidance for baseline MAAP
 actions. That guidance MUST distinguish user-facing speech, fallback shell
@@ -6628,10 +6638,12 @@ summarize, or omit non-required context before the request is sent.
 
 ### 16.3 Required Prompt Prohibitions
 
-The prompt MUST prohibit bypassing the pane shell for native local system
-mutation. The prompt MAY describe explicitly configured MCP servers and other
-connectors as external integrations; when it does, it MUST state that they are
-available only through Mezzanine's visible external-integration path.
+The prompt MUST prohibit bypassing visible MAAP local actions for native local
+system mutation, and MUST not imply that native runtime execution is an
+undeclared model capability. The prompt MAY describe explicitly configured MCP
+servers and other connectors as external integrations; when it does, it MUST
+state that they are available only through Mezzanine's visible
+external-integration path.
 For ordinary turns, the prompt SHOULD keep MCP and skill awareness abstract
 and SHOULD reveal concrete tool or skill inventories only when the task
 explicitly makes them relevant, so mere availability does not bias action
