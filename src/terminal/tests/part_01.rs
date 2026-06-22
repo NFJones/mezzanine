@@ -3499,6 +3499,38 @@ fn attached_terminal_fd_loop_io_blocks_until_input_poll_timeout_when_output_is_w
     );
 }
 
+
+/// Verifies that already-ready input is returned without waiting for the
+/// output writability sample. This protects against regressions where a
+/// second blocking poll delays input processing behind a quiet descriptor.
+#[test]
+fn attached_terminal_fd_loop_io_returns_ready_input_without_second_poll_delay() {
+    let (mut input_writer, input_reader) = UnixStream::pair().unwrap();
+    let (output_writer, _output_reader) = UnixStream::pair().unwrap();
+    input_writer.write_all(b"x").unwrap();
+    let mut io = AttachedTerminalFdLoopIo::new(
+        input_reader.as_raw_fd(),
+        output_writer.as_raw_fd(),
+        None,
+        Some(Duration::from_millis(250)),
+    )
+    .unwrap();
+
+    let started = std::time::Instant::now();
+    let readiness = io.poll_readiness().unwrap();
+
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "poll_readiness delayed ready input behind the output sample"
+    );
+    assert!(readiness.iter().any(|ready| {
+        ready.role == AttachedTerminalFdRole::Input && ready.readable && ready.is_ready()
+    }));
+    assert!(readiness.iter().any(|ready| {
+        ready.role == AttachedTerminalFdRole::Output && ready.writable && ready.is_ready()
+    }));
+}
+
 /// Verifies that attached-terminal frames suppress the host cursor, reset
 /// coordinate-affecting terminal modes, enable host mouse reporting, clear
 /// stale viewport cells, and restore a configured Mezzanine cursor at the

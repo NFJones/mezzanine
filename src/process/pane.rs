@@ -426,8 +426,10 @@ impl PaneProcess {
     pub(crate) fn send_signal_to_process_group(&mut self, signal: Signal) -> Result<()> {
         if let Some(process_group_leader) = self.process_group_leader {
             send_signal_to_pane_process_group(process_group_leader, signal)
-        } else {
+        } else if signal == Signal::KILL {
             self.child.kill()?;
+            Ok(())
+        } else {
             Ok(())
         }
     }
@@ -448,7 +450,9 @@ impl PaneProcess {
             if elapsed >= timeout {
                 return Ok(None);
             }
-            let _ = self.wait_for_output_activity_after(activity_sequence, timeout - elapsed);
+            if self.wait_for_output_activity_after(activity_sequence, timeout - elapsed) {
+                let _ = self.read_available_output(PTY_IO_CHUNK_BYTES)?;
+            }
         }
     }
 }

@@ -109,6 +109,7 @@ Common slash commands:
 | `/thinking` | Toggle provider thinking mode when supported. |
 | `/approval` | Inspect or change the session approval mode. |
 | `/permissions` | Inspect or change permission policy. |
+| `/shell-mode` | Inspect or change whether local actions use native runtime execution or pane-shell transport for the active pane. |
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
