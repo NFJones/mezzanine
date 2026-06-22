@@ -2218,6 +2218,55 @@ fn native_apply_patch_executor_rejects_symlink_escape_and_non_regular_targets() 
     );
 }
 
+/// Verifies native apply_patch honors the executor timeout before mutating files.
+///
+/// Native patch execution is synchronous Rust filesystem work, so the executor
+/// must propagate a timed-out shell-shaped output when the request budget is
+/// exhausted instead of applying the patch anyway.
+#[test]
+fn native_apply_patch_executor_honors_effective_timeout() {
+    let temp = test_temp_dir("native-apply-patch-timeout");
+    std::fs::write(temp.join("note.txt"), "old\n").unwrap();
+    let action = AgentAction {
+        id: "native-patch-timeout".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let plan = local_action_plan(&action).unwrap().unwrap();
+    let request = super::LocalExecutionRequest {
+        action_id: action.id.clone(),
+        action: action.clone(),
+        turn_id: "turn-timeout".to_string(),
+        agent_id: "agent-1".to_string(),
+        pane_id: "%1".to_string(),
+        plan,
+        effective_timeout_ms: 0,
+        transport: super::LocalExecutionTransport::Native,
+        marker: marker(),
+    };
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &temp);
+
+    let output = super::LocalActionExecutor::execute_local_action(&mut executor, &request).unwrap();
+
+    assert_eq!(output.transport, super::LocalExecutionTransport::Native);
+    assert!(!output.sent_to_pane);
+    assert!(output.shell_output.timed_out);
+    assert_eq!(output.shell_output.exit_code, None);
+    assert!(
+        output.shell_output.stderr.contains("apply_patch timed out"),
+        "{}",
+        output.shell_output.stderr
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("note.txt")).unwrap(),
+        "old\n"
+    );
+}
+
 /// Verifies semantic patch lowering supports Mezzanine patch
 /// blocks through a shell-backed applicator.
 ///

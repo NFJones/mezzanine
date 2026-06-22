@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod matcher;
 mod parser;
@@ -92,21 +92,39 @@ pub fn apply_patch_write_plan_from_read_output(
 /// and preimage verification as the shell-backed read/write pipeline while
 /// avoiding pane-shell dispatch for environments where native local execution
 /// has already been allowed by the runtime.
-pub fn apply_patch_natively(patch: &str, strip: Option<u64>, cwd: &Path) -> Result<()> {
+pub fn apply_patch_natively(
+    patch: &str,
+    strip: Option<u64>,
+    cwd: &Path,
+    deadline: Option<Instant>,
+) -> Result<()> {
     if strip.is_some() {
         return Err(MezError::invalid_args(
             "apply_patch strip is unsupported for Mezzanine patch blocks",
         ));
     }
+    ensure_native_apply_patch_deadline(deadline)?;
     let effective =
         try_convert_unified_diff_to_mez_patch(patch).unwrap_or_else(|| patch.to_string());
+    ensure_native_apply_patch_deadline(deadline)?;
     validate_apply_patch_payload(&effective)?;
     debug_assert!(is_mez_patch_payload(&effective));
     let patch = parse_mez_patch(&effective)?;
+    ensure_native_apply_patch_deadline(deadline)?;
     let cwd = canonical_apply_patch_cwd(cwd)?;
-    let snapshots = native_apply_patch_snapshots(&patch, &cwd)?;
+    ensure_native_apply_patch_deadline(deadline)?;
+    let snapshots = native_apply_patch_snapshots(&patch, &cwd, deadline)?;
+    ensure_native_apply_patch_deadline(deadline)?;
     let changes = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
-    apply_native_patch_changes(&cwd, &changes)
+    ensure_native_apply_patch_deadline(deadline)?;
+    apply_native_patch_changes(&cwd, &changes, deadline)
+}
+
+fn ensure_native_apply_patch_deadline(deadline: Option<Instant>) -> Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Err(MezError::invalid_state("apply_patch timed out"));
+    }
+    Ok(())
 }
 
 fn canonical_apply_patch_cwd(cwd: &Path) -> Result<PathBuf> {
@@ -127,9 +145,11 @@ fn canonical_apply_patch_cwd(cwd: &Path) -> Result<PathBuf> {
 fn native_apply_patch_snapshots(
     patch: &MezPatch,
     cwd: &Path,
+    deadline: Option<Instant>,
 ) -> Result<BTreeMap<String, ApplyPatchSnapshot>> {
     let mut snapshots = BTreeMap::new();
     for path in patch.touched_paths() {
+        ensure_native_apply_patch_deadline(deadline)?;
         let snapshot = native_apply_patch_snapshot(&path, cwd)?;
         snapshots.insert(path, snapshot);
     }
@@ -222,10 +242,15 @@ fn path_is_under_cwd(cwd: &Path, path: &Path) -> bool {
     path == cwd || path.starts_with(cwd)
 }
 
-fn apply_native_patch_changes(cwd: &Path, changes: &[ApplyPatchFileChange]) -> Result<()> {
-    let prepared = prepare_native_patch_changes(cwd, changes)?;
+fn apply_native_patch_changes(
+    cwd: &Path,
+    changes: &[ApplyPatchFileChange],
+    deadline: Option<Instant>,
+) -> Result<()> {
+    let prepared = prepare_native_patch_changes(cwd, changes, deadline)?;
     let mut applied = Vec::new();
     for change in &prepared {
+        ensure_native_apply_patch_deadline(deadline)?;
         let result = verify_native_patch_preimage(change.change, &change.resolved)
             .and_then(|()| apply_prepared_native_patch_change(change));
         if let Err(error) = result {
@@ -258,9 +283,11 @@ struct NativePatchPreparedChange<'a> {
 fn prepare_native_patch_changes<'a>(
     cwd: &Path,
     changes: &'a [ApplyPatchFileChange],
+    deadline: Option<Instant>,
 ) -> Result<Vec<NativePatchPreparedChange<'a>>> {
     let mut prepared = Vec::with_capacity(changes.len());
     for change in changes {
+        ensure_native_apply_patch_deadline(deadline)?;
         prepared.push(prepare_native_patch_change(cwd, change)?);
     }
     Ok(prepared)

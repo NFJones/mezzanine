@@ -445,10 +445,12 @@ impl LocalActionExecutor for NativeShellLocalExecutor<'_> {
                 )
                 .map(LocalExecutionOutput::native)
             }
-            LocalActionKind::ApplyPatch => {
-                execute_native_apply_patch(&request.action, &self.working_directory)
-                    .map(LocalExecutionOutput::native)
-            }
+            LocalActionKind::ApplyPatch => execute_native_apply_patch(
+                &request.action,
+                &self.working_directory,
+                request.effective_timeout_ms,
+            )
+            .map(LocalExecutionOutput::native),
         }
     }
 }
@@ -456,13 +458,15 @@ impl LocalActionExecutor for NativeShellLocalExecutor<'_> {
 fn execute_native_apply_patch(
     action: &AgentAction,
     working_directory: &std::path::Path,
+    timeout_ms: u64,
 ) -> Result<ShellExecutionOutput> {
     let AgentActionPayload::ApplyPatch { patch, strip } = &action.payload else {
         return Err(MezError::invalid_args(
             "native apply_patch execution requires an apply_patch action",
         ));
     };
-    match apply_patch_natively(patch, *strip, working_directory) {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    match apply_patch_natively(patch, *strip, working_directory, Some(deadline)) {
         Ok(()) => Ok(ShellExecutionOutput::new(
             Some(0),
             String::new(),
@@ -470,6 +474,15 @@ fn execute_native_apply_patch(
             false,
             false,
         )),
+        Err(error) if error.message().contains("apply_patch timed out") => {
+            Ok(ShellExecutionOutput::new(
+                None,
+                String::new(),
+                format!("{}\n", error.message()),
+                true,
+                false,
+            ))
+        }
         Err(error) => Ok(ShellExecutionOutput::new(
             Some(1),
             String::new(),
