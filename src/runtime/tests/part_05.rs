@@ -2503,6 +2503,57 @@ fn runtime_agent_context_reports_native_local_actions_bypass_readiness() {
     }));
 }
 
+/// Verifies native local execution readiness guidance covers every non-ready pane state.
+///
+/// Native mode bypasses pane-shell readiness for eligible local actions. The
+/// prompt hint must say this consistently for passive readiness states as well
+/// as explicit foreground interactive blocks, otherwise the model can avoid
+/// safe native local work even though dispatch will execute it host-side.
+#[test]
+fn runtime_agent_context_reports_native_local_actions_bypass_all_non_ready_readiness() {
+    for readiness_state in [
+        PaneReadinessState::Unknown,
+        PaneReadinessState::PromptCandidate,
+        PaneReadinessState::Probing,
+        PaneReadinessState::Busy,
+        PaneReadinessState::Degraded,
+        PaneReadinessState::FullScreen,
+        PaneReadinessState::PasswordPrompt,
+        PaneReadinessState::InteractiveBlocked,
+    ] {
+        let mut service = test_runtime_service();
+        service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
+        service.set_pane_readiness("%1", readiness_state);
+
+        let context = service
+            .agent_context_for_pane_prompt("%1", "check repo status", 0)
+            .unwrap();
+
+        let block = context
+            .blocks
+            .iter()
+            .find(|block| {
+                block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"
+            })
+            .unwrap_or_else(|| panic!("missing native readiness hint for {readiness_state:?}"));
+        assert!(
+            block.content.contains(
+                "native local shell_command and apply_patch actions execute outside the pane shell",
+            ),
+            "{readiness_state:?}: {}",
+            block.content
+        );
+        assert!(
+            !block.content.contains("shell_command and apply_patch cannot execute")
+                && !block
+                    .content
+                    .contains("may be delayed or rejected until Mezzanine confirms"),
+            "{readiness_state:?}: {}",
+            block.content
+        );
+    }
+}
+
 /// Verifies explicit `$create-skill` prompt syntax loads the built-in skill
 /// authoring workflow even when no user or project skills have been installed.
 /// This keeps the built-in workflow available as normal skill context instead

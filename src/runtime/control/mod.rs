@@ -1113,6 +1113,17 @@ fn runtime_agent_pane_readiness_context_block(
         return None;
     }
     let state_name = runtime_pane_readiness_state_name(readiness_state);
+    if local_action_executor == RuntimeLocalActionExecutor::Native {
+        return Some(ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            label: "pane readiness".to_string(),
+            content: format!(
+                "pane_id={pane_id} readiness_state={state_name}\n\
+                 Pane readiness is not ready, but native local shell_command and apply_patch actions execute outside the pane shell and are not blocked by pane readiness. \
+                 Do not send interactive or stateful pane-shell work until the pane readiness changes."
+            ),
+        });
+    }
     let content = match readiness_state {
         PaneReadinessState::Unknown
         | PaneReadinessState::PromptCandidate
@@ -1125,21 +1136,11 @@ fn runtime_agent_pane_readiness_context_block(
         ),
         PaneReadinessState::FullScreen
         | PaneReadinessState::PasswordPrompt
-        | PaneReadinessState::InteractiveBlocked => {
-            if local_action_executor == RuntimeLocalActionExecutor::Native {
-                format!(
-                    "pane_id={pane_id} readiness_state={state_name}\n\
-                     Foreground interactive content is still active in this pane, but native local shell_command and apply_patch actions execute outside the pane shell and are not blocked by pane readiness. \
-                     Do not send interactive or stateful pane-shell work until the user exits that UI or the pane readiness changes."
-                )
-            } else {
-                format!(
-                    "pane_id={pane_id} readiness_state={state_name}\n\
-                     Foreground interactive content is still active in this pane, so shell_command and apply_patch cannot execute until the user exits that UI or the pane readiness changes. \
-                     If local shell work is required, report the blockage or tell the user to return the pane to its shell prompt instead of emitting shell-backed actions immediately."
-                )
-            }
-        }
+        | PaneReadinessState::InteractiveBlocked => format!(
+            "pane_id={pane_id} readiness_state={state_name}\n\
+             Foreground interactive content is still active in this pane, so shell_command and apply_patch cannot execute until the user exits that UI or the pane readiness changes. \
+             If local shell work is required, report the blockage or tell the user to return the pane to its shell prompt instead of emitting shell-backed actions immediately."
+        ),
         PaneReadinessState::Ready => return None,
     };
     Some(ContextBlock {
