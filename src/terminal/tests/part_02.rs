@@ -3217,6 +3217,108 @@ fn render_attached_client_view_draws_agent_prompt_state_in_pane() {
     assert!(view.cursor_visible);
 }
 
+/// Verifies that native-mode agent shells mask active alternate-screen pane
+/// content as a pane-local overlay without mutating the pane terminal state.
+///
+/// Native local execution does not write through the pane PTY, so its live
+/// transcript and prompt must render above a full-screen alternate-buffer
+/// application while the agent shell is visible. Hiding the agent shell should
+/// reveal the same still-active alternate-screen application content.
+#[test]
+fn render_attached_client_view_masks_alternate_screen_for_native_agent_overlay() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(40, 5).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let mut prompt =
+        crate::readline::ReadlinePrompt::new(crate::readline::ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("inspect overlay");
+    let mut frame_context = TerminalFrameContext::default();
+    frame_context.panes.insert(
+        pane_id.clone(),
+        TerminalPaneFrameContext {
+            mode: Some("agent".to_string()),
+            agent_prompt: Some(prompt),
+            agent_display_lines: vec!["native action log".to_string()],
+            agent_shell_native_overlay: true,
+            ..TerminalPaneFrameContext::default()
+        },
+    );
+    let mut screens = BTreeMap::new();
+    let mut screen = TerminalScreen::new(Size::new(40, 5).unwrap(), 10).unwrap();
+    screen.feed(b"normal shell text");
+    screen.feed(b"\x1b[?1049h\x1b[5;1Hfullscreen tui row");
+    screens.insert(pane_id.clone(), screen);
+    let overlay_config = TerminalClientLoopConfig {
+        frame_context,
+        window_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+
+    let overlay_view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &screens,
+        &overlay_config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        overlay_view
+            .lines
+            .iter()
+            .any(|line| line.contains("native action log")),
+        "{:?}",
+        overlay_view.lines
+    );
+    assert!(
+        overlay_view
+            .lines
+            .iter()
+            .any(|line| line.contains("mez> inspect overlay")),
+        "{:?}",
+        overlay_view.lines
+    );
+    assert!(
+        overlay_view
+            .lines
+            .iter()
+            .all(|line| !line.contains("fullscreen tui row")),
+        "{:?}",
+        overlay_view.lines
+    );
+    assert!(screens
+        .get(&pane_id)
+        .is_some_and(TerminalScreen::alternate_screen_active));
+
+    let program_config = TerminalClientLoopConfig {
+        window_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+    let program_view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &screens,
+        &program_config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        program_view
+            .lines
+            .iter()
+            .any(|line| line.contains("fullscreen tui row")),
+        "{:?}",
+        program_view.lines
+    );
+    assert!(screens
+        .get(&pane_id)
+        .is_some_and(TerminalScreen::alternate_screen_active));
+}
+
 /// Verifies that active-pane footer reconciliation places live status in the
 /// prompt row without leaving a stale pane-rendered copy behind.
 ///

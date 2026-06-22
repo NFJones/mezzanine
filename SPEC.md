@@ -1202,6 +1202,11 @@ mode, so the containing terminal's normal scrollback remains available while
 pane-local alternate-screen parsing, rendering, and history rules remain owned
 by Mezzanine.
 
+Visible native-mode agent shells MUST render as pane-local overlays above normal
+and alternate-screen pane contents while leaving the pane process, PTY state,
+and terminal buffers unchanged. Hiding or exiting the agent shell MUST reveal
+the same pane application screen state that remained active under the overlay.
+
 Mezzanine SHOULD provide a command or first-run step that installs or prints
 the Mezzanine terminfo entry for the current user. If terminfo installation is
 not possible, Mezzanine MUST continue with the best documented fallback and

@@ -149,6 +149,8 @@ pub struct TerminalPaneFrameContext {
     pub agent_prompt: Option<ReadlinePrompt>,
     /// Pane-local agent progress and response lines shown above the prompt.
     pub agent_display_lines: Vec<String>,
+    /// Whether a visible agent shell should mask pane terminal content.
+    pub agent_shell_native_overlay: bool,
 }
 
 /// Placement of a one-row terminal frame within its owning region.
