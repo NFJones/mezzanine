@@ -6092,6 +6092,53 @@ fn terminal_screen_restores_normal_screen_after_alternate_screen_exit() {
     assert!(!screen.alternate_screen_active());
 }
 
+/// Verifies terminal size is saved and restored across alternate screen
+/// enter/exit when the terminal is resized while alternate mode is active.
+///
+/// Without this, a pane expanded while vim/less is running would see a
+/// stale size after the program exits.
+#[test]
+fn terminal_screen_saves_and_restores_size_across_alternate_screen_with_intervening_resize() {
+    let mut screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap();
+
+    // Enter alternate screen and verify
+    screen.feed(b"[?1049h");
+    assert!(screen.alternate_screen_active());
+    assert_eq!(screen.size(), Size::new(80, 24).unwrap());
+
+    // Resize while alternate screen is active
+    screen.resize(Size::new(120, 40).unwrap());
+    assert_eq!(screen.size(), Size::new(120, 40).unwrap());
+
+    // Exit alternate screen — size should restore to original
+    screen.feed(b"[?1049l");
+    assert!(!screen.alternate_screen_active());
+    assert_eq!(screen.size(), Size::new(80, 24).unwrap());
+}
+
+/// Verifies DEC autowrap mode is saved and restored across alternate screen
+/// enter/exit so that an alternate-screen program's DEC private mode 7
+/// changes do not leak into the normal screen.
+#[test]
+fn terminal_screen_saves_and_restores_autowrap_across_alternate_screen() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+
+    // Disable autowrap before entering alternate screen
+    screen.feed(b"[?7l");
+    assert!(!screen.mode_state().autowrap_enabled);
+
+    // Enter alternate screen, enable autowrap, exit
+    screen.feed(b"[?1049h");
+    assert!(screen.alternate_screen_active());
+    screen.feed(b"[?7h");
+    assert!(screen.mode_state().autowrap_enabled);
+    screen.feed(b"[?1049l");
+
+    // Autowrap should be restored to disabled
+    assert!(!screen.alternate_screen_active());
+    assert!(!screen.mode_state().autowrap_enabled);
+}
+
 /// Verifies stray alternate-screen resets leave normal content intact.
 ///
 /// Terminal applications can emit extra DEC alternate-screen reset sequences

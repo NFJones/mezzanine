@@ -209,6 +209,10 @@ pub(super) struct SavedNormalScreenState {
     pub(super) graphic_rendition: GraphicRendition,
     /// Stored detached-scrollback state for shell-clear restoration behavior.
     pub(super) normal_viewport_detached_from_history: bool,
+    /// Stored terminal size for the normal screen.
+    pub(super) size: Size,
+    /// Stored DEC autowrap mode for the normal screen.
+    pub(super) autowrap_enabled: bool,
 }
 
 impl AlternateScreenState {
@@ -2521,6 +2525,8 @@ impl TerminalScreen {
             saved_cursor: self.saved_cursor,
             graphic_rendition: self.graphic_rendition,
             normal_viewport_detached_from_history: self.normal_viewport_detached_from_history,
+            size: self.size,
+            autowrap_enabled: self.autowrap_enabled,
         }
     }
 
@@ -2536,6 +2542,8 @@ impl TerminalScreen {
         self.saved_cursor = state.saved_cursor;
         self.graphic_rendition = state.graphic_rendition;
         self.normal_viewport_detached_from_history = state.normal_viewport_detached_from_history;
+        self.size = state.size;
+        self.autowrap_enabled = state.autowrap_enabled;
     }
 
     /// Runs the apply dec private modes operation for this subsystem.
