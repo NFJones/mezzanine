@@ -13,24 +13,6 @@ use super::*;
 /// repeated shell dispatch or successful mutation.
 const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
 
-/// Returns the latest non-empty native shell output preview lines.
-fn native_shell_output_progress_lines(output: &str, max_lines: usize) -> Vec<String> {
-    if max_lines == 0 {
-        return Vec::new();
-    }
-    let mut lines = output
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .lines()
-        .rev()
-        .filter(|line| !line.trim().is_empty())
-        .take(max_lines)
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    lines.reverse();
-    lines
-}
-
 /// Current action-pressure phase for one active turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeActionPressurePhase {
@@ -623,7 +605,7 @@ impl RuntimeSessionService {
                             &progress_action_id,
                         ) {
                             let lines =
-                                native_shell_output_progress_lines(output, output_preview_lines);
+                                crate::runtime::processes::output_filter::latest_agent_shell_transaction_output_lines(output, output_preview_lines);
                             if !lines.is_empty() {
                                 self.append_agent_shell_output_status_lines_to_terminal_buffer(
                                     &progress_pane_id,

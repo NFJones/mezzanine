@@ -2111,6 +2111,21 @@ impl AsyncRuntimeSessionActor {
                         },
                     })
             }
+            AgentProviderEvent::OutputProgress {
+                agent_id: _,
+                turn_id: _,
+                pane_id,
+                action_id: _,
+                lines,
+            } => {
+                let _ = self
+                    .service
+                    .append_agent_shell_output_status_lines_to_terminal_buffer(&pane_id, &lines);
+                Ok(RuntimeEventApplication {
+                    applied: true,
+                    side_effects: Vec::new(),
+                })
+            }
             AgentProviderEvent::Completed {
                 agent_id,
                 turn_id,

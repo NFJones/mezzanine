@@ -4573,7 +4573,7 @@ impl RuntimeSessionService {
     /// The preview intentionally has no trailing newline after its final row.
     /// Later output replaces it in place, while the next durable agent
     /// transcript append clears it before writing normal log content.
-    pub(in crate::runtime) fn append_agent_shell_output_status_lines_to_terminal_buffer(
+    pub(crate) fn append_agent_shell_output_status_lines_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         lines: &[String],

@@ -388,6 +388,7 @@ impl RuntimeSessionService {
         let local_action_executor = self.agent_local_action_executor_for_pane(&turn.pane_id);
         let native_shell_path = self.session.shell.path().to_path_buf();
         let native_working_directory = self.pane_current_working_directory(&turn.pane_id);
+        let terminal_shell_output_preview_lines = self.terminal_shell_output_preview_lines;
         Ok(Some(RuntimeAgentProviderDispatch {
             turn,
             context,
@@ -407,6 +408,7 @@ impl RuntimeSessionService {
             local_action_executor,
             native_shell_path,
             native_working_directory,
+            terminal_shell_output_preview_lines,
             loop_turn: self.agent_loop_turns.get(turn_id).cloned(),
         }))
     }

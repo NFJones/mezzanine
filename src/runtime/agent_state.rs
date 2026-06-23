@@ -292,6 +292,9 @@ pub struct RuntimeAgentProviderDispatch {
     pub native_shell_path: PathBuf,
     /// Working directory available for native local action execution workers.
     pub native_working_directory: Option<PathBuf>,
+    /// Number of live shell-output preview lines visible during native local
+    /// action execution.
+    pub terminal_shell_output_preview_lines: usize,
     /// Optional `/loop` controller metadata for this provider turn.
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
 }

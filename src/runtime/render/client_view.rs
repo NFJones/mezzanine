@@ -6,7 +6,6 @@
 //! from input mutation helpers makes the runtime render facade easier to scan.
 
 use super::*;
-use crate::runtime::RuntimeLocalActionExecutor;
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///
@@ -1279,11 +1278,6 @@ impl RuntimeSessionService {
                             }),
                         agent_display_lines: self
                             .runtime_agent_prompt_display_lines_for_pane(&pane_id),
-                        agent_shell_native_overlay: agent_session.is_some_and(|session| {
-                            matches!(session.visibility, AgentShellVisibility::Visible)
-                                && self.agent_local_action_executor_for_pane(pane_id.as_str())
-                                    == RuntimeLocalActionExecutor::Native
-                        }),
                     },
                 );
             }

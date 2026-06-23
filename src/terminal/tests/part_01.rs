@@ -6092,6 +6092,23 @@ fn terminal_screen_restores_normal_screen_after_alternate_screen_exit() {
     assert!(!screen.alternate_screen_active());
 }
 
+/// Verifies stray alternate-screen resets leave normal content intact.
+///
+/// Terminal applications can emit extra DEC alternate-screen reset sequences
+/// while the pane is already using the normal screen. Those resets must not
+/// erase normal-screen content or enter alternate mode.
+#[test]
+fn terminal_screen_preserves_normal_screen_on_stray_alternate_screen_reset() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"keep");
+    screen.feed(b"[?1049l!");
+
+    assert!(screen.history().is_empty());
+    assert_eq!(screen.visible_lines()[0], "keep!");
+    assert!(!screen.alternate_screen_active());
+}
+
 /// Verifies DEC private mode 1048 saves and restores only the cursor.
 ///
 /// Full-screen wrappers can use `CSI ?1048h` and `CSI ?1048l` separately from

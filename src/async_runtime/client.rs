@@ -1086,10 +1086,9 @@ async fn dispatch_agent_provider_side_effects(
                 else {
                     continue;
                 };
-                let task =
-                    tokio::spawn(
-                        async move { execute_runtime_agent_provider_dispatch(dispatch).await },
-                    );
+                let task = tokio::spawn(async move {
+                    execute_runtime_agent_provider_dispatch(dispatch, None).await
+                });
                 worker_tasks.push((agent_id, turn_id, task));
             }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
@@ -1424,6 +1423,7 @@ fn remember_worker_event(
 /// on duplicated control-flow logic.
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
+    output_progress_sender: Option<tokio::sync::mpsc::UnboundedSender<AgentProviderEvent>>,
 ) -> Result<super::AgentTurnExecution> {
     let RuntimeAgentProviderDispatch {
         turn,
@@ -1444,8 +1444,10 @@ async fn execute_runtime_agent_provider_dispatch(
         local_action_executor,
         native_shell_path,
         native_working_directory,
+        terminal_shell_output_preview_lines: _,
         loop_turn: _,
     } = dispatch;
+    let output_progress_sender_ref = output_progress_sender.as_ref();
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
     let mut selected_auto_sizing_profile: Option<ModelProfile> = None;
     let loop_allowed_actions = None;
@@ -1582,6 +1584,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 local_action_executor,
                 &native_shell_path,
                 native_working_directory.as_deref(),
+                output_progress_sender_ref,
             )?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1615,6 +1618,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 local_action_executor,
                 &native_shell_path,
                 native_working_directory.as_deref(),
+                output_progress_sender_ref,
             )?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1648,6 +1652,7 @@ async fn execute_runtime_agent_provider_dispatch(
                 local_action_executor,
                 &native_shell_path,
                 native_working_directory.as_deref(),
+                output_progress_sender_ref,
             )?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
@@ -1692,6 +1697,7 @@ fn execute_provider_worker_native_local_actions(
     local_action_executor: RuntimeLocalActionExecutor,
     native_shell_path: &std::path::Path,
     native_working_directory: Option<&std::path::Path>,
+    output_progress_sender: Option<&tokio::sync::mpsc::UnboundedSender<AgentProviderEvent>>,
 ) -> Result<AgentTurnExecution> {
     if local_action_executor != RuntimeLocalActionExecutor::Native
         || execution.terminal_state != AgentTurnState::Running
@@ -1744,6 +1750,36 @@ fn execute_provider_worker_native_local_actions(
         let marker = async_native_local_action_marker(turn, &action.id)?;
         let mut native_executor =
             NativeShellLocalExecutor::new(native_shell_path, working_directory);
+        if let Some(sender) = output_progress_sender {
+            let agent_id = turn.agent_id.clone();
+            let turn_id = turn.turn_id.clone();
+            let pane_id = turn.pane_id.clone();
+            let action_id = action.id.clone();
+            let sender = sender.clone();
+            native_executor = native_executor.with_output_progress(move |output| {
+                let lines: Vec<String> = output
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .lines()
+                    .rev()
+                    .filter(|line| !line.trim().is_empty())
+                    .take(8)
+                    .map(ToString::to_string)
+                    .collect();
+                let _ = sender.send(AgentProviderEvent::OutputProgress {
+                    agent_id: AgentId::opaque(agent_id.clone()).unwrap(),
+                    turn_id: turn_id.clone(),
+                    pane_id: pane_id.clone(),
+                    action_id: action_id.clone(),
+                    lines: {
+                        let mut l = lines;
+                        l.reverse();
+                        l
+                    },
+                });
+                Ok(())
+            });
+        }
         execution.action_results[index] =
             execute_local_action(turn, &action, marker, &mut native_executor).or_else(|error| {
                 ActionResult::failed(
@@ -2123,6 +2159,7 @@ mod tests {
             RuntimeLocalActionExecutor::Native,
             std::path::Path::new("/bin/sh"),
             Some(&work_dir),
+            None,
         )
         .unwrap();
 

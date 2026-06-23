@@ -2595,8 +2595,6 @@ impl TerminalScreen {
                     if mode == 1049 {
                         self.restore_cursor();
                     }
-                } else {
-                    self.clear_screen();
                 }
             }
             1048 => {

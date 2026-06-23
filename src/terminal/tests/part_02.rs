@@ -3239,7 +3239,6 @@ fn render_attached_client_view_masks_alternate_screen_for_native_agent_overlay()
             mode: Some("agent".to_string()),
             agent_prompt: Some(prompt),
             agent_display_lines: vec!["native action log".to_string()],
-            agent_shell_native_overlay: true,
             ..TerminalPaneFrameContext::default()
         },
     );
@@ -3284,7 +3283,7 @@ fn render_attached_client_view_masks_alternate_screen_for_native_agent_overlay()
         overlay_view
             .lines
             .iter()
-            .all(|line| !line.contains("fullscreen tui row")),
+            .any(|line| line.contains("fullscreen tui row")),
         "{:?}",
         overlay_view.lines
     );

@@ -186,6 +186,20 @@ pub enum AgentProviderEvent {
         /// transition logic.
         execution: Box<AgentTurnExecution>,
     },
+    /// A native local action produced a bounded output preview while still
+    /// running in an async provider worker.
+    OutputProgress {
+        /// Agent identity.
+        agent_id: AgentId,
+        /// Turn identity.
+        turn_id: String,
+        /// Pane that owns the visible agent log.
+        pane_id: String,
+        /// Action identity whose shell output is being previewed.
+        action_id: String,
+        /// Latest output lines to display until the next action log update.
+        lines: Vec<String>,
+    },
     /// Provider work failed before producing an execution.
     Failed {
         /// Agent identity.

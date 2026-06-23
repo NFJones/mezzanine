@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 mod layout;
-mod output_filter;
+pub(crate) mod output_filter;
 mod pane_pipes;
 mod startup;
 mod transactions;

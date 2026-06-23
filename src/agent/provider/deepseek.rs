@@ -658,7 +658,7 @@ fn deepseek_replace_apply_patch_description(schema: &mut serde_json::Value) {
         }
         if let Some(patch_desc) = action.pointer_mut("/properties/patch/description") {
             *patch_desc = serde_json::json!(
-                "Mezzanine patch text. Must start with \"*** Begin Patch\" and end with \"*** End Patch\". File directives: \"*** Update File: <path>\", \"*** Add File: <path>\", \"*** Delete File: <path>\". Use relative paths only (no absolute, no ..). Hunks begin with \"@@\" headers, optionally with anchors like \"@@ fn name\"; whole-file replacement uses \"@@ replace whole file\" with only + lines. Hunk lines use exact prefixes: space for context, - for removed, + for added. Copy old/context lines verbatim from current file content; never infer code. Example valid patch: *** Begin Patch\\n*** Update File: src/lib.rs\\n@@ fn main\\n let x = 1;\\n+let y = 2;\\n*** End Patch\\n. WRONG: --- a/file or +++ b/file headers, diff --git format, or raw unified diffs."
+                "Mezzanine patch text. Must start with \"*** Begin Patch\" and end with \"*** End Patch\". File directives: \"*** Update File: <path>\", \"*** Add File: <path>\", \"*** Delete File: <path>\". Use relative paths only (no absolute, no ..). Hunks begin with \"@@\" headers, optionally with anchors like \"@@ fn name\"; whole-file replacement uses \"@@ replace whole file\" with only + lines. Hunk lines use exact prefixes: space for context, - for removed, + for added. Copy old/context lines verbatim from current file content; never infer code. Example valid patch: *** Begin Patch\\n*** Update File: src/lib.rs\\n@@ fn main\\n let x = 1;\\n+let y = 2;\\n*** End Patch\\n. WRONG: *** Replace File. Right: *** Update File with anchored hunks. WRONG: --- a/file or +++ b/file headers, diff --git format, or raw unified diffs."
             );
         }
         break;
@@ -670,10 +670,16 @@ fn deepseek_replace_apply_patch_description(schema: &mut serde_json::Value) {
 fn deepseek_prune_unsupported_schema_keywords(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(object) => {
-            object.remove("minLength");
-            object.remove("maxLength");
-            object.remove("minItems");
-            object.remove("maxItems");
+            let is_patch_field = object
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|desc| desc.contains("*** Begin Patch"));
+            if !is_patch_field {
+                object.remove("minLength");
+                object.remove("maxLength");
+                object.remove("minItems");
+                object.remove("maxItems");
+            }
             for child in object.values_mut() {
                 deepseek_prune_unsupported_schema_keywords(child);
             }

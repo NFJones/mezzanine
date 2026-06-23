@@ -748,21 +748,14 @@ pub(super) fn render_styled_pane_lines(
     } else {
         0
     };
-    let native_overlay = pane_agent_shell_native_overlay(frame_context, pane.id.as_str());
     if pane_frame.position == TerminalFramePosition::Top
         && let Some(frame) = frame.clone()
     {
         lines.push(frame);
     }
     let content_start = lines.len();
-    if native_overlay {
-        for _ in 0..content_rows {
-            lines.push(TerminalStyledLine::plain(" ".repeat(width)));
-        }
-    } else {
-        for line in content.iter().skip(start).take(content_rows) {
-            lines.push(fit_styled_width(line, width));
-        }
+    for line in content.iter().skip(start).take(content_rows) {
+        lines.push(fit_styled_width(line, width));
     }
     let content_end = lines.len();
     overlay_agent_display_lines(
@@ -840,21 +833,14 @@ pub(super) fn render_pane_lines(
     } else {
         0
     };
-    let native_overlay = pane_agent_shell_native_overlay(frame_context, pane.id.as_str());
     if pane_frame.position == TerminalFramePosition::Top
         && let Some(frame) = frame.clone()
     {
         lines.push(frame);
     }
     let content_start = lines.len();
-    if native_overlay {
-        for _ in 0..content_rows {
-            lines.push(" ".repeat(width));
-        }
-    } else {
-        for line in content.iter().skip(start).take(content_rows) {
-            lines.push(fit_width(line, width));
-        }
+    for line in content.iter().skip(start).take(content_rows) {
+        lines.push(fit_width(line, width));
     }
     let content_end = lines.len();
     overlay_agent_display_lines(
@@ -1218,17 +1204,6 @@ pub(super) fn pane_agent_shell_visible(
         .get(pane_id)
         .and_then(|context| context.mode.as_deref())
         == Some("agent")
-}
-
-/// Reports whether the visible agent shell should render as a full pane body overlay.
-pub(super) fn pane_agent_shell_native_overlay(
-    frame_context: &TerminalFrameContext,
-    pane_id: &str,
-) -> bool {
-    frame_context
-        .panes
-        .get(pane_id)
-        .is_some_and(|context| context.agent_shell_native_overlay)
 }
 
 /// Runs the pane agent prompt space reserved operation for this subsystem.

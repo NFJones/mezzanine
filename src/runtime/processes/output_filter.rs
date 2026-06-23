@@ -656,7 +656,7 @@ pub(super) fn trailing_mez_osc_prefix_fragment(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Returns the latest non-empty model-visible shell output lines.
-pub(super) fn latest_agent_shell_transaction_output_lines(
+pub(crate) fn latest_agent_shell_transaction_output_lines(
     output: &str,
     max_lines: usize,
 ) -> Vec<String> {
