@@ -668,9 +668,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if tokio::runtime::Handle::try_current().is_ok() {
-            return Err(MezError::invalid_state(
-                "synchronous /list-mcp discovery cannot run inside an active async runtime",
-            ));
+            return Ok(());
         }
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
