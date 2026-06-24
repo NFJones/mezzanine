@@ -167,22 +167,34 @@ fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptS
     }) else {
         return empty_mcp_prompt_summary();
     };
-    let mut available_server_count = 0usize;
     let mut available_tool_count = 0usize;
     let mut unavailable_servers = Vec::new();
+    let mut available_servers = Vec::new();
+    let mut available_tools = Vec::new();
     for line in block.content.lines() {
         if let Some(counts) = mcp_availability_counts_from_line(line) {
-            available_server_count = counts.0;
             available_tool_count = counts.1;
+            continue;
+        }
+        if let Some(server) = mcp_available_server_from_line(line) {
+            available_servers.push(server);
+            continue;
+        }
+        if let Some(tool) = mcp_available_tool_from_line(line) {
+            available_tools.push(tool);
             continue;
         }
         if let Some(server) = mcp_unavailable_server_from_line(line) {
             unavailable_servers.push(server);
         }
     }
+    if available_tools.len() < available_tool_count {
+        let missing = available_tool_count - available_tools.len();
+        available_tools.extend(placeholder_mcp_tools(missing));
+    }
     McpPromptSummary {
-        available_servers: placeholder_mcp_servers(available_server_count),
-        available_tools: placeholder_mcp_tools(available_tool_count),
+        available_servers,
+        available_tools,
         unavailable_servers,
     }
 }
@@ -223,6 +235,37 @@ fn mcp_unavailable_server_from_line(line: &str) -> Option<McpPromptUnavailableSe
     })
 }
 
+/// Parses one available-server manifest line emitted by `append_mcp_context`.
+fn mcp_available_server_from_line(line: &str) -> Option<McpPromptServer> {
+    if !line.starts_with("server=") || !line.contains("status=available") {
+        return None;
+    }
+    Some(McpPromptServer {
+        server_id: mcp_raw_field(line, "server=")?.to_string(),
+        display_name: mcp_quoted_field(line, "name=").unwrap_or_default(),
+        purpose: mcp_quoted_field(line, "purpose=").unwrap_or_default(),
+        usage_instructions: mcp_quoted_field(line, "usage_instructions=").unwrap_or_default(),
+        tool_count: mcp_usize_field(line, "tools=").unwrap_or(0),
+        approval_required_tool_count: 0,
+    })
+}
+
+/// Parses one available-tool manifest line emitted by `append_mcp_context`.
+fn mcp_available_tool_from_line(line: &str) -> Option<McpPromptTool> {
+    if !line.starts_with("available_tool=") || !line.contains("callable=true") {
+        return None;
+    }
+    let combined = mcp_raw_field(line, "available_tool=")?;
+    let (server_id, tool_name) = combined.split_once('/')?;
+    Some(McpPromptTool {
+        server_id: server_id.to_string(),
+        tool_name: tool_name.to_string(),
+        description: mcp_quoted_field(line, "description=").unwrap_or_default(),
+        approval_required: false,
+        input_schema_json: "{}".to_string(),
+    })
+}
+
 /// Parses one whitespace-delimited raw MCP context field.
 fn mcp_raw_field<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
     line.split_whitespace()
@@ -251,20 +294,6 @@ fn mcp_quoted_field(line: &str, prefix: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Builds placeholder available-server entries for prompt count rendering.
-fn placeholder_mcp_servers(count: usize) -> Vec<McpPromptServer> {
-    (0..count)
-        .map(|_| McpPromptServer {
-            server_id: String::new(),
-            display_name: String::new(),
-            purpose: String::new(),
-            usage_instructions: String::new(),
-            tool_count: 0,
-            approval_required_tool_count: 0,
-        })
-        .collect()
 }
 
 /// Builds placeholder available-tool entries for prompt count rendering.

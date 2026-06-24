@@ -662,6 +662,34 @@ impl RuntimeSessionService {
         self.start_agent_prompt_turn_inner(pane_id, prompt, None)
     }
 
+    /// Returns whether a pane still has a running or queued turn owned by its loop controller.
+    fn pane_has_active_agent_loop_turn(&self, pane_id: &str) -> bool {
+        let running_loop_turn_active = self
+            .agent_shell_store
+            .get(pane_id)
+            .and_then(|session| session.running_turn_id.as_deref())
+            .and_then(|turn_id| self.agent_loop_turns.get(turn_id))
+            .is_some_and(|loop_turn| loop_turn.pane_id == pane_id);
+        let queued_loop_turn_active = self.agent_scheduler.queued_turns().any(|work| {
+            work.pane_id.as_deref() == Some(pane_id)
+                && self
+                    .agent_loop_turns
+                    .get(&work.turn_id)
+                    .is_some_and(|loop_turn| loop_turn.pane_id == pane_id)
+        });
+        running_loop_turn_active || queued_loop_turn_active
+    }
+
+    /// Clears stale loop controller metadata for a pane that no longer has active loop work.
+    fn clear_stale_agent_loop_state_for_pane(&mut self, pane_id: &str) -> Result<()> {
+        if let Some(state) = self.agent_loops_by_pane.remove(pane_id) {
+            self.restore_agent_loop_parent_conversation(pane_id, &state)?;
+        }
+        self.agent_loop_turns
+            .retain(|_, loop_turn| loop_turn.pane_id != pane_id);
+        Ok(())
+    }
+
     /// Starts a `/loop` command by creating the first loop-owned work turn.
     pub(super) fn execute_agent_shell_loop_command(
         &mut self,
@@ -676,9 +704,12 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
         }
         if self.agent_loops_by_pane.contains_key(pane_id) {
-            return Err(MezError::conflict(
-                "an agent loop is already active for this pane",
-            ));
+            if self.pane_has_active_agent_loop_turn(pane_id) {
+                return Err(MezError::conflict(
+                    "an agent loop is already active for this pane",
+                ));
+            }
+            self.clear_stale_agent_loop_state_for_pane(pane_id)?;
         }
         self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
         let parent_session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
