@@ -3813,12 +3813,11 @@ fn semantic_apply_patch_structural_anchor_scope_rejects_internal_ambiguity() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
-/// Verifies line-range hints do not override anchored ambiguity.
+/// Verifies anchored line-range hints remain conservative.
 ///
-/// Header anchors are stronger placement constraints than unified old-line
-/// ranges. If the anchored structural scope still contains multiple valid
-/// candidates, the patch should fail even when a range hint points at one of
-/// them.
+/// Header anchors remain stronger placement constraints than unified old-line
+/// ranges. If the anchored structural scope still has only a near range-hint
+/// winner, the patch should fail instead of guessing.
 #[test]
 fn semantic_apply_patch_anchor_scope_rejects_range_hint_override() {
     let temp = test_temp_dir("semantic-codex-patch-anchor-range-override");
@@ -3839,7 +3838,10 @@ fn semantic_apply_patch_anchor_scope_rejects_range_hint_override() {
         error.contains("matching_scope=structural_anchor_scope"),
         "{error}"
     );
-    assert!(!error.contains("range_hint_disambiguation="), "{error}");
+    assert!(
+        error.contains("range_hint_disambiguation=rejected reason=near_tie hint_line=2"),
+        "{error}"
+    );
     std::fs::remove_dir_all(&temp).unwrap();
 }
 

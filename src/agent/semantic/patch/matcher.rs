@@ -1119,15 +1119,7 @@ fn resolve_hunk_candidates(
             .into_iter()
             .next()
             .map(|candidate| candidate.into_hunk_match(mode))),
-        _ => match range_hint_candidate(
-            &candidates,
-            capped,
-            if scope == ApplyPatchSearchScope::FullFile {
-                range_hint
-            } else {
-                None
-            },
-        ) {
+        _ => match range_hint_candidate(&candidates, capped, range_hint) {
             ApplyPatchRangeHintSelection::Selected(index) => Ok(Some(
                 candidates
                     .into_iter()
