@@ -2738,6 +2738,117 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
     let _ = fs::remove_dir_all(target.parent().unwrap());
 }
 
+/// Verifies truncated `apply_patch` read snapshots surface a transport
+/// diagnostic instead of falling through to snapshot parsing.
+///
+/// The read phase carries base64-framed file snapshots that Rust must parse
+/// before it can generate the write phase. If the retained PTY observation is
+/// truncated or transport-incomplete, parsing the partial payload produces a
+/// misleading "missing snapshot marker" error. The runtime should dispatch a
+/// model-visible write-phase failure that names the capture boundary directly.
+#[test]
+fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(160, 60).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-apply-patch-truncated-read","input":"create a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "maap semantic response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "patch-1".to_string(),
+                    rationale: "create a file".to_string(),
+                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                        patch: "*** Begin Patch\n*** Add File: target/truncated-read-note.txt\n+alpha\n*** End Patch"
+                            .to_string(),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.pending_agent_provider_tasks.remove("turn-1");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    let marker = service
+        .running_shell_transactions
+        .keys()
+        .next()
+        .cloned()
+        .expect("apply_patch read transaction should be running");
+    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    transaction.observed_output_preview = "partial apply_patch read transport".to_string();
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+    transaction.observed_output_truncated = true;
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
+
+    let write_transaction = service
+        .running_shell_transactions
+        .values()
+        .find(|transaction| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "patch-1"
+            )
+        })
+        .expect("truncated read should dispatch an apply_patch error write phase");
+    assert!(
+        write_transaction.command.contains(
+            "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase"
+        ),
+        "{}",
+        write_transaction.command
+    );
+    assert!(
+        !write_transaction.command.contains("read phase did not emit a snapshot"),
+        "{}",
+        write_transaction.command
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies mixed `say` plus semantic file-mutation batches present the file
 /// diff before the assistant summary.
 ///

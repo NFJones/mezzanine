@@ -1030,9 +1030,19 @@ impl RuntimeSessionService {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
-        let decoded_output = decode_shell_output_transport(&transaction.observed_output_preview);
-        let write_plan = apply_patch_write_plan_from_read_output(patch, &decoded_output)
-            .unwrap_or_else(|error| apply_patch_error_plan(error.message()));
+        let decoded_output =
+            decode_shell_output_transport_with_diagnostics(&transaction.observed_output_preview);
+        let write_plan = if transaction.observed_output_truncated
+            || decoded_output.diagnostics.transport_incomplete()
+            || decoded_output.diagnostics.output_truncated()
+        {
+            apply_patch_error_plan(
+                "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
+            )
+        } else {
+            apply_patch_write_plan_from_read_output(patch, &decoded_output.output)
+                .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
+        };
 
         self.append_agent_trace_turn_event(
             &turn.pane_id,
