@@ -133,6 +133,9 @@ pub(super) fn mcp_tool_manifest_for_description(tools: &[McpPromptTool]) -> Stri
         return "No MCP tools are currently callable in this schema.".to_string();
     }
     let sorted_tools = sorted_mcp_prompt_tools(tools);
+    if sorted_tools.is_empty() {
+        return "No MCP tools are currently callable in this schema.".to_string();
+    }
     let total = sorted_tools.len();
     let mut entries = sorted_tools
         .into_iter()
