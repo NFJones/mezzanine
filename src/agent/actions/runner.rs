@@ -452,7 +452,36 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 durable_response_request = response_request.clone();
             }
             let Some(batch) = &response.action_batch else {
-                break response;
+                let error = MezError::invalid_args(
+                    "provider response did not include a parsed MAAP action_batch",
+                );
+                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
+                    repair_attempts = repair_attempts.saturating_add(1);
+                    request = maap_repair_request(
+                        &response_request,
+                        error.message(),
+                        &response.raw_text,
+                        repair_attempts,
+                    );
+                    continue;
+                }
+                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
+                let mut response = response;
+                response.usage = cumulative_usage;
+                response.quota_usage = latest_quota_usage;
+                return Ok(failed_maap_validation_execution_with_summary(
+                    self.provider,
+                    &turn,
+                    durable_response_request,
+                    response,
+                    latest_response_usage,
+                    &error,
+                    FailureSummaryScope {
+                        stage: "maap_missing_action_batch",
+                        available_mcp_servers: &self.available_mcp_servers,
+                        available_mcp_tools: self.available_mcp_tools,
+                    },
+                ));
             };
             if let Some(next_request) =
                 mixed_capability_continuation_request(&response_request, batch)
@@ -855,7 +884,37 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 durable_response_request = response_request.clone();
             }
             let Some(batch) = &response.action_batch else {
-                break response;
+                let error = MezError::invalid_args(
+                    "provider response did not include a parsed MAAP action_batch",
+                );
+                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
+                    repair_attempts = repair_attempts.saturating_add(1);
+                    request = maap_repair_request(
+                        &response_request,
+                        error.message(),
+                        &response.raw_text,
+                        repair_attempts,
+                    );
+                    continue;
+                }
+                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
+                let mut response = response;
+                response.usage = cumulative_usage;
+                response.quota_usage = latest_quota_usage;
+                return Ok(failed_maap_validation_execution_with_summary_async(
+                    self.provider,
+                    &turn,
+                    durable_response_request,
+                    response,
+                    latest_response_usage,
+                    &error,
+                    FailureSummaryScope {
+                        stage: "maap_missing_action_batch",
+                        available_mcp_servers: &self.available_mcp_servers,
+                        available_mcp_tools: self.available_mcp_tools,
+                    },
+                )
+                .await);
             };
             if let Some(next_request) =
                 mixed_capability_continuation_request(&response_request, batch)

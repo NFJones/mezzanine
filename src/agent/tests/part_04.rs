@@ -3746,6 +3746,96 @@ fn turn_runner_retries_malformed_provider_maap_output() {
     );
 }
 
+/// Verifies a provider response with no parsed MAAP batch enters the same
+/// ephemeral repair flow as malformed provider-native MAAP output instead of
+/// becoming an immediate failed turn.
+#[test]
+fn turn_runner_retries_missing_provider_action_batch() {
+    let turn = turn();
+    let missing_batch = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "plain text without maap".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+    let corrected = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "corrected missing batch response".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "test action batch rationale".to_string(),
+            thought: None,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            actions: vec![say_action("say-1", "Corrected missing batch.")],
+            final_turn: true,
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let provider = SequencedProvider::new(vec![Ok(missing_batch), Ok(corrected)]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "reply".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].messages.iter().any(|message| {
+        message.content.contains("provider response did not include a parsed MAAP action_batch")
+            && message.content.contains("plain text without maap")
+    }));
+    assert!(
+        execution
+            .request
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("ephemeral maap repair")),
+        "{:?}",
+        execution.request.messages
+    );
+}
+
 /// Verifies the async turn runner applies the same ephemeral MAAP repair path
 /// used by the synchronous runner so production provider workers can recover
 /// from model schema mistakes without adding repair instructions to context.
@@ -3862,6 +3952,96 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
 
     assert_eq!(execution.terminal_state, AgentTurnState::Completed);
     assert_eq!(provider.requests().len(), 3);
+    assert!(
+        execution
+            .request
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("ephemeral maap repair")),
+        "{:?}",
+        execution.request.messages
+    );
+}
+
+/// Verifies the async turn runner repairs provider responses that omit the
+/// parsed MAAP batch before it falls back to a failed terminal execution.
+#[tokio::test]
+async fn async_turn_runner_retries_missing_provider_action_batch() {
+    let turn = turn();
+    let missing_batch = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "async plain text without maap".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+    let corrected = ModelResponse {
+        provider: "batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "corrected async missing batch response".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: Some(MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "test action batch rationale".to_string(),
+            thought: None,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            actions: vec![say_action("say-1", "Corrected async missing batch.")],
+            final_turn: true,
+        }),
+        provider_transcript_events: Vec::new(),
+    };
+    let provider = SequencedProvider::new(vec![Ok(missing_batch), Ok(corrected)]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn_async(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "reply".to_string(),
+            }])
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].messages.iter().any(|message| {
+        message.content.contains("provider response did not include a parsed MAAP action_batch")
+            && message.content.contains("async plain text without maap")
+    }));
     assert!(
         execution
             .request
