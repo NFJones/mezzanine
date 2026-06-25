@@ -4548,12 +4548,15 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     let repository_index = prompt.find("3. Repository Instructions").unwrap();
     let personality_index = prompt.find("4. Personality").unwrap();
     let judgment_index = prompt.find("5. Judgment").unwrap();
+    let format_index = prompt.find("13. Format").unwrap();
+    let mcp_index = prompt.find("14. MCP").unwrap();
     assert!(identity_index < repository_index);
     assert!(identity_index < autonomy_index);
     assert!(autonomy_index < repository_index);
     assert!(repository_index < judgment_index);
     assert!(repository_index < personality_index);
     assert!(personality_index < judgment_index);
+    assert!(format_index < mcp_index);
     assert!(!prompt.contains("Mezzanine pane agent agent-1"));
     assert!(prompt.contains("MCP integrations exist through Mezzanine's external-integration path"));
     assert!(prompt.contains("Current availability: servers=1 tools=1."));
