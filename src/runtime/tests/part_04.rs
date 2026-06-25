@@ -33,13 +33,31 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         pane_text.contains("│"),
         "table should be rendered as terminal presentation: {pane_text}"
     );
-    let table_rows = pane_text
-        .lines()
-        .filter(|line| line.contains('│'))
+    let pane_lines = pane_text.lines().collect::<Vec<_>>();
+    let table_rows = pane_lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains('│'))
         .collect::<Vec<_>>();
     assert!(table_rows.len() > 3, "table cells should wrap as rows: {pane_text}");
+    let separator_index = pane_lines
+        .iter()
+        .position(|line| line.contains('├'))
+        .expect("table separator should be rendered");
+    let last_table_row_index = table_rows
+        .last()
+        .map(|(index, _)| *index)
+        .unwrap_or(separator_index);
     assert!(
-        table_rows.iter().all(|line| line.matches('│').count() >= 3),
+        pane_lines[separator_index.saturating_add(1)..=last_table_row_index]
+            .iter()
+            .all(|line| line.contains('│')),
+        "wrapped final table row should remain contiguous without blank gaps: {pane_text}"
+    );
+    assert!(
+        table_rows
+            .iter()
+            .all(|(_, line)| line.matches('│').count() >= 3),
         "wrapped table rows should preserve column borders: {table_rows:?}"
     );
     let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
