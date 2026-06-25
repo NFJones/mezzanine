@@ -28,7 +28,7 @@ use super::{
     TranscriptEntry, TranscriptRole, action_result_context_content, append_mcp_context,
     assemble_model_request_with_retained_tail_percent,
     compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
-    current_unix_seconds, decode_shell_output_transport, discover_project_root,
+    current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
     exact_command_sha256, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
     json_escape, local_action_plan, local_action_summary, network_action_plan,

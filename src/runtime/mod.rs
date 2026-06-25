@@ -42,7 +42,7 @@ use crate::agent::{
     agent_subshell_enter_command, append_mcp_context, append_memory_context,
     append_permission_policy_context, append_scheduler_context,
     assemble_model_request_with_retained_tail_percent,
-    compact_model_context_for_budget_with_retained_tail_percent, decode_shell_output_transport,
+    compact_model_context_for_budget_with_retained_tail_percent,
     decode_shell_output_transport_with_diagnostics, execute_agent_shell_command_with_context,
     execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
     execute_network_action_with_transport_async, local_action_plan, local_action_summary,

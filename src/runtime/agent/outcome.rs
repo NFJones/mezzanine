@@ -662,8 +662,11 @@ pub(super) fn runtime_action_result_is_feedback_candidate(result: &ActionResult)
     if !result.is_error {
         return false;
     }
-    if result.action_type == "shell_command" {
-        return result.status == ActionStatus::Failed && error.code == "pane_not_ready";
+    if result.action_type == "shell_command"
+        && result.status == ActionStatus::Failed
+        && error.code == "pane_not_ready"
+    {
+        return true;
     }
     if runtime_action_result_is_runtime_infrastructure_failure(result) {
         return false;

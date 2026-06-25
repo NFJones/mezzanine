@@ -573,8 +573,29 @@ fn parse_openai_chat_completions_http_response(
     let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
         None
     } else {
-        parse_openai_chat_completions_maap_action_batch(message, &raw_text, request)?
+        match parse_openai_chat_completions_maap_action_batch(message, &raw_text, request) {
+            Ok(action_batch) => action_batch,
+            Err(error) => {
+                if let Some(error) = openai_chat_completions_finish_reason_error(
+                    envelope.finish_reason.as_deref(),
+                    &raw_text,
+                    Some(&error),
+                    request,
+                ) {
+                    return Err(error);
+                }
+                return Err(error);
+            }
+        }
     };
+    if let Some(error) = openai_chat_completions_finish_reason_error(
+        envelope.finish_reason.as_deref(),
+        &raw_text,
+        None,
+        request,
+    ) {
+        return Err(error);
+    }
     Ok(ModelResponse {
         provider: provider_id.to_string(),
         model: envelope.model,
@@ -585,6 +606,51 @@ fn parse_openai_chat_completions_http_response(
         action_batch,
         provider_transcript_events: Vec::new(),
     })
+}
+
+/// Returns whether this OpenAI-compatible request must produce a provider action batch.
+fn openai_chat_completions_request_requires_maap(request: &ModelRequest) -> bool {
+    request.interaction_kind != ModelInteractionKind::AutoSizing
+        && !request.allowed_actions.actions.is_empty()
+}
+
+/// Converts terminal OpenAI-compatible finish reasons into runtime-recoverable errors.
+fn openai_chat_completions_finish_reason_error(
+    finish_reason: Option<&str>,
+    raw_text: &str,
+    parse_error: Option<&MezError>,
+    request: &ModelRequest,
+) -> Option<MezError> {
+    if !openai_chat_completions_request_requires_maap(request) {
+        return None;
+    }
+    if finish_reason != Some("length") {
+        return None;
+    }
+    let detail = parse_error
+        .map(|error| format!(": {}", error.message()))
+        .unwrap_or_default();
+    let provider_raw_text = parse_error
+        .and_then(MezError::provider_raw_text)
+        .unwrap_or(raw_text)
+        .to_string();
+    Some(
+        MezError::invalid_state(format!(
+            "OpenAI-compatible Chat Completions response hit max_output_tokens before completing MAAP output{detail}"
+        ))
+        .with_provider_failure_json(
+            serde_json::json!({
+                "provider": "openai_chat_completions",
+                "finish_reason": "length",
+                "incomplete_details": {
+                    "reason": "max_output_tokens"
+                },
+                "raw_text_bytes": provider_raw_text.len()
+            })
+            .to_string(),
+        )
+        .with_provider_raw_text(provider_raw_text),
+    )
 }
 
 /// Parses a MAAP batch from native tool calls or fallback text content.

@@ -761,6 +761,96 @@ fn openai_compatible_chat_completions_duplicate_maap_tool_calls_are_malformed_ou
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies OpenAI-compatible length finish reasons use output-limit recovery.
+///
+/// A Chat Completions backend can stop in the middle of MAAP JSON when the
+/// response exhausts its output-token budget. This must surface as an
+/// output-limit error so the runtime can use the dedicated max-output-token
+/// recovery path instead of treating the partial MAAP payload as ordinary
+/// malformed provider output.
+#[test]
+fn openai_compatible_chat_completions_length_finish_reason_is_output_limit_error() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-length-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "role": "assistant",
+                            "content": "{"
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    };
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap();
+
+    let error = provider.send_request(&request).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(
+        error.message().contains("max_output_tokens"),
+        "{}",
+        error.message()
+    );
+    assert!(provider_error_is_output_limit_exceeded(
+        error.message(),
+        error.provider_failure_json()
+    ));
+    let failure_json: serde_json::Value =
+        serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+    assert_eq!(failure_json["finish_reason"], "length");
+    assert_eq!(
+        failure_json["incomplete_details"]["reason"],
+        "max_output_tokens"
+    );
+    assert_eq!(error.provider_raw_text(), Some("{"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies generic OpenAI-compatible Chat Completions provider options tune
 /// MAAP request shape without importing DeepSeek shims.
 ///
