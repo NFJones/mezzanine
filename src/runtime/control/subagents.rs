@@ -429,6 +429,12 @@ impl RuntimeSessionService {
             self.agent_auto_sizing_overrides
                 .insert(started.pane_id.clone(), auto_sizing);
         }
+        if let Some(local_action_executor) =
+            self.inherited_local_action_executor_for_child_agent(&spawn.parent_agent_id)
+        {
+            self.agent_local_action_executor_overrides
+                .insert(started.pane_id.clone(), local_action_executor);
+        }
         if let Some(profile_name) = profile.model_profile.as_deref() {
             self.provider_registry.resolve_profile(profile_name)?;
             self.model_profile_overrides
@@ -685,6 +691,15 @@ impl RuntimeSessionService {
             self.runtime_auto_sizing_config_for_pane(parent_pane_id.as_str())
                 .clone(),
         )
+    }
+
+    /// Returns the effective local action executor a child agent should inherit.
+    pub(in crate::runtime) fn inherited_local_action_executor_for_child_agent(
+        &self,
+        parent_agent_id: &str,
+    ) -> Option<RuntimeLocalActionExecutor> {
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
+        Some(self.agent_local_action_executor_for_pane(parent_pane_id.as_str()))
     }
 
     /// Removes subagent bucket ids whose windows no longer exist.

@@ -3687,6 +3687,34 @@ fn runtime_subagent_routing_inherits_parent_pane_setting() {
     );
 }
 
+/// Verifies subagents inherit the live parent pane shell-mode selection.
+///
+/// Shell mode is pane-local state layered over the global local-action
+/// executor default. Child agents should keep the parent pane effective
+/// executor so delegated shell commands continue with the same native vs
+/// pane-shell behavior without requiring another toggle.
+#[test]
+fn runtime_subagent_shell_mode_inherits_parent_pane_setting() {
+    let mut service = test_runtime_service();
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::PaneShell;
+    service.agent_local_action_executor_overrides.insert(
+        "%1".to_string(),
+        RuntimeLocalActionExecutor::Native,
+    );
+
+    assert_eq!(
+        service.inherited_local_action_executor_for_child_agent("agent-%1"),
+        Some(RuntimeLocalActionExecutor::Native)
+    );
+
+    service.agent_local_action_executor_overrides.remove("%1");
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
+    assert_eq!(
+        service.inherited_local_action_executor_for_child_agent("agent-%1"),
+        Some(RuntimeLocalActionExecutor::Native)
+    );
+}
+
 /// Verifies subagents inherit the live parent pane auto-sizing configuration.
 ///
 /// Auto-sizing uses pane-local model profile names for router and bucket
@@ -3710,6 +3738,67 @@ fn runtime_subagent_auto_sizing_inherits_parent_pane_setting() {
         service.inherited_auto_sizing_for_child_agent("agent-%1"),
         Some(parent_auto_sizing)
     );
+}
+
+/// Verifies a spawned subagent inherits the parent pane shell-mode override.
+///
+/// Shell-mode inheritance must land on the child pane before the subagent turn
+/// begins so model-authored local actions use the same executor path as the
+/// parent that delegated the work.
+#[test]
+fn runtime_spawned_subagent_inherits_parent_shell_mode_override() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.agent_local_action_executor = RuntimeLocalActionExecutor::PaneShell;
+    service.agent_local_action_executor_overrides.insert(
+        "%1".to_string(),
+        RuntimeLocalActionExecutor::Native,
+    );
+
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "explorer".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::ExploreOnly,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: false,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: false,
+        task_prompt: "inspect the renderer issue".to_string(),
+        explicit_user_approval: false,
+    };
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            spawn,
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_pane_id = serde_json::from_str::<serde_json::Value>(&spawned)
+        .unwrap()
+        .get("pane")
+        .and_then(|pane| pane.get("pane_id"))
+        .and_then(serde_json::Value::as_str)
+        .expect("spawned pane id")
+        .to_string();
+
+    assert_eq!(
+        service.agent_local_action_executor_for_pane(&child_pane_id),
+        RuntimeLocalActionExecutor::Native
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
 }
 
 /// Verifies exiting a parent agent shell closes active child subagent panes.
