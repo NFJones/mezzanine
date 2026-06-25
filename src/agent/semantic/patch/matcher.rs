@@ -1111,11 +1111,16 @@ fn find_unanchored_hunk_position_layered(
         )? {
             return Ok(hunk_match);
         }
+        let tolerant_ranges = if cursor > 0 {
+            vec![(cursor.min(lines.len()), lines.len()), (0, lines.len())]
+        } else {
+            vec![(0, lines.len())]
+        };
         let tolerant_matches = find_line_sequence_matches_omitting_blank_context(
             lines,
             old,
             blank_gap_policies,
-            &[(cursor.min(lines.len()), lines.len())],
+            &tolerant_ranges,
             *mode,
         );
         if !tolerant_matches.lines.is_empty() {

@@ -3149,6 +3149,37 @@ fn semantic_apply_patch_omitted_blank_separator_context_rejects_nonblank_gap() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
+/// Verifies omitted-blank matching retries before cursor progress.
+///
+/// A later exact hunk can advance the unanchored search cursor before a
+/// following hunk needs blank-context tolerance against earlier file content.
+/// The tolerant matcher must mirror exact matching by retrying the whole file
+/// instead of only searching after the cursor.
+#[test]
+fn semantic_apply_patch_omitted_blank_context_retries_before_cursor() {
+    let temp = test_temp_dir("semantic-codex-patch-blank-context-before-cursor");
+    std::fs::write(
+        temp.join("note.rs"),
+        "fn earlier() {\n    keep();\n\n    old();\n}\n\nfn later() {\n    tail();\n}\n",
+    )
+    .unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.rs\n@@\n fn later() {\n-    tail();\n+    done();\n }\n@@\n fn earlier() {\n     keep();\n-    old();\n+    new();\n }\n*** End Patch";
+
+    let output = run_apply_patch_action(&temp, patch);
+
+    assert!(
+        output.status.success(),
+        "command failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("note.rs")).unwrap(),
+        "fn earlier() {\n    keep();\n    new();\n}\n\nfn later() {\n    done();\n}\n"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
 /// Verifies unanchored pure-addition hunks append by default.
 ///
 /// Codex applies update hunks with no old lines at the end of the current
