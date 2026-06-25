@@ -1707,7 +1707,10 @@ async fn execute_provider_worker_native_local_actions_async(
     {
         return Ok(execution);
     }
-    tokio::task::spawn_blocking(move || {
+    let cancellation_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancellation_guard =
+        NativeLocalActionCancellationGuard::new(cancellation_requested.clone());
+    let result = tokio::task::spawn_blocking(move || {
         execute_provider_worker_native_local_actions(
             &turn,
             execution,
@@ -1715,12 +1718,45 @@ async fn execute_provider_worker_native_local_actions_async(
             &native_shell_path,
             native_working_directory.as_deref(),
             output_progress_sender.as_ref(),
+            Some(cancellation_requested),
         )
     })
     .await
     .map_err(|error| {
         MezError::invalid_state(format!("native local action worker join failed: {error}"))
-    })?
+    })?;
+    cancellation_guard.disarm();
+    result
+}
+
+/// Signals blocking native-local execution to stop when the async worker drops.
+struct NativeLocalActionCancellationGuard {
+    cancellation_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    armed: bool,
+}
+
+impl NativeLocalActionCancellationGuard {
+    /// Builds a guard around one shared cancellation flag.
+    fn new(cancellation_requested: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            cancellation_requested,
+            armed: true,
+        }
+    }
+
+    /// Disarms cancellation after the blocking worker finishes normally.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NativeLocalActionCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancellation_requested
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 /// Executes native local actions before returning provider work to the actor.
@@ -1736,6 +1772,7 @@ fn execute_provider_worker_native_local_actions(
     native_shell_path: &std::path::Path,
     native_working_directory: Option<&std::path::Path>,
     output_progress_sender: Option<&tokio::sync::mpsc::UnboundedSender<AgentProviderEvent>>,
+    cancellation_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<AgentTurnExecution> {
     if local_action_executor != RuntimeLocalActionExecutor::Native
         || execution.terminal_state != AgentTurnState::Running
@@ -1788,6 +1825,9 @@ fn execute_provider_worker_native_local_actions(
         let marker = async_native_local_action_marker(turn, &action.id)?;
         let mut native_executor =
             NativeShellLocalExecutor::new(native_shell_path, working_directory);
+        if let Some(cancellation_requested) = cancellation_requested.clone() {
+            native_executor = native_executor.with_cancellation(cancellation_requested);
+        }
         if let Some(sender) = output_progress_sender {
             let agent_id = turn.agent_id.clone();
             let turn_id = turn.turn_id.clone();
@@ -2198,6 +2238,7 @@ mod tests {
             std::path::Path::new("/bin/sh"),
             Some(&work_dir),
             None,
+            None,
         )
         .unwrap();
 
@@ -2319,6 +2360,145 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&marker_path).unwrap(),
             "native-worker-done"
+        );
+        let _ = std::fs::remove_dir_all(work_dir);
+    }
+
+    /// Verifies cancelling a provider worker interrupts the blocking native
+    /// shell command it delegated through `spawn_blocking`.
+    ///
+    /// `/stop` settles the turn on the runtime side by aborting the async
+    /// provider task. This regression proves the dropped future also signals
+    /// the blocking native executor so the spawned shell process exits before a
+    /// long-running command can finish naturally.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_worker_native_local_actions_abort_interrupts_running_command() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let work_dir = std::env::temp_dir().join(format!(
+            "mez-native-local-action-abort-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let pid_path = work_dir.join("shell.pid");
+        let marker_path = work_dir.join("marker");
+        let turn = AgentTurnRecord {
+            turn_id: "turn-native-worker-abort".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+        };
+        let action = AgentAction {
+            id: "native-worker-shell-abort".to_string(),
+            rationale: "prove provider abort interrupts native worker".to_string(),
+            payload: AgentActionPayload::ShellCommand {
+                summary: "Run a cancellable native command".to_string(),
+                command: "printf $$ > shell.pid; sleep 5; printf native-worker-done > marker"
+                    .to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: Some(5_000),
+            },
+        };
+        let execution = AgentTurnExecution {
+            request: ModelRequest {
+                provider: "test".to_string(),
+                model: "test".to_string(),
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: false,
+                interaction_kind: ModelInteractionKind::ActionExecution,
+                allowed_actions: crate::agent::AllowedActionSet::say_only(),
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "test".to_string(),
+                model: "test".to_string(),
+                raw_text: "native worker shell".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: Some(MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "test native worker shell cancellation".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: BTreeMap::new(),
+            action_results: vec![ActionResult::running(&turn, &action, Vec::new(), None)],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+
+        let worker = tokio::spawn(execute_provider_worker_native_local_actions_async(
+            turn,
+            execution,
+            RuntimeLocalActionExecutor::Native,
+            std::path::PathBuf::from("/bin/sh"),
+            Some(work_dir.clone()),
+            None,
+        ));
+
+        for _ in 0..50 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            pid_path.exists(),
+            "native command never recorded its shell pid"
+        );
+
+        worker.abort();
+        let abort_error = worker.await.unwrap_err();
+        assert!(abort_error.is_cancelled());
+
+        let pid: u32 = std::fs::read_to_string(&pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
+        for _ in 0..60 {
+            if !proc_path.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            !proc_path.exists(),
+            "native command was still running after provider cancellation"
+        );
+        assert!(
+            !marker_path.exists(),
+            "cancelled native command should not reach its completion marker"
         );
         let _ = std::fs::remove_dir_all(work_dir);
     }

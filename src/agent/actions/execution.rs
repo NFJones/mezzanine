@@ -408,6 +408,7 @@ pub struct NativeShellLocalExecutor<'a> {
     shell_path: std::path::PathBuf,
     working_directory: std::path::PathBuf,
     output_progress: Option<Box<NativeShellOutputProgressCallback<'a>>>,
+    cancellation_requested: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl<'a> NativeShellLocalExecutor<'a> {
@@ -420,6 +421,7 @@ impl<'a> NativeShellLocalExecutor<'a> {
             shell_path: shell_path.into(),
             working_directory: working_directory.as_ref().to_path_buf(),
             output_progress: None,
+            cancellation_requested: None,
         }
     }
 
@@ -430,6 +432,15 @@ impl<'a> NativeShellLocalExecutor<'a> {
         output_progress: impl FnMut(&str) -> Result<()> + 'a,
     ) -> Self {
         self.output_progress = Some(Box::new(output_progress));
+        self
+    }
+
+    /// Installs a shared cancellation flag observed by native shell commands.
+    pub fn with_cancellation(
+        mut self,
+        cancellation_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.cancellation_requested = Some(cancellation_requested);
         self
     }
 }
@@ -456,6 +467,7 @@ impl LocalActionExecutor for NativeShellLocalExecutor<'_> {
                     &self.working_directory,
                     request,
                     self.output_progress.as_deref_mut(),
+                    self.cancellation_requested.as_deref(),
                 )
                 .map(LocalExecutionOutput::native)
             }
@@ -512,6 +524,7 @@ fn execute_native_shell_command(
     working_directory: &std::path::Path,
     request: &LocalExecutionRequest,
     output_progress: Option<&mut NativeShellOutputProgressCallback<'_>>,
+    cancellation_requested: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<ShellExecutionOutput> {
     let mut command = Command::new(shell_path);
     command
@@ -560,6 +573,7 @@ fn execute_native_shell_command(
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut timed_out = false;
+    let mut interrupted = false;
     let mut progress = NativeShellOutputProgress::new(output_progress);
     let result = (|| -> Result<ShellExecutionOutput> {
         loop {
@@ -568,6 +582,13 @@ fn execute_native_shell_command(
                 && (stdout_done && stderr_done
                     || native_child_process_group_exited(process_group_leader)?)
             {
+                break;
+            }
+            if cancellation_requested
+                .map(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or(false)
+            {
+                interrupted = true;
                 break;
             }
             let now = Instant::now();
@@ -595,7 +616,7 @@ fn execute_native_shell_command(
                 break;
             }
         }
-        if timed_out {
+        if interrupted || timed_out {
             terminate_child_process_group(&mut child)?;
             if exit_status.is_none() {
                 exit_status = Some(child.wait()?);
@@ -642,7 +663,7 @@ fn execute_native_shell_command(
             progress.into_text(),
             String::new(),
             timed_out,
-            false,
+            interrupted,
         );
         output.signal = exit_status.and_then(|status| status.signal());
         output.transport_diagnostics.output_bytes_dropped =
