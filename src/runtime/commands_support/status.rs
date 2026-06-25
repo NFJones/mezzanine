@@ -355,6 +355,27 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .as_deref()
                 .unwrap_or("none")
         ),
+        format!(
+            "last_provider_input_tokens = {}",
+            runtime_metrics
+                .last_provider_input_tokens
+                .map(|tokens| tokens.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "last_provider_cached_input_tokens = {}",
+            runtime_metrics
+                .last_provider_cached_input_tokens
+                .map(|tokens| tokens.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "last_provider_cached_input_hit_ratio = {}",
+            runtime_metrics
+                .last_provider_cached_input_hit_ratio_basis_points
+                .map(|basis_points| format!("{}.{:02}%", basis_points / 100, basis_points % 100))
+                .unwrap_or_else(|| "none".to_string())
+        ),
         "".to_string(),
         "[runtime histograms]".to_string(),
     ];

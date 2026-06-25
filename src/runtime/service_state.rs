@@ -206,6 +206,12 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) last_provider_request_shape_sha256: Option<String>,
     /// Most recent tool-choice digest observed by runtime metrics.
     pub(super) last_tool_choice_sha256: Option<String>,
+    /// Most recent provider response input tokens observed by runtime metrics.
+    pub(super) last_provider_input_tokens: Option<u64>,
+    /// Most recent provider response cached input tokens, when reported.
+    pub(super) last_provider_cached_input_tokens: Option<u64>,
+    /// Most recent provider response cache-hit ratio in basis points.
+    pub(super) last_provider_cached_input_hit_ratio_basis_points: Option<u32>,
 }
 
 impl RuntimeMetricsSnapshot {
@@ -359,6 +365,10 @@ impl RuntimeMetricsSnapshot {
             .record(latest_usage.input_tokens);
         self.provider_output_tokens_per_response
             .record(latest_usage.output_tokens);
+        self.last_provider_input_tokens = Some(latest_usage.input_tokens);
+        self.last_provider_cached_input_tokens = latest_usage.cached_input_tokens;
+        self.last_provider_cached_input_hit_ratio_basis_points =
+            latest_usage.cached_input_hit_ratio_basis_points();
         if let Some(cached) = latest_usage.cached_input_tokens {
             self.provider_cached_input_reports =
                 self.provider_cached_input_reports.saturating_add(1);

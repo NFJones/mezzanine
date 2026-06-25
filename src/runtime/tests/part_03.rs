@@ -4461,6 +4461,18 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         "{response}"
     );
     assert!(
+        response.contains("last_provider_input_tokens = 200"),
+        "{response}"
+    );
+    assert!(
+        response.contains("last_provider_cached_input_tokens = 100"),
+        "{response}"
+    );
+    assert!(
+        response.contains("last_provider_cached_input_hit_ratio = 50.00%"),
+        "{response}"
+    );
+    assert!(
         response.contains("[runtime provider tokens by model]"),
         "{response}"
     );
