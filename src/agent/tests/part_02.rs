@@ -1569,6 +1569,7 @@ fn shell_action_executor_receives_transaction_wrapper_and_succeeds() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
+            signal: None,
             stdout: framed_shell_output("ok\n"),
             stderr: String::new(),
             timed_out: false,
@@ -1630,6 +1631,7 @@ fn shell_action_executor_decodes_encoded_transport_on_nonzero_exit() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(7),
+            signal: None,
             stdout: "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nZmFpbHVyZSBkZXRhaWxzCg==\n__MEZ_SHELL_OUTPUT_BASE64_END__\n".to_string(),
             stderr: String::new(),
             timed_out: false,
@@ -1680,6 +1682,72 @@ fn native_shell_command_executor_captures_output_without_pane_dispatch() {
     assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
 }
 
+/// Verifies native shell_command model-facing output follows observed pipe
+/// event order instead of appending all stderr after stdout.
+///
+/// Pane shell output is a single PTY byte stream, so native execution should
+/// preserve the order in which pipe reader events reached the executor when it
+/// builds the model-facing combined output. This keeps simple interleaved
+/// stdout/stderr commands from being reordered into separate stream blocks.
+#[test]
+fn native_shell_command_executor_merges_stdio_in_observed_order() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-merged-stdio-order");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = r#"printf 'stdout-1\n'; sleep 0.05; printf 'stderr-1\n' >&2; sleep 0.05; printf 'stdout-2\n'"#.to_string();
+        *timeout_ms = Some(1_000);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert_eq!(result.content_text(), "stdout-1
+stderr-1
+stdout-2
+");
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
+}
+
+/// Verifies native shell_command execution reports native signal termination
+/// metadata when the host wait status contains a signal.
+///
+/// Native mode bypasses the pane wrapper, so signal metadata must come from
+/// the native child status rather than the POSIX high-exit-code convention
+/// used for pane-shell results.
+#[test]
+fn native_shell_command_executor_reports_signal_metadata() {
+    let turn = turn();
+    let cwd = std::env::current_dir().unwrap();
+    let mut action = shell_action("native-signal-metadata");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = "kill -TERM $$".to_string();
+        *timeout_ms = Some(1_000);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &cwd);
+
+    let result = execute_local_action(&turn, &action, marker(), &mut executor).unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    let structured = result.structured_content_json.as_deref().unwrap();
+    assert!(
+        structured.contains(r#""signal":15"#) || structured.contains(r#""signal": 15"#),
+        "native signal should be reported from wait status: {structured}"
+    );
+}
+
 /// Verifies native shell_command execution reports cumulative output progress
 /// before command completion.
 ///
@@ -1728,6 +1796,54 @@ fn native_shell_command_executor_reports_cumulative_output_progress() {
     );
 }
 
+/// Verifies native shell_command cleanup runs when progress reporting fails.
+///
+/// Progress callbacks run after the native child process and pipe reader
+/// threads have started. If the callback returns an error, the executor must
+/// still terminate the child process group instead of leaking the command tree.
+#[test]
+fn native_shell_command_executor_cleans_up_after_progress_callback_error() {
+    let turn = turn();
+    let mut action = shell_action("native-progress-error-cleanup");
+    let temp = test_temp_dir("native-progress-error-cleanup");
+    let pid_file = temp.join("pid");
+    if let AgentActionPayload::ShellCommand {
+        command,
+        timeout_ms,
+        ..
+    } = &mut action.payload
+    {
+        *command = format!(
+            "printf '%s\n' $$ > {}; printf 'started\n'; sleep 5",
+            pid_file.display()
+        );
+        *timeout_ms = Some(5_000);
+    }
+    let mut executor = NativeShellLocalExecutor::new("/bin/sh", &temp)
+        .with_output_progress(|_| Err(crate::MezError::invalid_state("progress failed")));
+
+    let error = execute_local_action(&turn, &action, marker(), &mut executor).unwrap_err();
+
+    assert!(
+        error.to_string().contains("progress failed"),
+        "unexpected error: {error}"
+    );
+    let raw_pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(raw_pid).unwrap();
+    for _ in 0..20 {
+        match rustix::process::test_kill_process_group(pid) {
+            Err(rustix::io::Errno::SRCH) => return,
+            Ok(()) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(error) => panic!("failed to probe native process group {raw_pid}: {error}"),
+        }
+    }
+    panic!("native process group {raw_pid} survived progress callback failure");
+}
+
 /// Verifies native environment probing reports whether pane bootstrap identity
 /// matches the native runtime identity.
 ///
@@ -1765,6 +1881,24 @@ fn native_environment_equivalence_probe_reports_matching_identity() {
             .iter()
             .any(|diagnostic| diagnostic.contains("working_directory mismatch")),
         "{different:?}"
+    );
+
+    let mut path_mismatch = pane.clone();
+    path_mismatch.path = Some(format!(
+        "{}:pane-only",
+        std::env::var("PATH").unwrap_or_default()
+    ));
+    let path_different = EnvironmentEquivalenceProbe::compare(Some(&path_mismatch), &cwd);
+    assert_eq!(
+        path_different.equivalence,
+        EnvironmentEquivalence::Different
+    );
+    assert!(
+        path_different
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("PATH mismatch")),
+        "{path_different:?}"
     );
 }
 
@@ -4161,6 +4295,7 @@ fn semantic_apply_patch_result_elides_generated_command_content() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
+            signal: None,
             stdout: framed_shell_output("diff -- apply patch\n"),
             stderr: String::new(),
             timed_out: false,
@@ -4663,6 +4798,7 @@ fn shell_action_executor_maps_timeout_interrupt_and_nonzero_exit() {
     let mut timeout = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: None,
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: true,
@@ -4684,6 +4820,7 @@ fn shell_action_executor_maps_timeout_interrupt_and_nonzero_exit() {
     let mut interrupted = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: None,
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
@@ -4705,6 +4842,7 @@ fn shell_action_executor_maps_timeout_interrupt_and_nonzero_exit() {
     let mut nonzero = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(2),
+            signal: None,
             stdout: String::new(),
             stderr: "no\n".to_string(),
             timed_out: false,

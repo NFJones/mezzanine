@@ -1578,14 +1578,15 @@ async fn execute_runtime_agent_provider_dispatch(
                     loop_allowed_actions.clone(),
                 )
                 .await?;
-            let execution = execute_provider_worker_native_local_actions(
-                &turn,
+            let execution = execute_provider_worker_native_local_actions_async(
+                turn.clone(),
                 execution,
                 local_action_executor,
-                &native_shell_path,
-                native_working_directory.as_deref(),
-                output_progress_sender_ref,
-            )?;
+                native_shell_path.clone(),
+                native_working_directory.clone(),
+                output_progress_sender_ref.cloned(),
+            )
+            .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(execution)
@@ -1612,14 +1613,15 @@ async fn execute_runtime_agent_provider_dispatch(
                     loop_allowed_actions.clone(),
                 )
                 .await?;
-            let execution = execute_provider_worker_native_local_actions(
-                &turn,
+            let execution = execute_provider_worker_native_local_actions_async(
+                turn.clone(),
                 execution,
                 local_action_executor,
-                &native_shell_path,
-                native_working_directory.as_deref(),
-                output_progress_sender_ref,
-            )?;
+                native_shell_path.clone(),
+                native_working_directory.clone(),
+                output_progress_sender_ref.cloned(),
+            )
+            .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(execution)
@@ -1646,14 +1648,15 @@ async fn execute_runtime_agent_provider_dispatch(
                     loop_allowed_actions.clone(),
                 )
                 .await?;
-            let execution = execute_provider_worker_native_local_actions(
-                &turn,
+            let execution = execute_provider_worker_native_local_actions_async(
+                turn.clone(),
                 execution,
                 local_action_executor,
-                &native_shell_path,
-                native_working_directory.as_deref(),
-                output_progress_sender_ref,
-            )?;
+                native_shell_path.clone(),
+                native_working_directory.clone(),
+                output_progress_sender_ref.cloned(),
+            )
+            .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
             Ok(execution)
@@ -1683,6 +1686,41 @@ fn runtime_provider_dispatch_after_auto_sizing(
         return (target_provider, selected_profile);
     }
     (provider, current_profile)
+}
+
+/// Settles native local actions on Tokio blocking threads before actor completion.
+///
+/// Native shell execution uses blocking process waits, pipe reads, and cleanup
+/// joins. Keeping that work behind `spawn_blocking` prevents current-thread
+/// async provider runtimes from stalling timers, cancellation checks, and other
+/// control-side futures while preserving the synchronous result-shaping helper.
+async fn execute_provider_worker_native_local_actions_async(
+    turn: AgentTurnRecord,
+    execution: AgentTurnExecution,
+    local_action_executor: RuntimeLocalActionExecutor,
+    native_shell_path: std::path::PathBuf,
+    native_working_directory: Option<std::path::PathBuf>,
+    output_progress_sender: Option<tokio::sync::mpsc::UnboundedSender<AgentProviderEvent>>,
+) -> Result<AgentTurnExecution> {
+    if local_action_executor != RuntimeLocalActionExecutor::Native
+        || execution.terminal_state != AgentTurnState::Running
+    {
+        return Ok(execution);
+    }
+    tokio::task::spawn_blocking(move || {
+        execute_provider_worker_native_local_actions(
+            &turn,
+            execution,
+            local_action_executor,
+            &native_shell_path,
+            native_working_directory.as_deref(),
+            output_progress_sender.as_ref(),
+        )
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!("native local action worker join failed: {error}"))
+    })?
 }
 
 /// Executes native local actions before returning provider work to the actor.
@@ -2165,6 +2203,119 @@ mod tests {
 
         assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
         assert_eq!(execution.terminal_state, AgentTurnState::Running);
+        assert_eq!(
+            std::fs::read_to_string(&marker_path).unwrap(),
+            "native-worker-done"
+        );
+        let _ = std::fs::remove_dir_all(work_dir);
+    }
+
+    /// Verifies native local actions do not block current-thread Tokio timers.
+    ///
+    /// Native shell execution performs blocking host waits. This regression
+    /// runs native settlement from a current-thread runtime and proves an
+    /// independent timer still advances while the shell command is sleeping,
+    /// which requires the native work to be delegated to `spawn_blocking`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn provider_worker_native_local_actions_do_not_block_current_thread_timers() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let work_dir = std::env::temp_dir().join(format!(
+            "mez-native-local-action-nonblocking-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let marker_path = work_dir.join("marker");
+        let turn = AgentTurnRecord {
+            turn_id: "turn-native-worker-nonblocking".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+        };
+        let action = AgentAction {
+            id: "native-worker-shell-nonblocking".to_string(),
+            rationale: "prove native worker does not block timers".to_string(),
+            payload: AgentActionPayload::ShellCommand {
+                summary: "Run a delayed native command".to_string(),
+                command: "sleep 0.25; printf native-worker-done > marker".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: Some(1_000),
+            },
+        };
+        let execution = AgentTurnExecution {
+            request: ModelRequest {
+                provider: "test".to_string(),
+                model: "test".to_string(),
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: false,
+                interaction_kind: ModelInteractionKind::ActionExecution,
+                allowed_actions: crate::agent::AllowedActionSet::say_only(),
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "test".to_string(),
+                model: "test".to_string(),
+                raw_text: "native worker shell".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: Some(MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "test native worker shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: BTreeMap::new(),
+            action_results: vec![ActionResult::running(&turn, &action, Vec::new(), None)],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        let started = std::time::Instant::now();
+        let worker = tokio::spawn(execute_provider_worker_native_local_actions_async(
+            turn.clone(),
+            execution,
+            RuntimeLocalActionExecutor::Native,
+            std::path::PathBuf::from("/bin/sh"),
+            Some(work_dir.clone()),
+            None,
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(180),
+            "current-thread timer was stalled by native local execution: {:?}",
+            started.elapsed()
+        );
+        let execution = worker.await.unwrap().unwrap();
+        assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
         assert_eq!(
             std::fs::read_to_string(&marker_path).unwrap(),
             "native-worker-done"

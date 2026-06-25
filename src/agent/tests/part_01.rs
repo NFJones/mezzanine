@@ -161,6 +161,7 @@ impl PaneShellExecutor for FakePaneShellExecutor {
         self.requests.push(request.clone());
         Ok(self.output.clone().unwrap_or(ShellExecutionOutput {
             exit_code: Some(0),
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
@@ -1294,6 +1295,7 @@ fn tool_discovery_runs_through_pane_shell_and_caches_by_signature() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
+            signal: None,
             stdout:
                 "tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --version\t0\t1714500000\n\
                  tool\tgrep\t1\t/usr/bin/grep\tGNU grep 3.11\tcommand -v grep\t0\t/usr/bin/grep --version\t0\t1714500000\n\
@@ -1363,6 +1365,7 @@ fn tool_discovery_reports_shell_failures() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(2),
+            signal: None,
             stdout: String::new(),
             stderr: "no shell\n".to_string(),
             timed_out: false,

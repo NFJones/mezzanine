@@ -5050,6 +5050,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
+            signal: None,
             stdout: framed_shell_output("/repo\n"),
             stderr: String::new(),
             timed_out: false,
@@ -5470,6 +5471,7 @@ fn shell_action_executor_result_includes_marker_in_terminal_observation() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(0),
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
@@ -5505,6 +5507,7 @@ fn shell_action_executor_infers_signal_from_high_exit_code() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(137), // 128 + 9 (SIGKILL)
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
@@ -5540,6 +5543,7 @@ fn shell_action_executor_reports_sigint_for_interrupted_action() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: None,
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
@@ -5574,6 +5578,7 @@ fn shell_action_executor_reports_null_signal_for_normal_exit() {
     let mut executor = FakePaneShellExecutor {
         output: Some(ShellExecutionOutput {
             exit_code: Some(1),
+            signal: None,
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,

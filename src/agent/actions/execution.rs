@@ -22,7 +22,7 @@ use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
 use std::io::Read;
 use std::os::fd::AsFd;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -66,6 +66,8 @@ pub struct ShellExecutionRequest {
 pub struct ShellExecutionOutput {
     /// Structured `exit_code` value carried by this API type.
     pub exit_code: Option<i32>,
+    /// Native process signal when the executor can observe signal termination.
+    pub signal: Option<i32>,
     /// Structured `stdout` value carried by this API type.
     pub stdout: String,
     /// Structured `stderr` value carried by this API type.
@@ -93,6 +95,7 @@ impl ShellExecutionOutput {
     ) -> Self {
         Self {
             exit_code,
+            signal: None,
             stdout,
             stderr,
             timed_out,
@@ -251,6 +254,17 @@ impl EnvironmentEquivalenceProbe {
         }
         if !different.is_empty() {
             return Self::new(EnvironmentEquivalence::Different, different);
+        }
+        let native_path = std::env::var("PATH").ok();
+        match (&pane_signature.path, &native_path) {
+            (Some(pane_path), Some(native_path)) if pane_path != native_path => {
+                return Self::new(
+                    EnvironmentEquivalence::Different,
+                    vec!["PATH mismatch between pane and native runtime".to_string()],
+                );
+            }
+            (Some(_), Some(_)) => diagnostics.push("PATH matches".to_string()),
+            _ => diagnostics.push("PATH comparison unavailable".to_string()),
         }
         diagnostics.push(format!("os={native_os}"));
         diagnostics.push(format!("arch={native_arch}"));
@@ -540,30 +554,63 @@ fn execute_native_shell_command(
     let poll_interval = Duration::from_millis(NATIVE_SHELL_POLL_INTERVAL_MS);
     let reader_shutdown_grace = Duration::from_millis(NATIVE_SHELL_READER_SHUTDOWN_GRACE_MS);
     let process_group_leader = i32::try_from(child.id()).ok().and_then(Pid::from_raw);
+    let mut stdout_reader = Some(stdout_reader);
+    let mut stderr_reader = Some(stderr_reader);
     let mut exit_status = None;
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut timed_out = false;
     let mut progress = NativeShellOutputProgress::new(output_progress);
-    loop {
-        drain_child_pipe_events(&event_rx, &mut stdout_done, &mut stderr_done, &mut progress)?;
-        if exit_status.is_some()
-            && (stdout_done && stderr_done
-                || native_child_process_group_exited(process_group_leader)?)
-        {
-            break;
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            timed_out = true;
-            break;
-        }
-        let wait = std::cmp::min(deadline.saturating_duration_since(now), poll_interval);
-        if exit_status.is_none() {
-            if let Some(status) = child.wait_timeout(wait)? {
-                exit_status = Some(status);
+    let result = (|| -> Result<ShellExecutionOutput> {
+        loop {
+            drain_child_pipe_events(&event_rx, &mut stdout_done, &mut stderr_done, &mut progress)?;
+            if exit_status.is_some()
+                && (stdout_done && stderr_done
+                    || native_child_process_group_exited(process_group_leader)?)
+            {
+                break;
             }
-        } else {
+            let now = Instant::now();
+            if now >= deadline {
+                timed_out = true;
+                break;
+            }
+            let wait = std::cmp::min(deadline.saturating_duration_since(now), poll_interval);
+            if exit_status.is_none() {
+                if let Some(status) = child.wait_timeout(wait)? {
+                    exit_status = Some(status);
+                }
+            } else {
+                wait_for_child_pipe_event(
+                    &event_rx,
+                    wait,
+                    &mut stdout_done,
+                    &mut stderr_done,
+                    &mut progress,
+                )?;
+            }
+            if Instant::now() >= deadline && !(exit_status.is_some() && stdout_done && stderr_done)
+            {
+                timed_out = true;
+                break;
+            }
+        }
+        if timed_out {
+            terminate_child_process_group(&mut child)?;
+            if exit_status.is_none() {
+                exit_status = Some(child.wait()?);
+            }
+        }
+        let shutdown_deadline = Instant::now() + reader_shutdown_grace;
+        while !(stdout_done && stderr_done) {
+            let now = Instant::now();
+            if now >= shutdown_deadline {
+                break;
+            }
+            let wait = std::cmp::min(
+                shutdown_deadline.saturating_duration_since(now),
+                poll_interval,
+            );
             wait_for_child_pipe_event(
                 &event_rx,
                 wait,
@@ -572,53 +619,48 @@ fn execute_native_shell_command(
                 &mut progress,
             )?;
         }
-        if Instant::now() >= deadline && !(exit_status.is_some() && stdout_done && stderr_done) {
-            timed_out = true;
-            break;
+        if !stdout_done {
+            request_child_pipe_reader_shutdown(&stdout_cancel_tx);
         }
-    }
-    if timed_out {
-        terminate_child_process_group(&mut child)?;
-        if exit_status.is_none() {
-            exit_status = Some(child.wait()?);
+        if !stderr_done {
+            request_child_pipe_reader_shutdown(&stderr_cancel_tx);
         }
-    }
-    let shutdown_deadline = Instant::now() + reader_shutdown_grace;
-    while !(stdout_done && stderr_done) {
-        let now = Instant::now();
-        if now >= shutdown_deadline {
-            break;
-        }
-        let wait = std::cmp::min(
-            shutdown_deadline.saturating_duration_since(now),
-            poll_interval,
-        );
-        wait_for_child_pipe_event(
-            &event_rx,
-            wait,
-            &mut stdout_done,
-            &mut stderr_done,
-            &mut progress,
+        let stdout = join_child_pipe_reader(
+            NativePipeStream::Stdout,
+            stdout_reader
+                .take()
+                .ok_or_else(|| MezError::invalid_state("native stdout reader already joined"))?,
         )?;
+        let stderr = join_child_pipe_reader(
+            NativePipeStream::Stderr,
+            stderr_reader
+                .take()
+                .ok_or_else(|| MezError::invalid_state("native stderr reader already joined"))?,
+        )?;
+        let mut output = ShellExecutionOutput::new(
+            exit_status.and_then(|status| status.code()),
+            progress.into_text(),
+            String::new(),
+            timed_out,
+            false,
+        );
+        output.signal = exit_status.and_then(|status| status.signal());
+        output.transport_diagnostics.output_bytes_dropped =
+            stdout.bytes_dropped.saturating_add(stderr.bytes_dropped);
+        Ok(output)
+    })();
+    if result.is_err() {
+        cleanup_native_shell_command_after_error(
+            &mut child,
+            stdout_done,
+            stderr_done,
+            &stdout_cancel_tx,
+            &stderr_cancel_tx,
+            &mut stdout_reader,
+            &mut stderr_reader,
+        );
     }
-    if !stdout_done {
-        request_child_pipe_reader_shutdown(&stdout_cancel_tx);
-    }
-    if !stderr_done {
-        request_child_pipe_reader_shutdown(&stderr_cancel_tx);
-    }
-    let stdout = join_child_pipe_reader(NativePipeStream::Stdout, stdout_reader)?;
-    let stderr = join_child_pipe_reader(NativePipeStream::Stderr, stderr_reader)?;
-    let mut output = ShellExecutionOutput::new(
-        exit_status.and_then(|status| status.code()),
-        stdout.text,
-        stderr.text,
-        timed_out,
-        false,
-    );
-    output.transport_diagnostics.output_bytes_dropped =
-        stdout.bytes_dropped.saturating_add(stderr.bytes_dropped);
-    Ok(output)
+    result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -643,8 +685,6 @@ impl NativePipeStream {
 #[derive(Debug)]
 /// Bounded text captured from one native child pipe plus dropped-byte metadata.
 struct CapturedPipeOutput {
-    /// UTF-8 text retained for the model-facing action result.
-    text: String,
     /// Bytes discarded after the retained output reached its configured cap.
     bytes_dropped: usize,
 }
@@ -685,6 +725,11 @@ impl<'callback, 'env> NativeShellOutputProgress<'callback, 'env> {
             output_progress(&text)?;
         }
         Ok(())
+    }
+
+    /// Converts the cumulative native output preview into model-facing text.
+    fn into_text(self) -> String {
+        String::from_utf8_lossy(&self.preview).to_string()
     }
 }
 
@@ -756,6 +801,33 @@ fn record_child_pipe_event(
 /// Requests that one native pipe reader stop waiting for additional bytes.
 fn request_child_pipe_reader_shutdown(cancel_tx: &mpsc::Sender<()>) {
     let _ = cancel_tx.send(());
+}
+
+/// Best-effort cleanup for native shell commands that fail before normal
+/// result assembly.
+fn cleanup_native_shell_command_after_error(
+    child: &mut std::process::Child,
+    stdout_done: bool,
+    stderr_done: bool,
+    stdout_cancel_tx: &mpsc::Sender<()>,
+    stderr_cancel_tx: &mpsc::Sender<()>,
+    stdout_reader: &mut Option<thread::JoinHandle<Result<CapturedPipeOutput>>>,
+    stderr_reader: &mut Option<thread::JoinHandle<Result<CapturedPipeOutput>>>,
+) {
+    let _ = terminate_child_process_group(child);
+    if !stdout_done {
+        request_child_pipe_reader_shutdown(stdout_cancel_tx);
+    }
+    if !stderr_done {
+        request_child_pipe_reader_shutdown(stderr_cancel_tx);
+    }
+    if let Some(reader) = stdout_reader.take() {
+        let _ = join_child_pipe_reader(NativePipeStream::Stdout, reader);
+    }
+    if let Some(reader) = stderr_reader.take() {
+        let _ = join_child_pipe_reader(NativePipeStream::Stderr, reader);
+    }
+    let _ = child.wait();
 }
 
 /// Joins one native reader thread and converts panics into typed errors.
@@ -886,10 +958,7 @@ fn read_child_pipe<R: Read + AsFd>(
             }
         }
     }
-    Ok(CapturedPipeOutput {
-        text: String::from_utf8_lossy(&bytes).into_owned(),
-        bytes_dropped,
-    })
+    Ok(CapturedPipeOutput { bytes_dropped })
 }
 
 /// Defines the `McpActionExecutor` behavior contract for this subsystem.
@@ -1227,7 +1296,9 @@ fn local_output_to_action_result_with_transport(
     let combined_output_bytes = output.stdout.len().saturating_add(output.stderr.len());
     let transport_incomplete = output.transport_diagnostics.transport_incomplete();
     let output_truncated = output.transport_diagnostics.output_truncated();
-    let signal: Option<i32> = if output.interrupted {
+    let signal: Option<i32> = if let Some(signal) = output.signal {
+        Some(signal)
+    } else if output.interrupted {
         Some(2) // SIGINT
     } else if let Some(ec) = output.exit_code {
         if ec > 128 && ec < 256 {
