@@ -3191,6 +3191,385 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies replacement-present patch mismatches steer recovery toward
+/// reconciling already-applied current file state.
+///
+/// Matcher diagnostics can report that the replacement block or distinctive
+/// added lines are already present. Runtime feedback should preserve that
+/// subtype so the model inspects current file state instead of replaying the
+/// same stale patch.
+#[test]
+fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "patch the file")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .expect("started turn should be recorded");
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+
+    let action = crate::agent::AgentAction {
+        id: "patch-replacement".to_string(),
+        rationale: "apply a source patch".to_string(),
+        payload: crate::agent::AgentActionPayload::ApplyPatch {
+            patch:
+                "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@\n-old\n+new\n*** End Patch"
+                    .to_string(),
+            strip: None,
+        },
+    };
+    let mut failed = crate::agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "shell_command_failed",
+        "shell command exited with status 1",
+    )
+    .unwrap();
+    failed.structured_content_json = Some(
+        serde_json::json!({
+            "command": "\"$MEZ_PYTHON\" \"$MEZ_PATCH_SCRIPT\" \"$MEZ_PATCH\"",
+            "terminal_observation": {
+                "exit_code": 1,
+                "combined_output_preview": "apply_patch: hunk did not match: src/driver/mod.rs\napply_patch: replacement_hint=full_replacement_block_present span(s): 18-21\napply_patch: replacement_hint_next_step=skip_or_reconcile_already_applied_change\napply_patch: patch failed",
+                "combined_output_bytes": 231,
+                "output_truncated": false
+            }
+        })
+        .to_string(),
+    );
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "replacement hint patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![failed],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    assert!(service
+        .queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "apply_patch_hunk_mismatch",
+        )
+        .unwrap());
+    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let feedback = context
+        .blocks
+        .iter()
+        .rev()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint
+                && block.label == "action failure feedback"
+        })
+        .expect("feedback block should be present");
+    assert!(
+        feedback
+            .content
+            .contains("intended replacement may already be present"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback
+            .content
+            .contains("skip the stale hunk or report the current file state"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        !feedback.content.contains("reported line number(s)"),
+        "{}",
+        feedback.content
+    );
+    assert!(feedback.content.contains("src/driver/mod.rs"), "{}", feedback.content);
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies missing-anchor patch mismatches steer recovery toward refreshing
+/// the hunk header anchor.
+///
+/// Matcher diagnostics can explain that a structural or header anchor could not
+/// be found in order. Runtime feedback should preserve that signal so the model
+/// repairs the anchor instead of treating the failure as a generic reread case.
+#[test]
+fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "patch the file")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .expect("started turn should be recorded");
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+
+    let action = crate::agent::AgentAction {
+        id: "patch-anchor".to_string(),
+        rationale: "apply a source patch".to_string(),
+        payload: crate::agent::AgentActionPayload::ApplyPatch {
+            patch:
+                "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@ fn owner()\n-old\n+new\n*** End Patch"
+                    .to_string(),
+            strip: None,
+        },
+    };
+    let mut failed = crate::agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "shell_command_failed",
+        "shell command exited with status 1",
+    )
+    .unwrap();
+    failed.structured_content_json = Some(
+        serde_json::json!({
+            "command": "apply_patch",
+            "terminal_observation": {
+                "exit_code": 1,
+                "combined_output_preview": "apply_patch: hunk did not match: src/driver/mod.rs\napply_patch: hunk header anchor was not found in order: fn owner()\napply_patch: suggested_next_step=fix_or_refresh_header_anchor\napply_patch: patch failed",
+                "combined_output_bytes": 211,
+                "output_truncated": false
+            }
+        })
+        .to_string(),
+    );
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "missing anchor patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![failed],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    assert!(service
+        .queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "apply_patch_hunk_mismatch",
+        )
+        .unwrap());
+    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let feedback = context
+        .blocks
+        .iter()
+        .rev()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint
+                && block.label == "action failure feedback"
+        })
+        .expect("feedback block should be present");
+    assert!(
+        feedback
+            .content
+            .contains("hunk header anchor was not found in order"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback
+            .content
+            .contains("refresh or correct the @@ header anchor"),
+        "{}",
+        feedback.content
+    );
+    assert!(feedback.content.contains("src/driver/mod.rs"), "{}", feedback.content);
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies ambiguous repeated-candidate mismatches keep candidate-region
+/// reread guidance.
+///
+/// When matcher diagnostics surface multiple candidate read ranges, runtime
+/// feedback should preserve that ambiguity and avoid collapsing the next step
+/// back to one generic owner-range reread.
+#[test]
+fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "patch the file")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .expect("started turn should be recorded");
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+
+    let action = crate::agent::AgentAction {
+        id: "patch-candidates".to_string(),
+        rationale: "apply a source patch".to_string(),
+        payload: crate::agent::AgentActionPayload::ApplyPatch {
+            patch:
+                "*** Begin Patch\n*** Update File: note.rs\n@@\n-old();\n+new();\n*** End Patch"
+                    .to_string(),
+            strip: None,
+        },
+    };
+    let mut failed = crate::agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Failed,
+        "shell_command_failed",
+        "shell command exited with status 1",
+    )
+    .unwrap();
+    failed.structured_content_json = Some(
+        serde_json::json!({
+            "command": "apply_patch",
+            "terminal_observation": {
+                "exit_code": 1,
+                "combined_output_preview": "apply_patch: hunk did not match: note.rs\napply_patch: candidate match span(s): 10, 12\napply_patch: suggested_candidate_read_range(s): note.rs:6-12, note.rs:8-12\napply_patch: suggested_next_step=reread_candidate_regions\napply_patch: patch failed",
+                "combined_output_bytes": 256,
+                "output_truncated": false
+            }
+        })
+        .to_string(),
+    );
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "ambiguous candidate patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![failed],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    assert!(service
+        .queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "apply_patch_hunk_mismatch",
+        )
+        .unwrap());
+    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let feedback = context
+        .blocks
+        .iter()
+        .rev()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint
+                && block.label == "action failure feedback"
+        })
+        .expect("feedback block should be present");
+    assert!(
+        feedback
+            .content
+            .contains("repeated or ambiguous candidate regions"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback
+            .content
+            .contains("inspect the suggested candidate range(s)"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback
+            .content
+            .contains("Do not retry substantially the same patch or focus only on one generic line range"),
+        "{}",
+        feedback.content
+    );
+    assert!(feedback.content.contains("note.rs"), "{}", feedback.content);
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies real `apply_patch` write-phase hunk failures enter model recovery.
 ///
 /// `apply_patch` runs through a read transaction followed by a generated write

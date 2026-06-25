@@ -983,12 +983,20 @@ pub(super) fn runtime_execution_has_apply_patch_failure(execution: &AgentTurnExe
 pub(super) fn runtime_execution_has_apply_patch_hunk_mismatch(
     execution: &AgentTurnExecution,
 ) -> bool {
+    runtime_execution_has_apply_patch_failure_marker(execution, "hunk did not match")
+}
+
+/// Returns true when one `apply_patch` failure output contains the requested marker.
+fn runtime_execution_has_apply_patch_failure_marker(
+    execution: &AgentTurnExecution,
+    marker: &str,
+) -> bool {
     execution
         .action_results
         .iter()
         .filter(|result| result.is_error && result.action_type == "apply_patch")
         .filter_map(runtime_unrecovered_action_failure_output)
-        .any(|output| output.to_ascii_lowercase().contains("hunk did not match"))
+        .any(|output| output.contains(marker))
 }
 
 /// Returns true when a failed execution includes config-change validation.
@@ -1098,6 +1106,36 @@ pub(super) fn runtime_failure_feedback_specific_guidance(
         } else {
             format!(" Affected path(s): {}.", paths.join(", "))
         };
+        if runtime_execution_has_apply_patch_failure_marker(
+            execution,
+            "replacement_hint_next_step=skip_or_reconcile_already_applied_change",
+        ) || runtime_execution_has_apply_patch_failure_marker(
+            execution,
+            "suggested_next_step=skip_or_reconcile_already_applied_change",
+        ) {
+            return Some(format!(
+                "Apply-patch recovery: the mismatch diagnostic indicates the intended replacement may already be present in the current file. Next step: inspect the affected path(s) and reconcile current contents before emitting another mutation. If the intended change is already present, skip the stale hunk or report the current file state instead of replaying the same patch. If more edits are still needed, emit a smaller fresh Mezzanine *** Begin Patch block against the current file contents rather than retrying substantially the same patch.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+            ));
+        }
+        if runtime_execution_has_apply_patch_failure_marker(
+            execution,
+            "suggested_next_step=fix_or_refresh_header_anchor",
+        ) {
+            return Some(format!(
+                "Apply-patch recovery: the mismatch diagnostic indicates the hunk header anchor was not found in order. Next step: inspect the affected path(s) around the intended owner region, then refresh or correct the @@ header anchor before emitting another mutation. Do not reuse a stale or misplaced anchor, and do not retry substantially the same patch.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+            ));
+        }
+        if runtime_execution_has_apply_patch_failure_marker(
+            execution,
+            "suggested_next_step=reread_candidate_regions",
+        ) || runtime_execution_has_apply_patch_failure_marker(
+            execution,
+            "suggested_candidate_read_range(s):",
+        ) {
+            return Some(format!(
+                "Apply-patch recovery: the mismatch diagnostic indicates repeated or ambiguous candidate regions in the current target file. Next step: inspect the suggested candidate range(s) or other repeated owner regions with a bounded shell_command before emitting another mutation. Do not retry substantially the same patch or focus only on one generic line range. After reading current context, emit a smaller fresh Mezzanine *** Begin Patch block with distinctive @@ header anchors for the intended region.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+            ));
+        }
         return Some(format!(
             "Apply-patch recovery: if a hunk did not match or the patch did not apply, the exact old-context lines were not found in the current target file or matched ambiguously; this is not necessarily a stale-file condition. Next step: first inspect the affected path(s) with a bounded shell_command, especially around any reported line number(s), before emitting another mutation. Do not retry substantially the same patch. After reading current context, emit a smaller fresh Mezzanine *** Begin Patch block against the current file contents, using distinctive @@ header anchors for repeated or ambiguous regions.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
         ));
