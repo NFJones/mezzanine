@@ -129,6 +129,9 @@ pub(crate) fn provider_error_retry_class_from_parts(
         if status_code == 429 || (500..=599).contains(&status_code) {
             return ProviderErrorRetryClass::RetryableTransport;
         }
+        if provider_error_invites_retry(message, provider_failure_json) {
+            return ProviderErrorRetryClass::RetryableTransport;
+        }
         return ProviderErrorRetryClass::NonRetryable;
     }
     if kind == crate::error::MezErrorKind::Io {
@@ -730,5 +733,37 @@ mod tests {
         );
 
         assert_eq!(retry_class, ProviderErrorRetryClass::RetryableTransport);
+    }
+
+    /// Verifies status-bearing provider errors still honor explicit retry
+    /// invitations before falling back to terminal non-retryable handling.
+    ///
+    /// Some providers use non-429/5xx status codes for transient failures while
+    /// including a clear retry instruction in the response body. The classifier
+    /// must preserve those retries without weakening the unsupported-400 guard.
+    #[test]
+    fn provider_retry_classifier_honors_retry_invitations_with_status_codes() {
+        let retry_class = provider_error_retry_class_from_parts(
+            crate::error::MezErrorKind::InvalidState,
+            "Chat Completions API returned status 409: you can retry your request",
+            Some(
+                r#"{"status_code":409,"error":{"message":"An error occurred while processing your request; you can retry your request"}}"#,
+            ),
+        );
+
+        assert_eq!(retry_class, ProviderErrorRetryClass::RetryableTransport);
+    }
+
+    /// Verifies unsupported OpenAI-style status 400 errors remain non-retryable
+    /// even when the status-code branch also honors retry invitation language.
+    #[test]
+    fn provider_retry_classifier_keeps_unsupported_400_non_retryable() {
+        let retry_class = provider_error_retry_class_from_parts(
+            crate::error::MezErrorKind::InvalidState,
+            "Chat Completions API returned status 400: Unsupported parameter",
+            Some(r#"{"status_code":400,"error":{"message":"Unsupported parameter: temperature"}}"#),
+        );
+
+        assert_eq!(retry_class, ProviderErrorRetryClass::NonRetryable);
     }
 }
