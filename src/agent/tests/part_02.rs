@@ -5154,6 +5154,13 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
     assert!(description.contains("Decide the next Mezzanine capability"));
     assert!(description.contains("Return a function call, not prose"));
     assert!(description.contains("Capability map: shell=local files"));
+    assert!(description.contains("network_search=web_search"));
+    assert!(description.contains("network_fetch=fetch_url"));
+    assert!(description.contains("mcp=mcp_call"));
+    assert!(description.contains("memory=memory_search or memory_store"));
+    assert!(description.contains("issues=issue_add, issue_update, issue_query, or issue_delete"));
+    assert!(description.contains("a missing shell, network_search, network_fetch, mcp, subagent, config_change, memory, issues, or respond_only action surface is not a blocker"));
+    assert!(!description.contains("missing shell, patch, web, MCP, messaging"));
     assert!(description.contains("Wrong: say(blocked"));
     assert!(description.contains("Right: request_capability(capability=\"shell\""));
     assert!(description.contains("Wrong: *** Replace File"));

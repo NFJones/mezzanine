@@ -1265,8 +1265,9 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
 ///
 /// Runtime request-shape diagnostics use this helper without executing a full
 /// turn. This regression keeps those diagnostics aligned with the live runner
-/// so an initial selected-model request with MCP tools is not reported as a
-/// capability-only or memory-only surface.
+/// and the SPEC-defined mixed default surface so an initial selected-model
+/// request with MCP tools is not reported as a capability-only or memory-only
+/// surface.
 #[test]
 fn default_action_gates_expose_mcp_and_memory_for_diagnostic_request_shapes() {
     let mut request = assemble_model_request(
@@ -2751,6 +2752,22 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert!(
         capability_description.contains("network_fetch exposes fetch_url"),
+        "{capability_description}"
+    );
+    assert!(
+        capability_description.contains("subagent exposes send_message and spawn_agent"),
+        "{capability_description}"
+    );
+    assert!(
+        capability_description.contains("config_change exposes config_change"),
+        "{capability_description}"
+    );
+    assert!(
+        capability_description.contains("memory exposes memory_search and memory_store"),
+        "{capability_description}"
+    );
+    assert!(
+        capability_description.contains("issues exposes issue_add, issue_update, issue_query, and issue_delete"),
         "{capability_description}"
     );
     let capability_reason_description = capability_schema["properties"]["reason"]["description"]

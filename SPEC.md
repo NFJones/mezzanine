@@ -3514,10 +3514,16 @@ message proposals, subagent spawn proposals, configuration change proposals,
 MCP tool proposals, approval responses, or completion status.
 
 Model interaction for one turn MAY be split into capability-decision,
-action-execution, and repair requests. A capability-decision request MUST expose
-only non-executing response actions, including `say` and
-`request_capability`. It MUST NOT expose shell, local filesystem, network, MCP,
-subagent, configuration mutation, or model-authored abort actions.
+action-execution, and repair requests. A capability-decision request without
+runtime-owned default action gates MUST expose only non-executing response
+actions, including `say` and `request_capability`. It MUST NOT expose shell,
+local filesystem, network, subagent, configuration mutation, or model-authored
+abort actions. A capability-decision request MAY also expose default,
+runtime-owned diagnostic or integration actions that are already available
+without additional capability routing, such as `mcp_call` or memory actions,
+and those actions remain subject to the active allowed-action validation before
+execution. Issue-tracker actions are exposed only when the issue capability is
+granted and the local issue tracker is enabled.
 
 `request_capability` is a non-executing control signal from the model to the
 harness. It MUST include a coarse capability name and a task-specific reason.

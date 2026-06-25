@@ -11,12 +11,14 @@ use std::collections::BTreeSet;
 ///
 /// The interaction kind is controller-owned state. It tells providers whether
 /// the model is currently deciding which capability it needs or emitting
-/// executable MAAP actions after a capability has been granted.
+/// executable MAAP actions after a capability has been granted. Runtime-owned
+/// default gates may still widen a capability-decision request with already
+/// available diagnostic or integration actions such as MCP and memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelInteractionKind {
-    /// The model may speak to the user or request a coarse capability, but it
-    /// must not emit executable filesystem, shell, network, MCP, or subagent
-    /// actions.
+    /// The model may speak to the user or request a coarse capability. The base
+    /// surface is non-executing, but runtime-owned default gates can add
+    /// already-available MCP or memory actions before provider submission.
     CapabilityDecision,
     /// The model may emit only the executable MAAP actions exposed through the
     /// request's allowed-action set.
