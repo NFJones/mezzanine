@@ -139,6 +139,7 @@ pub(crate) fn provider_error_retry_class_from_parts(
     }
     if message.contains("provider HTTP request failed")
         || message.contains("provider HTTP response read failed")
+        || message.contains("provider HTTP response read stalled")
         || provider_error_invites_retry(message, provider_failure_json)
     {
         ProviderErrorRetryClass::RetryableTransport
@@ -706,5 +707,28 @@ fn provider_error_kind_name(kind: crate::error::MezErrorKind) -> &'static str {
         crate::error::MezErrorKind::NotFound => "not_found",
         crate::error::MezErrorKind::Forbidden => "forbidden",
         crate::error::MezErrorKind::NotImplemented => "not_implemented",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderErrorRetryClass, provider_error_retry_class_from_parts};
+
+    /// Verifies provider HTTP body-read inactivity is treated as a retryable
+    /// transport failure rather than a terminal provider failure.
+    ///
+    /// The HTTP transport reports stalled chunk reads as `InvalidState` with a
+    /// stable diagnostic prefix. That condition is transient in the same way as
+    /// request and response-read transport failures, so the retry classifier
+    /// must preserve it for runtime retry scheduling.
+    #[test]
+    fn provider_retry_classifier_treats_response_read_stalls_as_retryable_transport() {
+        let retry_class = provider_error_retry_class_from_parts(
+            crate::error::MezErrorKind::InvalidState,
+            "provider HTTP response read stalled for 50ms while waiting for body chunk",
+            None,
+        );
+
+        assert_eq!(retry_class, ProviderErrorRetryClass::RetryableTransport);
     }
 }
