@@ -3879,15 +3879,15 @@ fn openai_responses_request_body_includes_reasoning_effort() {
     assert_eq!(value["prompt_cache_retention"], "24h");
 }
 
-/// Verifies OpenAI Responses request bodies omit a configured output-token
-/// cap while keeping the parsed request setting available for providers that
-/// support an explicit output limit. The Responses endpoint has rejected the
-/// field for affected requests, so the request builder must not forward it.
+/// Verifies OpenAI Responses request bodies include the configured output-token
+/// cap and reflect retry-raised limits. Output-limit recovery mutates
+/// `ModelRequest.max_output_tokens`, so the Responses body must carry the
+/// current value for the retry to affect provider behavior.
 #[test]
-fn openai_responses_request_body_omits_configured_max_output_tokens() {
+fn openai_responses_request_body_includes_configured_max_output_tokens() {
     let mut provider_options = std::collections::BTreeMap::new();
     provider_options.insert("max_output_tokens".to_string(), "12000".to_string());
-    let request = assemble_model_request(
+    let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
             model: "gpt-5.1".to_string(),
@@ -3911,12 +3911,18 @@ fn openai_responses_request_body_omits_configured_max_output_tokens() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
 
     assert_eq!(request.max_output_tokens, Some(12000));
-    assert!(value.get("max_output_tokens").is_none());
+    assert_eq!(value["max_output_tokens"], 12000);
     assert!(
         value["prompt_cache_key"]
             .as_str()
             .is_some_and(|key| key.starts_with("mez-"))
     );
+
+    request.max_output_tokens = Some(24000);
+    let retry_body = openai_responses_request_body(&request).unwrap();
+    let retry_value: serde_json::Value = serde_json::from_str(&retry_body).unwrap();
+
+    assert_eq!(retry_value["max_output_tokens"], 24000);
 }
 
 /// Builds a minimal OpenAI request for prompt-cache retention tests.

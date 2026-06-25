@@ -3390,6 +3390,51 @@ fn runtime_agent_shell_mcp_command_reports_live_registry_detail() {
     assert!(!response.contains("requires_runtime"), "{response}");
 }
 
+/// Verifies synchronous `/list-mcp` inside an active Tokio runtime degrades
+/// gracefully to configured registry state instead of surfacing the blocking
+/// discovery error reserved for callers outside async execution.
+#[tokio::test]
+async fn runtime_agent_shell_list_mcp_inside_active_runtime_reports_configured_server() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .mcp_registry_mut()
+        .add_server(crate::mcp::McpServerConfig::stdio(
+            "fixture",
+            "fixture",
+            "mcp-fixture",
+            Vec::new(),
+        ))
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-mcp","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-active-runtime","input":"/list-mcp"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""kind":"display""#), "{response}");
+    assert!(response.contains("## MCP Servers"), "{response}");
+    assert!(response.contains("Servers: 1"), "{response}");
+    assert!(response.contains("Tools: 0"), "{response}");
+    assert!(response.contains("### `fixture` - fixture"), "{response}");
+    assert!(response.contains("- State: enabled"), "{response}");
+    assert!(response.contains("- Status: configured"), "{response}");
+    assert!(
+        !response.contains("synchronous /list-mcp discovery cannot run inside an active async runtime"),
+        "{response}"
+    );
+    assert_eq!(
+        service.mcp_registry().list_servers()[0].status,
+        crate::mcp::McpServerStatus::Configured
+    );
+}
+
 /// Verifies async runtime config application initializes MCP transports at
 /// session-start time and records human-readable lifecycle status.
 ///
