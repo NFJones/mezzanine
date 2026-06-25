@@ -999,9 +999,14 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![crate::agent::AgentAction {
-                    id: "complete-1".to_string(),
+                    id: "say-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Complete,
+                    payload: crate::agent::AgentActionPayload::Say {
+                        status: crate::agent::SayStatus::Final,
+                        text: "Done.".to_string(),
+                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            .to_string(),
+                    },
                 }],
                 final_turn: true,
             }),
@@ -1023,7 +1028,7 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("agent: completed without a user-facing response"),
+        pane_text.contains("mez> Done."),
         "{pane_text}"
     );
     assert!(
@@ -1082,11 +1087,6 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
                             content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
                                 .to_string(),
                         },
-                    },
-                    crate::agent::AgentAction {
-                        id: "complete-1".to_string(),
-                        rationale: String::new(),
-                        payload: crate::agent::AgentActionPayload::Complete,
                     },
                 ],
                 final_turn: true,

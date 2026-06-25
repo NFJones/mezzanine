@@ -464,9 +464,14 @@ fn runtime_complete_batch_for(
         turn_id: turn_id.into(),
         agent_id: agent_id.into(),
         actions: vec![crate::agent::AgentAction {
-            id: "complete-1".to_string(),
-            rationale: "finish the turn".to_string(),
-            payload: crate::agent::AgentActionPayload::Complete,
+            id: "say-1".to_string(),
+            rationale: "report completion".to_string(),
+            payload: crate::agent::AgentActionPayload::Say {
+                status: crate::agent::SayStatus::Final,
+                text: "Done.".to_string(),
+                content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                    .to_string(),
+            },
         }],
         final_turn: true,
     }

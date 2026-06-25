@@ -25,9 +25,6 @@ pub(super) fn validate_batch_allowed_actions(
     request: &ModelRequest,
 ) -> Result<()> {
     for action in &batch.actions {
-        if matches!(action.payload, AgentActionPayload::Complete) {
-            continue;
-        }
         let action_type = action.action_type();
         let Some(allowed_action) = AllowedAction::from_action_type(action_type) else {
             return Err(MezError::invalid_args(format!(
