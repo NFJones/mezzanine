@@ -2292,10 +2292,34 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
                 .contains("[action_result patch-invalid apply_patch failed]")
             && block.content.contains("Mezzanine patch blocks starting")
     }));
-    assert!(context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint
-            && block.content.contains("action failure feedback")
-    }));
+    let feedback = context
+        .blocks
+        .iter()
+        .rev()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint
+                && block.label == "action failure feedback"
+        })
+        .expect("feedback block should be present");
+    assert!(
+        feedback
+            .content
+            .contains("patch payload was rejected by Mezzanine validation before execution"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback.content.contains("attempt=1 max=5"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        !feedback
+            .content
+            .contains("exact old-context lines were not found"),
+        "{}",
+        feedback.content
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -2988,6 +3012,14 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
             .iter()
             .any(|task| task.turn_id == turn.turn_id)
     );
+    assert_eq!(
+        service
+            .agent_turn_failure_feedback_attempts
+            .values()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
     let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
@@ -2996,6 +3028,32 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
                 .contains("[action_result patch-transport apply_patch failed]")
             && block.content.contains("pane_input_write_failed")
     }));
+    let feedback = context
+        .blocks
+        .iter()
+        .rev()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint
+                && block.label == "action failure feedback"
+        })
+        .expect("feedback block should be present");
+    assert!(
+        feedback
+            .content
+            .contains("runtime could not deliver the generated patch command"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback.content.contains("attempt=1 max=5"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        !feedback.content.contains("exact old-context lines were not found"),
+        "{}",
+        feedback.content
+    );
     service.pane_processes_mut().terminate_all().unwrap();
 }
 

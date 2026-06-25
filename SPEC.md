@@ -2524,9 +2524,11 @@ context-limit recovery rather than proactive threshold compaction.
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one
 bad action in a batch cannot consume the recovery budget for a different
-failed action. `apply_patch` failures are excluded from this bounded recovery
-budget and MAY be retried until they succeed or some other blocker ends the
-turn.
+failed action. `apply_patch` hunk-mismatch and ambiguous-candidate failures are
+excluded from this bounded recovery budget and MAY be retried until they succeed
+or some other blocker ends the turn. Non-hunk `apply_patch` validation,
+transport, readiness, and precondition failures MUST remain bounded by the
+normal failed-action correction budget.
 `agents.implementation_pressure_after_shell_actions` MUST be a positive integer
 and MUST default to `3`. It defines the gentle shell-command inspection
 pressure threshold; runtime-owned inspection pressure MUST escalate to medium at

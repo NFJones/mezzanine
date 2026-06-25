@@ -882,7 +882,9 @@ pub(super) fn runtime_execution_uses_unbounded_apply_patch_recovery(
             continue;
         }
         saw_feedback_candidate = true;
-        if result.action_type != "apply_patch" {
+        if result.action_type != "apply_patch"
+            || !runtime_apply_patch_failure_output_contains(result, "hunk did not match")
+        {
             return false;
         }
     }
@@ -987,6 +989,14 @@ pub(super) fn runtime_execution_has_apply_patch_hunk_mismatch(
 }
 
 /// Returns true when one `apply_patch` failure output contains the requested marker.
+fn runtime_apply_patch_failure_output_contains(result: &ActionResult, marker: &str) -> bool {
+    result.is_error
+        && result.action_type == "apply_patch"
+        && runtime_unrecovered_action_failure_output(result)
+            .is_some_and(|output| output.contains(marker))
+}
+
+/// Returns true when one `apply_patch` failure output contains the requested marker.
 fn runtime_execution_has_apply_patch_failure_marker(
     execution: &AgentTurnExecution,
     marker: &str,
@@ -994,9 +1004,19 @@ fn runtime_execution_has_apply_patch_failure_marker(
     execution
         .action_results
         .iter()
-        .filter(|result| result.is_error && result.action_type == "apply_patch")
-        .filter_map(runtime_unrecovered_action_failure_output)
-        .any(|output| output.contains(marker))
+        .any(|result| runtime_apply_patch_failure_output_contains(result, marker))
+}
+
+/// Returns true when one `apply_patch` failure uses the requested error code.
+fn runtime_execution_has_apply_patch_error_code(
+    execution: &AgentTurnExecution,
+    code: &str,
+) -> bool {
+    execution.action_results.iter().any(|result| {
+        result.is_error
+            && result.action_type == "apply_patch"
+            && runtime_action_result_has_error_code(result, code)
+    })
 }
 
 /// Returns true when a failed execution includes config-change validation.
@@ -1106,6 +1126,17 @@ pub(super) fn runtime_failure_feedback_specific_guidance(
         } else {
             format!(" Affected path(s): {}.", paths.join(", "))
         };
+        if runtime_execution_has_apply_patch_error_code(execution, "invalid_params") {
+            return Some(
+                "Apply-patch recovery: the patch payload was rejected by Mezzanine validation before execution. Next step: correct the patch structure from the action result diagnostic before retrying. Do not treat this as a file-context mismatch or start with file rereads unless another diagnostic points to current file contents. Reissue a valid Mezzanine patch block that starts with *** Begin Patch, or use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+                    .to_string(),
+            );
+        }
+        if runtime_execution_has_apply_patch_error_code(execution, "pane_input_write_failed") {
+            return Some(format!(
+                "Apply-patch recovery: the runtime could not deliver the generated patch command to the pane shell. Next step: use the action result to retry with a smaller Mezzanine patch or another bounded corrective action instead of treating this as a file-context mismatch. If another attempt is needed, break large mutations into smaller apply_patch actions after any necessary inspection.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+            ));
+        }
         if runtime_execution_has_apply_patch_failure_marker(
             execution,
             "replacement_hint_next_step=skip_or_reconcile_already_applied_change",
@@ -1136,8 +1167,13 @@ pub(super) fn runtime_failure_feedback_specific_guidance(
                 "Apply-patch recovery: the mismatch diagnostic indicates repeated or ambiguous candidate regions in the current target file. Next step: inspect the suggested candidate range(s) or other repeated owner regions with a bounded shell_command before emitting another mutation. Do not retry substantially the same patch or focus only on one generic line range. After reading current context, emit a smaller fresh Mezzanine *** Begin Patch block with distinctive @@ header anchors for the intended region.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
             ));
         }
+        if runtime_execution_has_apply_patch_hunk_mismatch(execution) {
+            return Some(format!(
+                "Apply-patch recovery: if a hunk did not match or the patch did not apply, the exact old-context lines were not found in the current target file or matched ambiguously; this is not necessarily a stale-file condition. Next step: first inspect the affected path(s) with a bounded shell_command, especially around any reported line number(s), before emitting another mutation. Do not retry substantially the same patch. After reading current context, emit a smaller fresh Mezzanine *** Begin Patch block against the current file contents, using distinctive @@ header anchors for repeated or ambiguous regions.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+            ));
+        }
         return Some(format!(
-            "Apply-patch recovery: if a hunk did not match or the patch did not apply, the exact old-context lines were not found in the current target file or matched ambiguously; this is not necessarily a stale-file condition. Next step: first inspect the affected path(s) with a bounded shell_command, especially around any reported line number(s), before emitting another mutation. Do not retry substantially the same patch. After reading current context, emit a smaller fresh Mezzanine *** Begin Patch block against the current file contents, using distinctive @@ header anchors for repeated or ambiguous regions.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
+            "Apply-patch recovery: the patch failed before a hunk-mismatch diagnosis was available. Next step: use the action result to correct the reported validation, transport, or execution precondition issue before retrying. Do not assume the current file context is stale or ambiguous unless a later diagnostic says so.{path_hint} If another attempt is needed, emit the smallest corrected Mezzanine patch or bounded inspection command justified by the reported error."
         ));
     }
     if runtime_execution_has_config_change_failure(execution) {
