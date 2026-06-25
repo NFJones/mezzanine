@@ -646,6 +646,121 @@ fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_rea
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies duplicate OpenAI-compatible MAAP tool calls surface as malformed output.
+///
+/// Duplicate MAAP function calls are a provider-output packaging error, not a
+/// plain runtime invalid-state failure. The error must retain the raw tool-call
+/// payload so the existing malformed-MAAP repair flow can ask the model for one
+/// corrected action batch.
+#[test]
+fn openai_compatible_chat_completions_duplicate_maap_tool_calls_are_malformed_output() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-duplicate-tools-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "duplicate tool call payload",
+        "thought": null,
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "hello"
+            }
+        ]
+    })
+    .to_string();
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: serde_json::json!({
+                "model": "local-chat-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "arguments": arguments
+                                    }
+                                },
+                                {
+                                    "id": "call_2",
+                                    "type": "function",
+                                    "function": {
+                                        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                                        "arguments": arguments
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        },
+    };
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &std::collections::BTreeMap::new(),
+        120_000,
+        transport,
+    )
+    .unwrap();
+
+    let error = provider.send_request(&request).unwrap_err();
+
+    assert!(
+        error.message().contains("provider MAAP output is malformed"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("multiple MAAP tool calls"),
+        "{}",
+        error.message()
+    );
+    let raw_text = error.provider_raw_text().expect("raw provider tool calls");
+    assert!(raw_text.contains("call_1"), "{raw_text}");
+    assert!(raw_text.contains("call_2"), "{raw_text}");
+    assert!(raw_text.contains(OPENAI_MAAP_FUNCTION_TOOL_NAME), "{raw_text}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies generic OpenAI-compatible Chat Completions provider options tune
 /// MAAP request shape without importing DeepSeek shims.
 ///

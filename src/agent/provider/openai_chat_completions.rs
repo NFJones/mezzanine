@@ -686,8 +686,11 @@ fn openai_chat_completions_maap_tool_arguments(
     match matches.len() {
         0 => Ok(None),
         1 => Ok(matches.pop()),
-        _ => Err(MezError::invalid_state(
-            "OpenAI-compatible Chat Completions response returned multiple MAAP tool calls",
+        _ => Err(provider_maap_parse_error(
+            MezError::invalid_state(
+                "OpenAI-compatible Chat Completions response returned multiple MAAP tool calls",
+            ),
+            &serde_json::Value::Array(tool_calls.clone()).to_string(),
         )),
     }
 }
