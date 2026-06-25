@@ -7,7 +7,7 @@
 
 use super::chat_completions::{ChatCompletionsDialect, parse_chat_completions_response_envelope};
 use super::errors::provider_maap_parse_error;
-use super::schema::{maap_action_batch_schema, mcp_tool_manifest_for_description};
+use super::schema::{maap_action_batch_schema, openai_maap_current_action_batch_description};
 use super::{
     MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
@@ -517,10 +517,7 @@ fn openai_chat_completions_maap_tool(request: &ModelRequest) -> serde_json::Valu
         "type": "function",
         "function": {
             "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-            "description": format!(
-                "Submit one validated Mezzanine MAAP action batch. Return a function call, not prose. The function call is only the transport envelope for the action batch, not a prerequisite task step; do not emit a say-only or progress batch claiming that an initial or schema-valid batch is needed before the executable action, and do not put required-function-call compliance language in rationale or thought fields. If an executable action is available and useful, put that action in this function call now. If missing information, parameters, or identifiers can be safely gathered from current context, action results, local artifacts, web results, MCP results, or another available or requestable action, request or use the relevant capability instead of asking the user. If this schema includes mcp_call and the task matches visible MCP metadata, treat mcp_call as a likely useful action in the same batch schema as other currently allowed actions. Do not use memory_search, memory_store, shell preflight, or request_capability for shell/network merely to set up a useful MCP call. Do not use memory_search or memory_store to rehydrate, preserve, or look up facts already present in current action results. {}",
-                mcp_tool_manifest_for_description(&request.available_mcp_tools)
-            ),
+            "description": openai_maap_current_action_batch_description(request),
             "parameters": maap_action_batch_schema(&request.allowed_actions, &request.available_mcp_tools)
         }
     })

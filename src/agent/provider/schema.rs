@@ -110,7 +110,7 @@ fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::
 }
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.
-fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
+pub(super) fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
     let mcp_manifest = if request.allowed_actions.contains(AllowedAction::McpCall) {
         mcp_tool_manifest_for_description(&request.available_mcp_tools)
     } else {
