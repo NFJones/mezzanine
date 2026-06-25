@@ -9,7 +9,7 @@ use super::{LocalActionKind, LocalActionPlan};
 use crate::agent::maap::{is_mez_patch_payload, validate_apply_patch_payload};
 use crate::agent::shell::shell_quote;
 use crate::error::{MezError, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -80,8 +80,24 @@ pub fn apply_patch_write_plan_from_read_output(
     patch: &str,
     read_output: &str,
 ) -> Result<LocalActionPlan> {
+    apply_patch_write_plan_from_read_outputs(patch, std::slice::from_ref(&read_output.to_string()))
+}
+
+/// Builds the write phase for an `apply_patch` action from multiple remote
+/// snapshot read outputs.
+///
+/// # Parameters
+/// - `patch`: The model-authored Mezzanine patch block.
+/// - `read_outputs`: Decoded shell outputs from one or more read phases.
+pub fn apply_patch_write_plan_from_read_outputs(
+    patch: &str,
+    read_outputs: &[String],
+) -> Result<LocalActionPlan> {
     let patch = parse_mez_patch(patch)?;
-    let snapshots = parse_apply_patch_snapshot_output(read_output)?;
+    let mut snapshots = BTreeMap::new();
+    for read_output in read_outputs {
+        snapshots.extend(parse_apply_patch_snapshot_output(read_output)?);
+    }
     let changes = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
     mez_apply_patch_write_plan(changes)
 }
@@ -436,6 +452,24 @@ pub fn apply_patch_touched_paths(patch: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Builds a read-phase shell action that snapshots only the provided paths.
+///
+/// # Parameters
+/// - `paths`: Relative paths from the parsed patch to snapshot in one shell
+///   transaction.
+pub fn apply_patch_read_plan_for_paths(paths: &BTreeSet<String>) -> LocalActionPlan {
+    LocalActionPlan {
+        kind: LocalActionKind::ApplyPatch,
+        summary: "I’ll apply a patch.".to_string(),
+        command: mez_apply_patch_read_command(paths),
+        policy_command: "apply_patch".to_string(),
+        interactive: false,
+        stateful: false,
+        timeout_ms: Some(APPLY_PATCH_TIMEOUT_MS),
+        display_output_after_completion: true,
+    }
+}
+
 /// Builds a write-phase shell action that reports one deterministic
 /// `apply_patch` error.
 ///
@@ -473,17 +507,7 @@ fn mez_apply_patch_read_plan(patch: &str, strip: Option<u64>) -> Result<LocalAct
         ));
     }
     let patch = parse_mez_patch(patch)?;
-    let command = mez_apply_patch_read_command(&patch.touched_paths());
-    Ok(LocalActionPlan {
-        kind: LocalActionKind::ApplyPatch,
-        summary: "I’ll apply a patch.".to_string(),
-        command,
-        policy_command: "apply_patch".to_string(),
-        interactive: false,
-        stateful: false,
-        timeout_ms: Some(APPLY_PATCH_TIMEOUT_MS),
-        display_output_after_completion: true,
-    })
+    Ok(apply_patch_read_plan_for_paths(&patch.touched_paths()))
 }
 
 fn mez_apply_patch_write_plan(changes: Vec<ApplyPatchFileChange>) -> Result<LocalActionPlan> {

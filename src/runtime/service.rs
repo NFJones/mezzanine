@@ -312,6 +312,7 @@ impl RuntimeSessionService {
             agent_turn_ledger: AgentTurnLedger::new(false),
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),
+            apply_patch_batch_states: BTreeMap::new(),
             agent_turn_pending_steering: BTreeMap::new(),
             agent_turn_failure_feedback_attempts: BTreeMap::new(),
             agent_action_failure_retry_limit: DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,

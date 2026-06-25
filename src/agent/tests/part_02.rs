@@ -3484,6 +3484,70 @@ fn semantic_apply_patch_plan_accepts_multi_file_payloads() {
     std::fs::remove_dir_all(&temp).unwrap();
 }
 
+/// Verifies accumulated read snapshots can build one verified write phase.
+///
+/// Shell-backed `apply_patch` may split large patches into multiple read
+/// transactions to stay under PTY capture limits. The semantic planner must be
+/// able to merge those independent read outputs before generating the write
+/// transaction so multi-file patches keep their original atomic verification
+/// behavior.
+#[test]
+fn semantic_apply_patch_write_plan_accepts_accumulated_read_snapshots() {
+    let temp = test_temp_dir("semantic-codex-patch-accumulated-read");
+    let patch =
+        "*** Begin Patch\n*** Add File: one.txt\n+one\n*** Add File: two.txt\n+two\n*** End Patch";
+
+    let mut first_paths = BTreeSet::new();
+    first_paths.insert("one.txt".to_string());
+    let first_plan = apply_patch_read_plan_for_paths(&first_paths);
+    let first_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&first_plan.command)
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    assert!(first_output.status.success());
+
+    let mut second_paths = BTreeSet::new();
+    second_paths.insert("two.txt".to_string());
+    let second_plan = apply_patch_read_plan_for_paths(&second_paths);
+    let second_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&second_plan.command)
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    assert!(second_output.status.success());
+
+    let read_outputs = vec![
+        String::from_utf8_lossy(&first_output.stdout).to_string(),
+        String::from_utf8_lossy(&second_output.stdout).to_string(),
+    ];
+    let write_plan = apply_patch_write_plan_from_read_outputs(patch, &read_outputs).unwrap();
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&write_plan.command)
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "command failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("one.txt")).unwrap(),
+        "one\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("two.txt")).unwrap(),
+        "two\n"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
 /// Verifies Mezzanine patch hunk mismatches report actionable context.
 ///
 /// A hunk mismatch does not prove the file changed after the model read it. It

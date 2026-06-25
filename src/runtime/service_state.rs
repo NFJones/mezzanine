@@ -849,6 +849,20 @@ pub(super) struct RunningShellTransactionRef {
     pub(super) observed_output_truncated: bool,
 }
 
+/// Tracks a shell-backed `apply_patch` action across batched read phases.
+///
+/// Large patch read snapshots can exceed a pane PTY capture budget when every
+/// touched path is read in one transaction. The runtime keeps this state while
+/// dispatching one read transaction per path and then builds the verified write
+/// phase from the accumulated snapshot outputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RuntimeApplyPatchBatchState {
+    /// Paths that still need read-phase snapshots.
+    pub(super) remaining_paths: Vec<String>,
+    /// Decoded read-phase outputs that completed without transport truncation.
+    pub(super) read_outputs: Vec<String>,
+}
+
 /// Carries Running Shell Transaction Kind state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -1934,6 +1948,11 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
+    /// Tracks shell-backed `apply_patch` actions that are collecting batched read snapshots.
+    ///
+    /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
+    /// running semantic action while successive read transactions complete.
+    pub(super) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
     /// User steering prompts waiting to be incorporated into an active turn.
     ///
     /// Input submitted while a turn is already running cannot alter a provider

@@ -7,7 +7,9 @@
 use super::agent_state::RuntimeAgentProviderClaim;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
-use super::service_state::{RuntimeAgentPatchRecord, RuntimeAgentTurnSteering};
+use super::service_state::{
+    RuntimeAgentPatchRecord, RuntimeAgentTurnSteering, RuntimeApplyPatchBatchState,
+};
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
     AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
@@ -52,7 +54,9 @@ use super::{
 use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
 use crate::agent::{
     ApplyPatchTransactionPhase, MaapBatch, NativeShellLocalExecutor, ProviderApiCompatibility,
-    apply_patch_error_plan, apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
+    apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
+    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
+    apply_patch_write_plan_from_read_outputs,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, execute_local_action,
     openai_compatible_provider_from_auth_store_with_provider_options,

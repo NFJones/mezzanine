@@ -26,8 +26,9 @@ pub enum LocalActionKind {
 pub(super) use patch::APPLY_PATCH_TIMEOUT_MS;
 pub use patch::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_natively,
-    apply_patch_touched_paths, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output, try_convert_unified_diff_to_mez_patch,
+    apply_patch_read_plan_for_paths, apply_patch_touched_paths, apply_patch_transaction_phase,
+    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
+    try_convert_unified_diff_to_mez_patch,
 };
 
 /// Runtime-generated shell execution data for one local action.

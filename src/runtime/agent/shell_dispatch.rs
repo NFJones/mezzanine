@@ -41,6 +41,43 @@ enum RuntimeActionPressureSeverity {
 }
 
 impl RuntimeSessionService {
+    /// Builds the state key for one batched shell-backed `apply_patch` action.
+    fn apply_patch_batch_state_key(turn_id: &str, action_id: &str) -> String {
+        format!("{turn_id}/{action_id}")
+    }
+
+    /// Replaces the initial shell-backed `apply_patch` read plan with the next
+    /// one-path batch read plan.
+    fn prepare_apply_patch_batched_read_plan(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        plan: &mut crate::agent::LocalActionPlan,
+    ) -> Result<()> {
+        let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
+            return Ok(());
+        };
+        let key = Self::apply_patch_batch_state_key(&turn.turn_id, &action.id);
+        if !self.apply_patch_batch_states.contains_key(&key) {
+            self.apply_patch_batch_states.insert(
+                key.clone(),
+                RuntimeApplyPatchBatchState {
+                    remaining_paths: apply_patch_touched_paths(patch)?,
+                    read_outputs: Vec::new(),
+                },
+            );
+        }
+        if let Some(state) = self.apply_patch_batch_states.get_mut(&key)
+            && !state.remaining_paths.is_empty()
+        {
+            let path = state.remaining_paths.remove(0);
+            let mut paths = BTreeSet::new();
+            paths.insert(path);
+            *plan = apply_patch_read_plan_for_paths(&paths);
+        }
+        Ok(())
+    }
+
     /// Runs the execution has pending shell dispatch operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -488,7 +525,7 @@ impl RuntimeSessionService {
             {
                 state.emitted_apply_patch = true;
             }
-            let plan = match local_action_plan(action) {
+            let mut plan = match local_action_plan(action) {
                 Ok(Some(plan)) => plan,
                 Ok(None) => continue,
                 Err(error) => {
@@ -506,6 +543,12 @@ impl RuntimeSessionService {
                     continue;
                 }
             };
+            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && self.agent_local_action_executor_for_pane(&turn.pane_id)
+                    != RuntimeLocalActionExecutor::Native
+            {
+                self.prepare_apply_patch_batched_read_plan(turn, action, &mut plan)?;
+            }
             let command = plan.command.as_str();
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -1008,9 +1051,13 @@ impl RuntimeSessionService {
         transaction: &RunningShellTransactionRef,
         exit_code: i32,
     ) -> Result<bool> {
-        if exit_code != 0
-            || apply_patch_transaction_phase(&transaction.command)
-                != Some(ApplyPatchTransactionPhase::Read)
+        let state_key = Self::apply_patch_batch_state_key(&turn.turn_id, action_id);
+        if exit_code != 0 {
+            self.apply_patch_batch_states.remove(&state_key);
+            return Ok(false);
+        }
+        if apply_patch_transaction_phase(&transaction.command)
+            != Some(ApplyPatchTransactionPhase::Read)
         {
             return Ok(false);
         }
@@ -1036,9 +1083,38 @@ impl RuntimeSessionService {
             || decoded_output.diagnostics.transport_incomplete()
             || decoded_output.diagnostics.output_truncated()
         {
+            self.apply_patch_batch_states.remove(&state_key);
             apply_patch_error_plan(
                 "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
             )
+        } else if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
+            state.read_outputs.push(decoded_output.output);
+            if !state.remaining_paths.is_empty() {
+                let path = state.remaining_paths.remove(0);
+                let mut paths = BTreeSet::new();
+                paths.insert(path);
+                let read_plan = apply_patch_read_plan_for_paths(&paths);
+                self.apply_patch_batch_states.insert(state_key, state);
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!(
+                        "action {} apply_patch_phase=read reason=next_batch_read",
+                        action.id
+                    ),
+                )?;
+                self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
+                self.dispatch_shell_action_to_pane(
+                    turn,
+                    &action,
+                    &read_plan.command,
+                    read_plan.stateful,
+                    read_plan.timeout_ms,
+                )?;
+                return Ok(true);
+            }
+            apply_patch_write_plan_from_read_outputs(patch, &state.read_outputs)
+                .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
         } else {
             apply_patch_write_plan_from_read_output(patch, &decoded_output.output)
                 .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
