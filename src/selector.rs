@@ -453,19 +453,9 @@ struct TokenContext {
 /// on duplicated control-flow logic.
 fn token_context(line: &str, cursor: usize) -> TokenContext {
     let segment_start = current_command_segment_start(line, cursor);
-    let token_start = line[segment_start..cursor]
-        .char_indices()
-        .rev()
-        .find_map(|(offset, ch)| {
-            ch.is_whitespace()
-                .then_some(segment_start + offset + ch.len_utf8())
-        })
-        .unwrap_or(segment_start);
-    let token_end = line[cursor..]
-        .char_indices()
-        .find_map(|(offset, ch)| ch.is_whitespace().then_some(cursor + offset))
-        .unwrap_or(line.len());
-    let tokens_before = whitespace_tokens(&line[segment_start..token_start]);
+    let token_start = segment_start + current_token_start(&line[segment_start..cursor]);
+    let token_end = cursor + current_token_end(&line[cursor..]);
+    let tokens_before = shell_tokens(&line[segment_start..token_start]);
     let query = line[token_start..cursor].to_string();
     TokenContext {
         query,
@@ -473,6 +463,62 @@ fn token_context(line: &str, cursor: usize) -> TokenContext {
         token_end,
         tokens_before,
     }
+}
+
+/// Returns the byte offset of the current token start inside one command segment.
+fn current_token_start(segment: &str) -> usize {
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    let mut token_start = segment.len();
+    let mut token_open = false;
+    for (index, ch) in segment.char_indices() {
+        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
+            token_start = index + ch.len_utf8();
+            token_open = false;
+            continue;
+        }
+        if !token_open {
+            token_start = index;
+            token_open = true;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => {}
+        }
+    }
+    token_start
+}
+
+/// Returns the byte offset of the current token end inside the trailing slice.
+fn current_token_end(segment: &str) -> usize {
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    for (index, ch) in segment.char_indices() {
+        if quote == QuoteState::None && !escaped && (ch.is_whitespace() || ch == ';') {
+            return index;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => {}
+        }
+    }
+    segment.len()
 }
 
 /// Runs the current command segment start operation for this subsystem.
@@ -536,16 +582,67 @@ enum QuoteState {
     Double,
 }
 
-/// Runs the whitespace tokens operation for this subsystem.
+/// Runs the shell tokens operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn whitespace_tokens(value: &str) -> Vec<String> {
-    value
-        .split_whitespace()
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>()
+fn shell_tokens(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    let mut token_start = None;
+    for (index, ch) in value.char_indices() {
+        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                tokens.push(unescape_shell_token(&value[start..index]));
+            }
+            continue;
+        }
+        token_start.get_or_insert(index);
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => {}
+        }
+    }
+    if let Some(start) = token_start {
+        tokens.push(unescape_shell_token(&value[start..]));
+    }
+    tokens
+}
+
+/// Removes shell escaping and quoting from one parsed token.
+fn unescape_shell_token(value: &str) -> String {
+    let mut unescaped = String::new();
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            unescaped.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => unescaped.push(ch),
+        }
+    }
+    if escaped {
+        unescaped.push('\\');
+    }
+    unescaped
 }
 
 /// Runs the mezzanine candidates operation for this subsystem.
@@ -1038,7 +1135,10 @@ fn path_candidates(
             }
             let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
             let suffix = if is_dir { "/" } else { "" };
-            let value = format!("{display_prefix}{name}{suffix}");
+            let value = format!(
+                "{display_prefix}{}{suffix}",
+                escape_path_component_for_shell(&name)
+            );
             Some(SelectorCandidate::new(
                 value,
                 SelectorCandidateKind::Value,
@@ -1196,12 +1296,13 @@ fn path_completion_parts(
     while let Some(component) = components.next() {
         let has_more_components = components.peek().is_some();
         if !has_more_components && !query.ends_with('/') {
-            name_prefix = component.to_string();
+            name_prefix = unescape_shell_token(component);
             break;
         }
-        let next_directory = directory.join(component);
+        let lookup_component = unescape_shell_token(component);
+        let next_directory = directory.join(&lookup_component);
         if component.is_empty() || !next_directory.is_dir() {
-            name_prefix = component.to_string();
+            name_prefix = lookup_component;
             break;
         }
         directory = next_directory;
@@ -1209,6 +1310,18 @@ fn path_completion_parts(
         display_prefix.push('/');
     }
     (directory, display_prefix, name_prefix)
+}
+
+/// Escapes one path component so shell completion inserts a single token.
+fn escape_path_component_for_shell(component: &str) -> String {
+    let mut escaped = String::new();
+    for ch in component.chars() {
+        if ch.is_whitespace() || matches!(ch, '\\' | '\'' | '"' | ';') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 /// Expands a leading tilde in a path used only for completion lookup.
@@ -1604,6 +1717,56 @@ mod tests {
             plan.candidates
                 .iter()
                 .any(|candidate| candidate.value == "src/")
+        );
+    }
+
+    /// Verifies continued agent path completion still works after selecting a
+    /// directory whose name contains spaces.
+    ///
+    /// The selector must escape inserted spaced path components and map those
+    /// escaped components back to real filesystem names for subsequent lookup,
+    /// or the next completion splits the path into multiple tokens and stops.
+    #[test]
+    fn selector_continues_agent_path_completion_inside_directory_with_spaces() {
+        let _guard = CWD_TEST_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("mez-selector-spaced-paths-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("dir with spaces").join("subdir")).unwrap();
+        std::env::set_current_dir(&root).unwrap();
+
+        let first_plan = plan_selector(
+            SelectorSurface::AgentCommand,
+            "inspect ./dir",
+            "inspect ./dir".len(),
+        )
+        .unwrap();
+        let directory_candidate = first_plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.value == "./dir\\ with\\ spaces/")
+            .unwrap()
+            .clone();
+        let (selected_line, selected_cursor) =
+            apply_selector_candidate("inspect ./dir", &first_plan, &directory_candidate);
+        let second_plan = plan_selector(
+            SelectorSurface::AgentCommand,
+            &selected_line,
+            selected_cursor,
+        )
+        .unwrap();
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(selected_line, "inspect ./dir\\ with\\ spaces/");
+        assert_eq!(selected_cursor, selected_line.len());
+        assert!(
+            second_plan
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == "./dir\\ with\\ spaces/subdir/")
         );
     }
 
