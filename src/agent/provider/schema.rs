@@ -241,7 +241,10 @@ fn maap_action_schema(
 
 /// Returns MCP prompt tools in deterministic provider-visible order.
 fn sorted_mcp_prompt_tools(tools: &[McpPromptTool]) -> Vec<&McpPromptTool> {
-    let mut tools = tools.iter().collect::<Vec<_>>();
+    let mut tools = tools
+        .iter()
+        .filter(|tool| !tool.server_id.is_empty() && !tool.tool_name.is_empty())
+        .collect::<Vec<_>>();
     tools.sort_by(|left, right| {
         left.server_id
             .cmp(&right.server_id)

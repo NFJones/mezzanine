@@ -167,13 +167,11 @@ fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptS
     }) else {
         return empty_mcp_prompt_summary();
     };
-    let mut available_tool_count = 0usize;
     let mut unavailable_servers = Vec::new();
     let mut available_servers = Vec::new();
     let mut available_tools = Vec::new();
     for line in block.content.lines() {
-        if let Some(counts) = mcp_availability_counts_from_line(line) {
-            available_tool_count = counts.1;
+        if mcp_availability_counts_from_line(line).is_some() {
             continue;
         }
         if let Some(server) = mcp_available_server_from_line(line) {
@@ -187,10 +185,6 @@ fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptS
         if let Some(server) = mcp_unavailable_server_from_line(line) {
             unavailable_servers.push(server);
         }
-    }
-    if available_tools.len() < available_tool_count {
-        let missing = available_tool_count - available_tools.len();
-        available_tools.extend(placeholder_mcp_tools(missing));
     }
     McpPromptSummary {
         available_servers,
@@ -257,6 +251,9 @@ fn mcp_available_tool_from_line(line: &str) -> Option<McpPromptTool> {
     }
     let combined = mcp_raw_field(line, "available_tool=")?;
     let (server_id, tool_name) = combined.split_once('/')?;
+    if server_id.is_empty() || tool_name.is_empty() {
+        return None;
+    }
     Some(McpPromptTool {
         server_id: server_id.to_string(),
         tool_name: tool_name.to_string(),
@@ -294,19 +291,6 @@ fn mcp_quoted_field(line: &str, prefix: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Builds placeholder available-tool entries for prompt count rendering.
-fn placeholder_mcp_tools(count: usize) -> Vec<McpPromptTool> {
-    (0..count)
-        .map(|_| McpPromptTool {
-            server_id: String::new(),
-            tool_name: String::new(),
-            description: String::new(),
-            approval_required: false,
-            input_schema_json: "{}".to_string(),
-        })
-        .collect()
 }
 
 /// Extracts the live Mezzanine session UUID from runtime identity context.
