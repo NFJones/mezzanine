@@ -298,10 +298,10 @@ fn apply_patch_hunk_mismatch_error(
             range_hint.old_start
         ));
     }
-    if let Some(anchor) = missing_anchor {
+    if let Some(anchor) = &missing_anchor {
         message.push_str(&format!(
             "\napply_patch: hunk header anchor was not found in order: {}",
-            apply_patch_mismatch_excerpt(&anchor)
+            apply_patch_mismatch_excerpt(anchor)
         ));
     }
     if !candidate_lines.is_empty() {
@@ -330,6 +330,17 @@ fn apply_patch_hunk_mismatch_error(
                 .join(", ")
         ));
     }
+    let candidate_context_ranges = apply_patch_candidate_context_ranges(file, &candidate_spans);
+    if !candidate_context_ranges.is_empty() {
+        message.push_str(&format!(
+            "\napply_patch: suggested_candidate_read_range(s): {}",
+            candidate_context_ranges
+                .iter()
+                .map(|(start, end)| format!("{path}:{start}-{end}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if let Some(rejection) = range_rejection {
         message.push_str(&format!(
             "\napply_patch: range_hint_disambiguation=rejected reason={} hint_line={}",
@@ -343,7 +354,8 @@ fn apply_patch_hunk_mismatch_error(
             message.push_str(&format!(" next_distance={distance}"));
         }
     }
-    if let Some(hint) = apply_patch_replacement_presence_hint(file, hunk, scope) {
+    let replacement_hint = apply_patch_replacement_presence_hint(file, hunk, scope);
+    if let Some(hint) = &replacement_hint {
         message.push_str(&format!(
             "\napply_patch: replacement_hint={} span(s): {}",
             hint.kind.as_str(),
@@ -360,7 +372,7 @@ fn apply_patch_hunk_mismatch_error(
                 .join(", ")
         ));
         message.push_str(
-            "\napply_patch: replacement_hint_next_step=reconcile_current_file_before_retry",
+            "\napply_patch: replacement_hint_next_step=skip_or_reconcile_already_applied_change",
         );
     }
     if let Some(first_line) = hunk.old.first() {
@@ -403,7 +415,22 @@ fn apply_patch_hunk_mismatch_error(
                 })
         })
         .or_else(|| (!file.lines.is_empty()).then_some(0));
-    if let Some(center) = context_center
+    if replacement_hint.is_some() {
+        message.push_str(
+            "\napply_patch: suggested_next_step=skip_or_reconcile_already_applied_change\
+             \napply_patch: retry_without_reread=false",
+        );
+    } else if missing_anchor.is_some() {
+        message.push_str(
+            "\napply_patch: suggested_next_step=fix_or_refresh_header_anchor\
+             \napply_patch: retry_without_reread=false",
+        );
+    } else if !candidate_context_ranges.is_empty() {
+        message.push_str(
+            "\napply_patch: suggested_next_step=reread_candidate_regions\
+             \napply_patch: retry_without_reread=false",
+        );
+    } else if let Some(center) = context_center
         && let Some((start, end)) = apply_patch_current_context_range(file, center)
     {
         message.push_str(
@@ -433,9 +460,23 @@ fn apply_patch_hunk_mismatch_error(
             hunk.old.len() - APPLY_PATCH_MISMATCH_CONTEXT_LINES
         ));
     }
-    message.push_str(&format!(
-        "\napply_patch: next step: read {path} around the reported line(s), then retry with a smaller fresh Mezzanine patch using a distinctive @@ header anchor"
-    ));
+    if replacement_hint.is_some() {
+        message.push_str(
+            "\napply_patch: next step: inspect the reported replacement span(s); if the intended change is already present, skip this hunk or reconcile the surrounding edit instead of forcing another retry",
+        );
+    } else if missing_anchor.is_some() {
+        message.push_str(&format!(
+            "\napply_patch: next step: refresh or correct the missing @@ header anchor for {path}, then retry with current anchor context"
+        ));
+    } else if candidate_context_ranges.is_empty() {
+        message.push_str(&format!(
+            "\napply_patch: next step: read {path} around the reported line(s), then retry with a smaller fresh Mezzanine patch using a distinctive @@ header anchor"
+        ));
+    } else {
+        message.push_str(&format!(
+            "\napply_patch: next step: read {path} around the reported candidate range(s), then retry with a smaller fresh Mezzanine patch using a distinctive @@ header anchor"
+        ));
+    }
     message.push_str(
         "\napply_patch: do not retry substantially the same patch without fresh target context",
     );
@@ -1689,4 +1730,20 @@ fn apply_patch_current_context_range(
     let start = center.saturating_sub(APPLY_PATCH_MISMATCH_CONTEXT_LINES / 2);
     let end = (center + (APPLY_PATCH_MISMATCH_CONTEXT_LINES / 2) + 1).min(file.lines.len());
     Some((start + 1, end))
+}
+
+fn apply_patch_candidate_context_ranges(
+    file: &ApplyPatchTextFile,
+    candidate_spans: &[ApplyPatchCandidateSpan],
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for span in candidate_spans {
+        let center = span.start_line.saturating_sub(1);
+        if let Some(range) = apply_patch_current_context_range(file, center)
+            && !ranges.contains(&range)
+        {
+            ranges.push(range);
+        }
+    }
+    ranges
 }

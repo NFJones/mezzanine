@@ -2687,6 +2687,10 @@ fn semantic_apply_patch_unified_range_rejects_tied_candidates() {
     assert!(error.contains("matching_scope=full_file"), "{error}");
     assert!(error.contains("candidate match span(s): 10, 12"), "{error}");
     assert!(
+        error.contains("suggested_candidate_read_range(s): note.rs:6-12, note.rs:8-12"),
+        "{error}"
+    );
+    assert!(
         error.contains("range_hint_disambiguation=rejected reason=tie hint_line=11"),
         "{error}"
     );
@@ -3612,7 +3616,7 @@ fn semantic_apply_patch_hunk_mismatch_reports_present_replacement_block() {
         "{error}"
     );
     assert!(
-        error.contains("replacement_hint_next_step=reconcile_current_file_before_retry"),
+        error.contains("replacement_hint_next_step=skip_or_reconcile_already_applied_change"),
         "{error}"
     );
     std::fs::remove_dir_all(&temp).unwrap();
@@ -3640,7 +3644,7 @@ fn semantic_apply_patch_hunk_mismatch_reports_present_distinctive_added_lines() 
         "{error}"
     );
     assert!(
-        error.contains("replacement_hint_next_step=reconcile_current_file_before_retry"),
+        error.contains("replacement_hint_next_step=skip_or_reconcile_already_applied_change"),
         "{error}"
     );
     std::fs::remove_dir_all(&temp).unwrap();
