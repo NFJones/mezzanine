@@ -446,6 +446,7 @@ pub(super) fn render_agent_markdown_body_lines(
     }
     let table_body_display_width = table_display_width
         .saturating_sub(UnicodeWidthStr::width("mez> "))
+        .saturating_sub(1)
         .max(1);
     prefix_agent_rendered_markdown_lines(render_markdown_preserving_source_blank_lines(
         trimmed,
