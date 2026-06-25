@@ -859,6 +859,12 @@ pub(super) struct RunningShellTransactionRef {
 pub(super) struct RuntimeApplyPatchBatchState {
     /// Paths that still need read-phase snapshots.
     pub(super) remaining_paths: Vec<String>,
+    /// Full transport text captured for the currently running read-phase batch.
+    ///
+    /// Pane previews stay size-bounded for display, but write-phase planning
+    /// still needs the complete snapshot payload so large read batches can be
+    /// verified after the preview truncates.
+    pub(super) current_read_transport: String,
     /// Decoded read-phase outputs that completed without transport truncation.
     pub(super) read_outputs: Vec<String>,
 }

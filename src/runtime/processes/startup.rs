@@ -85,6 +85,7 @@ impl RuntimeSessionService {
                 screen.feed(b"\n[mezzanine: pane restarted with a fresh primary PID]\n");
                 self.pane_screens.insert(started.pane_id.clone(), screen);
             }
+            self.set_pane_readiness(&started.pane_id, PaneReadinessState::PromptCandidate);
             self.session.set_pane_live_state(&started.pane_id, true)?;
             self.append_lifecycle_event(
                 EventKind::PaneChanged,

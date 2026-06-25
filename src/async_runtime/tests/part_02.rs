@@ -803,6 +803,7 @@ async fn async_pane_process_driver_reports_io_and_lifecycle_results() {
     backend.push_resize_result(Ok(()));
     backend.push_terminate_result(Ok(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: Some(0),
         signal: None,
     }));
@@ -833,6 +834,7 @@ async fn async_pane_process_driver_reports_io_and_lifecycle_results() {
         terminated,
         RuntimeEvent::Process(ProcessEvent::Exited {
             pane_id: "%1".to_string(),
+            primary_pid: None,
             exit_code: Some(0),
             signal: None,
         })
@@ -850,11 +852,13 @@ async fn async_pane_process_driver_reports_polled_exit_once() {
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_exit_result(Ok(Some(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: Some(7),
         signal: None,
     })));
     backend.push_exit_result(Ok(Some(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: Some(7),
         signal: None,
     })));
@@ -869,6 +873,7 @@ async fn async_pane_process_driver_reports_polled_exit_once() {
         first,
         Some(RuntimeEvent::Process(ProcessEvent::Exited {
             pane_id: "%1".to_string(),
+            primary_pid: None,
             exit_code: Some(7),
             signal: None,
         }))
@@ -919,6 +924,7 @@ async fn async_pty_pane_process_io_bridges_live_portable_pty() {
         pane_id,
         exit_code,
         signal,
+        ..
     } = event
     else {
         panic!("expected process exit event, got {event:?}");
@@ -989,6 +995,7 @@ async fn async_pty_pane_process_io_preserves_full_screen_mode_bytes() {
         pane_id,
         exit_code,
         signal,
+        ..
     } = event
     else {
         panic!("expected process exit event, got {event:?}");
@@ -1235,6 +1242,7 @@ async fn async_pane_io_side_effect_service_executes_pane_effects() {
     backend.push_resize_result(Ok(()));
     backend.push_terminate_result(Ok(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: Some(0),
         signal: None,
     }));
@@ -1627,6 +1635,7 @@ async fn async_pane_process_service_serializes_output_and_side_effects() {
     backend.push_resize_result(Ok(()));
     backend.push_terminate_result(Ok(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: Some(0),
         signal: None,
     }));
@@ -1928,6 +1937,7 @@ async fn async_pane_process_service_wakes_on_terminal_lifecycle_and_terminates_b
     let mut backend = AsyncFakePaneProcessIo::default();
     backend.push_terminate_result(Ok(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: None,
         signal: Some("killed".to_string()),
     }));
@@ -1997,6 +2007,7 @@ async fn async_pane_process_service_reports_exit_after_output_turn() {
     backend.push_output(b"final output before exit\n".to_vec());
     backend.push_exit_result(Ok(Some(ProcessEvent::Exited {
         pane_id: "%1".to_string(),
+        primary_pid: None,
         exit_code: Some(0),
         signal: None,
     })));

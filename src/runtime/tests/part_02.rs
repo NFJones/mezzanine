@@ -3245,6 +3245,51 @@ fn runtime_service_can_handoff_running_pane_process_to_async_owner() {
         .unwrap();
 }
 
+/// Verifies stale async process-exit events cannot close a pane after its id is reused.
+///
+/// `load-layout` can restart a fresh process for a restored pane id while an
+/// older async watcher still holds a late exit event for the previous process.
+/// The runtime must compare the event's primary PID with the currently live
+/// primary PID and ignore mismatches so the new pane generation remains live.
+#[test]
+fn runtime_service_ignores_stale_process_exit_with_mismatched_primary_pid() {
+    let mut service = test_runtime_service();
+    let started = service
+        .start_initial_pane_process(Some("sleep 30"))
+        .unwrap();
+    let stale_primary_pid = started.primary_pid.saturating_add(1);
+
+    let update = service
+        .apply_pane_process_exit_event(
+            &started.pane_id,
+            stale_primary_pid,
+            crate::process::PaneExitStatus {
+                code: Some(0),
+                signal: None,
+                success: true,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(update, None);
+    assert_eq!(
+        service.pane_processes().primary_pid(&started.pane_id),
+        Some(started.primary_pid)
+    );
+    assert!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .any(|pane| pane.id.as_str() == started.pane_id.as_str() && pane.live)
+    );
+    service
+        .pane_processes_mut()
+        .terminate_pane_with_grace(&started.pane_id, Duration::from_millis(50))
+        .unwrap();
+}
+
 /// Verifies runtime service restarts restored panes with fresh primary pids.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -3287,6 +3332,9 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     assert!(starts.iter().all(|start| start.primary_pid > 0));
     assert_ne!(starts[0].primary_pid, starts[1].primary_pid);
     assert_eq!(service.pane_processes().len(), 2);
+    assert!(starts.iter().all(|start| {
+        service.pane_readiness_state(&start.pane_id) == PaneReadinessState::PromptCandidate
+    }));
     assert!(
         service
             .session()

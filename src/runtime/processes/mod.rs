@@ -97,9 +97,15 @@ impl RuntimeSessionService {
         if self.find_pane_descriptor(&pane_id).is_none() {
             return Ok(None);
         }
+        let live_primary_pid = self.primary_pid_for_live_pane_process(&pane_id);
+        if primary_pid != 0
+            && let Some(live_primary_pid) = live_primary_pid
+            && live_primary_pid != primary_pid
+        {
+            return Ok(None);
+        }
         let primary_pid = if primary_pid == 0 {
-            self.primary_pid_for_live_pane_process(&pane_id)
-                .unwrap_or(0)
+            live_primary_pid.unwrap_or(0)
         } else {
             primary_pid
         };

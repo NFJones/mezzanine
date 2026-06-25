@@ -4563,6 +4563,7 @@ async fn async_actor_applies_process_exit_events_to_session_state() {
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Process(ProcessEvent::Exited {
             pane_id: "%1".to_string(),
+            primary_pid: None,
             exit_code: Some(0),
             signal: None,
         }));

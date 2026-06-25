@@ -457,6 +457,7 @@ impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
             }
             Ok(Some(ProcessEvent::Exited {
                 pane_id,
+                primary_pid: Some(self.process.primary_pid()),
                 exit_code: status.code,
                 signal: status.signal.map(|signal| signal.to_string()),
             }))
@@ -506,6 +507,7 @@ impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
             let status = terminate_pane_process_async(&mut self.process, force).await?;
             Ok(ProcessEvent::Exited {
                 pane_id,
+                primary_pid: Some(self.process.primary_pid()),
                 exit_code: status.code,
                 signal: status.signal.map(|signal| signal.to_string()),
             })
@@ -1998,6 +2000,7 @@ impl AsyncPaneProcessIo for AsyncFakePaneProcessIo {
             self.terminate_results.pop_front().unwrap_or_else(|| {
                 Ok(ProcessEvent::Exited {
                     pane_id: String::new(),
+                    primary_pid: None,
                     exit_code: None,
                     signal: Some(if force { "killed" } else { "terminated" }.to_string()),
                 })

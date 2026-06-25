@@ -42,7 +42,10 @@ enum RuntimeActionPressureSeverity {
 
 impl RuntimeSessionService {
     /// Builds the state key for one batched shell-backed `apply_patch` action.
-    fn apply_patch_batch_state_key(turn_id: &str, action_id: &str) -> String {
+    pub(in crate::runtime) fn apply_patch_batch_state_key(
+        turn_id: &str,
+        action_id: &str,
+    ) -> String {
         format!("{turn_id}/{action_id}")
     }
 
@@ -63,6 +66,7 @@ impl RuntimeSessionService {
                 key.clone(),
                 RuntimeApplyPatchBatchState {
                     remaining_paths: apply_patch_touched_paths(patch)?,
+                    current_read_transport: String::new(),
                     read_outputs: Vec::new(),
                 },
             );
@@ -1077,47 +1081,65 @@ impl RuntimeSessionService {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
-        let decoded_output =
-            decode_shell_output_transport_with_diagnostics(&transaction.observed_output_preview);
-        let write_plan = if transaction.observed_output_truncated
-            || decoded_output.diagnostics.transport_incomplete()
-            || decoded_output.diagnostics.output_truncated()
-        {
-            self.apply_patch_batch_states.remove(&state_key);
-            apply_patch_error_plan(
-                "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
-            )
-        } else if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
-            state.read_outputs.push(decoded_output.output);
-            if !state.remaining_paths.is_empty() {
-                let path = state.remaining_paths.remove(0);
-                let mut paths = BTreeSet::new();
-                paths.insert(path);
-                let read_plan = apply_patch_read_plan_for_paths(&paths);
-                self.apply_patch_batch_states.insert(state_key, state);
-                self.append_agent_trace_turn_event(
-                    &turn.pane_id,
-                    &turn.turn_id,
-                    &format!(
-                        "action {} apply_patch_phase=read reason=next_batch_read",
-                        action.id
-                    ),
-                )?;
-                self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
-                self.dispatch_shell_action_to_pane(
-                    turn,
-                    &action,
-                    &read_plan.command,
-                    read_plan.stateful,
-                    read_plan.timeout_ms,
-                )?;
-                return Ok(true);
+        let write_plan = if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
+            let retained_transport = if state.current_read_transport.is_empty() {
+                &transaction.observed_output_preview
+            } else {
+                &state.current_read_transport
+            };
+            let decoded_output = decode_shell_output_transport_with_diagnostics(retained_transport);
+            if (state.current_read_transport.is_empty() && transaction.observed_output_truncated)
+                || decoded_output.diagnostics.transport_incomplete()
+                || decoded_output.diagnostics.output_truncated()
+            {
+                apply_patch_error_plan(
+                    "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
+                )
+            } else {
+                state.read_outputs.push(decoded_output.output);
+                state.current_read_transport.clear();
+                if !state.remaining_paths.is_empty() {
+                    let path = state.remaining_paths.remove(0);
+                    let mut paths = BTreeSet::new();
+                    paths.insert(path);
+                    let read_plan = apply_patch_read_plan_for_paths(&paths);
+                    self.apply_patch_batch_states.insert(state_key, state);
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "action {} apply_patch_phase=read reason=next_batch_read",
+                            action.id
+                        ),
+                    )?;
+                    self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
+                    self.dispatch_shell_action_to_pane(
+                        turn,
+                        &action,
+                        &read_plan.command,
+                        read_plan.stateful,
+                        read_plan.timeout_ms,
+                    )?;
+                    return Ok(true);
+                }
+                apply_patch_write_plan_from_read_outputs(patch, &state.read_outputs)
+                    .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
             }
-            apply_patch_write_plan_from_read_outputs(patch, &state.read_outputs)
-                .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
         } else {
-            apply_patch_write_plan_from_read_output(patch, &decoded_output.output)
-                .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
+            let decoded_output = decode_shell_output_transport_with_diagnostics(
+                &transaction.observed_output_preview,
+            );
+            if transaction.observed_output_truncated
+                || decoded_output.diagnostics.transport_incomplete()
+                || decoded_output.diagnostics.output_truncated()
+            {
+                apply_patch_error_plan(
+                    "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
+                )
+            } else {
+                apply_patch_write_plan_from_read_output(patch, &decoded_output.output)
+                    .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
+            }
         };
 
         self.append_agent_trace_turn_event(

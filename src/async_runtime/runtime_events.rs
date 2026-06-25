@@ -158,6 +158,8 @@ pub enum ProcessEvent {
     Exited {
         /// Pane identity.
         pane_id: String,
+        /// Operating-system process id for the exiting pane process when known.
+        primary_pid: Option<u32>,
         /// Exit status code when available.
         exit_code: Option<i32>,
         /// Signal name or number when available.

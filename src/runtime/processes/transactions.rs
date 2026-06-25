@@ -150,6 +150,7 @@ impl RuntimeSessionService {
         bytes: &[u8],
     ) {
         let output_preview_lines = self.terminal_shell_output_preview_lines;
+        let mut apply_patch_transport_updates = Vec::new();
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
@@ -165,6 +166,16 @@ impl RuntimeSessionService {
                     RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap => bytes.to_vec(),
                 };
+                if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind
+                    && apply_patch_transaction_phase(&transaction.command)
+                        == Some(ApplyPatchTransactionPhase::Read)
+                    && !observed_bytes.is_empty()
+                {
+                    apply_patch_transport_updates.push((
+                        Self::apply_patch_batch_state_key(&transaction.turn_id, action_id),
+                        String::from_utf8_lossy(&observed_bytes).into_owned(),
+                    ));
+                }
                 transaction.observed_output_bytes = transaction
                     .observed_output_bytes
                     .saturating_add(observed_bytes.len());
@@ -205,6 +216,11 @@ impl RuntimeSessionService {
                         ));
                     }
                 }
+            }
+        }
+        for (state_key, transport_chunk) in apply_patch_transport_updates {
+            if let Some(state) = self.apply_patch_batch_states.get_mut(&state_key) {
+                state.current_read_transport.push_str(&transport_chunk);
             }
         }
         for (turn_id, action_id, pane_id, lines) in status_line_updates {
