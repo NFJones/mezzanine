@@ -364,6 +364,14 @@ pub(super) fn provider_error_should_retry_without_summary(error: &MezError) -> b
     )
 }
 
+/// Maximum number of retryable provider transport retries for one
+/// failure-summary request.
+const FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT: usize = 1;
+
+/// Maximum number of MAAP repair retries for one malformed failure-summary
+/// response.
+const FAILURE_SUMMARY_MAAP_REPAIR_LIMIT: usize = 1;
+
 /// Builds a response-only model request for final failure characterization.
 fn failure_summary_request(
     previous_request: &ModelRequest,
@@ -535,24 +543,63 @@ pub(super) fn summarize_controller_failure_execution<P: ModelProvider>(
     previous_request: &ModelRequest,
     input: FailureSummaryInput<'_>,
 ) -> Option<AgentTurnExecution> {
-    let request = failure_summary_request(
+    let mut request = failure_summary_request(
         previous_request,
         input.scope.stage,
         input.error,
         &input.failed_response.raw_text,
     );
-    let response = provider.send_request(&request).ok()?;
-    if response.provider != provider.provider_id() {
-        return None;
+    let mut retry_attempts = 0;
+    let mut repair_attempts = 0;
+    loop {
+        let response = match provider.send_request(&request) {
+            Ok(response) => response,
+            Err(error) => {
+                if provider_error_should_retry_without_summary(&error)
+                    && retry_attempts < FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT
+                {
+                    retry_attempts += 1;
+                    continue;
+                }
+                if maap_provider_error_is_repairable(&error)
+                    && repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT
+                {
+                    repair_attempts += 1;
+                    request = maap_repair_request(
+                        &request,
+                        error.message(),
+                        error.provider_raw_text().unwrap_or(""),
+                        repair_attempts,
+                    );
+                    continue;
+                }
+                return None;
+            }
+        };
+        if response.provider != provider.provider_id() {
+            return None;
+        }
+        let response_raw_text = response.raw_text.clone();
+        match failure_summary_execution_from_response(
+            turn,
+            request.clone(),
+            &input.failed_response.raw_text,
+            response,
+            input.scope,
+        ) {
+            Ok(execution) => return Some(execution),
+            Err(error) if repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT => {
+                repair_attempts += 1;
+                request = maap_repair_request(
+                    &request,
+                    error.message(),
+                    &response_raw_text,
+                    repair_attempts,
+                );
+            }
+            Err(_) => return None,
+        }
     }
-    failure_summary_execution_from_response(
-        turn,
-        request,
-        &input.failed_response.raw_text,
-        response,
-        input.scope,
-    )
-    .ok()
 }
 
 /// Attempts one response-only provider call to summarize a provider failure.
@@ -592,24 +639,63 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
     previous_request: &ModelRequest,
     input: FailureSummaryInput<'_>,
 ) -> Option<AgentTurnExecution> {
-    let request = failure_summary_request(
+    let mut request = failure_summary_request(
         previous_request,
         input.scope.stage,
         input.error,
         &input.failed_response.raw_text,
     );
-    let response = provider.send_request_async(&request).await.ok()?;
-    if response.provider != provider.provider_id() {
-        return None;
+    let mut retry_attempts = 0;
+    let mut repair_attempts = 0;
+    loop {
+        let response = match provider.send_request_async(&request).await {
+            Ok(response) => response,
+            Err(error) => {
+                if provider_error_should_retry_without_summary(&error)
+                    && retry_attempts < FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT
+                {
+                    retry_attempts += 1;
+                    continue;
+                }
+                if maap_provider_error_is_repairable(&error)
+                    && repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT
+                {
+                    repair_attempts += 1;
+                    request = maap_repair_request(
+                        &request,
+                        error.message(),
+                        error.provider_raw_text().unwrap_or(""),
+                        repair_attempts,
+                    );
+                    continue;
+                }
+                return None;
+            }
+        };
+        if response.provider != provider.provider_id() {
+            return None;
+        }
+        let response_raw_text = response.raw_text.clone();
+        match failure_summary_execution_from_response(
+            turn,
+            request.clone(),
+            &input.failed_response.raw_text,
+            response,
+            input.scope,
+        ) {
+            Ok(execution) => return Some(execution),
+            Err(error) if repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT => {
+                repair_attempts += 1;
+                request = maap_repair_request(
+                    &request,
+                    error.message(),
+                    &response_raw_text,
+                    repair_attempts,
+                );
+            }
+            Err(_) => return None,
+        }
     }
-    failure_summary_execution_from_response(
-        turn,
-        request,
-        &input.failed_response.raw_text,
-        response,
-        input.scope,
-    )
-    .ok()
 }
 
 /// Builds the terminal failed execution for a MAAP response that remained

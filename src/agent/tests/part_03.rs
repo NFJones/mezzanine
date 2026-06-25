@@ -2069,6 +2069,181 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
     );
 }
 
+/// Verifies failure-summary provider calls retry transient transport failures.
+///
+/// The final failure summary is best-effort, but the summary request is still a
+/// provider interaction. A transient transport failure while asking for the
+/// summary should use the same retry classification instead of immediately
+/// collapsing to the unsummarized terminal provider error.
+#[test]
+fn turn_runner_retries_retryable_failure_summary_provider_call() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![
+        Err(crate::MezError::invalid_state(
+            "provider schema rejected request",
+        )),
+        Err(crate::MezError::invalid_state(
+            "provider HTTP response read failed: error decoding response body",
+        )),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "summary after retry".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "The provider failed before any action ran.")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "hello".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert!(execution.response.raw_text.contains("controller_failure_summary"));
+    assert_eq!(provider.requests().len(), 3);
+}
+
+/// Verifies malformed failure-summary MAAP responses get one repair attempt.
+///
+/// The summary request is constrained to response-only `say` actions. If the
+/// model returns malformed MAAP for that response, the existing MAAP repair
+/// prompt should give it a bounded chance to emit the valid final say batch
+/// rather than silently dropping the summary.
+#[tokio::test]
+async fn turn_runner_repairs_malformed_failure_summary_response() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![
+        Err(crate::MezError::invalid_state(
+            "provider schema rejected request",
+        )),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "not a summary batch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "repaired summary".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "The provider failed before any action ran.")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn_async(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "hello".to_string(),
+            }])
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert!(execution.response.raw_text.contains("controller_failure_summary"));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[2].interaction_kind,
+        crate::agent::ModelInteractionKind::Repair
+    );
+    assert!(
+        requests[2]
+            .messages
+            .iter()
+            .any(|message| message.content.contains("[ephemeral maap repair]")),
+        "{:?}",
+        requests[2].messages
+    );
+}
+
 /// Verifies retryable provider transport failures are not converted into
 /// terminal failure summaries.
 ///
