@@ -3326,6 +3326,67 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
     );
 }
 
+/// Verifies volatile MCP integration context does not perturb OpenAI stable-prefix material.
+///
+/// Runtime-derived integration summaries can change between turns as MCP
+/// discovery refreshes. The stable prefix should continue to reuse the same
+/// durable prompt material when the user, repository guidance, and system
+/// prompt summary are otherwise unchanged.
+#[test]
+fn openai_stable_prefix_excludes_volatile_mcp_integration_context() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let context_with_mcp_detail = |detail: &str| {
+        AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::ProjectGuidance,
+                label: "project guidance".to_string(),
+                content: "use stable project style".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::Configuration,
+                label: "mcp integrations".to_string(),
+                content: format!(
+                    "available_servers=1 available_tools=0 unavailable_servers=0\nstatus_detail={detail}"
+                ),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "inspect cache reuse".to_string(),
+            },
+        ])
+        .unwrap()
+    };
+
+    let first = assemble_model_request(&profile, &turn(), &context_with_mcp_detail("starting"))
+        .unwrap();
+    let second = assemble_model_request(&profile, &turn(), &context_with_mcp_detail("ready"))
+        .unwrap();
+    let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
+    let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
+
+    assert_eq!(
+        openai_stable_prefix_material_for_request(&first).unwrap(),
+        openai_stable_prefix_material_for_request(&second).unwrap()
+    );
+    assert_eq!(
+        first_diagnostics.cacheable_prefix_sha256,
+        second_diagnostics.cacheable_prefix_sha256
+    );
+    assert_ne!(
+        first_diagnostics.volatile_input_sha256,
+        second_diagnostics.volatile_input_sha256
+    );
+}
+
 /// Verifies long OpenAI sessions preserve append-only stable-prefix continuity
 /// until an explicit compaction changes the sequence.
 ///
