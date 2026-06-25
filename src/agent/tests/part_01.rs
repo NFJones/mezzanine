@@ -3932,6 +3932,58 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
     assert!(!event_message.content.contains("previous provider-native event"));
 }
 
+
+/// Verifies DeepSeek system prompts point to repository guidance reinforced in user context.
+///
+/// DeepSeek receives repository instructions at the front of the first user
+/// message for provider adherence, but section 3 must still contain prompt
+/// material explaining where those active instructions live so the model does
+/// not treat the empty section as permission to reread instruction files.
+#[test]
+fn assemble_model_request_points_deepseek_system_prompt_to_user_repository_instructions() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::ProjectGuidance,
+                label: "active repository instructions".to_string(),
+                content: "Run just test before handoff.".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "fix the prompt".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let system = &request.messages[0].content;
+    let first_user = request
+        .messages
+        .iter()
+        .find(|message| message.role == ModelMessageRole::User)
+        .unwrap();
+
+    assert!(system.contains("3. Repository Instructions"));
+    assert!(system.contains("DeepSeek provider note"));
+    assert!(system.contains("first user message"));
+    assert!(!system.contains("Run just test before handoff."));
+    assert!(first_user.content.starts_with("Active repository instructions:"));
+    assert!(first_user.content.contains("Run just test before handoff."));
+    assert!(first_user.content.contains("fix the prompt"));
+}
+
 /// Verifies transcript persistence does not recursively store prompt context.
 ///
 /// Request messages can include prior transcript excerpts, legacy passive

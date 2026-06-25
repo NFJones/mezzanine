@@ -58,8 +58,8 @@ pub fn assemble_model_request_with_retained_tail_percent(
         .map(|block| block.content.clone())
         .collect::<Vec<_>>();
     let is_deepseek = profile.provider.as_str() == "deepseek";
-    let repo_instructions_for_prompt = if is_deepseek {
-        Vec::new()
+    let repo_instructions_for_prompt = if is_deepseek && !repository_instruction_blocks.is_empty() {
+        vec![deepseek_repository_instructions_system_prompt_pointer()]
     } else {
         repository_instruction_blocks.clone()
     };
@@ -321,6 +321,11 @@ fn prompt_cache_lineage_id_from_blocks(blocks: &[ContextBlock]) -> Option<String
         .map(|block| block.content.trim())
         .filter(|lineage_id| !lineage_id.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Returns the system-prompt pointer used when DeepSeek receives repository guidance in user context.
+fn deepseek_repository_instructions_system_prompt_pointer() -> String {
+    "DeepSeek provider note: active repository instructions are repeated at the beginning of the first user message for provider adherence. Treat that repeated block as the authoritative repository instruction contents for this turn; do not reread repository instruction files merely because the full text is reinforced outside section 3.".to_string()
 }
 
 /// Prepends discovered repository instruction content to the first user message.
