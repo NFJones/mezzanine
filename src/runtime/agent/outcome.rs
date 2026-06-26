@@ -1220,6 +1220,12 @@ pub(super) fn runtime_failure_feedback_repeat_guidance(
     if attempt <= 1 {
         return None;
     }
+    if runtime_execution_has_apply_patch_failure(execution) && attempt >= 5 {
+        return Some(
+            "\nRepeated apply-patch recovery: five consecutive apply_patch failures reached the shell-edit fallback threshold. Do not emit another apply_patch action for the next mutation attempt; use a bounded shell_command with conventional file-edit tooling such as python, sed, or ed, and include a short note that this shell-edit fallback is intentional."
+                .to_string(),
+        );
+    }
     if runtime_execution_has_apply_patch_hunk_mismatch(execution) {
         return Some(
             "\nRepeated apply-patch recovery: the same failure signature repeated. Do not emit another apply_patch action until you have read the affected target file or otherwise obtained current target context."

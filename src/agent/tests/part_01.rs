@@ -4872,6 +4872,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     );
     assert!(prompt.contains("several small anchored hunks"));
     assert!(prompt.contains("Treat most `apply_patch` failures as recoverable"));
+    assert!(prompt.contains("After five consecutive `apply_patch` failures"));
+    assert!(prompt.contains("shell-edit fallback using conventional tools such as python, sed, or ed"));
     assert!(prompt.contains(
         "Do not stop at the first patch failure when a bounded inspection or corrected patch can still make progress"
     ));

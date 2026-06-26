@@ -3917,7 +3917,12 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         feedback.content
     );
     assert!(
-        feedback.content.contains("Repeated apply-patch recovery: the same failure signature repeated."),
+        feedback.content.contains("five consecutive apply_patch failures reached the shell-edit fallback threshold"),
+        "{}",
+        feedback.content
+    );
+    assert!(
+        feedback.content.contains("use a bounded shell_command with conventional file-edit tooling"),
         "{}",
         feedback.content
     );
