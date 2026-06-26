@@ -3451,6 +3451,41 @@ fn runtime_service_restarts_restored_panes_with_rendered_process_sizes() {
     poll_until_exit(&mut service);
 }
 
+/// Verifies layout-loaded panes drain their first prompt output before redraw.
+///
+/// `:load-layout` synchronously recreates panes and then asks the attached
+/// client for a full redraw. The restored shell prompt must already be in the
+/// pane screen at that point, otherwise users see blank panes until the next
+/// keypress happens to poll shell output.
+#[test]
+fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
+    let original = test_session();
+    let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restored = Session::from_snapshot_payload(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        &payload,
+    )
+    .unwrap();
+    let pane_id = restored.active_window().unwrap().active_pane().id.to_string();
+    let mut service = RuntimeSessionService::with_event_log(
+        restored,
+        PathBuf::from("/tmp/mez-1000/restored-prompt-drain.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+
+    let starts = service
+        .restart_restored_pane_processes(Some("printf 'restored-ps1$ '; sleep 30"))
+        .unwrap();
+    let visible = service.pane_screen(&pane_id).unwrap().visible_lines().join("\n");
+
+    assert_eq!(starts.len(), 1);
+    assert!(visible.contains("restored-ps1$"), "{visible:?}");
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies runtime snapshot resume treats saved pane working directories as
 /// best-effort metadata when fresh pane process startup cannot use them.
 ///

@@ -8,6 +8,11 @@
 
 use super::*;
 
+/// Maximum time spent waiting for freshly restored shells to print their first
+/// prompt bytes during a synchronous layout load.
+const RESTORED_PANE_INITIAL_OUTPUT_WAIT: std::time::Duration =
+    std::time::Duration::from_millis(150);
+
 /// Returns the user's home directory when it is available and usable as a
 /// pane process start directory.
 fn runtime_home_directory() -> Option<PathBuf> {
@@ -98,7 +103,63 @@ impl RuntimeSessionService {
             )?;
             starts.push(started);
         }
+        self.drain_restored_pane_initial_output(&starts)?;
         Ok(starts)
+    }
+
+    /// Waits briefly for newly restored panes to emit their first visible bytes.
+    ///
+    /// A `load-layout` command immediately redraws the attached client after it
+    /// restarts pane shells. Without a bounded drain here, that redraw can race
+    /// the shell's first prompt repaint and leave panes apparently blank until
+    /// the user's next keypress causes another output poll.
+    fn drain_restored_pane_initial_output(&mut self, starts: &[PaneProcessStart]) -> Result<()> {
+        if starts.is_empty() {
+            return Ok(());
+        }
+        if !self
+            .poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?
+            .is_empty()
+        {
+            return Ok(());
+        }
+        let deadline = std::time::Instant::now() + RESTORED_PANE_INITIAL_OUTPUT_WAIT;
+        let mut pending = starts
+            .iter()
+            .filter_map(|start| {
+                self.pane_processes
+                    .output_activity_sequence(start.pane_id.as_str())
+                    .map(|sequence| (start.pane_id.clone(), sequence))
+            })
+            .collect::<Vec<_>>();
+        let wait_slice = std::time::Duration::from_millis(10);
+        while !pending.is_empty() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let mut index = 0usize;
+            let slice = remaining.min(wait_slice);
+            while index < pending.len() {
+                let pane_id = pending[index].0.clone();
+                let sequence = pending[index].1;
+                if self
+                    .pane_processes
+                    .wait_for_output_activity_after(pane_id.as_str(), sequence, slice)
+                    .unwrap_or(false)
+                {
+                    pending.swap_remove(index);
+                    self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
+                } else {
+                    index = index.saturating_add(1);
+                }
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+            }
+        }
+        self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
+        Ok(())
     }
 
     /// Starts one restored pane while treating its snapshot working directory
