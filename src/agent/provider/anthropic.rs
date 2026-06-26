@@ -12,10 +12,107 @@ use super::{
     ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ProviderHttpRequest,
     ProviderHttpResponse, Result, validate_non_empty,
 };
+use std::collections::BTreeMap;
+
+/// Default Anthropic Messages API version used when provider options omit one.
+const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Conservative fallback output cap required by Anthropic Messages requests.
+const DEFAULT_ANTHROPIC_MAX_TOKENS: usize = 4096;
+
+/// Provider-level options for Anthropic Messages requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AnthropicMessagesOptions {
+    anthropic_version: String,
+    default_max_tokens: usize,
+}
+
+impl Default for AnthropicMessagesOptions {
+    fn default() -> Self {
+        Self {
+            anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
+            default_max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
+        }
+    }
+}
+
+impl AnthropicMessagesOptions {
+    /// Parses Anthropic-specific provider options while rejecting option names
+    /// that only make sense for OpenAI-compatible or DeepSeek request shapes.
+    fn from_provider_options(provider_options: &BTreeMap<String, String>) -> Result<Self> {
+        let mut options = Self::default();
+        for (key, value) in provider_options {
+            match key.as_str() {
+                "anthropic_version" | "anthropic-version" => {
+                    validate_non_empty("Anthropic provider option `anthropic_version`", value)?;
+                    options.anthropic_version = value.trim().to_string();
+                }
+                "max_tokens" | "default_max_tokens" => {
+                    options.default_max_tokens = parse_positive_usize(
+                        "Anthropic provider option `default_max_tokens`",
+                        value,
+                    )?;
+                }
+                "max_output_tokens"
+                | "context_window_tokens"
+                | "context_limit_tokens"
+                | "privacy_tier"
+                | "residency"
+                | "approval_policy"
+                | "reasoning_effort" => {}
+                "maap_output"
+                | "maap_output_mode"
+                | "structured_output"
+                | "response_format"
+                | "tool_choice"
+                | "maap_tool_choice"
+                | "parallel_tool_calls"
+                | "supports_parallel_tool_calls"
+                | "tool_calls"
+                | "supports_tool_calls"
+                | "output_token_field"
+                | "maap_surface"
+                | "thinking" => {
+                    return Err(MezError::invalid_args(format!(
+                        "Anthropic provider option `{key}` is not supported by the Anthropic Messages API"
+                    )));
+                }
+                _ => {}
+            }
+        }
+        Ok(options)
+    }
+}
+
+/// Parses a positive integer provider option.
+fn parse_positive_usize(label: &str, value: &str) -> Result<usize> {
+    let parsed = value
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| MezError::invalid_args(format!("{label} must be a positive integer")))?;
+    if parsed == 0 {
+        return Err(MezError::invalid_args(format!(
+            "{label} must be a positive integer"
+        )));
+    }
+    Ok(parsed)
+}
 
 /// Chat Completions transport dialect implementation for Anthropic Messages.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AnthropicMessagesDialect;
+#[derive(Debug, Clone, Default)]
+pub struct AnthropicMessagesDialect {
+    options: AnthropicMessagesOptions,
+}
+
+impl AnthropicMessagesDialect {
+    /// Builds an Anthropic dialect from configured non-secret provider options.
+    pub(in crate::agent) fn from_provider_options(
+        provider_options: &BTreeMap<String, String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            options: AnthropicMessagesOptions::from_provider_options(provider_options)?,
+        })
+    }
+}
 
 impl ChatCompletionsDialect for AnthropicMessagesDialect {
     /// Returns the default provider id used before configuration overrides are applied.
@@ -46,15 +143,20 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
     /// Builds one provider-specific Messages API request.
     fn build_chat_request(
         &self,
-        _request: &ModelRequest,
-        _api_key: Option<&str>,
-        _endpoint: &str,
-        _stream: bool,
-        _timeout_ms: u64,
+        request: &ModelRequest,
+        api_key: Option<&str>,
+        endpoint: &str,
+        stream: bool,
+        timeout_ms: u64,
     ) -> Result<ProviderHttpRequest> {
-        Err(MezError::invalid_state(
-            "Anthropic provider request construction is not implemented yet",
-        ))
+        build_anthropic_messages_http_request(
+            request,
+            api_key,
+            endpoint,
+            stream,
+            timeout_ms,
+            &self.options,
+        )
     }
 
     /// Parses one successful provider-specific Messages API response.
@@ -94,6 +196,124 @@ pub(super) fn anthropic_messages_endpoint_for_base_url(base_url: &str) -> Result
         return Ok(format!("{base_url}/messages"));
     }
     Ok(format!("{base_url}/v1/messages"))
+}
+
+/// Builds one Anthropic Messages API HTTP request.
+fn build_anthropic_messages_http_request(
+    request: &ModelRequest,
+    api_key: Option<&str>,
+    endpoint: &str,
+    stream: bool,
+    timeout_ms: u64,
+    options: &AnthropicMessagesOptions,
+) -> Result<ProviderHttpRequest> {
+    if let Some(api_key) = api_key {
+        validate_non_empty("Anthropic provider API key", api_key)?;
+    }
+    validate_non_empty("Anthropic Messages endpoint", endpoint)?;
+    if timeout_ms == 0 {
+        return Err(MezError::invalid_args(
+            "Anthropic provider timeout must be greater than zero",
+        ));
+    }
+    let body = anthropic_messages_request_body(request, stream, options)?;
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "Accept".to_string(),
+        if stream {
+            "text/event-stream".to_string()
+        } else {
+            "application/json".to_string()
+        },
+    );
+    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    headers.insert(
+        "anthropic-version".to_string(),
+        options.anthropic_version.clone(),
+    );
+    if let Some(api_key) = api_key {
+        headers.insert("x-api-key".to_string(), api_key.to_string());
+    }
+    Ok(ProviderHttpRequest {
+        method: "POST".to_string(),
+        url: endpoint.to_string(),
+        headers,
+        body,
+        timeout_ms,
+        max_response_bytes: None,
+    })
+}
+
+/// Builds an Anthropic-compliant Messages API JSON body.
+fn anthropic_messages_request_body(
+    request: &ModelRequest,
+    stream: bool,
+    options: &AnthropicMessagesOptions,
+) -> Result<String> {
+    let mut system_parts = Vec::new();
+    let mut messages = Vec::<serde_json::Value>::new();
+    for message in &request.messages {
+        let role = match message.role {
+            super::ModelMessageRole::System | super::ModelMessageRole::Developer => {
+                system_parts.push(message.content.clone());
+                continue;
+            }
+            super::ModelMessageRole::Assistant => "assistant",
+            super::ModelMessageRole::User | super::ModelMessageRole::Tool => "user",
+        };
+        if message.content.is_empty() {
+            continue;
+        }
+        if let Some(last) = messages.last_mut()
+            && last.get("role").and_then(serde_json::Value::as_str) == Some(role)
+        {
+            let previous = last
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            last["content"] = serde_json::json!(format!("{previous}\n\n{}", message.content));
+            continue;
+        }
+        messages.push(serde_json::json!({
+            "role": role,
+            "content": message.content,
+        }));
+    }
+    if messages.is_empty() {
+        return Err(MezError::invalid_args(
+            "Anthropic Messages request requires at least one user or assistant message",
+        ));
+    }
+    let max_tokens = request
+        .max_output_tokens
+        .filter(|tokens| *tokens > 0)
+        .unwrap_or(options.default_max_tokens);
+    let mut body = serde_json::json!({
+        "model": request.model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+        "stream": stream,
+    });
+    if !system_parts.is_empty() {
+        body["system"] = serde_json::json!(system_parts.join("\n\n"));
+    }
+    if let Some(temperature) = request
+        .temperature
+        .as_deref()
+        .and_then(|temperature| temperature.parse::<f64>().ok())
+        .filter(|temperature| temperature.is_finite())
+    {
+        body["temperature"] = serde_json::json!(temperature);
+    }
+    if let Some(stop) = request.stop.as_ref().filter(|stop| !stop.is_empty()) {
+        body["stop_sequences"] = serde_json::json!(stop);
+    }
+    serde_json::to_string(&body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "Anthropic Messages request encoding failed: {error}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -154,6 +374,7 @@ mod tests {
             &store,
             "claude-prod",
             Some("https://api.anthropic.com/v1"),
+            &BTreeMap::new(),
             DEFAULT_PROVIDER_TIMEOUT_MS,
             ReqwestProviderHttpTransport,
         )
@@ -180,6 +401,7 @@ mod tests {
             &store,
             "claude-prod",
             None,
+            &BTreeMap::new(),
             DEFAULT_PROVIDER_TIMEOUT_MS,
             ReqwestProviderHttpTransport,
         )

@@ -766,6 +766,7 @@ impl RuntimeSessionService {
                     auth_store,
                     &model_profile.provider,
                     endpoint_override,
+                    &model_profile.provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )

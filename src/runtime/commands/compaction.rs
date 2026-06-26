@@ -386,6 +386,7 @@ impl RuntimeSessionService {
                     auth_store,
                     &task.model_profile.provider,
                     endpoint_override,
+                    &task.model_profile.provider_options,
                     DEFAULT_PROVIDER_TIMEOUT_MS,
                     ReqwestProviderHttpTransport,
                 )

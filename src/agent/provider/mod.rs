@@ -931,9 +931,11 @@ pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
     auth_store: &AuthStore,
     provider_name: &str,
     base_url_override: Option<&str>,
+    provider_options: &BTreeMap<String, String>,
     timeout_ms: u64,
     transport: T,
 ) -> Result<AnthropicMessagesProvider<T>> {
+    let dialect = AnthropicMessagesDialect::from_provider_options(provider_options)?;
     let Some(metadata) = auth_store.read_metadata_for_provider(provider_name)? else {
         return Err(MezError::invalid_state(format!(
             "Anthropic provider `{provider_name}` requires an authenticated API key"
@@ -945,8 +947,12 @@ pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
         )));
     }
     let credential = auth_store.provider_secret(provider_name)?;
-    let mut provider =
-        AnthropicMessagesProvider::new(credential, transport)?.with_provider_id(provider_name)?;
+    let mut provider = AnthropicMessagesProvider::with_optional_auth_and_dialect(
+        Some(credential),
+        transport,
+        dialect,
+    )?
+    .with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         let endpoint = provider.chat_endpoint_for_base_url(base_url)?;
         provider = provider.with_endpoint(endpoint);
