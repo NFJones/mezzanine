@@ -1,7 +1,8 @@
-//! OpenAI MAAP tool and strict-schema construction.
+//! Provider MAAP tool and strict-schema construction.
 //!
-//! This module owns MAAP action schemas, MCP argument schema normalization,
-//! and provider-facing schema descriptions.
+//! This module owns provider-neutral MAAP action schemas, MCP argument schema
+//! normalization, and provider-facing schema descriptions shared by multiple
+//! provider adapters.
 
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, McpPromptTool, ModelRequest,
@@ -103,7 +104,7 @@ fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::
     serde_json::json!({
         "type": "function",
         "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-        "description": openai_maap_current_action_batch_description(request),
+        "description": maap_current_action_batch_description(request),
         "strict": true,
         "parameters": maap_action_batch_schema(
             &openai_stable_schema_action_surface(request),
@@ -144,7 +145,7 @@ fn openai_stable_schema_action_surface(request: &ModelRequest) -> AllowedActionS
 }
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.
-pub(super) fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
+pub(super) fn maap_current_action_batch_description(request: &ModelRequest) -> String {
     let mcp_manifest = if request.allowed_actions.contains(AllowedAction::McpCall) {
         mcp_tool_manifest_for_description(&request.available_mcp_tools)
     } else {
@@ -158,6 +159,11 @@ pub(super) fn openai_maap_current_action_batch_description(request: &ModelReques
         OpenAiMaapToolSurface::CAPABILITY_MAP,
         OpenAiMaapToolSurface::ANTI_EXAMPLES
     )
+}
+
+/// Returns the legacy OpenAI export name for the shared current-action-batch description.
+pub(super) fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
+    maap_current_action_batch_description(request)
 }
 
 /// Returns a compact model-facing manifest for MCP tools in one provider schema.

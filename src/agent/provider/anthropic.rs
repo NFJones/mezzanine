@@ -11,6 +11,7 @@ use super::chat_completions::ChatCompletionsDialect;
 use super::errors::{
     openai_provider_failure_event_json, openai_provider_failure_json, provider_maap_parse_error,
 };
+use super::schema::{maap_action_batch_schema, maap_current_action_batch_description};
 use super::{
     ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
@@ -326,6 +327,10 @@ fn anthropic_messages_request_body(
     if !system_parts.is_empty() {
         body["system"] = serde_json::json!(system_parts.join("\n\n"));
     }
+    if anthropic_request_requires_maap(request) {
+        body["tools"] = serde_json::json!([anthropic_maap_tool(request)]);
+        body["tool_choice"] = anthropic_maap_tool_choice();
+    }
     if let Some(temperature) = request
         .temperature
         .as_deref()
@@ -341,6 +346,27 @@ fn anthropic_messages_request_body(
         MezError::invalid_state(format!(
             "Anthropic Messages request encoding failed: {error}"
         ))
+    })
+}
+
+/// Builds the Anthropic-native MAAP carrier tool for action turns.
+fn anthropic_maap_tool(request: &ModelRequest) -> serde_json::Value {
+    serde_json::json!({
+        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+        "description": maap_current_action_batch_description(request),
+        "input_schema": maap_action_batch_schema(
+            &request.allowed_actions,
+            &request.available_mcp_tools,
+        )
+    })
+}
+
+/// Forces Anthropic action turns through the canonical MAAP carrier tool.
+fn anthropic_maap_tool_choice() -> serde_json::Value {
+    serde_json::json!({
+        "type": "tool",
+        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+        "disable_parallel_tool_use": true,
     })
 }
 
@@ -1242,6 +1268,96 @@ mod tests {
             provider_error_retry_class(&error),
             ProviderErrorRetryClass::NonRetryable
         );
+    }
+
+    /// Verifies Anthropic action-execution requests advertise one provider-native
+    /// MAAP tool and force that tool even for say-only surfaces such as
+    /// compaction and remember flows.
+    #[test]
+    fn anthropic_request_body_forces_maap_tool_for_say_only_action_execution() {
+        let request = ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![crate::agent::ModelMessage {
+                role: crate::agent::ModelMessageRole::User,
+                source: crate::agent::ContextSourceKind::UserInstruction,
+                content: "summarize this conversation".to_string(),
+            }],
+        };
+
+        let body =
+            anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(value["tool_choice"]["type"], "tool");
+        assert_eq!(value["tool_choice"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
+        assert_eq!(
+            value["tool_choice"]["disable_parallel_tool_use"],
+            serde_json::json!(true)
+        );
+        assert_eq!(value["tools"][0]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
+        assert_eq!(
+            value["tools"][0]["input_schema"]["required"],
+            serde_json::json!(["rationale", "thought", "actions"])
+        );
+        let description = value["tools"][0]["description"].as_str().unwrap();
+        assert!(description.contains("Return a function call, not prose"));
+    }
+
+    /// Verifies AutoSizing requests stay tool-free so Anthropic routing turns do
+    /// not advertise or force the MAAP carrier.
+    #[test]
+    fn anthropic_request_body_omits_tools_for_auto_sizing() {
+        let request = ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::agent::ModelInteractionKind::AutoSizing,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![crate::agent::ModelMessage {
+                role: crate::agent::ModelMessageRole::User,
+                source: crate::agent::ContextSourceKind::UserInstruction,
+                content: "pick the best provider".to_string(),
+            }],
+        };
+
+        let body =
+            anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert!(value.get("tools").is_none());
+        assert!(value.get("tool_choice").is_none());
     }
 
     /// Verifies Anthropic status failure shaping retains the provider request
