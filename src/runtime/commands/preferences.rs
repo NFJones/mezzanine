@@ -35,9 +35,10 @@ impl RuntimeSessionService {
             });
         }
 
-        let requested = args.mode.executor().ok_or_else(|| {
-            MezError::invalid_args("shell-mode expects native, pane, pane_shell, shell, or status")
-        })?;
+        let requested = args
+            .mode
+            .executor()
+            .ok_or_else(|| MezError::invalid_args("shell-mode expects native, pane, or status"))?;
         let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
         match args.scope {
             ShellModeCommandScope::Session => {
@@ -457,13 +458,13 @@ fn parse_shell_mode_args(args: &str) -> Result<ShellModeCommandArgs> {
                 &mut mode,
                 ShellModeCommandMode::Executor(RuntimeLocalActionExecutor::Native),
             )?,
-            "pane" | "pane_shell" | "shell" => set_shell_mode_once(
+            "pane" => set_shell_mode_once(
                 &mut mode,
                 ShellModeCommandMode::Executor(RuntimeLocalActionExecutor::PaneShell),
             )?,
             _ => {
                 return Err(MezError::invalid_args(
-                    "/shell-mode expects native, pane, pane_shell, shell, or status",
+                    "/shell-mode expects native, pane, or status",
                 ));
             }
         }

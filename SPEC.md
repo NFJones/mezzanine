@@ -5041,8 +5041,7 @@ The baseline command capabilities are:
   pane-local agent preference and MUST checkpoint that preference with other
   pane-scoped agent shell preferences.
 - `/shell-mode`: Inspect or change the local action executor for the active
-  agent shell. It MUST accept `native`, `pane`, `shell`, `pane_shell`,
-  `status`, and optional `--scope session|config`. Session scope MUST update
+  agent shell. It MUST accept `native`, `pane`, `status`, and optional `--scope session|config`. Session scope MUST update
   the active pane immediately without requiring an agent-shell restart. Config
   scope MUST persist `agents.local_action_executor` through normal config
   mutation validation and then use the persisted mode. Status output MUST show

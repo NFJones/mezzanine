@@ -368,6 +368,30 @@ fn runtime_agent_shell_shell_mode_command_sets_override_and_persists_config() {
     assert!(status.contains("configured=pane"), "{status}");
     assert!(status.contains("source=session"), "{status}");
 
+    let pane = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"shell-mode-pane","method":"agent/shell/command","params":{"idempotency_key":"shell-mode-pane","input":"/shell-mode pane"}}"#,
+        &primary,
+    );
+    assert!(pane.contains(r#""kind":"mutated""#), "{pane}");
+    assert!(pane.contains("mode=pane"), "{pane}");
+    assert_eq!(
+        service.agent_local_action_executor_for_pane("%1"),
+        RuntimeLocalActionExecutor::PaneShell
+    );
+
+    for alias in ["shell", "pane_shell"] {
+        let rejected = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"shell-mode-alias-{alias}","method":"agent/shell/command","params":{{"idempotency_key":"shell-mode-alias-{alias}","input":"/shell-mode {alias}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(
+            rejected.contains("/shell-mode expects native, pane, or status"),
+            "{rejected}"
+        );
+    }
+
     let persisted = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"shell-mode-config","method":"agent/shell/command","params":{"idempotency_key":"shell-mode-config","input":"/shell-mode native --scope config"}}"#,
         &primary,
