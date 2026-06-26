@@ -200,8 +200,8 @@ impl RuntimeSessionService {
     ///
     /// This recovery path deliberately does not compact context: the provider
     /// accepted the input, but the model spent too much output budget. The
-    /// durable active turn is retried with a temporary developer instruction
-    /// and an escalated `max_output_tokens` provider option.
+    /// durable active turn first retries with compact-output guidance only,
+    /// then escalates the `max_output_tokens` provider option on a later retry.
     pub(crate) fn recover_agent_provider_output_limit_failure(
         &mut self,
         agent_id: &AgentId,
@@ -234,12 +234,14 @@ impl RuntimeSessionService {
                 "runtime agent turn has no model profile",
             ));
         };
-        let retry_tokens = model_profile.output_limit_retry_tokens();
-        model_profile
-            .provider_options
-            .insert("max_output_tokens".to_string(), retry_tokens.to_string());
-        self.agent_turn_model_profiles
-            .insert(turn_id.to_string(), model_profile);
+        let retry_tokens = (attempt > 1).then(|| model_profile.output_limit_retry_tokens());
+        if let Some(retry_tokens) = retry_tokens {
+            model_profile
+                .provider_options
+                .insert("max_output_tokens".to_string(), retry_tokens.to_string());
+            self.agent_turn_model_profiles
+                .insert(turn_id.to_string(), model_profile);
+        }
 
         let context = self
             .agent_turn_contexts
@@ -249,12 +251,10 @@ impl RuntimeSessionService {
             block.source != ContextSourceKind::Configuration
                 || block.label != RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL
         });
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            label: RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL.to_string(),
-            content: format!(
+        let guidance = if let Some(retry_tokens) = retry_tokens {
+            format!(
                 "[ephemeral provider output-limit retry]\n\
-                 The previous provider response was incomplete because generation hit max_output_tokens. \
+                 The previous provider response was still incomplete because generation hit max_output_tokens. \
                  Return one complete compact MAAP batch or one short final say. \
                  Do not include progress prose, plans, evidence lists, command logs, or explanations. \
                  Prefer the next focused executable action when work remains. \
@@ -264,23 +264,50 @@ impl RuntimeSessionService {
                 retry_tokens,
                 runtime_mezzanine_error_code(error.kind()),
                 error.message()
-            ),
+            )
+        } else {
+            format!(
+                "[ephemeral provider output-limit retry]\n\
+                 The previous provider response was incomplete because generation hit max_output_tokens. \
+                 Retry once with a much shorter complete response before Mezzanine escalates recovery. \
+                 Return one minimal complete MAAP batch or one short final say. \
+                 Do not include progress prose, plans, evidence lists, command logs, or explanations. \
+                 Prefer the next focused executable action when work remains. \
+                 This retry instruction is not durable transcript or future-turn context.\n\
+                 attempt={} error_kind={} error_message={}",
+                attempt.max(1),
+                runtime_mezzanine_error_code(error.kind()),
+                error.message()
+            )
+        };
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL.to_string(),
+            content: guidance,
         });
-        self.append_agent_status_text_to_terminal_buffer(
-            &turn.pane_id,
-            &format!(
-                "agent: provider response hit output limit; retrying compactly attempt={} max_output_tokens={}",
+        let status_text = if let Some(retry_tokens) = retry_tokens {
+            format!(
+                "agent: provider response hit output limit again; retrying compactly attempt={} max_output_tokens={}",
                 attempt.max(1),
                 retry_tokens
-            ),
-        )?;
+            )
+        } else {
+            format!(
+                "agent: provider response hit output limit; retrying with shorter-response guidance attempt={}",
+                attempt.max(1)
+            )
+        };
+        self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &status_text)?;
+        let trace_retry_tokens = retry_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "unchanged".to_string());
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
             &format!(
                 "provider_request recovery_applied reason=provider_output_limit attempt={} max_output_tokens={} error_kind={}",
                 attempt.max(1),
-                retry_tokens,
+                trace_retry_tokens,
                 runtime_mezzanine_error_code(error.kind())
             ),
         )?;

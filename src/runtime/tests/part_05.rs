@@ -1912,14 +1912,15 @@ context_window_tokens = 40000
     );
 }
 
-/// Verifies provider output-limit incomplete responses trigger compact retry
-/// guidance and max-output escalation without compacting active-turn context.
+/// Verifies provider output-limit incomplete responses first trigger compact
+/// retry guidance, then max-output escalation, without compacting active-turn
+/// context.
 ///
 /// Output exhaustion means the provider accepted the input but cut generation
-/// off, so the recovery path should ask for a smaller complete response rather
-/// than discarding context.
+/// off, so the recovery path should first ask for a smaller complete response
+/// before escalating the output budget or discarding context.
 #[test]
-fn runtime_provider_output_limit_error_guides_compact_retry_without_compaction() {
+fn runtime_provider_output_limit_error_guides_then_escalates_without_compaction() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -1984,9 +1985,10 @@ max_output_tokens = 4096
 
     assert_eq!(execution.terminal_state, AgentTurnState::Completed);
     let requests = provider.requests.borrow();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].max_output_tokens, Some(4096));
-    assert_eq!(requests[1].max_output_tokens, Some(16_384));
+    assert_eq!(requests[1].max_output_tokens, Some(4096));
+    assert_eq!(requests[2].max_output_tokens, Some(16_384));
     let second_request_text = requests[1]
         .messages
         .iter()
@@ -2002,8 +2004,18 @@ max_output_tokens = 4096
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("one complete compact MAAP batch"),
+        second_request_text.contains("much shorter complete response"),
         "{second_request_text}"
+    );
+    let third_request_text = requests[2]
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        third_request_text.contains("one complete compact MAAP batch"),
+        "{third_request_text}"
     );
     assert!(
         !second_request_text.contains("[context compacted]"),
@@ -2014,8 +2026,19 @@ max_output_tokens = 4096
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let pane_text_unwrapped = pane_text.replace("\n", "");
     assert!(
-        pane_text.contains("provider response hit output limit; retrying compactly"),
+        pane_text_unwrapped
+            .contains("provider response hit output limit; retrying with shorter-response"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped
+            .contains("provider response hit output limit again; retrying compactly"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped.contains("max_output_tokens=16384"),
         "{pane_text}"
     );
 }

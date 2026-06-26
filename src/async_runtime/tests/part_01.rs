@@ -3390,10 +3390,11 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
 }
 
 /// Verifies provider output-limit failures use the retry timer path after
-/// mutating only active-turn retry guidance and the model profile output cap.
+/// mutating only active-turn retry guidance for the first retry.
 ///
 /// This protects OpenAI `response.incomplete/max_output_tokens` events from
-/// becoming terminal turn failures or context-compaction triggers.
+/// becoming terminal turn failures or context-compaction triggers before the
+/// later retry-budget escalation stage.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_recovers_output_limit_failure_before_provider_retry() {
     let mut service = test_service();
@@ -3489,7 +3490,7 @@ max_output_tokens = 4096
 
         let pending = handle.pending_agent_provider_tasks().await.unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].model_profile.max_output_tokens(), Some(16_384));
+        assert_eq!(pending[0].model_profile.max_output_tokens(), Some(4096));
         let dispatches = handle
             .drain_agent_provider_dispatch_side_effects(8)
             .await
@@ -3515,7 +3516,7 @@ max_output_tokens = 4096
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("provider response hit output limit; retrying compactly"),
+        pane_text.contains("provider response hit output limit; retrying with shorter-response"),
         "{pane_text}"
     );
     assert!(

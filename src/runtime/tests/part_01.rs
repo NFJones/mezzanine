@@ -1249,8 +1249,8 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
     }
 }
 
-/// Fails the first provider request with an output-limit incomplete response
-/// and succeeds after runtime recovery adds compact-output retry guidance.
+/// Fails the first two provider requests with output-limit incomplete responses
+/// and succeeds after runtime recovery applies both retry stages.
 struct RuntimeOutputLimitThenSuccessProvider {
     /// Requests observed by the test provider.
     requests: RefCell<Vec<crate::agent::ModelRequest>>,
@@ -1262,14 +1262,14 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
         "runtime-batch"
     }
 
-    /// Returns one output-limit error, then a successful completion response.
+    /// Returns two output-limit errors, then a successful completion response.
     fn send_request(
         &self,
         request: &crate::agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
-        if requests.len() == 1 {
+        if requests.len() <= 2 {
             return Err(MezError::invalid_state(
                 "OpenAI stream returned an incomplete response: max_output_tokens",
             )
