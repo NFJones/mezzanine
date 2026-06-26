@@ -445,7 +445,7 @@ impl ProviderCapabilities {
         match api {
             ProviderApiCompatibility::OpenAiResponses => Self {
                 supports_responses_api: true,
-                supports_max_output_tokens: true,
+                supports_max_output_tokens: false,
                 supports_reasoning_controls: true,
                 supports_thinking_toggle: false,
                 supports_service_tier: true,

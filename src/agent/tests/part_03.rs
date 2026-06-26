@@ -4294,7 +4294,7 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
 
     assert_eq!(body["model"], "gpt-5.4");
     assert_eq!(body["prompt_cache_retention"], "24h");
-    assert_eq!(body["max_output_tokens"], 16_384);
+    assert!(body.get("max_output_tokens").is_none());
     assert_eq!(body["reasoning"]["effort"], "medium");
     assert_eq!(body["service_tier"], "priority");
     assert_eq!(body["parallel_tool_calls"], false);
@@ -4330,8 +4330,8 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
     assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_441);
     assert_eq!(diagnostics.stable_prompt_prefix_sha256, "7bef2b69c46ecd779236e5fff02e891bcb3dfa5d9f3fb81ebf51806bf9c73df1");
-    assert_eq!(diagnostics.provider_request_shape_bytes, 27_599);
-    assert_eq!(diagnostics.provider_request_shape_sha256, "aab391d2b8143800d891a9ff42c48550c4a45178574ca3bc6716fae624f12ac0");
+    assert_eq!(diagnostics.provider_request_shape_bytes, 27_573);
+    assert_eq!(diagnostics.provider_request_shape_sha256, "2f89d651ae06b554c8185872372a0a3a78d01bc49244cc5db2ba4a77b8e70189");
 }
 
 /// Verifies OpenAI Responses request bodies carry the selected reasoning effort
@@ -4369,12 +4369,12 @@ fn openai_responses_request_body_includes_reasoning_effort() {
     assert_eq!(value["prompt_cache_retention"], "24h");
 }
 
-/// Verifies OpenAI Responses request bodies include the configured output-token
-/// cap and reflect retry-raised limits. Output-limit recovery mutates
-/// `ModelRequest.max_output_tokens`, so the Responses body must carry the
-/// current value for the retry to affect provider behavior.
+/// Verifies OpenAI Responses request bodies do not serialize the configured
+/// output-token cap even when retries raise `ModelRequest.max_output_tokens`.
+/// OpenAI rejects the legacy wire field, so recovery must adjust provider
+/// behavior without emitting `max_output_tokens` on the Responses path.
 #[test]
-fn openai_responses_request_body_includes_configured_max_output_tokens() {
+fn openai_responses_request_body_omits_configured_max_output_tokens() {
     let mut provider_options = std::collections::BTreeMap::new();
     provider_options.insert("max_output_tokens".to_string(), "12000".to_string());
     let mut request = assemble_model_request(
@@ -4401,7 +4401,7 @@ fn openai_responses_request_body_includes_configured_max_output_tokens() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
 
     assert_eq!(request.max_output_tokens, Some(12000));
-    assert_eq!(value["max_output_tokens"], 12000);
+    assert!(value.get("max_output_tokens").is_none());
     assert!(
         value["prompt_cache_key"]
             .as_str()
@@ -4412,7 +4412,7 @@ fn openai_responses_request_body_includes_configured_max_output_tokens() {
     let retry_body = openai_responses_request_body(&request).unwrap();
     let retry_value: serde_json::Value = serde_json::from_str(&retry_body).unwrap();
 
-    assert_eq!(retry_value["max_output_tokens"], 24000);
+    assert!(retry_value.get("max_output_tokens").is_none());
 }
 
 /// Builds a minimal OpenAI request for prompt-cache retention tests.

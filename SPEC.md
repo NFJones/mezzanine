@@ -2609,8 +2609,9 @@ Generated default model profiles SHOULD include provider/model-aware recommended
 `max_output_tokens` values for known agent workloads when the selected provider
 exposes a compatible output-budget control. Profiles for unknown or generic
 OpenAI-compatible providers MAY omit `max_output_tokens` so the provider default
-applies. `max_output_tokens` MUST be sent to providers that expose a compatible
-output budget control and MUST NOT be included in prompt-cache identity material.
+applies. Mezzanine MUST send `max_output_tokens` only to providers whose active
+wire API accepts that field, and MUST NOT include it in prompt-cache identity
+material.
 Mezzanine MUST NOT use local fallback context-size estimates as a
 prompt-submission gate or provider-request preflight; provider-reported usage
 and provider context-limit errors are the authoritative context-size signals.

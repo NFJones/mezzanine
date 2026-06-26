@@ -510,7 +510,6 @@ pub fn openai_prompt_cache_diagnostics_for_request(
         "reasoning_effort": request.reasoning_effort,
         "latency_preference": request.latency_preference,
         "prompt_cache_retention": openai_prompt_cache_retention_request_value(request)?,
-        "max_output_tokens": request.max_output_tokens,
         "parallel_tool_calls": false,
         "store": false,
         "response_format": response_format,

@@ -60,9 +60,6 @@ pub(super) fn openai_responses_request_body_with_stream(
     {
         body["service_tier"] = serde_json::json!(service_tier);
     }
-    if let Some(max_output_tokens) = request.max_output_tokens {
-        body["max_output_tokens"] = serde_json::json!(max_output_tokens);
-    }
     if let Some(retention) = openai_prompt_cache_retention_request_value(request)? {
         body["prompt_cache_retention"] = serde_json::json!(retention);
     }
