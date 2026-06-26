@@ -34,6 +34,16 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
     /// Returns the diagnostic label used when validating a bearer credential.
     fn credential_label(&self) -> &'static str;
 
+    /// Extracts one provider-owned error detail string from a failed HTTP body.
+    fn provider_error_detail(&self, body: &str) -> String {
+        openai_provider_error_detail(body)
+    }
+
+    /// Shapes one sanitized provider failure JSON payload from a failed HTTP body.
+    fn provider_failure_json(&self, status_code: Option<u16>, body: &str) -> String {
+        openai_provider_failure_json(status_code, body)
+    }
+
     /// Derives the chat-completions endpoint from a configured base URL.
     fn chat_endpoint_for_base_url(&self, base_url: &str) -> Result<String>;
 
@@ -276,12 +286,12 @@ where
             "{} {surface} API returned status {}: {}",
             self.dialect.provider_label(),
             response.status_code,
-            openai_provider_error_detail(&response.body)
+            self.dialect.provider_error_detail(&response.body)
         ))
-        .with_provider_failure_json(openai_provider_failure_json(
-            Some(response.status_code),
-            &response.body,
-        ))
+        .with_provider_failure_json(
+            self.dialect
+                .provider_failure_json(Some(response.status_code), &response.body),
+        )
     }
 
     /// Parses a successful model catalog response into shared catalog metadata.

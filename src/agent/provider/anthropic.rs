@@ -8,7 +8,9 @@
 //! auth-store construction.
 
 use super::chat_completions::ChatCompletionsDialect;
-use super::errors::{openai_provider_failure_event_json, provider_maap_parse_error};
+use super::errors::{
+    openai_provider_failure_event_json, openai_provider_failure_json, provider_maap_parse_error,
+};
 use super::{
     ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
@@ -142,6 +144,12 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
     /// Derives the Anthropic Messages endpoint from a configured base URL.
     fn chat_endpoint_for_base_url(&self, base_url: &str) -> Result<String> {
         anthropic_messages_endpoint_for_base_url(base_url)
+    }
+
+    /// Shapes sanitized Anthropic failure JSON while retaining the provider
+    /// request id when the API supplied one.
+    fn provider_failure_json(&self, status_code: Option<u16>, body: &str) -> String {
+        anthropic_provider_failure_json(status_code, body)
     }
 
     /// Builds one provider-specific Messages API request.
@@ -736,8 +744,54 @@ fn anthropic_provider_error_from_value(
         .unwrap_or(fallback_message);
     Some(
         MezError::invalid_state(message)
-            .with_provider_failure_json(openai_provider_failure_event_json(value)),
+            .with_provider_failure_json(anthropic_provider_failure_event_json(value)),
     )
+}
+
+/// Builds a sanitized Anthropic failure JSON payload from one failed HTTP body.
+fn anthropic_provider_failure_json(status_code: Option<u16>, body: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    anthropic_failure_json_with_request_id(
+        openai_provider_failure_json(status_code, body),
+        parsed.as_ref(),
+    )
+}
+
+/// Builds a sanitized Anthropic failure JSON payload from one parsed response
+/// or stream event object.
+fn anthropic_provider_failure_event_json(value: &serde_json::Value) -> String {
+    anthropic_failure_json_with_request_id(openai_provider_failure_event_json(value), Some(value))
+}
+
+/// Adds an Anthropic request id to one already-sanitized failure JSON payload
+/// when the provider supplied that identifier.
+fn anthropic_failure_json_with_request_id(
+    base_json: String,
+    value: Option<&serde_json::Value>,
+) -> String {
+    let Some(request_id) = anthropic_request_id(value) else {
+        return base_json;
+    };
+    let Ok(mut object) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&base_json)
+    else {
+        return base_json;
+    };
+    object.insert(
+        "request_id".to_string(),
+        serde_json::Value::String(request_id.to_string()),
+    );
+    serde_json::Value::Object(object).to_string()
+}
+
+/// Returns the Anthropic request id from one parsed failure payload when present.
+fn anthropic_request_id(value: Option<&serde_json::Value>) -> Option<&str> {
+    let value = value?;
+    value
+        .pointer("/request_id")
+        .or_else(|| value.pointer("/error/request_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|request_id| !request_id.trim().is_empty())
 }
 
 /// Extracts Anthropic token-usage counters from a response or stream usage
@@ -925,7 +979,8 @@ impl AnthropicStreamContentBlock {
 mod tests {
     use super::*;
     use crate::agent::{
-        AnthropicMessagesProvider, DEFAULT_PROVIDER_TIMEOUT_MS, ReqwestProviderHttpTransport,
+        AnthropicMessagesProvider, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass,
+        ReqwestProviderHttpTransport, provider_error_retry_class,
     };
     use crate::auth::{AuthPaths, AuthStore};
     use crate::error::MezErrorKind;
@@ -1149,5 +1204,88 @@ mod tests {
         let failure_json = error.provider_failure_json().unwrap();
         assert!(failure_json.contains("max_output_tokens"), "{failure_json}");
         assert_eq!(error.provider_raw_text(), Some("partial"));
+    }
+
+    /// Verifies Anthropic stop reasons map context-window exhaustion into the
+    /// shared runtime context-limit recovery path.
+    #[test]
+    fn anthropic_stop_reason_context_window_maps_to_context_limit() {
+        let error =
+            anthropic_stop_reason_error(Some("model_context_window_exceeded"), "partial", true)
+                .unwrap();
+
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::ContextLimit
+        );
+    }
+
+    /// Verifies Anthropic refusals stay terminal instead of entering retry or
+    /// compaction recovery.
+    #[test]
+    fn anthropic_stop_reason_refusal_is_terminal() {
+        let error = anthropic_stop_reason_error(Some("refusal"), "partial", true).unwrap();
+
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::NonRetryable
+        );
+    }
+
+    /// Verifies unsupported Anthropic pause-turn responses fail closed as
+    /// terminal provider errors instead of looping inside retry recovery.
+    #[test]
+    fn anthropic_stop_reason_pause_turn_is_terminal() {
+        let error = anthropic_stop_reason_error(Some("pause_turn"), "partial", true).unwrap();
+
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::NonRetryable
+        );
+    }
+
+    /// Verifies Anthropic status failure shaping retains the provider request
+    /// id inside sanitized diagnostics.
+    #[test]
+    fn anthropic_failure_json_preserves_request_id() {
+        let failure_json = anthropic_provider_failure_json(
+            Some(429),
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"},"request_id":"req_123"}"#,
+        );
+
+        assert!(
+            failure_json.contains(r#""request_id":"req_123""#),
+            "{failure_json}"
+        );
+    }
+
+    /// Verifies Anthropic HTTP-200 stream error events classify by structured
+    /// error type and preserve the provider request id for diagnostics.
+    #[test]
+    fn anthropic_stream_error_event_is_retryable_and_preserves_request_id() {
+        let body = concat!(
+            "event: error\n",
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"too many requests\"},\"request_id\":\"req_123\"}\n\n"
+        );
+
+        let error = parse_anthropic_messages_provider_body(
+            body,
+            "fallback-model",
+            true,
+            "turn-1",
+            "agent-1",
+            true,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::RetryableTransport
+        );
+        let failure_json = error.provider_failure_json().unwrap();
+        assert!(
+            failure_json.contains(r#""request_id":"req_123""#),
+            "{failure_json}"
+        );
     }
 }

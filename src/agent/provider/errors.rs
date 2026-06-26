@@ -249,10 +249,13 @@ pub(crate) fn provider_error_is_transient_overload_or_unavailable(
         return false;
     };
     [
+        "/error/type",
         "/error/message",
         "/message",
+        "/body/error/type",
         "/body/error/message",
         "/body/message",
+        "/response/error/type",
         "/response/error/message",
     ]
     .into_iter()
@@ -360,6 +363,7 @@ fn provider_error_text_is_transient_overload_or_unavailable(text: &str) -> bool 
     let lower = text.to_ascii_lowercase();
     lower.contains("api_error")
         || lower.contains("timeout_error")
+        || lower.contains("rate_limit_error")
         || lower.contains("overloaded_error")
         || lower.contains("api overloaded")
         || lower.contains("server overloaded")
@@ -771,5 +775,102 @@ mod tests {
         );
 
         assert_eq!(retry_class, ProviderErrorRetryClass::NonRetryable);
+    }
+
+    /// Verifies Anthropic status-bearing errors map into the same retry and
+    /// recovery classes used by the runtime after structured failure JSON is
+    /// attached to provider errors.
+    #[test]
+    fn provider_retry_classifier_maps_anthropic_status_and_error_types() {
+        let cases = [
+            (
+                401,
+                "authentication_error",
+                "invalid api key",
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+            (
+                402,
+                "billing_error",
+                "billing failure",
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+            (
+                403,
+                "permission_error",
+                "permission denied",
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+            (
+                404,
+                "not_found_error",
+                "model not found",
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+            (
+                408,
+                "timeout_error",
+                "request timed out",
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                413,
+                "request_too_large",
+                "request_too_large",
+                ProviderErrorRetryClass::ContextLimit,
+            ),
+            (
+                429,
+                "rate_limit_error",
+                "rate limit exceeded",
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                500,
+                "api_error",
+                "internal api error",
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                529,
+                "overloaded_error",
+                "server overloaded",
+                ProviderErrorRetryClass::RetryableTransport,
+            ),
+            (
+                400,
+                "invalid_request_error",
+                "request schema is invalid",
+                ProviderErrorRetryClass::NonRetryable,
+            ),
+        ];
+
+        for (status_code, error_type, message, expected) in cases {
+            let failure_json = format!(
+                r#"{{"status_code":{status_code},"error":{{"type":"{error_type}","message":"{message}"}}}}"#
+            );
+            let retry_class = provider_error_retry_class_from_parts(
+                crate::error::MezErrorKind::InvalidState,
+                message,
+                Some(&failure_json),
+            );
+
+            assert_eq!(retry_class, expected, "{status_code} {error_type}");
+        }
+    }
+
+    /// Verifies structured provider error types can drive retry behavior even
+    /// when the HTTP transport already succeeded and no status code is present.
+    #[test]
+    fn provider_retry_classifier_uses_structured_error_types_without_status_codes() {
+        let retry_class = provider_error_retry_class_from_parts(
+            crate::error::MezErrorKind::InvalidState,
+            "Anthropic stream error",
+            Some(
+                r#"{"error":{"type":"rate_limit_error","message":"too many requests"},"request_id":"req_123"}"#,
+            ),
+        );
+
+        assert_eq!(retry_class, ProviderErrorRetryClass::RetryableTransport);
     }
 }
