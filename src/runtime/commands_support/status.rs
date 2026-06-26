@@ -356,6 +356,27 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .unwrap_or("none")
         ),
         format!(
+            "last_provider_output_token_budget_source = {}",
+            runtime_metrics
+                .last_provider_output_token_budget_source
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
+            "last_provider_output_token_budget_tokens = {}",
+            runtime_metrics
+                .last_provider_output_token_budget_tokens
+                .map(|tokens| tokens.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "last_provider_output_limit_retry_override_tokens = {}",
+            runtime_metrics
+                .last_provider_output_limit_retry_override_tokens
+                .map(|tokens| tokens.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
             "last_provider_input_tokens = {}",
             runtime_metrics
                 .last_provider_input_tokens

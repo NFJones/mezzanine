@@ -4450,6 +4450,16 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         },
         &crate::agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
     );
+    let mut request = runtime_model_request_fixture("turn-output-budget");
+    request.max_output_tokens = Some(16_384);
+    request.messages.push(crate::agent::ModelMessage {
+        role: crate::agent::ModelMessageRole::Developer,
+        source: ContextSourceKind::Configuration,
+        content: "[ephemeral provider output-limit retry] max_output_tokens=16384".to_string(),
+    });
+    service
+        .runtime_metrics
+        .record_provider_request_shape(&request, None, false);
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"show-metrics","method":"terminal/command","params":{"idempotency_key":"show-metrics","input":"show-metrics"}}"#,
@@ -4458,6 +4468,18 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
 
     assert!(
         response.contains("provider_input_tokens = 320"),
+        "{response}"
+    );
+    assert!(
+        response.contains("last_provider_output_token_budget_source = temporary_output_limit_retry_override"),
+        "{response}"
+    );
+    assert!(
+        response.contains("last_provider_output_token_budget_tokens = 16384"),
+        "{response}"
+    );
+    assert!(
+        response.contains("last_provider_output_limit_retry_override_tokens = 16384"),
         "{response}"
     );
     assert!(

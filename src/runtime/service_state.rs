@@ -206,6 +206,12 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) last_provider_request_shape_sha256: Option<String>,
     /// Most recent tool-choice digest observed by runtime metrics.
     pub(super) last_tool_choice_sha256: Option<String>,
+    /// Most recent provider output-token budget source observed by runtime metrics.
+    pub(super) last_provider_output_token_budget_source: Option<String>,
+    /// Most recent provider output-token budget value observed by runtime metrics.
+    pub(super) last_provider_output_token_budget_tokens: Option<usize>,
+    /// Most recent temporary output-limit retry override observed by runtime metrics.
+    pub(super) last_provider_output_limit_retry_override_tokens: Option<usize>,
     /// Most recent provider response input tokens observed by runtime metrics.
     pub(super) last_provider_input_tokens: Option<u64>,
     /// Most recent provider response cached input tokens, when reported.
@@ -275,6 +281,16 @@ impl RuntimeMetricsSnapshot {
         self.last_model = Some(request.model.clone());
         self.last_interaction_kind = Some(request.interaction_kind.as_str().to_string());
         self.last_allowed_actions = Some(request.allowed_actions.action_type_names().join(","));
+        self.last_provider_output_token_budget_tokens = request.max_output_tokens;
+        let output_limit_retry_override = provider_request_output_limit_retry_override(request);
+        self.last_provider_output_limit_retry_override_tokens = output_limit_retry_override;
+        self.last_provider_output_token_budget_source = Some(
+            match (request.max_output_tokens, output_limit_retry_override) {
+                (Some(_), Some(_)) => "temporary_output_limit_retry_override".to_string(),
+                (Some(_), None) => "configured".to_string(),
+                (None, _) => "omitted_provider_default".to_string(),
+            },
+        );
         if let Some(diagnostics) = diagnostics {
             self.provider_prompt_cache_diagnostics_available = self
                 .provider_prompt_cache_diagnostics_available
@@ -423,6 +439,19 @@ impl RuntimeMetricsSnapshot {
         self.shell_transaction_protocol_violations =
             self.shell_transaction_protocol_violations.saturating_add(1);
     }
+}
+
+/// Returns the output-limit retry override token value when the provider request
+/// carries second-stage retry guidance that raises the provider-visible budget.
+fn provider_request_output_limit_retry_override(request: &ModelRequest) -> Option<usize> {
+    request.max_output_tokens.filter(|_| {
+        request.messages.iter().any(|message| {
+            message
+                .content
+                .contains("[ephemeral provider output-limit retry]")
+                && message.content.contains("max_output_tokens=")
+        })
+    })
 }
 
 /// One retained `apply_patch` attempt emitted by the current pane agent session.
