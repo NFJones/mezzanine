@@ -16,6 +16,7 @@ use std::pin::Pin;
 
 // Model provider traits and OpenAI Responses adapter.
 
+mod anthropic;
 mod cache;
 mod catalog;
 mod chat_completions;
@@ -27,6 +28,7 @@ mod openai_request;
 mod quota;
 mod response;
 mod schema;
+use anthropic::AnthropicMessagesDialect;
 #[cfg(test)]
 pub(crate) use cache::openai_stable_prefix_material_for_request;
 pub use cache::{OpenAiPromptCacheDiagnostics, openai_prompt_cache_diagnostics_for_request};
@@ -772,6 +774,8 @@ pub fn openai_provider_from_auth_store_with_options<T>(
 /// Alias for the shared Chat Completions provider when used for DeepSeek.
 pub type DeepSeekChatCompletionsProvider<T> =
     ChatCompletionsProvider<T, DeepSeekChatCompletionsDialect>;
+/// Alias for the shared transport shell when used for Anthropic Messages.
+pub type AnthropicMessagesProvider<T> = ChatCompletionsProvider<T, AnthropicMessagesDialect>;
 /// Alias for the shared Chat Completions provider when used for named
 /// OpenAI-compatible backends.
 pub type OpenAiCompatibleChatCompletionsProvider<T> =
@@ -909,6 +913,40 @@ pub fn deepseek_chat_completions_provider_from_auth_store_with_provider_options<
         DeepSeekChatCompletionsProvider::without_auth(transport)?
     }
     .with_provider_id(provider_name)?;
+    if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
+        let endpoint = provider.chat_endpoint_for_base_url(base_url)?;
+        provider = provider.with_endpoint(endpoint);
+    }
+    provider = provider.with_timeout(timeout_ms);
+    Ok(provider)
+}
+
+/// Builds an Anthropic Messages provider from auth metadata.
+///
+/// Anthropic only supports direct API-key authentication in Mez. The configured
+/// provider name scopes credential lookup and request guards so multiple named
+/// Claude providers can coexist without falling back to the literal
+/// `anthropic` provider id.
+pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
+    auth_store: &AuthStore,
+    provider_name: &str,
+    base_url_override: Option<&str>,
+    timeout_ms: u64,
+    transport: T,
+) -> Result<AnthropicMessagesProvider<T>> {
+    let Some(metadata) = auth_store.read_metadata_for_provider(provider_name)? else {
+        return Err(MezError::invalid_state(format!(
+            "Anthropic provider `{provider_name}` requires an authenticated API key"
+        )));
+    };
+    if metadata.credential_kind != AuthCredentialKind::ApiKey {
+        return Err(MezError::invalid_state(format!(
+            "Anthropic provider `{provider_name}` requires API-key credentials"
+        )));
+    }
+    let credential = auth_store.provider_secret(provider_name)?;
+    let mut provider =
+        AnthropicMessagesProvider::new(credential, transport)?.with_provider_id(provider_name)?;
     if let Some(base_url) = base_url_override.filter(|e| !e.trim().is_empty()) {
         let endpoint = provider.chat_endpoint_for_base_url(base_url)?;
         provider = provider.with_endpoint(endpoint);
