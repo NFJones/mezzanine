@@ -7,6 +7,7 @@
 //! async actor and tests.
 
 use super::*;
+use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
 
 impl RuntimeSessionService {
     /// Builds a runtime provider dispatch from one configured provider API.
@@ -71,9 +72,16 @@ impl RuntimeSessionService {
                     )
                     .map(RuntimeAgentProviderDispatchProvider::DeepSeek)
                 }
-                ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(
-                    "Anthropic provider execution is not implemented yet",
-                )),
+                ProviderApiCompatibility::AnthropicMessages => {
+                    anthropic_provider_from_auth_store_with_provider_options(
+                        auth_store,
+                        provider_name,
+                        endpoint_override,
+                        DEFAULT_PROVIDER_TIMEOUT_MS,
+                        ReqwestProviderHttpTransport,
+                    )
+                    .map(RuntimeAgentProviderDispatchProvider::Anthropic)
+                }
             }
         })();
         match provider_result {

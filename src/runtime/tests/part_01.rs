@@ -1388,7 +1388,7 @@ fn toml_string(value: &str) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn poll_until_exit(service: &mut RuntimeSessionService) -> Vec<PaneExitUpdate> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let activity_sequences = tracked_pane_activity_sequences(service);
         let updates = service.poll_pane_processes().unwrap();

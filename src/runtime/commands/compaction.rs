@@ -7,6 +7,7 @@
 //! command dispatch.
 
 use super::*;
+use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
 
 impl RuntimeSessionService {
     /// Executes `/compact` by queuing model-backed conversation compaction.
@@ -325,12 +326,6 @@ impl RuntimeSessionService {
             })?;
         let provider_api =
             effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
-        if !matches!(provider_api, ProviderApiCompatibility::OpenAiResponses) {
-            return Err(MezError::config(format!(
-                "provider API `{}` is not supported for model compaction",
-                provider_api.as_str()
-            )));
-        }
         self.append_credential_access_audit(
             &task.model_profile.provider,
             &provider_config.auth_profile,
@@ -344,22 +339,59 @@ impl RuntimeSessionService {
                 "provider_compact",
                 "denied",
             )?;
-            return Err(MezError::invalid_state(
-                "OpenAI provider compaction requires an attached auth store",
-            ));
+            return Err(MezError::invalid_state(format!(
+                "provider API `{}` compaction requires an attached auth store",
+                provider_api.as_str()
+            )));
         };
         let endpoint_override = provider_config
             .base_url
             .as_deref()
             .filter(|endpoint| !endpoint.is_empty());
-        let provider = openai_responses_provider_from_auth_store_with_provider_options(
-            auth_store,
-            &task.model_profile.provider,
-            endpoint_override,
-            &provider_config.options,
-            DEFAULT_PROVIDER_TIMEOUT_MS,
-            ReqwestProviderHttpTransport,
-        )?;
+        let provider = match provider_api {
+            ProviderApiCompatibility::OpenAiResponses => {
+                openai_responses_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &task.model_profile.provider,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::OpenAi)
+            }
+            ProviderApiCompatibility::OpenAiChatCompletions => {
+                openai_compatible_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &task.model_profile.provider,
+                    endpoint_override,
+                    &provider_config.options,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::OpenAiCompatible)
+            }
+            ProviderApiCompatibility::DeepSeekChatCompletions => {
+                deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &task.model_profile.provider,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::DeepSeek)
+            }
+            ProviderApiCompatibility::AnthropicMessages => {
+                anthropic_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &task.model_profile.provider,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::Anthropic)
+            }
+        }?;
         self.append_credential_access_audit(
             &task.model_profile.provider,
             &provider_config.auth_profile,
@@ -368,10 +400,7 @@ impl RuntimeSessionService {
         )?;
         self.claimed_agent_compaction_tasks
             .insert(pane_id.to_string(), task.clone());
-        Ok(Some(RuntimeAgentCompactionDispatch {
-            task,
-            provider: RuntimeAgentProviderDispatchProvider::OpenAi(provider),
-        }))
+        Ok(Some(RuntimeAgentCompactionDispatch { task, provider }))
     }
 
     /// Applies a completed model-backed compaction response.

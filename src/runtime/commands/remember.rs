@@ -7,6 +7,7 @@
 
 use super::compaction;
 use super::*;
+use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
 use crate::memory::{MemoryKind, MemoryState};
 use std::process::Command;
 
@@ -760,9 +761,16 @@ impl RuntimeSessionService {
                 )
                 .map(RuntimeAgentProviderDispatchProvider::DeepSeek)
             }
-            ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(
-                "Anthropic remember provider execution is not implemented yet",
-            )),
+            ProviderApiCompatibility::AnthropicMessages => {
+                anthropic_provider_from_auth_store_with_provider_options(
+                    auth_store,
+                    &model_profile.provider,
+                    endpoint_override,
+                    DEFAULT_PROVIDER_TIMEOUT_MS,
+                    ReqwestProviderHttpTransport,
+                )
+                .map(RuntimeAgentProviderDispatchProvider::Anthropic)
+            }
         };
         match provider_result {
             Ok(provider) => {
