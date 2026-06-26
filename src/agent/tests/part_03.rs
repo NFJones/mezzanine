@@ -4454,6 +4454,39 @@ fn openai_responses_request_body_omits_default_in_memory_prompt_cache_retention(
     assert!(value.get("prompt_cache_retention").is_none());
 }
 
+/// Verifies OpenAI prompt-cache diagnostics normalize explicit in-memory
+/// retention the same way the provider-visible request body does.
+///
+/// For model families where  remains the OpenAI default, Mezzanine
+/// omits an explicit request field. Diagnostics must fingerprint the emitted
+/// provider request shape, not the raw profile option, so implicit default and
+/// explicit default requests stay identical for cache-shape reporting.
+#[test]
+fn openai_prompt_cache_diagnostics_normalize_default_in_memory_retention() {
+    let implicit = openai_prompt_cache_retention_test_request("gpt-5.4");
+    let mut explicit = openai_prompt_cache_retention_test_request("gpt-5.4");
+    explicit.prompt_cache_retention = Some("in_memory".to_string());
+
+    let implicit_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&implicit).unwrap()).unwrap();
+    let explicit_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&explicit).unwrap()).unwrap();
+    assert!(implicit_body.get("prompt_cache_retention").is_none());
+    assert!(explicit_body.get("prompt_cache_retention").is_none());
+    assert_eq!(implicit_body, explicit_body);
+
+    let implicit_diagnostics = openai_prompt_cache_diagnostics_for_request(&implicit).unwrap();
+    let explicit_diagnostics = openai_prompt_cache_diagnostics_for_request(&explicit).unwrap();
+    assert_eq!(
+        implicit_diagnostics.provider_request_shape_bytes,
+        explicit_diagnostics.provider_request_shape_bytes
+    );
+    assert_eq!(
+        implicit_diagnostics.provider_request_shape_sha256,
+        explicit_diagnostics.provider_request_shape_sha256
+    );
+}
+
 /// Verifies explicit in-memory prompt-cache retention is rejected for current
 /// and future model families whose provider default is extended retention.
 #[test]
