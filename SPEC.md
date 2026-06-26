@@ -5941,7 +5941,8 @@ OpenAI authentication when permitted by provider policy.
 The direct `mez auth login` command MUST prefer browser-based ChatGPT sign-in
 by default when an interactive terminal is available. It MUST also provide an
 explicit device-code ChatGPT sign-in option for out-of-band authentication and
-an explicit API-key option for users or environments that require API keys.
+an explicit API-key option for users or environments that require API keys,
+including API-key-only providers such as Anthropic.
 Noninteractive API-key setup MUST require an explicit API-key method and an
 out-of-band secret source such as an API-key file.
 Browser-based and device-code ChatGPT sign-in MUST request only OAuth scopes

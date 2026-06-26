@@ -157,10 +157,10 @@ Existing primary config files are migrated on launch to the current schema
 version before Mezzanine validates them. Newer config schema versions than the
 running binary understands are rejected.
 
-If you are using an API key instead of browser auth:
+If you are using an API key for Anthropic or another API-key-backed provider instead of OpenAI browser auth:
 
 ```sh
-mez auth login --api-key
+mez auth login --provider anthropic --api-key
 ```
 
 ### 3. Start Mezzanine inside a repository

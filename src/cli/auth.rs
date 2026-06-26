@@ -116,7 +116,7 @@ pub(super) async fn run_auth<W: Write>(
                 AuthMethod::Browser => {
                     if provider != "openai" {
                         return Err(MezError::invalid_args(
-                            "browser-based login is only supported for OpenAI; use `mez auth login --provider deepseek --api-key`",
+                            "browser-based login is only supported for OpenAI; use `mez auth login --provider anthropic --api-key` or another provider-specific API-key flow",
                         ));
                     }
                     if !interactive {
@@ -143,7 +143,7 @@ pub(super) async fn run_auth<W: Write>(
                 AuthMethod::DeviceCode => {
                     if provider != "openai" {
                         return Err(MezError::invalid_args(
-                            "device-code login is only supported for OpenAI; use `mez auth login --provider deepseek --api-key`",
+                            "device-code login is only supported for OpenAI; use `mez auth login --provider anthropic --api-key` or another provider-specific API-key flow",
                         ));
                     }
                     let credential = run_openai_device_code_login_async().await?;

@@ -2252,6 +2252,85 @@ fn auth_login_method_selection_is_browser_first() {
     );
 }
 
+/// Verifies non-OpenAI browser and device-code auth guidance points to API-key setup.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+/// Verifies that non-OpenAI browser and device-code auth requests fail with
+/// provider-specific API-key guidance for Anthropic.
+fn auth_login_rejects_non_openai_browser_and_device_code_with_api_key_guidance() {
+    let (env, home) = test_env("auth-login-non-openai-guidance");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let browser_error = run_with_plain(
+        vec![
+            "mez".to_string(),
+            "auth".to_string(),
+            "login".to_string(),
+            "--provider".to_string(),
+            "anthropic".to_string(),
+            "--browser".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        browser_error.kind(),
+        crate::error::MezErrorKind::InvalidArgs
+    );
+    assert!(
+        browser_error
+            .message()
+            .contains("browser-based login is only supported for OpenAI")
+    );
+    assert!(
+        browser_error
+            .message()
+            .contains("--provider anthropic --api-key")
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+
+    let device_error = run_with_plain(
+        vec![
+            "mez".to_string(),
+            "auth".to_string(),
+            "login".to_string(),
+            "--provider".to_string(),
+            "anthropic".to_string(),
+            "--device-code".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+
+    assert_eq!(device_error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        device_error
+            .message()
+            .contains("device-code login is only supported for OpenAI")
+    );
+    assert!(
+        device_error
+            .message()
+            .contains("--provider anthropic --api-key")
+    );
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies auth login rejects conflicting method flags.
 ///
 /// This regression scenario documents the behavior being protected so a
