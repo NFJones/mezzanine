@@ -4247,6 +4247,93 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     assert_eq!(diagnostics.cacheable_prefix_sha256.len(), 64);
 }
 
+/// Verifies a representative OpenAI Responses request has stable canonical
+/// request-shape fixture values for cache diagnostics.
+///
+/// This covers the provider-visible request pieces that affect cache affinity:
+/// instructions, prompt-cache routing key, stable prefix material, tools,
+/// forced tool choice, response-format shape, and the aggregate provider
+/// request-shape fingerprint. Exact values are intentionally pinned so schema
+/// or request-shape drift is reviewed instead of silently fragmenting cache
+/// reuse.
+#[test]
+fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-5.4".to_string(),
+        reasoning_profile: Some("medium".to_string()),
+        latency_preference: Some("fast".to_string()),
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let mut request = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::ProjectGuidance,
+                label: "active repository instructions".to_string(),
+                content: "Prefer deterministic request shapes.".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "Inspect cache stability.".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    request.prompt_cache_retention = Some("24h".to_string());
+    request.max_output_tokens = Some(16_384);
+
+    let body_text = openai_responses_request_body(&request).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+
+    assert_eq!(body["model"], "gpt-5.4");
+    assert_eq!(body["prompt_cache_retention"], "24h");
+    assert_eq!(body["max_output_tokens"], 16_384);
+    assert_eq!(body["reasoning"]["effort"], "medium");
+    assert_eq!(body["service_tier"], "priority");
+    assert_eq!(body["parallel_tool_calls"], false);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["stream"], false);
+    assert_eq!(body["tool_choice"]["type"], "function");
+    assert_eq!(body["tool_choice"]["name"], "submit_maap_action_batch");
+    assert!(body["text"]["format"].is_null());
+    assert!(body["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("Prefer deterministic request shapes."));
+    assert!(body["input"].as_array().unwrap().iter().any(|message| {
+        message["role"] == "user"
+            && message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Inspect cache stability."))
+    }));
+    assert!(body["tools"].as_array().unwrap().iter().any(|tool| {
+        tool["name"] == "submit_maap_action_batch"
+            && tool["parameters"]["properties"]["actions"]["minItems"] == 1
+    }));
+    assert_eq!(body["prompt_cache_key"], diagnostics.prompt_cache_key);
+
+    assert_eq!(diagnostics.prompt_cache_key, "mez-c5e815134a88da86e22eb961d0d14c3d");
+    assert_eq!(diagnostics.instructions_bytes, 44_280);
+    assert_eq!(diagnostics.instructions_sha256, "7c58edce792d419411ad3034fb46572a1a82e15b51686c7f164d2324328216c1");
+    assert_eq!(diagnostics.response_format_bytes, 4);
+    assert_eq!(diagnostics.response_format_sha256, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b");
+    assert_eq!(diagnostics.tools_bytes, 27_281);
+    assert_eq!(diagnostics.tools_sha256, "3fe8c23aa136005b8114ec893aa89f1f9cff6cf39689dc0a7654096fa4dbfff0");
+    assert_eq!(diagnostics.tool_choice_bytes, 53);
+    assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
+    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_441);
+    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "7bef2b69c46ecd779236e5fff02e891bcb3dfa5d9f3fb81ebf51806bf9c73df1");
+    assert_eq!(diagnostics.provider_request_shape_bytes, 27_599);
+    assert_eq!(diagnostics.provider_request_shape_sha256, "aab391d2b8143800d891a9ff42c48550c4a45178574ca3bc6716fae624f12ac0");
+}
+
 /// Verifies OpenAI Responses request bodies carry the selected reasoning effort
 /// through the provider-specific `reasoning` field. This protects automatic
 /// reasoning and explicit model picker selections from silently dropping the
