@@ -222,6 +222,16 @@ fn append_shell_action_result_context(
     {
         lines.push(format!("command: {command}"));
     }
+    append_json_scalar_line(
+        lines,
+        "execution_transport",
+        structured_object.and_then(|object| object.get("execution_transport")),
+    );
+    append_json_scalar_line(
+        lines,
+        "sent_to_pane",
+        structured_object.and_then(|object| object.get("sent_to_pane")),
+    );
     if let Some(observations) = structured_object
         .and_then(|object| object.get("read_observations"))
         .and_then(read_observations_for_context)
@@ -232,6 +242,7 @@ fn append_shell_action_result_context(
         .and_then(|object| object.get("terminal_observation"))
         .and_then(serde_json::Value::as_object);
     if let Some(observation) = terminal_observation {
+        append_json_scalar_line(lines, "stream", observation.get("stream"));
         append_json_scalar_line(lines, "exit_code", observation.get("exit_code"));
         append_json_scalar_line(lines, "signal", observation.get("signal"));
         append_true_bool_line(lines, "timed_out", observation.get("timed_out"));

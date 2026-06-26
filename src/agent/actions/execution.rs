@@ -344,6 +344,9 @@ impl LocalExecutionOutput {
 /// Implementors select the concrete transport for an already-planned local
 /// action without changing the model-facing action interface.
 pub trait LocalActionExecutor {
+    /// Reports which runtime transport this executor uses for local actions.
+    fn transport(&self) -> LocalExecutionTransport;
+
     /// Runs one planned local action through the selected runtime transport.
     fn execute_local_action(
         &mut self,
@@ -372,6 +375,10 @@ impl<E> LocalActionExecutor for PaneShellLocalExecutor<'_, E>
 where
     E: PaneShellExecutor,
 {
+    fn transport(&self) -> LocalExecutionTransport {
+        LocalExecutionTransport::PaneShell
+    }
+
     fn execute_local_action(
         &mut self,
         request: &LocalExecutionRequest,
@@ -446,6 +453,10 @@ impl<'a> NativeShellLocalExecutor<'a> {
 }
 
 impl LocalActionExecutor for NativeShellLocalExecutor<'_> {
+    fn transport(&self) -> LocalExecutionTransport {
+        LocalExecutionTransport::Native
+    }
+
     fn execute_local_action(
         &mut self,
         request: &LocalExecutionRequest,
@@ -1043,6 +1054,7 @@ pub fn execute_local_action(
         ));
     };
     let effective_timeout_ms = local_execution_shell_timeout_ms(turn, plan.timeout_ms);
+    let transport = executor.transport();
     let request = LocalExecutionRequest {
         action_id: action.id.clone(),
         action: action.clone(),
@@ -1051,7 +1063,7 @@ pub fn execute_local_action(
         pane_id: turn.pane_id.clone(),
         plan,
         effective_timeout_ms,
-        transport: LocalExecutionTransport::PaneShell,
+        transport,
         marker: marker.clone(),
     };
     let mut output = executor.execute_local_action(&request)?;

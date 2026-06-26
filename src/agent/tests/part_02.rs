@@ -1370,6 +1370,7 @@ fn action_result_context_compacts_shell_observation_for_model() {
             serde_json::json!({
                 "summary": "Inspect the current directory",
                 "command": "pwd",
+                "execution_transport": "pane_shell",
                 "sent_to_pane": true,
                 "stateful": false,
                 "approval": null,
@@ -1395,10 +1396,12 @@ fn action_result_context_compacts_shell_observation_for_model() {
 
     assert!(context.contains("[action_result a1 shell_command succeeded]"));
     assert!(context.contains("command: pwd"));
+    assert!(context.contains("execution_transport: pane_shell"));
+    assert!(context.contains("sent_to_pane: true"));
+    assert!(context.contains("stream: pty_combined"));
     assert!(context.contains("exit_code: 0"));
     assert!(context.contains("output:\n/repo\n"), "{context}");
     assert!(!context.contains("structured_content"), "{context}");
-    assert!(!context.contains("sent_to_pane"), "{context}");
     assert!(!context.contains("approval: null"), "{context}");
     assert!(!context.contains("matched_rules"), "{context}");
     assert!(!context.contains("marker:"), "{context}");
