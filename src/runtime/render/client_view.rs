@@ -436,7 +436,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn copy_mode_overlay_region(
+    fn pane_content_mouse_region(
         &self,
         window: &crate::layout::Window,
         pane_index: usize,
@@ -465,10 +465,6 @@ impl RuntimeSessionService {
         } else {
             window.pane_geometries_for_size(body_size)
         };
-        let pane = window
-            .panes()
-            .iter()
-            .find(|pane| pane.index == pane_index)?;
         let geometry = geometries
             .iter()
             .find(|geometry| geometry.index == pane_index)?;
@@ -480,18 +476,6 @@ impl RuntimeSessionService {
             self.pane_frame_position,
         )
         .ok()?;
-        let reserved_rows = self.agent_prompt_reserved_rows_for_pane(
-            pane.id.as_str(),
-            usize::from(full_content_size.columns),
-            usize::from(full_content_size.rows),
-        );
-        let reserved_rows = u16::try_from(reserved_rows)
-            .unwrap_or(u16::MAX)
-            .min(full_content_size.rows.saturating_sub(1));
-        let content_size = Size {
-            columns: full_content_size.columns,
-            rows: full_content_size.rows.saturating_sub(reserved_rows).max(1),
-        };
         let window_top_offset = usize::from(
             window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
         );
@@ -506,8 +490,39 @@ impl RuntimeSessionService {
                 .saturating_add(usize::from(geometry.row))
                 .saturating_add(pane_top_offset),
             usize::from(geometry.column),
-            content_size,
+            full_content_size,
         ))
+    }
+
+    /// Runs the copy mode overlay region operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(super) fn copy_mode_overlay_region(
+        &self,
+        window: &crate::layout::Window,
+        pane_index: usize,
+    ) -> Option<(usize, usize, Size)> {
+        let (row, column, full_content_size) =
+            self.pane_content_mouse_region(window, pane_index)?;
+        let pane = window
+            .panes()
+            .iter()
+            .find(|pane| pane.index == pane_index)?;
+        let reserved_rows = self.agent_prompt_reserved_rows_for_pane(
+            pane.id.as_str(),
+            usize::from(full_content_size.columns),
+            usize::from(full_content_size.rows),
+        );
+        let reserved_rows = u16::try_from(reserved_rows)
+            .unwrap_or(u16::MAX)
+            .min(full_content_size.rows.saturating_sub(1));
+        let content_size = Size {
+            columns: full_content_size.columns,
+            rows: full_content_size.rows.saturating_sub(reserved_rows).max(1),
+        };
+        Some((row, column, content_size))
     }
 
     /// Runs the agent prompt reserved rows for pane operation for this subsystem.
@@ -720,7 +735,7 @@ impl RuntimeSessionService {
             .panes()
             .iter()
             .filter_map(|pane| {
-                let (row, column, size) = self.copy_mode_overlay_region(window, pane.index)?;
+                let (row, column, size) = self.pane_content_mouse_region(window, pane.index)?;
                 let row = u16::try_from(row).ok()?;
                 let column = u16::try_from(column).ok()?;
                 let pane_id = pane.id.to_string();

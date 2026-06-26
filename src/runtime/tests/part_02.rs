@@ -2866,6 +2866,53 @@ fn runtime_control_initialize_resizes_started_initial_pane_for_primary_terminal(
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies pane-local agent shell prompt rows remain inside mouse ownership.
+///
+/// The agent prompt is rendered as part of the pane content even though copy-mode
+/// overlay rows reserve less height above it. Mouse drag selection must keep the
+/// agent shell active when the pointer reaches the prompt rows instead of
+/// falling through to the underlying pane.
+#[test]
+fn runtime_mouse_pane_regions_include_agent_prompt_rows() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(30, 4).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(30, 4).unwrap(),
+            &config,
+        )
+        .unwrap()
+        .unwrap();
+    let prompt_region = view.agent_prompt_region.unwrap();
+    let prompt_row = u16::try_from(
+        prompt_region
+            .row
+            .saturating_add(prompt_region.rows.saturating_sub(1)),
+    )
+    .unwrap();
+    let region = config
+        .mouse_pane_regions
+        .iter()
+        .find(|region| region.pane_id == "%1")
+        .unwrap();
+
+    assert!(
+        region.contains(u16::try_from(prompt_region.column).unwrap(), prompt_row),
+        "agent prompt row should remain inside pane mouse ownership: {region:?}"
+    );
+}
+
 /// Verifies observer `control/initialize` requests are visible immediately.
 ///
 /// The control dispatcher already creates the pending observer record. The
