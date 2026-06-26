@@ -268,7 +268,11 @@ impl EnvironmentEquivalenceProbe {
         }
         diagnostics.push(format!("os={native_os}"));
         diagnostics.push(format!("arch={native_arch}"));
-        Self::new(EnvironmentEquivalence::Equivalent, diagnostics)
+        diagnostics.push(
+            "environment parity beyond working_directory, os, arch, and PATH is not proven"
+                .to_string(),
+        );
+        Self::new(EnvironmentEquivalence::ProbablyEquivalent, diagnostics)
     }
 
     fn new(equivalence: EnvironmentEquivalence, diagnostics: Vec<String>) -> Self {

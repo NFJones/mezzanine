@@ -1848,13 +1848,13 @@ fn native_shell_command_executor_cleans_up_after_progress_callback_error() {
 }
 
 /// Verifies native environment probing reports whether pane bootstrap identity
-/// matches the native runtime identity.
+/// only proves partial native runtime parity.
 ///
-/// Native mode now warns and proceeds when equivalence is unknown or different,
-/// so the probe must keep returning specific diagnostic states without becoming
-/// a hard execution gate.
+/// Native mode warns and proceeds unless full pane/native environment equivalence
+/// is proven, so matching cwd/os/arch/PATH must still report a warning-triggering
+/// state instead of suppressing diagnostics as fully equivalent.
 #[test]
-fn native_environment_equivalence_probe_reports_matching_identity() {
+fn native_environment_equivalence_probe_reports_partial_identity_match_as_probable() {
     let cwd = std::env::current_dir().unwrap();
     let pane = test_env_signature(
         "pane-host",
@@ -1864,7 +1864,17 @@ fn native_environment_equivalence_probe_reports_matching_identity() {
     );
 
     let equivalent = EnvironmentEquivalenceProbe::compare(Some(&pane), &cwd);
-    assert_eq!(equivalent.equivalence, EnvironmentEquivalence::Equivalent);
+    assert_eq!(
+        equivalent.equivalence,
+        EnvironmentEquivalence::ProbablyEquivalent
+    );
+    assert!(
+        equivalent
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("environment parity beyond")),
+        "{equivalent:?}"
+    );
 
     let unknown = EnvironmentEquivalenceProbe::compare(None, &cwd);
     assert_eq!(unknown.equivalence, EnvironmentEquivalence::Unknown);
