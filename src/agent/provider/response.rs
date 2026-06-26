@@ -253,8 +253,7 @@ fn openai_usage_u64(value: &serde_json::Value, pointers: &[&str]) -> u64 {
 
 /// Returns cached input token accounting across OpenAI-compatible usage shapes.
 fn openai_cached_input_tokens(value: &serde_json::Value) -> Option<u64> {
-    let mut found = false;
-    let total = [
+    [
         "/input_tokens_details/cached_tokens",
         "/prompt_tokens_details/cached_tokens",
         "/input_token_details/cached_tokens",
@@ -264,12 +263,7 @@ fn openai_cached_input_tokens(value: &serde_json::Value) -> Option<u64> {
         "/cached_tokens",
     ]
     .iter()
-    .filter_map(|pointer| value.pointer(pointer).and_then(serde_json::Value::as_u64))
-    .fold(0_u64, |total, tokens| {
-        found = true;
-        total.saturating_add(tokens)
-    });
-    found.then_some(total)
+    .find_map(|pointer| value.pointer(pointer).and_then(serde_json::Value::as_u64))
 }
 
 /// Returns a human-readable error detail from an OpenAI stream event.

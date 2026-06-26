@@ -249,12 +249,14 @@ impl ModelTokenUsage {
 
     /// Returns the best-effort display value for provider prompt-cache hits.
     pub fn cached_input_tokens_display(self) -> String {
-        self.cached_input_tokens.unwrap_or(0).to_string()
+        self.cached_input_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     /// Returns the best-effort provider prompt-cache hit ratio.
     pub fn cached_input_hit_ratio_basis_points(self) -> Option<u32> {
-        let cached = self.cached_input_tokens.unwrap_or(0);
+        let cached = self.cached_input_tokens?;
         if self.input_tokens == 0 {
             return Some(0);
         }
@@ -269,7 +271,7 @@ impl ModelTokenUsage {
     pub fn cached_input_hit_ratio_display(self) -> String {
         self.cached_input_hit_ratio_basis_points()
             .map(|basis_points| format!("{}.{:02}%", basis_points / 100, basis_points % 100))
-            .unwrap_or_else(|| "0.00%".to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 }
 

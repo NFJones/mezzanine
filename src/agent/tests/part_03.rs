@@ -5469,8 +5469,8 @@ fn openai_response_parser_distinguishes_missing_and_zero_cached_tokens() {
         super::provider::parse_openai_responses_stream_body(&stream_body, "gpt-test").unwrap();
 
     assert_eq!(missing_usage.cached_input_tokens, None);
-    assert_eq!(missing_usage.cached_input_tokens_display(), "0");
-    assert_eq!(missing_usage.cached_input_hit_ratio_display(), "0.00%");
+    assert_eq!(missing_usage.cached_input_tokens_display(), "unknown");
+    assert_eq!(missing_usage.cached_input_hit_ratio_display(), "unknown");
     assert_eq!(zero_usage.cached_input_tokens, Some(0));
     assert_eq!(zero_usage.cached_input_tokens_display(), "0");
     assert_eq!(zero_usage.cached_input_hit_ratio_display(), "0.00%");
@@ -5480,7 +5480,7 @@ fn openai_response_parser_distinguishes_missing_and_zero_cached_tokens() {
         "57.14%"
     );
     assert_eq!(controller_alias_usage.cached_input_tokens, Some(36));
-    assert_eq!(multi_cached_usage.cached_input_tokens, Some(25));
+    assert_eq!(multi_cached_usage.cached_input_tokens, Some(12));
     assert_eq!(stream_usage.cached_input_tokens, Some(12));
 }
 
