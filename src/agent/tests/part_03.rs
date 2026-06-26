@@ -2796,8 +2796,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
-        2,
-        "the canonical tool must expose only currently allowed capability-decision actions"
+        15,
+        "the canonical OpenAI tool exposes a stable non-MCP action superset"
     );
     assert_eq!(
         capability_tool["parameters"]["properties"]["actions"]["minItems"],
@@ -2815,15 +2815,22 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     let action_types = openai_tool_action_types(capability_tool);
     assert!(action_types.contains(&"say".to_string()));
     assert!(action_types.contains(&"request_capability".to_string()));
+    assert!(action_types.contains(&"shell_command".to_string()));
+    assert!(action_types.contains(&"apply_patch".to_string()));
+    assert!(action_types.contains(&"web_search".to_string()));
+    assert!(action_types.contains(&"fetch_url".to_string()));
+    assert!(action_types.contains(&"send_message".to_string()));
+    assert!(action_types.contains(&"spawn_agent".to_string()));
+    assert!(action_types.contains(&"config_change".to_string()));
+    assert!(action_types.contains(&"memory_search".to_string()));
+    assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(action_types.contains(&"issue_add".to_string()));
+    assert!(action_types.contains(&"issue_update".to_string()));
+    assert!(action_types.contains(&"issue_query".to_string()));
+    assert!(action_types.contains(&"issue_delete".to_string()));
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));
-    assert!(!action_types.contains(&"shell_command".to_string()));
-    assert!(!action_types.contains(&"apply_patch".to_string()));
-    assert!(!action_types.contains(&"web_search".to_string()));
-    assert!(!action_types.contains(&"fetch_url".to_string()));
-    assert!(!action_types.contains(&"send_message".to_string()));
-    assert!(!action_types.contains(&"spawn_agent".to_string()));
-    assert!(!action_types.contains(&"config_change".to_string()));
+    assert!(!action_types.contains(&"mcp_call".to_string()));
     let removed_user_input_action = ["request", "user_input"].join("_");
     assert!(!action_types.contains(&removed_user_input_action));
     assert!(!action_types.contains(&"abort".to_string()));
@@ -3328,7 +3335,7 @@ fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
 /// text can remain reusable while the provider request shape reflects the live
 /// action schema.
 #[test]
-fn openai_maap_schema_tracks_current_allowed_action_surface() {
+fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -3363,7 +3370,7 @@ fn openai_maap_schema_tracks_current_allowed_action_surface() {
 
     assert!(capability_body.get("text").is_none());
     assert!(execution_body.get("text").is_none());
-    assert_ne!(capability_body["tools"], execution_body["tools"]);
+    assert_eq!(capability_body["tools"], execution_body["tools"]);
     assert_eq!(
         capability_body["tool_choice"]["name"],
         "submit_maap_action_batch"
@@ -3376,7 +3383,7 @@ fn openai_maap_schema_tracks_current_allowed_action_surface() {
         capability_diagnostics.response_format_sha256,
         execution_diagnostics.response_format_sha256
     );
-    assert_ne!(
+    assert_eq!(
         capability_diagnostics.tools_sha256,
         execution_diagnostics.tools_sha256
     );
@@ -3396,7 +3403,7 @@ fn openai_maap_schema_tracks_current_allowed_action_surface() {
         capability_diagnostics.cacheable_prefix_sha256,
         execution_diagnostics.cacheable_prefix_sha256
     );
-    assert_ne!(
+    assert_eq!(
         capability_diagnostics.provider_request_shape_sha256,
         execution_diagnostics.provider_request_shape_sha256
     );
@@ -4669,8 +4676,8 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert!(!action_types.contains(&removed_user_input_action));
     assert!(action_types.contains(&"request_capability".to_string()));
     assert!(!action_types.contains(&"abort".to_string()));
-    assert!(!action_types.contains(&"fetch_url".to_string()));
-    assert!(!action_types.contains(&"web_search".to_string()));
+    assert!(action_types.contains(&"fetch_url".to_string()));
+    assert!(action_types.contains(&"web_search".to_string()));
     let allowed_surface = value["input"].as_array().unwrap().last().unwrap()["content"][0]["text"]
         .as_str()
         .unwrap();
@@ -4781,9 +4788,9 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
     assert!(action_types.contains(&"shell_command".to_string()));
     assert!(action_types.contains(&"apply_patch".to_string()));
     assert!(action_types.contains(&"fetch_url".to_string()));
-    assert!(!action_types.contains(&"web_search".to_string()));
+    assert!(action_types.contains(&"web_search".to_string()));
     assert!(!action_types.contains(&"mcp_call".to_string()));
-    assert!(!action_types.contains(&"spawn_agent".to_string()));
+    assert!(action_types.contains(&"spawn_agent".to_string()));
 }
 
 /// Verifies available MCP tools keep the unified current action surface.
@@ -4940,7 +4947,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
 
-    assert_eq!(action_schemas.len(), 4);
+    assert_eq!(action_schemas.len(), 17);
     let action_types = openai_tool_action_types(mcp_tool);
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));

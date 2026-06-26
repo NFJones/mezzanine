@@ -105,8 +105,42 @@ fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::
         "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
         "description": openai_maap_current_action_batch_description(request),
         "strict": true,
-        "parameters": maap_action_batch_schema(&request.allowed_actions, &request.available_mcp_tools)
+        "parameters": maap_action_batch_schema(
+            &openai_stable_schema_action_surface(request),
+            &request.available_mcp_tools,
+        )
     })
+}
+
+/// Returns the provider-visible OpenAI action schema surface.
+///
+/// OpenAI prompt caching is sensitive to request-body tool bytes, so ordinary
+/// non-MCP requests use one stable superset schema and rely on the late
+/// allowed-action surface plus runtime validation for actual eligibility. MCP
+/// calls remain request-specific because callable tools and argument schemas
+/// are part of the integration contract.
+fn openai_stable_schema_action_surface(request: &ModelRequest) -> AllowedActionSet {
+    let mut actions = AllowedActionSet::from_actions([
+        AllowedAction::Say,
+        AllowedAction::RequestCapability,
+        AllowedAction::ShellCommand,
+        AllowedAction::ApplyPatch,
+        AllowedAction::WebSearch,
+        AllowedAction::FetchUrl,
+        AllowedAction::SendMessage,
+        AllowedAction::SpawnAgent,
+        AllowedAction::ConfigChange,
+        AllowedAction::MemorySearch,
+        AllowedAction::MemoryStore,
+        AllowedAction::IssueAdd,
+        AllowedAction::IssueUpdate,
+        AllowedAction::IssueQuery,
+        AllowedAction::IssueDelete,
+    ]);
+    if request.allowed_actions.contains(AllowedAction::McpCall) {
+        actions.extend([AllowedAction::McpCall]);
+    }
+    actions
 }
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.
