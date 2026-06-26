@@ -1319,7 +1319,7 @@ fn default_action_gates_keep_memory_when_mcp_is_available() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
-        description: "Read GitHub CI check results for a repository".to_string(),
+        description: "Read GitHub CI check results for a repository. User-configured non-authoritative server purpose: GitHub repository and CI operations.".to_string(),
         approval_required: false,
         input_schema_json: r#"{"type":"object"}"#.to_string(),
     };
@@ -4804,7 +4804,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     let mcp_tool = McpPromptTool {
         server_id: "githubcopilot".to_string(),
         tool_name: "list_ci_results".to_string(),
-        description: "Read GitHub CI check results for a repository".to_string(),
+        description: "Read GitHub CI check results for a repository. User-configured non-authoritative server purpose: GitHub repository and CI operations.".to_string(),
         approval_required: false,
         input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#
             .to_string(),
@@ -4856,6 +4856,10 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     assert!(action_types.contains(&"mcp_call".to_string()));
     assert!(action_types.contains(&"memory_search".to_string()));
     assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(
+        description.contains("Available MCP servers callable with mcp_call: githubcopilot (GitHub repository and CI operations; tools: list_ci_results)"),
+        "{description}"
+    );
     assert!(
         description.contains("Available MCP tools callable with mcp_call: githubcopilot/list_ci_results"),
         "{description}"
@@ -4938,6 +4942,10 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     assert_openai_strict_schema_shape(&mcp_tool["parameters"]);
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(
+        description.contains("Available MCP servers callable with mcp_call: fs (tools: read_file); zeta (tools: later)"),
+        "{description}"
+    );
+    assert!(
         description.contains("Available MCP tools callable with mcp_call: fs/read_file: Read file"),
         "{description}"
     );
@@ -5001,6 +5009,71 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     assert_eq!(
         mcp_schemas[0]["properties"]["arguments"]["additionalProperties"],
         false
+    );
+}
+
+/// Verifies large MCP catalogs keep server-level routing context visible.
+///
+/// The OpenAI function-tool description is the first routing surface the model
+/// sees for callable MCP integrations. When there are more callable tools than
+/// the compact tool list can enumerate, the schema should still provide a
+/// bounded server-level summary so overlapping tool names retain their server
+/// purpose and routing context.
+#[test]
+fn openai_responses_request_body_summarizes_large_mcp_catalog_by_server() {
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "use an MCP server".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Mcp);
+    request.available_mcp_tools = (0..22)
+        .map(|index| McpPromptTool {
+            server_id: format!("server{index:02}"),
+            tool_name: "search".to_string(),
+            description: format!(
+                "Search records. User-configured non-authoritative server purpose: Server {index:02} operations."
+            ),
+            approval_required: false,
+            input_schema_json: r#"{"type":"object","properties":{"query":{"type":"string"}}}"#
+                .to_string(),
+        })
+        .collect();
+
+    let body = openai_responses_request_body(&request).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let mcp_tool = openai_function_tool(&value, "submit_maap_action_batch");
+    let description = mcp_tool["description"].as_str().unwrap();
+
+    assert!(
+        description.contains(
+            "Available MCP servers callable with mcp_call: server00 (Server 00 operations; tools: search)"
+        ),
+        "{description}"
+    );
+    assert!(
+        description.contains("... plus 2 more MCP servers listed in the schema"),
+        "{description}"
+    );
+    assert!(
+        description.contains("... plus 2 more MCP tools listed in the schema"),
+        "{description}"
     );
 }
 

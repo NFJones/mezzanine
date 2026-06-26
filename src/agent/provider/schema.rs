@@ -163,12 +163,24 @@ pub(super) fn openai_maap_current_action_batch_description(request: &ModelReques
 /// Returns a compact model-facing manifest for MCP tools in one provider schema.
 pub(super) fn mcp_tool_manifest_for_description(tools: &[McpPromptTool]) -> String {
     const MAX_TOOL_DESCRIPTION_COUNT: usize = 20;
+    const MAX_SERVER_DESCRIPTION_COUNT: usize = 20;
     if tools.is_empty() {
         return "No MCP tools are currently callable in this schema.".to_string();
     }
     let sorted_tools = sorted_mcp_prompt_tools(tools);
     if sorted_tools.is_empty() {
         return "No MCP tools are currently callable in this schema.".to_string();
+    }
+    let total_servers = mcp_server_manifest_entries(&sorted_tools).len();
+    let mut server_entries = mcp_server_manifest_entries(&sorted_tools)
+        .into_iter()
+        .take(MAX_SERVER_DESCRIPTION_COUNT)
+        .collect::<Vec<_>>();
+    if total_servers > MAX_SERVER_DESCRIPTION_COUNT {
+        server_entries.push(format!(
+            "... plus {} more MCP servers listed in the schema",
+            total_servers - MAX_SERVER_DESCRIPTION_COUNT
+        ));
     }
     let total = sorted_tools.len();
     let mut entries = sorted_tools
@@ -190,9 +202,62 @@ pub(super) fn mcp_tool_manifest_for_description(tools: &[McpPromptTool]) -> Stri
         ));
     }
     format!(
-        "Available MCP tools callable with mcp_call: {}.",
+        "Available MCP servers callable with mcp_call: {}. Available MCP tools callable with mcp_call: {}.",
+        server_entries.join("; "),
         entries.join("; ")
     )
+}
+
+/// Returns compact server-level routing entries synthesized from MCP tools.
+fn mcp_server_manifest_entries(tools: &[&McpPromptTool]) -> Vec<String> {
+    let mut servers = Vec::<(String, Option<String>, Vec<String>)>::new();
+    for tool in tools {
+        let purpose = mcp_server_purpose_from_description(&tool.description);
+        match servers.last_mut() {
+            Some((server_id, server_purpose, tool_names)) if *server_id == tool.server_id => {
+                if server_purpose.is_none() {
+                    *server_purpose = purpose;
+                }
+                tool_names.push(tool.tool_name.clone());
+            }
+            _ => servers.push((
+                tool.server_id.clone(),
+                purpose,
+                vec![tool.tool_name.clone()],
+            )),
+        }
+    }
+    servers
+        .into_iter()
+        .map(|(server_id, purpose, tool_names)| {
+            let preview = tool_names.iter().take(3).cloned().collect::<Vec<_>>();
+            let remaining = tool_names.len().saturating_sub(preview.len());
+            let tool_summary = if remaining == 0 {
+                format!("tools: {}", preview.join(", "))
+            } else {
+                format!("tools: {} (+{} more)", preview.join(", "), remaining)
+            };
+            match purpose {
+                Some(purpose) if !purpose.is_empty() => {
+                    format!("{} ({}; {})", server_id, purpose, tool_summary)
+                }
+                _ => format!("{} ({})", server_id, tool_summary),
+            }
+        })
+        .collect()
+}
+
+/// Extracts user-configured server purpose text embedded in tool descriptions.
+fn mcp_server_purpose_from_description(description: &str) -> Option<String> {
+    const PURPOSE_PREFIX: &str = "User-configured non-authoritative server purpose: ";
+    const USAGE_PREFIX: &str = ". User-configured non-authoritative usage guidance:";
+
+    let normalized = mcp_schema_description(description);
+    let start = normalized.find(PURPOSE_PREFIX)? + PURPOSE_PREFIX.len();
+    let tail = normalized.get(start..)?.trim();
+    let end = tail.find(USAGE_PREFIX).or_else(|| tail.find('.'));
+    let purpose = end.map_or(tail, |index| &tail[..index]).trim();
+    (!purpose.is_empty()).then(|| purpose.to_string())
 }
 
 /// Runs the maap action batch schema operation for this subsystem.

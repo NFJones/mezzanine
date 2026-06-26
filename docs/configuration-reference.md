@@ -530,7 +530,7 @@ parallel_tool_calls = "disabled"
 | `model_profiles.<name>.multimodal` | boolean | omitted | Compatibility multimodal capability flag. |
 | `model_profiles.<name>.context_window_tokens` | integer | profile-specific | Display and compaction context denominator. |
 | `model_profiles.<name>.context_limit_tokens` | integer | omitted | Alternative explicit context limit. |
-| `model_profiles.<name>.max_output_tokens` | integer | omitted | Optional provider output-token cap. |
+| `model_profiles.<name>.max_output_tokens` | integer | profile/provider-specific | Optional provider output-token cap. Generated OpenAI and DeepSeek agent profiles include provider-aware recommended caps; local OpenAI-compatible examples omit the field so the provider default applies. |
 | `model_profiles.<name>.provider_options` | table | see below | Provider-specific non-secret model options. |
 | `model_profiles.<name>.safety_tier` | string | `"high"` in generated profiles | Safety posture label. |
 | `model_profiles.<name>.privacy_tier` | string | `"standard"` in generated profiles | Privacy posture label. |

@@ -205,6 +205,37 @@ fn default_config_matches_documented_example() {
     assert_eq!(DEFAULT_CONFIG_TOML.trim(), documented.trim());
 }
 
+/// Verifies generated defaults use provider-aware output token caps for known agent profiles.
+///
+/// A single universal output cap is not correct for all providers, but the
+/// built-in OpenAI and DeepSeek profiles have known agent workload targets.
+/// Keeping those caps explicit protects the generated default config from
+/// drifting back to provider-default output budgets.
+#[test]
+fn default_config_uses_provider_aware_output_token_caps() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let profiles = parsed
+        .get("model_profiles")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    for (profile, expected) in [
+        ("default", 16_384),
+        ("auto-size-router", 8_192),
+        ("auto-size-small", 16_384),
+        ("auto-size-medium", 16_384),
+        ("auto-size-large", 32_768),
+        ("deepseek-default", 32_768),
+        ("deepseek-fast", 32_768),
+    ] {
+        let tokens = profiles
+            .get(profile)
+            .and_then(|profile| profile.get("max_output_tokens"))
+            .and_then(toml::Value::as_integer);
+        assert_eq!(tokens, Some(expected));
+    }
+}
+
 /// Verifies the built-in DeepSeek preset uses canonical auto-sizing effort
 /// names rather than provider-native aliases.
 ///
