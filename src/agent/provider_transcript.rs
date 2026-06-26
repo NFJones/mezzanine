@@ -128,3 +128,100 @@ impl ProviderTranscriptEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies Anthropic-looking native `tool_use` transcript metadata is not
+    /// decoded as provider replay state.
+    ///
+    /// The first Anthropic release uses Mezzanine's provider-neutral action
+    /// result follow-up turns rather than replaying Claude-native `tool_use` /
+    /// `tool_result` blocks. Decoding only DeepSeek-native replay records keeps
+    /// that strategy explicit and prevents invalid mixed Anthropic continuity
+    /// until a full native replay path is implemented deliberately.
+    #[test]
+    fn anthropic_tool_use_transcript_events_are_not_replayed() {
+        let hidden = format!(
+            "{}{}",
+            PROVIDER_TRANSCRIPT_EVENT_MARKER,
+            serde_json::json!({
+                "version": PROVIDER_TRANSCRIPT_EVENT_VERSION,
+                "provider": "anthropic",
+                "kind": "assistant_tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "submit_maap_action_batch",
+                        "input": {"actions": []}
+                    }
+                ]
+            })
+        );
+
+        assert_eq!(
+            ProviderTranscriptEvent::from_transcript_content(&hidden),
+            None
+        );
+    }
+
+    /// Verifies unknown hidden provider transcript payloads fail closed instead
+    /// of leaking opaque native metadata into a replay event.
+    ///
+    /// Provider-native continuity records are hidden system transcript entries.
+    /// A malformed, unsupported, or future-provider payload must not become a
+    /// replay event for another provider, because that could expose native tool
+    /// metadata in the wrong request shape or user-visible transcript path.
+    #[test]
+    fn unknown_provider_transcript_events_fail_closed() {
+        let hidden = format!(
+            "{}{}",
+            PROVIDER_TRANSCRIPT_EVENT_MARKER,
+            serde_json::json!({
+                "version": PROVIDER_TRANSCRIPT_EVENT_VERSION,
+                "provider": "future-provider",
+                "kind": "assistant_tool_call",
+                "tool_calls": [{"id": "call_1"}]
+            })
+        );
+
+        assert_eq!(
+            ProviderTranscriptEvent::from_transcript_content(&hidden),
+            None
+        );
+        assert_eq!(
+            ProviderTranscriptEvent::from_transcript_content("ordinary transcript text"),
+            None
+        );
+    }
+
+    /// Verifies the existing DeepSeek replay format remains the only supported
+    /// native provider-transcript event family.
+    ///
+    /// This protects the provider-neutral Anthropic continuity decision without
+    /// regressing DeepSeek thinking-mode replay, which still needs hidden native
+    /// tool-call metadata and paired tool results.
+    #[test]
+    fn deepseek_provider_transcript_events_round_trip() {
+        let event = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: "visible assistant text".to_string(),
+            reasoning_content: Some("hidden reasoning".to_string()),
+            tool_calls: vec![serde_json::json!({
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }
+            })],
+        };
+
+        let encoded = event.to_transcript_content();
+        assert_eq!(
+            ProviderTranscriptEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+    }
+}
