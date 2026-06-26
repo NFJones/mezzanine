@@ -358,7 +358,10 @@ fn provider_error_text_invites_retry(text: &str) -> bool {
 /// - `text`: Provider diagnostic text to classify.
 fn provider_error_text_is_transient_overload_or_unavailable(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    lower.contains("api overloaded")
+    lower.contains("api_error")
+        || lower.contains("timeout_error")
+        || lower.contains("overloaded_error")
+        || lower.contains("api overloaded")
         || lower.contains("server overloaded")
         || lower.contains("server is overloaded")
         || lower.contains("temporarily unavailable")
@@ -375,6 +378,8 @@ fn provider_error_text_is_context_limit_exceeded(text: &str) -> bool {
     lower.contains("context_length_exceeded")
         || lower.contains("context length exceeded")
         || lower.contains("context_window_exceeded")
+        || lower.contains("model_context_window_exceeded")
+        || lower.contains("request_too_large")
         || lower.contains("exceeds the context window")
         || lower.contains("maximum context length")
         || lower.contains("max context length")
@@ -396,6 +401,7 @@ fn provider_error_text_is_context_limit_exceeded(text: &str) -> bool {
 fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("max_output_tokens")
+        || lower.contains("max_tokens")
         || lower.contains("maximum output tokens")
         || lower.contains("output token limit")
         || lower.contains("output tokens limit")
