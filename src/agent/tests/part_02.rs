@@ -2217,16 +2217,16 @@ fn native_apply_patch_executor_reports_stale_hunk_without_mutation() {
     assert!(structured.contains(r#""sent_to_pane":false"#), "{structured}");
 }
 
-/// Verifies native apply_patch rolls back earlier files when a later change fails.
+/// Verifies native apply_patch preserves earlier file changes when a later change fails.
 ///
 /// A multi-file native patch can pass initial snapshot matching and still fail
 /// during sequential apply if two patch paths resolve to the same target. The
-/// native transport must restore already-written bytes so failed actions do not
-/// leave partial filesystem mutations behind.
+/// native transport must keep already-applied file changes so the model can
+/// retry only the failed file operation.
 #[cfg(unix)]
 #[test]
-fn native_apply_patch_executor_rolls_back_partial_multi_file_failure() {
-    let temp = test_temp_dir("native-apply-patch-atomic-rollback");
+fn native_apply_patch_executor_preserves_partial_multi_file_success() {
+    let temp = test_temp_dir("native-apply-patch-partial-success");
     std::fs::write(temp.join("real.txt"), "old\n").unwrap();
     std::os::unix::fs::symlink("real.txt", temp.join("link.txt")).unwrap();
     let action = AgentAction {
@@ -2243,7 +2243,12 @@ fn native_apply_patch_executor_rolls_back_partial_multi_file_failure() {
     let result = execute_local_action(&turn(), &action, marker(), &mut executor).unwrap();
 
     assert_eq!(result.status, ActionStatus::Failed);
-    assert_eq!(std::fs::read_to_string(temp.join("real.txt")).unwrap(), "old\n");
+    assert_eq!(std::fs::read_to_string(temp.join("real.txt")).unwrap(), "link\n");
+    assert!(
+        result.content_text().contains("apply_patch: applied path(s): link.txt"),
+        "{}",
+        result.content_text()
+    );
     assert!(
         result
             .content_text()

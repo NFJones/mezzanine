@@ -56,6 +56,22 @@ const APPLY_PATCH_FILE_END_MARKER: &str = "__MEZ_APPLY_PATCH_FILE_END__";
 const APPLY_PATCH_CONTENT_BEGIN_MARKER: &str = "__MEZ_APPLY_PATCH_CONTENT_BEGIN__";
 /// Marker that ends base64 file content in an `apply_patch` snapshot stream.
 const APPLY_PATCH_CONTENT_END_MARKER: &str = "__MEZ_APPLY_PATCH_CONTENT_END__";
+
+/// Planned per-file patch outcomes after matching hunks against snapshots.
+struct ApplyPatchPlan {
+    /// Verified file changes that can be applied independently.
+    changes: Vec<ApplyPatchFileChange>,
+    /// File-specific diagnostics for patch operations that could not be planned.
+    errors: Vec<String>,
+}
+
+impl ApplyPatchPlan {
+    /// Returns true when no file operation failed during planning.
+    fn is_success(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
 /// Returns the shell transaction phase represented by a generated apply-patch
 /// command.
 ///
@@ -98,8 +114,8 @@ pub fn apply_patch_write_plan_from_read_outputs(
     for read_output in read_outputs {
         snapshots.extend(parse_apply_patch_snapshot_output(read_output)?);
     }
-    let changes = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
-    mez_apply_patch_write_plan(changes)
+    let plan = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
+    mez_apply_patch_write_plan(plan)
 }
 
 /// Applies one model-authored patch directly through the host filesystem.
@@ -131,9 +147,51 @@ pub fn apply_patch_natively(
     ensure_native_apply_patch_deadline(deadline)?;
     let snapshots = native_apply_patch_snapshots(&patch, &cwd, deadline)?;
     ensure_native_apply_patch_deadline(deadline)?;
-    let changes = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
+    let plan = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
     ensure_native_apply_patch_deadline(deadline)?;
-    apply_native_patch_changes(&cwd, &changes, deadline)
+    apply_native_patch_changes(&cwd, &plan.changes, deadline)?;
+    if plan.is_success() {
+        Ok(())
+    } else {
+        Err(apply_patch_planned_failure(&plan))
+    }
+}
+
+fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> MezError {
+    let mut lines = Vec::new();
+    if !plan.changes.is_empty() {
+        let paths = plan
+            .changes
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("apply_patch: applied path(s): {paths}"));
+    }
+    lines.extend(plan.errors.iter().cloned());
+    MezError::invalid_args(lines.join("\n"))
+}
+
+fn apply_patch_planned_failure_shell_lines(plan: &ApplyPatchPlan) -> String {
+    let mut lines = Vec::new();
+    if !plan.changes.is_empty() {
+        let paths = plan
+            .changes
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("apply_patch: applied path(s): {paths}"));
+    }
+    lines.extend(plan.errors.iter().cloned());
+    let mut command = String::new();
+    for line in lines {
+        command.push_str("printf '%s\\n' ");
+        command.push_str(&shell_quote(&line));
+        command.push_str(" >&2\n");
+    }
+    command.push_str("exit 1\n");
+    command
 }
 
 fn ensure_native_apply_patch_deadline(deadline: Option<Instant>) -> Result<()> {
@@ -263,28 +321,33 @@ fn apply_native_patch_changes(
     changes: &[ApplyPatchFileChange],
     deadline: Option<Instant>,
 ) -> Result<()> {
-    let prepared = prepare_native_patch_changes(cwd, changes, deadline)?;
-    let mut applied = Vec::new();
-    for change in &prepared {
+    let mut applied_paths = Vec::new();
+    for change in changes {
         ensure_native_apply_patch_deadline(deadline)?;
-        let result = verify_native_patch_preimage(change.change, &change.resolved)
-            .and_then(|()| apply_prepared_native_patch_change(change));
-        if let Err(error) = result {
-            rollback_native_patch_changes(&applied).map_err(|rollback_error| {
-                MezError::new(
-                    crate::error::MezErrorKind::Io,
-                    format!(
-                        "{}; rollback failed: {}",
-                        error.message(),
-                        rollback_error.message()
-                    ),
-                )
-            })?;
-            return Err(error);
-        }
-        applied.push(change);
+        let prepared = prepare_native_patch_change(cwd, change)
+            .map_err(|error| native_partial_apply_error(&applied_paths, error))?;
+        ensure_native_apply_patch_deadline(deadline)?;
+        verify_native_patch_preimage(prepared.change, &prepared.resolved)
+            .and_then(|()| apply_prepared_native_patch_change(&prepared))
+            .map_err(|error| native_partial_apply_error(&applied_paths, error))?;
+        applied_paths.push(change.path.clone());
     }
     Ok(())
+}
+
+fn native_partial_apply_error(applied_paths: &[String], error: MezError) -> MezError {
+    if applied_paths.is_empty() {
+        return error;
+    }
+    let paths = applied_paths.join(", ");
+    MezError::new(
+        error.kind(),
+        format!(
+            "apply_patch: applied path(s): {paths}
+{}",
+            error.message()
+        ),
+    )
 }
 
 /// Resolved and pre-validated native patch change ready for mutation.
@@ -293,20 +356,6 @@ struct NativePatchPreparedChange<'a> {
     change: &'a ApplyPatchFileChange,
     /// Canonical filesystem target verified against the earlier snapshot.
     resolved: PathBuf,
-}
-
-/// Resolves and verifies every native patch target before mutating any file.
-fn prepare_native_patch_changes<'a>(
-    cwd: &Path,
-    changes: &'a [ApplyPatchFileChange],
-    deadline: Option<Instant>,
-) -> Result<Vec<NativePatchPreparedChange<'a>>> {
-    let mut prepared = Vec::with_capacity(changes.len());
-    for change in changes {
-        ensure_native_apply_patch_deadline(deadline)?;
-        prepared.push(prepare_native_patch_change(cwd, change)?);
-    }
-    Ok(prepared)
 }
 
 /// Resolves and verifies one native patch target against its snapshot.
@@ -345,34 +394,6 @@ fn apply_prepared_native_patch_change(change: &NativePatchPreparedChange<'_>) ->
                 ),
             )
         }),
-    }
-}
-
-/// Restores previously applied native patch changes in reverse order.
-fn rollback_native_patch_changes(applied: &[&NativePatchPreparedChange<'_>]) -> Result<()> {
-    for change in applied.iter().rev() {
-        rollback_native_patch_change(change)?;
-    }
-    Ok(())
-}
-
-/// Restores one native patch target to its original snapshot state.
-fn rollback_native_patch_change(change: &NativePatchPreparedChange<'_>) -> Result<()> {
-    match &change.change.original {
-        ApplyPatchOriginalState::Regular(bytes) => {
-            write_native_patch_bytes(&change.resolved, bytes)
-        }
-        ApplyPatchOriginalState::Missing => match fs::remove_file(&change.resolved) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(MezError::new(
-                crate::error::MezErrorKind::Io,
-                format!(
-                    "apply_patch: failed to roll back file: {}: {error}",
-                    change.change.path
-                ),
-            )),
-        },
     }
 }
 
@@ -510,13 +531,19 @@ fn mez_apply_patch_read_plan(patch: &str, strip: Option<u64>) -> Result<LocalAct
     Ok(apply_patch_read_plan_for_paths(&patch.touched_paths()))
 }
 
-fn mez_apply_patch_write_plan(changes: Vec<ApplyPatchFileChange>) -> Result<LocalActionPlan> {
+fn mez_apply_patch_write_plan(plan: ApplyPatchPlan) -> Result<LocalActionPlan> {
+    if plan.changes.is_empty() && !plan.errors.is_empty() {
+        return Err(apply_patch_planned_failure(&plan));
+    }
     let mut command = String::from("# ");
     command.push_str(APPLY_PATCH_WRITE_PHASE_MARKER);
     command.push('\n');
     command.push_str(&apply_patch_write_command_prelude());
-    for (index, change) in changes.iter().enumerate() {
+    for (index, change) in plan.changes.iter().enumerate() {
         command.push_str(&apply_patch_write_change_command(index, change));
+    }
+    if !plan.errors.is_empty() {
+        command.push_str(&apply_patch_planned_failure_shell_lines(&plan));
     }
     Ok(LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
@@ -537,7 +564,7 @@ fn apply_patch_parse_error<T>(message: &str) -> Result<T> {
 fn apply_mez_patch_to_snapshots(
     patch: &MezPatch,
     snapshots: &BTreeMap<String, ApplyPatchSnapshot>,
-) -> Result<Vec<ApplyPatchFileChange>> {
+) -> Result<ApplyPatchPlan> {
     let mut current = BTreeMap::new();
     let mut original = BTreeMap::new();
     for (path, snapshot) in snapshots {
@@ -545,38 +572,10 @@ fn apply_mez_patch_to_snapshots(
         original.insert(path.clone(), state.clone());
         current.insert(path.clone(), state);
     }
+    let mut errors = Vec::new();
     for operation in &patch.operations {
-        match operation {
-            MezPatchOperation::Add { path, content } => {
-                ensure_missing_state(path, current.get(path))?;
-                current.insert(
-                    path.clone(),
-                    Some(ApplyPatchTextFile::from_lines(content.clone(), true)),
-                );
-            }
-            MezPatchOperation::Delete { path } => {
-                ensure_regular_state(path, current.get(path))?;
-                current.insert(path.clone(), None);
-            }
-            MezPatchOperation::Update {
-                path,
-                move_to,
-                hunks,
-                trailing_newline,
-            } => {
-                let mut file = ensure_regular_state(path, current.get(path))?.clone();
-                if let Some(value) = trailing_newline {
-                    file.trailing_newline = *value;
-                }
-                file = apply_patch_hunks_to_file(path, file, hunks)?;
-                if let Some(target) = move_to {
-                    ensure_missing_state(target, current.get(target))?;
-                    current.insert(path.clone(), None);
-                    current.insert(target.clone(), Some(file));
-                } else {
-                    current.insert(path.clone(), Some(file));
-                }
-            }
+        if let Err(error) = apply_mez_patch_operation_to_current(operation, &mut current) {
+            errors.push(error.message().to_string());
         }
     }
     let mut changes = Vec::new();
@@ -595,8 +594,14 @@ fn apply_mez_patch_to_snapshots(
             .cloned()
             .flatten()
             .map(|file| file.into_bytes());
-        let original_empty = matches!(original_state, ApplyPatchOriginalState::Missing);
-        if original_empty && final_bytes.is_none() {
+        let unchanged = match (&original_state, &final_bytes) {
+            (ApplyPatchOriginalState::Regular(original), Some(final_bytes)) => {
+                original == final_bytes
+            }
+            (ApplyPatchOriginalState::Missing, None) => true,
+            _ => false,
+        };
+        if unchanged {
             continue;
         }
         changes.push(ApplyPatchFileChange {
@@ -606,5 +611,44 @@ fn apply_mez_patch_to_snapshots(
             final_bytes,
         });
     }
-    Ok(changes)
+    Ok(ApplyPatchPlan { changes, errors })
+}
+
+fn apply_mez_patch_operation_to_current(
+    operation: &MezPatchOperation,
+    current: &mut BTreeMap<String, Option<ApplyPatchTextFile>>,
+) -> Result<()> {
+    match operation {
+        MezPatchOperation::Add { path, content } => {
+            ensure_missing_state(path, current.get(path))?;
+            current.insert(
+                path.clone(),
+                Some(ApplyPatchTextFile::from_lines(content.clone(), true)),
+            );
+        }
+        MezPatchOperation::Delete { path } => {
+            ensure_regular_state(path, current.get(path))?;
+            current.insert(path.clone(), None);
+        }
+        MezPatchOperation::Update {
+            path,
+            move_to,
+            hunks,
+            trailing_newline,
+        } => {
+            let mut file = ensure_regular_state(path, current.get(path))?.clone();
+            if let Some(value) = trailing_newline {
+                file.trailing_newline = *value;
+            }
+            file = apply_patch_hunks_to_file(path, file, hunks)?;
+            if let Some(target) = move_to {
+                ensure_missing_state(target, current.get(target))?;
+                current.insert(path.clone(), None);
+                current.insert(target.clone(), Some(file));
+            } else {
+                current.insert(path.clone(), Some(file));
+            }
+        }
+    }
+    Ok(())
 }
