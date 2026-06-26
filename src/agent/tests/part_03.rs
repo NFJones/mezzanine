@@ -2981,11 +2981,22 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert_eq!(value["input"][2]["role"], "developer");
     let allowed_surface = value["input"][2]["content"][0]["text"].as_str().unwrap();
     assert!(allowed_surface.contains("[allowed action surface]"));
+    assert!(allowed_surface.contains("interaction_kind="));
     assert!(allowed_surface.contains("allowed_actions=say,request_capability"));
-    assert!(allowed_surface.contains("authoritative for action eligibility"));
-    assert!(allowed_surface.contains("one canonical MAAP action-batch function"));
+    assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
     assert!(allowed_surface.contains("Emit only action objects whose type appears"));
-    assert!(allowed_surface.contains("Treat [executed result]"));
+    assert!(
+        !allowed_surface.contains("authoritative for action eligibility"),
+        "{allowed_surface}"
+    );
+    assert!(
+        !allowed_surface.contains("one canonical MAAP action-batch function"),
+        "{allowed_surface}"
+    );
+    assert!(
+        !allowed_surface.contains("Treat [executed result]"),
+        "{allowed_surface}"
+    );
 }
 
 /// Verifies OpenAI request rendering keeps Mezzanine action results
@@ -4581,11 +4592,14 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     assert!(current_text.contains("Patch the prompt context manager"));
 
     assert_eq!(input[2]["role"], "developer");
+    let allowed_surface = input[2]["content"][0]["text"].as_str().unwrap();
+    assert!(allowed_surface.contains("[allowed action surface]"));
+    assert!(allowed_surface.contains("interaction_kind="));
+    assert!(allowed_surface.contains("allowed_actions=say,request_capability"));
+    assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
     assert!(
-        input[2]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("latest user prompt is the active task")
+        !allowed_surface.contains("latest user prompt is the active task"),
+        "{allowed_surface}"
     );
 }
 
@@ -4660,31 +4674,23 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     let allowed_surface = value["input"].as_array().unwrap().last().unwrap()["content"][0]["text"]
         .as_str()
         .unwrap();
+    assert!(allowed_surface.contains("[allowed action surface]"));
+    assert!(allowed_surface.contains("interaction_kind=action_execution"));
     assert!(
         allowed_surface.contains("allowed_actions=say,request_capability,shell_command,apply_patch")
     );
-    assert!(allowed_surface.contains("one canonical MAAP action-batch function"));
     assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
+    assert!(allowed_surface.contains("Emit only action objects whose type appears"));
     assert!(
-        allowed_surface.contains("The active function call is the schema-valid transport envelope"),
+        !allowed_surface.contains("one canonical MAAP action-batch function"),
         "{allowed_surface}"
     );
     assert!(
-        allowed_surface.contains("required-function-call"),
+        !allowed_surface.contains("required-function-call"),
         "{allowed_surface}"
     );
     assert!(
-        allowed_surface.contains("do not emit a say-only setup batch"),
-        "{allowed_surface}"
-    );
-    assert!(allowed_surface.contains("Treat [executed result]"));
-    assert!(allowed_surface.contains("latest user prompt is the active task"));
-    assert!(allowed_surface.contains("emit that executable action instead of say final"));
-    assert!(allowed_surface.contains("After a recoverable apply_patch failure"));
-    assert!(
-        allowed_surface.contains(
-            "Model-selected skill lookup/loading is disabled; do not emit request_skills or call_skill"
-        ),
+        !allowed_surface.contains("Model-selected skill lookup/loading is disabled"),
         "{allowed_surface}"
     );
 
