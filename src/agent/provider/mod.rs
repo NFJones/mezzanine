@@ -76,6 +76,9 @@ pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/c
 /// Default DeepSeek models listing endpoint.
 #[allow(dead_code)]
 pub const DEEPSEEK_MODELS_ENDPOINT: &str = "https://api.deepseek.com/models";
+/// Default Anthropic Messages API endpoint.
+#[allow(dead_code)]
+pub const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 /// OpenAI project routing header for project-scoped API accounting.
@@ -99,6 +102,8 @@ pub const OPENAI_RESPONSES_API: &str = "openai-responses";
 pub const OPENAI_CHAT_COMPLETIONS_API: &str = "openai-chat-completions";
 /// API compatibility id for the DeepSeek Chat Completions dialect.
 pub const DEEPSEEK_CHAT_COMPLETIONS_API: &str = "deepseek-chat-completions";
+/// API compatibility id for the Anthropic Messages API.
+pub const ANTHROPIC_MESSAGES_API: &str = "anthropic-messages";
 
 /// Wire API compatibility selected for one configured provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +114,8 @@ pub enum ProviderApiCompatibility {
     OpenAiChatCompletions,
     /// DeepSeek Chat Completions dialect with native thinking and shim tools.
     DeepSeekChatCompletions,
+    /// Anthropic Messages request, response, and tool-use shape.
+    AnthropicMessages,
 }
 
 impl ProviderApiCompatibility {
@@ -118,6 +125,7 @@ impl ProviderApiCompatibility {
             Self::OpenAiResponses => OPENAI_RESPONSES_API,
             Self::OpenAiChatCompletions => OPENAI_CHAT_COMPLETIONS_API,
             Self::DeepSeekChatCompletions => DEEPSEEK_CHAT_COMPLETIONS_API,
+            Self::AnthropicMessages => ANTHROPIC_MESSAGES_API,
         }
     }
 
@@ -127,6 +135,7 @@ impl ProviderApiCompatibility {
             OPENAI_RESPONSES_API => Some(Self::OpenAiResponses),
             OPENAI_CHAT_COMPLETIONS_API => Some(Self::OpenAiChatCompletions),
             DEEPSEEK_CHAT_COMPLETIONS_API => Some(Self::DeepSeekChatCompletions),
+            ANTHROPIC_MESSAGES_API => Some(Self::AnthropicMessages),
             _ => None,
         }
     }
@@ -137,6 +146,7 @@ impl ProviderApiCompatibility {
             "openai" => Some(Self::OpenAiResponses),
             "openai-compatible" => Some(Self::OpenAiChatCompletions),
             "deepseek" => Some(Self::DeepSeekChatCompletions),
+            "anthropic" => Some(Self::AnthropicMessages),
             _ => None,
         }
     }
@@ -147,7 +157,7 @@ pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderA
     match api.map(str::trim).filter(|api| !api.is_empty()) {
         Some(api) => ProviderApiCompatibility::from_id(api).ok_or_else(|| {
             MezError::config(format!(
-                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, or {DEEPSEEK_CHAT_COMPLETIONS_API}"
+                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, {DEEPSEEK_CHAT_COMPLETIONS_API}, or {ANTHROPIC_MESSAGES_API}"
             ))
         }),
         None => ProviderApiCompatibility::default_for_kind(kind).ok_or_else(|| {
@@ -461,6 +471,17 @@ impl ProviderCapabilities {
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
                 supports_streaming: false,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
+            ProviderApiCompatibility::AnthropicMessages => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: false,
+                supports_thinking_toggle: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: true,
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: false,
             },
@@ -1468,5 +1489,60 @@ mod tests {
             schema.pointer("/properties/arguments/required"),
             Some(&serde_json::json!(["data"]))
         );
+    }
+
+    /// Verifies the Anthropic API compatibility identifier round-trips through
+    /// the stable parser and formatter used by provider configuration.
+    ///
+    /// This guards the new first-party Anthropic compatibility surface against
+    /// regressions where config accepts the constant but the runtime no longer
+    /// resolves it back to the same enum variant.
+    #[test]
+    fn anthropic_messages_api_id_round_trips() {
+        assert_eq!(
+            ProviderApiCompatibility::from_id(ANTHROPIC_MESSAGES_API),
+            Some(ProviderApiCompatibility::AnthropicMessages)
+        );
+        assert_eq!(
+            ProviderApiCompatibility::AnthropicMessages.as_str(),
+            ANTHROPIC_MESSAGES_API
+        );
+    }
+
+    /// Verifies Anthropic provider kinds default to the Anthropic Messages
+    /// compatibility layer when no explicit API id is configured.
+    ///
+    /// This keeps provider-kind resolution aligned with the new built-in
+    /// compatibility contract and exercises the user-facing helper that emits
+    /// configuration errors for unsupported API ids.
+    #[test]
+    fn effective_provider_api_defaults_anthropic_kind_to_messages() {
+        assert_eq!(
+            effective_provider_api("anthropic", None).unwrap(),
+            ProviderApiCompatibility::AnthropicMessages
+        );
+    }
+
+    /// Verifies Anthropic advertises only the conservative capabilities needed
+    /// for native Messages integration.
+    ///
+    /// The Anthropic adapter should allow provider-neutral output caps,
+    /// streaming, and tool use without implying OpenAI Responses support,
+    /// service tiers, prompt-cache retention, reasoning controls, or parallel
+    /// tool-call semantics.
+    #[test]
+    fn anthropic_messages_capabilities_are_conservative() {
+        let capabilities =
+            ProviderCapabilities::for_api(ProviderApiCompatibility::AnthropicMessages);
+
+        assert!(!capabilities.supports_responses_api);
+        assert!(capabilities.supports_max_output_tokens);
+        assert!(!capabilities.supports_reasoning_controls);
+        assert!(!capabilities.supports_thinking_toggle);
+        assert!(!capabilities.supports_service_tier);
+        assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(capabilities.supports_streaming);
+        assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_parallel_tool_calls);
     }
 }

@@ -760,6 +760,9 @@ impl RuntimeSessionService {
                 )
                 .map(RuntimeAgentProviderDispatchProvider::DeepSeek)
             }
+            ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(
+                "Anthropic remember provider execution is not implemented yet",
+            )),
         };
         match provider_result {
             Ok(provider) => {

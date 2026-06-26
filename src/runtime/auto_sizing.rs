@@ -184,7 +184,8 @@ pub(crate) fn runtime_auto_sizing_reasoning_levels_for_profile(
                 ProviderApiCompatibility::DeepSeekChatCompletions => {
                     levels.extend(["high".to_string(), "xhigh".to_string()]);
                 }
-                ProviderApiCompatibility::OpenAiChatCompletions => {}
+                ProviderApiCompatibility::OpenAiChatCompletions
+                | ProviderApiCompatibility::AnthropicMessages => {}
             }
         }
     }

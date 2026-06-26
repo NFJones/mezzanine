@@ -78,6 +78,7 @@ impl RuntimeSessionService {
                     quota_usage: Vec::new(),
                 }),
             },
+            ProviderApiCompatibility::AnthropicMessages => Ok(fallback),
         }
     }
 
@@ -244,6 +245,9 @@ impl RuntimeSessionService {
                 )
                 .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
             }
+            ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(
+                "Anthropic provider model listing is not implemented yet",
+            )),
         };
         let provider = match provider_result {
             Ok(provider) => {
@@ -462,7 +466,8 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 levels.extend(deepseek_default_reasoning_effort_levels());
             }
-            ProviderApiCompatibility::OpenAiChatCompletions => {}
+            ProviderApiCompatibility::OpenAiChatCompletions
+            | ProviderApiCompatibility::AnthropicMessages => {}
         }
     }
     dedupe_runtime_strings(levels)
