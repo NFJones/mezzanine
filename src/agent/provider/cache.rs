@@ -366,12 +366,17 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     material.push_str("prompt_version=");
     material.push_str(&AGENT_PROMPT_PROFILE_VERSION.to_string());
     material.push('\n');
+    material.push_str("provider=");
+    material.push_str(&request.provider);
+    material.push('\n');
+    material.push_str("model=");
+    material.push_str(&request.model);
+    material.push('\n');
     material.push_str("lineage_id=");
     material.push_str(
         request
             .prompt_cache_lineage_id
             .as_deref()
-            .or(request.prompt_cache_session_id.as_deref())
             .unwrap_or("lineage-unknown"),
     );
     material.push('\n');

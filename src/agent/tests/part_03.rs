@@ -3125,14 +3125,14 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     );
 }
 
-/// Verifies OpenAI prompt-cache routing keys follow an explicit lineage id when
-/// runtime context provides one.
+/// Verifies OpenAI prompt-cache routing keys include provider/model identity.
 ///
-/// The local routing namespace should survive provider/model switches and
-/// resume-like session-id changes when the inherited conversation prefix is the
-/// same.
+/// The local routing namespace should follow explicit lineage ids and survive
+/// resume-like session-id changes when provider, model, and lineage stay the
+/// same. Different provider/model compatibility targets must not share one
+/// routing key.
 #[test]
-fn openai_prompt_cache_key_uses_lineage_identity_not_provider_or_model() {
+fn openai_prompt_cache_key_uses_lineage_provider_and_model_identity() {
     let context_for_session = |session_id: &str, lineage_id: Option<&str>| {
         let mut blocks = vec![
             ContextBlock {
@@ -3225,7 +3225,7 @@ fn openai_prompt_cache_key_uses_lineage_identity_not_provider_or_model() {
         serde_json::from_str(&openai_responses_request_body(&lineage_fallback_session_b).unwrap())
             .unwrap();
 
-    assert_eq!(
+    assert_ne!(
         inherited_lineage_value["prompt_cache_key"],
         inherited_lineage_other_value["prompt_cache_key"]
     );
@@ -3237,16 +3237,18 @@ fn openai_prompt_cache_key_uses_lineage_identity_not_provider_or_model() {
         inherited_lineage_value["prompt_cache_key"],
         fresh_lineage_value["prompt_cache_key"]
     );
-    assert_ne!(
+    assert_eq!(
         fallback_a_value["prompt_cache_key"],
         fallback_b_value["prompt_cache_key"]
     );
 }
 
-/// Verifies OpenAI prompt-cache routing keys fall back to Mezzanine session
-/// identity when no explicit lineage id is present.
+/// Verifies OpenAI prompt-cache routing keys do not use live session fallback.
+///
+/// When no explicit lineage id is present, the key should use the stable unknown
+/// lineage namespace plus provider/model identity instead of volatile session ids.
 #[test]
-fn openai_prompt_cache_key_falls_back_to_session_identity() {
+fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
     let context_for_session = |session_id: &str| {
         AgentContext::new(vec![
             ContextBlock {
@@ -3298,11 +3300,11 @@ fn openai_prompt_cache_key_falls_back_to_session_identity() {
     let session_b_value: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&session_b_openai).unwrap()).unwrap();
 
-    assert_eq!(
+    assert_ne!(
         session_a_value["prompt_cache_key"],
         session_a_other_value["prompt_cache_key"]
     );
-    assert_ne!(
+    assert_eq!(
         session_a_value["prompt_cache_key"],
         session_b_value["prompt_cache_key"]
     );

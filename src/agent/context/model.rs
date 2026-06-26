@@ -449,8 +449,8 @@ pub struct ModelRequest {
     /// Other providers leave this unset to use their own default.
     pub temperature: Option<String>,
     /// Live Mezzanine session identifier used for cache diagnostics and
-    /// runtime-origin tracking without coupling routing to provider or model
-    /// names.
+    /// runtime-origin tracking without coupling provider cache routing to live
+    /// session identity.
     ///
     /// The value is non-secret and is derived from runtime session context when
     /// present. Requests built outside a live session leave it unset.
@@ -461,7 +461,8 @@ pub struct ModelRequest {
     ///
     /// The value is non-secret and is derived from runtime conversation
     /// metadata when present. Requests built outside a live conversation leave
-    /// it unset and fall back to the session id or an unknown placeholder.
+    /// it unset; provider cache keys use a stable unknown-lineage placeholder
+    /// instead of falling back to live session identity.
     pub prompt_cache_lineage_id: Option<String>,
     /// Stores the turn id value for this data structure.
     ///
