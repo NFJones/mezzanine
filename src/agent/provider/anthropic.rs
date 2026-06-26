@@ -8,10 +8,14 @@
 //! auth-store construction.
 
 use super::chat_completions::ChatCompletionsDialect;
+use super::errors::{openai_provider_failure_event_json, provider_maap_parse_error};
 use super::{
-    ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ProviderHttpRequest,
-    ProviderHttpResponse, Result, validate_non_empty,
+    ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
+    OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    provider_quota_usage_from_headers, validate_non_empty,
 };
+use crate::sse::parse_sse_events_with;
 use std::collections::BTreeMap;
 
 /// Default Anthropic Messages API version used when provider options omit one.
@@ -162,14 +166,30 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
     /// Parses one successful provider-specific Messages API response.
     fn parse_chat_response(
         &self,
-        _response: ProviderHttpResponse,
-        _request: &ModelRequest,
-        _provider_id: &str,
-        _stream: bool,
+        response: ProviderHttpResponse,
+        request: &ModelRequest,
+        provider_id: &str,
+        stream: bool,
     ) -> Result<ModelResponse> {
-        Err(MezError::invalid_state(
-            "Anthropic provider response parsing is not implemented yet",
-        ))
+        let ProviderHttpResponse { headers, body, .. } = response;
+        let (model, raw_text, action_batch, usage) = parse_anthropic_messages_provider_body(
+            &body,
+            &request.model,
+            stream,
+            &request.turn_id,
+            &request.agent_id,
+            anthropic_request_requires_maap(request),
+        )?;
+        Ok(ModelResponse {
+            provider: provider_id.to_string(),
+            model,
+            raw_text,
+            usage,
+            latest_request_usage: None,
+            quota_usage: provider_quota_usage_from_headers(&headers),
+            action_batch,
+            provider_transcript_events: Vec::new(),
+        })
     }
 
     /// Builds the provider-specific model catalog HTTP request.
@@ -316,6 +336,591 @@ fn anthropic_messages_request_body(
     })
 }
 
+/// Returns whether this Anthropic request must produce a MAAP action batch.
+fn anthropic_request_requires_maap(request: &ModelRequest) -> bool {
+    request.interaction_kind != super::ModelInteractionKind::AutoSizing
+        && !request.allowed_actions.actions.is_empty()
+}
+
+/// Parses one Anthropic provider body using the transport mode selected for
+/// the request.
+fn parse_anthropic_messages_provider_body(
+    body: &str,
+    fallback_model: &str,
+    stream: bool,
+    turn_id: &str,
+    agent_id: &str,
+    requires_maap: bool,
+) -> Result<(String, String, Option<super::MaapBatch>, ModelTokenUsage)> {
+    if stream {
+        parse_anthropic_messages_stream_body(body, fallback_model, turn_id, agent_id, requires_maap)
+    } else {
+        parse_anthropic_messages_http_body(body, fallback_model, turn_id, agent_id, requires_maap)
+    }
+}
+
+/// Parses one non-streaming Anthropic Messages API body.
+fn parse_anthropic_messages_http_body(
+    body: &str,
+    fallback_model: &str,
+    turn_id: &str,
+    agent_id: &str,
+    requires_maap: bool,
+) -> Result<(String, String, Option<super::MaapBatch>, ModelTokenUsage)> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        MezError::invalid_state(format!("Anthropic response was not JSON: {error}"))
+    })?;
+    if let Some(error) = anthropic_provider_error_from_value(&value, "Anthropic response") {
+        return Err(error);
+    }
+    let model = value
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(fallback_model)
+        .to_string();
+    let content = value
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| MezError::invalid_state("Anthropic response has no content array"))?;
+    let (raw_text, action_batch) =
+        anthropic_content_to_output(content, turn_id, agent_id, requires_maap)?;
+    if let Some(error) = anthropic_stop_reason_error(
+        value.get("stop_reason").and_then(serde_json::Value::as_str),
+        &raw_text,
+        requires_maap,
+    ) {
+        return Err(error);
+    }
+    Ok((
+        model,
+        raw_text,
+        action_batch,
+        anthropic_usage_from_value(value.get("usage")),
+    ))
+}
+
+/// Parses one streaming Anthropic Messages API SSE body.
+fn parse_anthropic_messages_stream_body(
+    body: &str,
+    fallback_model: &str,
+    turn_id: &str,
+    agent_id: &str,
+    requires_maap: bool,
+) -> Result<(String, String, Option<super::MaapBatch>, ModelTokenUsage)> {
+    let mut model = None;
+    let mut usage = ModelTokenUsage::default();
+    let mut stop_reason = None::<String>;
+    let mut completed = false;
+    let mut blocks = BTreeMap::<u64, AnthropicStreamContentBlock>::new();
+
+    parse_sse_events_with(
+        body,
+        "Anthropic stream response did not contain SSE data events",
+        |event_name, data| {
+            let data = data.trim();
+            if data.is_empty() {
+                return Ok(());
+            }
+            let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+                MezError::invalid_state(format!("Anthropic stream event was not JSON: {error}"))
+            })?;
+            if event_name == Some("error")
+                || value.get("type").and_then(serde_json::Value::as_str) == Some("error")
+            {
+                return Err(
+                    anthropic_provider_error_from_value(&value, "Anthropic stream error")
+                        .unwrap_or_else(|| {
+                            MezError::invalid_state("Anthropic stream returned an error event")
+                                .with_provider_failure_json(openai_provider_failure_event_json(
+                                    &value,
+                                ))
+                        }),
+                );
+            }
+            match value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .or(event_name)
+            {
+                Some("message_start") => {
+                    if model.is_none() {
+                        model = value
+                            .pointer("/message/model")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string);
+                    }
+                    anthropic_overlay_usage(&mut usage, value.pointer("/message/usage"));
+                }
+                Some("content_block_start") => {
+                    let index = value
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "Anthropic stream content_block_start event is missing an index",
+                            )
+                        })?;
+                    let block = value.get("content_block").ok_or_else(|| {
+                        MezError::invalid_state(
+                            "Anthropic stream content_block_start event is missing content_block",
+                        )
+                    })?;
+                    blocks.insert(index, AnthropicStreamContentBlock::from_start(block)?);
+                }
+                Some("content_block_delta") => {
+                    let index = value
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "Anthropic stream content_block_delta event is missing an index",
+                            )
+                        })?;
+                    let delta = value.get("delta").ok_or_else(|| {
+                        MezError::invalid_state(
+                            "Anthropic stream content_block_delta event is missing delta",
+                        )
+                    })?;
+                    blocks
+                        .get_mut(&index)
+                        .ok_or_else(|| {
+                            MezError::invalid_state(format!(
+                                "Anthropic stream delta referenced unknown content block index {index}"
+                            ))
+                        })?
+                        .apply_delta(delta)?;
+                }
+                Some("content_block_stop") => {
+                    let index = value
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "Anthropic stream content_block_stop event is missing an index",
+                            )
+                        })?;
+                    let block = blocks.get_mut(&index).ok_or_else(|| {
+                        MezError::invalid_state(format!(
+                            "Anthropic stream stop referenced unknown content block index {index}"
+                        ))
+                    })?;
+                    block.stopped = true;
+                }
+                Some("message_delta") => {
+                    if let Some(reason) = value
+                        .pointer("/delta/stop_reason")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        stop_reason = Some(reason.to_string());
+                    }
+                    anthropic_overlay_usage(&mut usage, value.get("usage"));
+                }
+                Some("message_stop") => {
+                    completed = true;
+                }
+                Some("ping") => {}
+                Some(_) | None => {}
+            }
+            Ok(())
+        },
+    )?;
+
+    let content = blocks
+        .into_values()
+        .map(AnthropicStreamContentBlock::finish)
+        .collect::<Result<Vec<_>>>()?;
+    let (raw_text, action_batch) =
+        anthropic_content_to_output(&content, turn_id, agent_id, requires_maap)?;
+    if let Some(error) =
+        anthropic_stop_reason_error(stop_reason.as_deref(), &raw_text, requires_maap)
+    {
+        return Err(error);
+    }
+    if raw_text.is_empty() && action_batch.is_none() {
+        return Err(MezError::invalid_state(
+            "Anthropic stream did not contain text or MAAP tool_use output",
+        ));
+    }
+    if !completed && action_batch.is_none() {
+        return Err(MezError::invalid_state(
+            "Anthropic stream closed before message_stop",
+        ));
+    }
+    Ok((
+        model.unwrap_or_else(|| fallback_model.to_string()),
+        raw_text,
+        action_batch,
+        usage,
+    ))
+}
+
+/// Converts Anthropic content blocks into response text and an optional MAAP
+/// action batch.
+fn anthropic_content_to_output(
+    content: &[serde_json::Value],
+    turn_id: &str,
+    agent_id: &str,
+    requires_maap: bool,
+) -> Result<(String, Option<super::MaapBatch>)> {
+    let mut raw_text = String::new();
+    let mut maap_inputs = Vec::new();
+    let mut saw_tool_use = false;
+
+    for block in content {
+        let block_type = block
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        match block_type {
+            "text" => {
+                raw_text.push_str(
+                    block
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+            }
+            "tool_use" => {
+                saw_tool_use = true;
+                if block.get("name").and_then(serde_json::Value::as_str)
+                    == Some(OPENAI_MAAP_FUNCTION_TOOL_NAME)
+                {
+                    let input = block
+                        .get("input")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    maap_inputs.push(serde_json::to_string(&input).map_err(|error| {
+                        MezError::invalid_state(format!(
+                            "Anthropic tool_use input encoding failed: {error}"
+                        ))
+                    })?);
+                }
+            }
+            "thinking" | "redacted_thinking" | "server_tool_use" | "server_tool_result" => {
+                return Err(anthropic_unsupported_content_block_error(block));
+            }
+            _ => return Err(anthropic_unsupported_content_block_error(block)),
+        }
+    }
+
+    let action_batch = if requires_maap {
+        if maap_inputs.len() > 1 {
+            return Err(provider_maap_parse_error(
+                MezError::invalid_args(
+                    "Anthropic returned extra MAAP tool_use blocks; pack the complete MAAP batch into exactly one submit_maap_action_batch tool_use",
+                ),
+                &serde_json::Value::Array(content.to_vec()).to_string(),
+            ));
+        }
+        if let Some(arguments) = maap_inputs.first() {
+            Some(
+                parse_maap_action_batch_json_for_turn(arguments, turn_id, agent_id)
+                    .map_err(|error| provider_maap_parse_error(error, arguments))?,
+            )
+        } else if saw_tool_use {
+            return Err(provider_maap_parse_error(
+                MezError::invalid_args(
+                    "Anthropic response did not include submit_maap_action_batch input in its tool_use block",
+                ),
+                &serde_json::Value::Array(content.to_vec()).to_string(),
+            ));
+        } else {
+            anthropic_text_maap_action_batch(&raw_text, turn_id, agent_id)?
+        }
+    } else {
+        None
+    };
+
+    let raw_text = if action_batch.is_some() && raw_text.trim().is_empty() {
+        "executing".to_string()
+    } else {
+        raw_text
+    };
+    Ok((raw_text, action_batch))
+}
+
+/// Parses a fallback MAAP batch from Anthropic text content when no tool_use
+/// block is present.
+fn anthropic_text_maap_action_batch(
+    raw_text: &str,
+    turn_id: &str,
+    agent_id: &str,
+) -> Result<Option<super::MaapBatch>> {
+    let trimmed = raw_text.trim();
+    if trimmed.starts_with('{') {
+        return parse_maap_action_batch_json_for_turn(trimmed, turn_id, agent_id)
+            .map(Some)
+            .map_err(|error| provider_maap_parse_error(error, raw_text));
+    }
+    parse_fenced_maap_action_batch_for_turn(raw_text, turn_id, agent_id)
+        .map_err(|error| provider_maap_parse_error(error, raw_text))
+}
+
+/// Converts Anthropic stop reasons into runtime-visible incomplete or terminal
+/// errors.
+fn anthropic_stop_reason_error(
+    stop_reason: Option<&str>,
+    raw_text: &str,
+    requires_maap: bool,
+) -> Option<MezError> {
+    let stop_reason = stop_reason?;
+    let base = serde_json::json!({
+        "provider": "anthropic",
+        "stop_reason": stop_reason,
+        "raw_text_bytes": raw_text.len(),
+    });
+    match stop_reason {
+        "end_turn" | "stop_sequence" | "tool_use" => None,
+        "max_tokens" => Some(
+            MezError::invalid_state(if requires_maap {
+                "Anthropic Messages response hit max_tokens before completing MAAP output"
+            } else {
+                "Anthropic Messages response hit max_tokens before completing output"
+            })
+            .with_provider_failure_json(
+                serde_json::json!({
+                    "provider": "anthropic",
+                    "stop_reason": "max_tokens",
+                    "incomplete_details": {
+                        "reason": "max_output_tokens"
+                    },
+                    "raw_text_bytes": raw_text.len()
+                })
+                .to_string(),
+            )
+            .with_provider_raw_text(raw_text.to_string()),
+        ),
+        "model_context_window_exceeded" => Some(
+            MezError::invalid_state(
+                "Anthropic Messages response exceeded the model context window",
+            )
+            .with_provider_failure_json(
+                serde_json::json!({
+                    "provider": "anthropic",
+                    "stop_reason": "model_context_window_exceeded",
+                    "incomplete_details": {
+                        "reason": "model_context_window_exceeded"
+                    },
+                    "raw_text_bytes": raw_text.len()
+                })
+                .to_string(),
+            )
+            .with_provider_raw_text(raw_text.to_string()),
+        ),
+        "refusal" => Some(
+            MezError::invalid_state("Anthropic Messages response ended with refusal")
+                .with_provider_failure_json(base.to_string())
+                .with_provider_raw_text(raw_text.to_string()),
+        ),
+        "pause_turn" => Some(
+            MezError::invalid_state(
+                "Anthropic Messages response paused the turn before completion",
+            )
+            .with_provider_failure_json(base.to_string())
+            .with_provider_raw_text(raw_text.to_string()),
+        ),
+        _ => None,
+    }
+}
+
+/// Builds a sanitized error from an Anthropic response or stream event.
+fn anthropic_provider_error_from_value(
+    value: &serde_json::Value,
+    fallback_message: &str,
+) -> Option<MezError> {
+    let error = value.get("error").filter(|error| !error.is_null())?;
+    let message = error
+        .get("message")
+        .or_else(|| value.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(fallback_message);
+    Some(
+        MezError::invalid_state(message)
+            .with_provider_failure_json(openai_provider_failure_event_json(value)),
+    )
+}
+
+/// Extracts Anthropic token-usage counters from a response or stream usage
+/// object.
+fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUsage {
+    let Some(value) = value else {
+        return ModelTokenUsage::default();
+    };
+    ModelTokenUsage {
+        input_tokens: anthropic_usage_u64(value, "input_tokens"),
+        output_tokens: anthropic_usage_u64(value, "output_tokens"),
+        reasoning_tokens: 0,
+        cached_input_tokens: value
+            .get("cache_read_input_tokens")
+            .and_then(serde_json::Value::as_u64),
+    }
+}
+
+/// Overlays cumulative Anthropic usage fields from one stream event.
+fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&serde_json::Value>) {
+    let next = anthropic_usage_from_value(value);
+    if next.input_tokens > 0 {
+        current.input_tokens = next.input_tokens;
+    }
+    if next.output_tokens > 0 {
+        current.output_tokens = next.output_tokens;
+    }
+    if next.reasoning_tokens > 0 {
+        current.reasoning_tokens = next.reasoning_tokens;
+    }
+    if next.cached_input_tokens.is_some() {
+        current.cached_input_tokens = next.cached_input_tokens;
+    }
+}
+
+/// Returns one Anthropic usage counter when present.
+fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
+/// Builds a structured unsupported-content diagnostic for Anthropic blocks.
+fn anthropic_unsupported_content_block_error(block: &serde_json::Value) -> MezError {
+    let block_type = block
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    MezError::invalid_state(format!(
+        "Anthropic response contained unsupported content block type `{block_type}`"
+    ))
+    .with_provider_failure_json(openai_provider_failure_event_json(&serde_json::json!({
+        "content_block": block
+    })))
+    .with_provider_raw_text(block.to_string())
+}
+
+/// Accumulates one streaming Anthropic content block until it stops.
+#[derive(Debug, Clone)]
+struct AnthropicStreamContentBlock {
+    kind: AnthropicStreamContentBlockKind,
+    stopped: bool,
+}
+
+/// Distinguishes the supported Anthropic streaming content block shapes.
+#[derive(Debug, Clone)]
+enum AnthropicStreamContentBlockKind {
+    Text { text: String },
+    ToolUse { name: String, input_json: String },
+}
+
+impl AnthropicStreamContentBlock {
+    /// Builds an accumulator from one `content_block_start` event payload.
+    fn from_start(block: &serde_json::Value) -> Result<Self> {
+        let kind = match block
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+        {
+            "text" => AnthropicStreamContentBlockKind::Text {
+                text: block
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            },
+            "tool_use" => AnthropicStreamContentBlockKind::ToolUse {
+                name: block
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                input_json: block
+                    .get("input")
+                    .filter(|input| !input.is_null())
+                    .and_then(|input| {
+                        if input == &serde_json::json!({}) {
+                            None
+                        } else {
+                            serde_json::to_string(input).ok()
+                        }
+                    })
+                    .unwrap_or_default(),
+            },
+            _ => return Err(anthropic_unsupported_content_block_error(block)),
+        };
+        Ok(Self {
+            kind,
+            stopped: false,
+        })
+    }
+
+    /// Applies one `content_block_delta` payload to the current accumulator.
+    fn apply_delta(&mut self, delta: &serde_json::Value) -> Result<()> {
+        let delta_type = delta
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        match (&mut self.kind, delta_type) {
+            (AnthropicStreamContentBlockKind::Text { text }, "text_delta") => {
+                text.push_str(
+                    delta
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+                Ok(())
+            }
+            (AnthropicStreamContentBlockKind::ToolUse { input_json, .. }, "input_json_delta") => {
+                input_json.push_str(
+                    delta
+                        .get("partial_json")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+                Ok(())
+            }
+            _ => Err(MezError::invalid_state(format!(
+                "Anthropic stream returned unsupported content block delta type `{delta_type}`"
+            ))
+            .with_provider_failure_json(openai_provider_failure_event_json(&serde_json::json!({
+                "delta": delta
+            })))
+            .with_provider_raw_text(delta.to_string())),
+        }
+    }
+
+    /// Finalizes one content block after stream completion.
+    fn finish(self) -> Result<serde_json::Value> {
+        match self.kind {
+            AnthropicStreamContentBlockKind::Text { text } => Ok(serde_json::json!({
+                "type": "text",
+                "text": text,
+            })),
+            AnthropicStreamContentBlockKind::ToolUse { name, input_json } => {
+                if !self.stopped {
+                    return Err(MezError::invalid_state(
+                        "Anthropic stream closed before a tool_use block finished",
+                    ));
+                }
+                let input = if input_json.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::from_str::<serde_json::Value>(&input_json).map_err(|error| {
+                        provider_maap_parse_error(
+                            MezError::invalid_args(format!(
+                                "Anthropic tool_use input JSON is malformed: {error}"
+                            )),
+                            &input_json,
+                        )
+                    })?
+                };
+                Ok(serde_json::json!({
+                    "type": "tool_use",
+                    "name": name,
+                    "input": input,
+                }))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +1030,124 @@ mod tests {
 
         assert_eq!(provider.provider_id(), "anthropic");
         assert_eq!(provider.endpoint, ANTHROPIC_MESSAGES_ENDPOINT);
+    }
+
+    /// Verifies Anthropic native `tool_use` blocks are translated into one
+    /// canonical MAAP action batch and preserve execution-mode placeholder
+    /// text when the provider omits visible assistant text.
+    #[test]
+    fn anthropic_content_blocks_parse_single_maap_tool_use_batch() {
+        let content = vec![serde_json::json!({
+            "type": "tool_use",
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+            "input": {
+                "rationale": "Return the final answer now.",
+                "actions": [{
+                    "type": "say",
+                    "status": "final",
+                    "content_type": "text/plain; charset=utf-8",
+                    "text": "done"
+                }]
+            }
+        })];
+
+        let (raw_text, action_batch) =
+            anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap();
+
+        assert_eq!(raw_text, "executing");
+        let batch = action_batch.unwrap();
+        assert_eq!(batch.rationale, "Return the final answer now.");
+        assert_eq!(batch.actions.len(), 1);
+    }
+
+    /// Verifies Anthropic rejects multiple MAAP carrier `tool_use` blocks so
+    /// one turn cannot smuggle extra carrier calls past the action-batch
+    /// contract.
+    #[test]
+    fn anthropic_content_blocks_reject_extra_maap_tool_use_blocks() {
+        let content = vec![
+            serde_json::json!({
+                "type": "tool_use",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "input": {
+                    "rationale": "First.",
+                    "actions": [{
+                        "type": "say",
+                        "status": "progress",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "one"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "tool_use",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "input": {
+                    "rationale": "Second.",
+                    "actions": [{
+                        "type": "say",
+                        "status": "final",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "two"
+                    }]
+                }
+            }),
+        ];
+
+        let error = anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap_err();
+
+        assert!(
+            error.message().contains("extra MAAP tool_use blocks"),
+            "{}",
+            error.message()
+        );
+        assert!(error.provider_raw_text().is_some());
+    }
+
+    /// Verifies Anthropic streaming tool-use input JSON is accumulated across
+    /// `input_json_delta` events and finalized only after the block stops.
+    #[test]
+    fn anthropic_stream_parses_tool_use_partial_json() {
+        let body = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-3-7-sonnet\",\"usage\":{\"input_tokens\":12}}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"submit_maap_action_batch\",\"input\":{}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"rationale\\\":\\\"Stream batch\\\",\\\"actions\\\":[{\\\"type\\\":\\\"say\\\",\\\"status\\\":\\\"final\\\",\\\"content_type\\\":\\\"text/plain; charset=utf-8\\\",\\\"text\\\":\\\"ok\\\"}]}\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let (model, raw_text, action_batch, usage) = parse_anthropic_messages_provider_body(
+            body,
+            "fallback-model",
+            true,
+            "turn-1",
+            "agent-1",
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(model, "claude-3-7-sonnet");
+        assert_eq!(raw_text, "executing");
+        assert!(action_batch.is_some());
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 5);
+    }
+
+    /// Verifies Anthropic `max_tokens` stop reasons surface the same
+    /// output-limit recovery signal used by the runtime compaction path.
+    #[test]
+    fn anthropic_stop_reason_max_tokens_maps_to_output_limit() {
+        let error = anthropic_stop_reason_error(Some("max_tokens"), "partial", true).unwrap();
+
+        let failure_json = error.provider_failure_json().unwrap();
+        assert!(failure_json.contains("max_output_tokens"), "{failure_json}");
+        assert_eq!(error.provider_raw_text(), Some("partial"));
     }
 }
