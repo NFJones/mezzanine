@@ -484,6 +484,11 @@ pub(super) fn runtime_provider_default_models(
                 .map(|models| models.iter().map(|model| (*model).to_string()).collect())
                 .unwrap_or_default()
         }
+        Ok(ProviderApiCompatibility::AnthropicMessages) if provider_config.kind == "anthropic" => {
+            runtime_default_models_for_provider(&provider_config.kind)
+                .map(|models| models.iter().map(|model| (*model).to_string()).collect())
+                .unwrap_or_default()
+        }
         Ok(ProviderApiCompatibility::DeepSeekChatCompletions)
             if provider_config.kind == "deepseek" =>
         {
@@ -502,6 +507,9 @@ fn runtime_provider_recommended_model(
 ) -> Option<&'static str> {
     match effective_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
         Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
+            runtime_recommended_model_for_provider(&provider_config.kind).ok()
+        }
+        Ok(ProviderApiCompatibility::AnthropicMessages) if provider_config.kind == "anthropic" => {
             runtime_recommended_model_for_provider(&provider_config.kind).ok()
         }
         Ok(ProviderApiCompatibility::DeepSeekChatCompletions)

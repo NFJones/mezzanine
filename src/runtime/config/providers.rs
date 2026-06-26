@@ -438,6 +438,12 @@ pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static
             "gpt-5.3-codex-spark",
             "gpt-5.2",
         ]),
+        "anthropic" => Ok(&[
+            "claude-fable-5",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ]),
         "deepseek" => Ok(&["deepseek-v4-pro", "deepseek-v4-flash"]),
         _ => Err(MezError::config(format!(
             "providers.{kind}.models is required for provider kind `{kind}`"

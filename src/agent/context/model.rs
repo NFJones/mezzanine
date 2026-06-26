@@ -264,6 +264,7 @@ fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Op
 /// Returns documented context-window metadata based on model-family naming.
 pub fn known_model_context_window_tokens(model: &str) -> Option<usize> {
     openai_known_model_context_window_tokens(model)
+        .or_else(|| anthropic_known_model_context_window_tokens(model))
         .or_else(|| deepseek_known_model_context_window_tokens(model))
 }
 
@@ -292,6 +293,16 @@ fn openai_known_model_context_window_tokens(model: &str) -> Option<usize> {
         return Some(OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS);
     }
     None
+}
+
+/// Returns documented context windows for DeepSeek model families Mezzanine ships.
+fn anthropic_known_model_context_window_tokens(model: &str) -> Option<usize> {
+    let model = model.trim().to_ascii_lowercase();
+    match model.as_str() {
+        "claude-fable-5" | "claude-opus-4-8" | "claude-sonnet-4-6" => Some(1_000_000),
+        "claude-haiku-4-5-20251001" => Some(200_000),
+        _ => None,
+    }
 }
 
 /// Returns documented context windows for DeepSeek model families Mezzanine ships.
