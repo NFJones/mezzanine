@@ -240,6 +240,20 @@ default_model = "claude-fable-5"
 # anthropic_version = "2023-06-01"
 # default_max_tokens = 4096
 
+[providers.claude-code]
+kind = "claude-code"
+api = "claude-code"
+auth_profile = "default"
+# Claude Code uses authentication and transport configured outside Mezzanine.
+# Mezzanine passes the selected model id to the local Claude Code CLI.
+models = [
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+]
+default_model = "claude-fable-5"
+
 # Example local OpenAI-compatible Chat Completions backend, such as LM Studio.
 # Uncomment and select this provider from a model profile when a local server is
 # listening on the configured base URL. Missing stored auth metadata is allowed;
@@ -294,8 +308,8 @@ model = "claude-fable-5"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
-context_window_tokens = 200000
-max_output_tokens = 4096
+context_window_tokens = 1000000
+max_output_tokens = 128000
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"
@@ -309,7 +323,7 @@ reasoning_profile = "medium"
 latency_preference = "fast"
 multimodal_required = false
 context_window_tokens = 200000
-max_output_tokens = 4096
+max_output_tokens = 64000
 safety_tier = "high"
 privacy_tier = "standard"
 residency = "global"

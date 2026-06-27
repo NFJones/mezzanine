@@ -300,6 +300,7 @@ fn anthropic_known_model_context_window_tokens(model: &str) -> Option<usize> {
     let model = model.trim().to_ascii_lowercase();
     match model.as_str() {
         "claude-fable-5" | "claude-opus-4-8" | "claude-sonnet-4-6" => Some(1_000_000),
+        "claude-haiku-4-5" => Some(200_000),
         "claude-haiku-4-5-20251001" => Some(200_000),
         _ => None,
     }

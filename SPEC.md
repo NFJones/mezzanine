@@ -2682,7 +2682,7 @@ entry MUST support `kind`, `api`, `auth_profile`, `base_url` when applicable,
 identify the provider brand/default profile, while `api` MUST identify the wire
 API compatibility implementation. Supported API compatibility identifiers are
 `openai-responses`, `openai-chat-completions`, `anthropic-messages`,
-`deepseek-chat-completions`, and the planned `claude-code` compatibility mode.
+`deepseek-chat-completions`, and `claude-code` compatibility mode.
 The schema version 7 to version 8 migration MUST
 backfill missing provider `api` values from historical provider-kind defaults:
 `openai` to `openai-responses`, `openai-compatible` to
