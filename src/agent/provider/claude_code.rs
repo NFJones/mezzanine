@@ -413,6 +413,37 @@ printf '%s\n' 'plain assistant text without a MAAP block'
         );
     }
 
+    /// Verifies empty Claude Code stdout is classified as a provider failure
+    /// and preserves redacted stderr so missing-login diagnostics remain
+    /// available without leaking credentials.
+    #[tokio::test]
+    async fn claude_code_provider_reports_empty_output_with_redacted_stderr() {
+        let fixture = ClaudeCodeFixture::new("empty-output");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+printf '%s\n' 'missing login authorization=Bearer abc token=secret-value' >&2
+exit 0
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let error = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.message().contains("produced no assistant output"),
+            "{}",
+            error.message()
+        );
+        let raw = error.provider_raw_text().unwrap();
+        assert!(raw.contains("missing login"), "{raw}");
+        assert!(raw.contains("[redacted]"), "{raw}");
+        assert!(!raw.contains("secret-value"), "{raw}");
+        assert!(!raw.contains("Bearer"), "{raw}");
+    }
+
     struct ClaudeCodeFixture {
         root: std::path::PathBuf,
         program: std::path::PathBuf,

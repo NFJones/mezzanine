@@ -93,6 +93,59 @@ async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_mo
     assert!(model_list.contains("| provider |"), "{model_list}");
 }
 
+/// Verifies that Claude Code providers skip live model-catalog lookups and
+/// expose the configured model list directly. This protects the documented
+/// configured-model fallback path without surfacing provider-catalog errors for
+/// the subprocess adapter.
+#[tokio::test]
+async fn runtime_agent_shell_model_list_uses_claude_code_configured_models() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "claude-code"
+default_model_profile = "default"
+
+[providers.claude-code]
+kind = "claude-code"
+api = "claude-code"
+models = ["claude-sonnet-4", "claude-opus-4"]
+default_model = "claude-sonnet-4"
+"#
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let model_list = service
+        .execute_agent_shell_command_async(&primary, "/model list")
+        .await
+        .unwrap();
+
+    assert!(model_list.contains(r#""kind":"display""#), "{model_list}");
+    assert!(!model_list.contains("Provider catalog unavailable"), "{model_list}");
+    assert!(
+        model_list.contains("| claude-code | ★ claude-sonnet-4 |"),
+        "{model_list}"
+    );
+    assert!(
+        model_list.contains("| claude-code | claude-opus-4 |"),
+        "{model_list}"
+    );
+    assert!(model_list.contains("| config |"), "{model_list}");
+}
+
 /// Verifies that ChatGPT browser/device credentials do not trigger a fabricated
 /// Codex model-catalog HTTP request. The runtime should skip that unsupported
 /// live catalog path and fall back to configured provider models without
