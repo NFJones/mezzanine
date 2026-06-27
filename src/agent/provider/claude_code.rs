@@ -20,8 +20,18 @@ use tokio::process::Command;
 
 /// Executable name used for Claude Code subprocess requests.
 const CLAUDE_CODE_PROGRAM: &str = "claude";
+/// Corrective instruction used after Claude Code returns malformed MAAP output.
+const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was invalid for Mezzanine because it did not contain one valid mezzanine-action-json action batch. Return only one validated Mezzanine MAAP action batch fenced in ```mezzanine-action-json``` with no surrounding prose.";
+/// Corrective instruction used after Claude Code returns an empty response.
+const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response was empty. Return only one validated Mezzanine MAAP action batch fenced in ```mezzanine-action-json``` with no surrounding prose.";
 /// Maximum stderr bytes retained in provider diagnostics.
 const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
+
+/// Captures one Claude Code subprocess completion for retry and validation.
+struct ClaudeCodeSubprocessOutput {
+    stdout: String,
+    stderr: String,
+}
 
 /// Experimental Claude Code subprocess provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,8 +102,26 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     "Claude Code provider received a request for a different provider",
                 ));
             }
-            let raw_text =
-                run_claude_code_subprocess(&self.program, request, self.timeout_ms).await?;
+            let raw_text = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+                let output = run_claude_code_subprocess(
+                    &self.program,
+                    &request.model,
+                    &claude_code_prompt(request, None),
+                    self.timeout_ms,
+                )
+                .await?;
+                if output.stdout.is_empty() {
+                    return Err(claude_code_empty_output_error(&output.stderr));
+                }
+                output.stdout
+            } else {
+                run_claude_code_request_with_corrective_retry(
+                    &self.program,
+                    request,
+                    self.timeout_ms,
+                )
+                .await?
+            };
             let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
                 None
             } else {
@@ -128,7 +156,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
 }
 
 /// Builds the text prompt passed to the Claude Code CLI.
-fn claude_code_prompt(request: &ModelRequest) -> String {
+fn claude_code_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
     let mut prompt = String::new();
     for message in &request.messages {
         let role = match message.role {
@@ -146,23 +174,81 @@ fn claude_code_prompt(request: &ModelRequest) -> String {
         prompt.push_str(role);
         prompt.push_str(">\n\n");
     }
+    if let Some(retry_instruction) = retry_instruction {
+        prompt.push_str("<developer>\n");
+        prompt.push_str(retry_instruction);
+        prompt.push_str("\n</developer>\n\n");
+    }
     prompt.push_str(
         "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly.\n",
     );
     prompt
 }
 
-/// Invokes Claude Code in print mode with direct tool use disabled.
-async fn run_claude_code_subprocess(
+/// Reports whether Claude Code output should receive one corrective retry.
+fn claude_code_output_needs_corrective_retry(request: &ModelRequest, raw_text: &str) -> bool {
+    if raw_text.is_empty() || request.interaction_kind == ModelInteractionKind::AutoSizing {
+        return raw_text.is_empty();
+    }
+    match parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id) {
+        Ok(Some(_)) => false,
+        Ok(None) | Err(_) => true,
+    }
+}
+
+/// Builds the provider error used when Claude Code exits successfully but
+/// produces no assistant output.
+fn claude_code_empty_output_error(stderr: &str) -> MezError {
+    MezError::invalid_state("Claude Code subprocess produced no assistant output")
+        .with_provider_raw_text(stderr.to_string())
+}
+
+/// Runs one bounded Claude Code request and applies one corrective retry for
+/// empty or malformed MAAP output.
+async fn run_claude_code_request_with_corrective_retry(
     program: &str,
     request: &ModelRequest,
     timeout_ms: u64,
 ) -> Result<String> {
-    let prompt = claude_code_prompt(request);
+    let first_output = run_claude_code_subprocess(
+        program,
+        &request.model,
+        &claude_code_prompt(request, None),
+        timeout_ms,
+    )
+    .await?;
+    if !claude_code_output_needs_corrective_retry(request, &first_output.stdout) {
+        return Ok(first_output.stdout);
+    }
+    let retry_instruction = if first_output.stdout.is_empty() {
+        CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION
+    } else {
+        CLAUDE_CODE_MAAP_RETRY_INSTRUCTION
+    };
+    let retry_output = run_claude_code_subprocess(
+        program,
+        &request.model,
+        &claude_code_prompt(request, Some(retry_instruction)),
+        timeout_ms,
+    )
+    .await?;
+    if retry_output.stdout.is_empty() {
+        return Err(claude_code_empty_output_error(&retry_output.stderr));
+    }
+    Ok(retry_output.stdout)
+}
+
+/// Invokes Claude Code in print mode with direct tool use disabled.
+async fn run_claude_code_subprocess(
+    program: &str,
+    model: &str,
+    prompt: &str,
+    timeout_ms: u64,
+) -> Result<ClaudeCodeSubprocessOutput> {
     let mut child = Command::new(program)
         .arg("--print")
         .arg("--model")
-        .arg(&request.model)
+        .arg(model)
         .arg("--disallowedTools")
         .arg("*")
         .stdin(Stdio::piped())
@@ -180,7 +266,7 @@ async fn run_claude_code_subprocess(
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(prompt.as_bytes()).await.map_err(|error| {
             MezError::invalid_state(format!(
-                "Claude Code subprocess stdin write failed: {}",
+                "Claude Code subprocess stdin write failed: {}; you can retry the request",
                 redact_claude_code_text(&error.to_string())
             ))
         })?;
@@ -190,12 +276,12 @@ async fn run_claude_code_subprocess(
         .await
         .map_err(|_| {
             MezError::invalid_state(format!(
-                "Claude Code subprocess timed out after {timeout_ms}ms"
+                "Claude Code subprocess timed out after {timeout_ms}ms; you can retry the request"
             ))
         })?
         .map_err(|error| {
             MezError::invalid_state(format!(
-                "Claude Code subprocess wait failed: {}",
+                "Claude Code subprocess wait failed: {}; you can retry the request",
                 redact_claude_code_text(&error.to_string())
             ))
         })?;
@@ -210,13 +296,7 @@ async fn run_claude_code_subprocess(
         ))
         .with_provider_raw_text(stderr));
     }
-    if stdout.is_empty() {
-        return Err(
-            MezError::invalid_state("Claude Code subprocess produced no assistant output")
-                .with_provider_raw_text(stderr),
-        );
-    }
-    Ok(stdout)
+    Ok(ClaudeCodeSubprocessOutput { stdout, stderr })
 }
 
 /// Redacts common secret-bearing fragments from subprocess diagnostics.
@@ -259,7 +339,10 @@ fn bound_claude_code_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{AllowedActionSet, ContextSourceKind, ModelMessage, ModelRequest};
+    use crate::agent::{
+        AllowedActionSet, ContextSourceKind, ModelMessage, ModelRequest, ProviderErrorRetryClass,
+        provider_error_retry_class,
+    };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
@@ -388,6 +471,64 @@ sleep 1
             .unwrap_err();
 
         assert!(error.message().contains("timed out"), "{}", error.message());
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::RetryableTransport
+        );
+    }
+
+    /// Verifies malformed Claude Code MAAP output gets one corrective retry
+    /// before the provider returns a terminal parse failure.
+    #[tokio::test]
+    async fn claude_code_provider_retries_malformed_output_once() {
+        let fixture = ClaudeCodeFixture::new("malformed-retry");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+count_file="$0.count"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+    printf '%s\n' 'plain assistant text without a MAAP block'
+    exit 0
+fi
+cat <<'EOF'
+```mezzanine-action-json
+{
+  "protocol": "maap/1",
+  "turn_id": "turn-1",
+  "agent_id": "agent-1",
+  "rationale": "return final text",
+  "actions": [
+    {
+      "id": "say-1",
+      "type": "say",
+      "status": "final",
+      "rationale": "Reply",
+      "text": "hello"
+    }
+  ],
+  "final": true
+}
+```
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let response = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap();
+
+        assert!(response.action_batch.is_some());
+        assert_eq!(
+            fs::read_to_string(fixture.program.with_extension("count")).unwrap(),
+            "2"
+        );
     }
 
     /// Verifies malformed Claude Code output is preserved as provider raw text
@@ -410,6 +551,59 @@ printf '%s\n' 'plain assistant text without a MAAP block'
         assert_eq!(
             error.provider_raw_text(),
             Some("plain assistant text without a MAAP block")
+        );
+    }
+
+    /// Verifies empty Claude Code stdout gets one corrective retry before the
+    /// provider returns the successful MAAP response from the retry.
+    #[tokio::test]
+    async fn claude_code_provider_retries_empty_output_once() {
+        let fixture = ClaudeCodeFixture::new("empty-output-retry");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+count_file="$0.count"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+    exit 0
+fi
+cat <<'EOF'
+```mezzanine-action-json
+{
+  "protocol": "maap/1",
+  "turn_id": "turn-1",
+  "agent_id": "agent-1",
+  "rationale": "return final text",
+  "actions": [
+    {
+      "id": "say-1",
+      "type": "say",
+      "status": "final",
+      "rationale": "Reply",
+      "text": "hello"
+    }
+  ],
+  "final": true
+}
+```
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let response = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap();
+
+        assert!(response.action_batch.is_some());
+        assert_eq!(
+            fs::read_to_string(fixture.program.with_extension("count")).unwrap(),
+            "2"
         );
     }
 
