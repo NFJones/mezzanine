@@ -3143,14 +3143,15 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     );
 }
 
-/// Verifies OpenAI prompt-cache routing keys include provider/model identity.
+/// Verifies OpenAI prompt-cache routing keys include lineage and provider identity.
 ///
 /// The local routing namespace should follow explicit lineage ids and survive
-/// resume-like session-id changes when provider, model, and lineage stay the
-/// same. Different provider/model compatibility targets must not share one
-/// routing key.
+/// resume-like session-id changes when provider and lineage stay the same.
+/// Same-provider OpenAI model switches should reuse one routing key so
+/// auto-sizing does not fragment provider prompt-cache affinity, while different
+/// provider compatibility targets must not share one routing key.
 #[test]
-fn openai_prompt_cache_key_uses_lineage_provider_and_model_identity() {
+fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
     let context_for_session = |session_id: &str, lineage_id: Option<&str>| {
         let mut blocks = vec![
             ContextBlock {
@@ -3191,7 +3192,13 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_identity() {
         &context_for_session("session-a", Some("lineage-parent")),
     )
     .unwrap();
-    let inherited_lineage_other_model = assemble_model_request(
+    let inherited_lineage_same_provider_other_model = assemble_model_request(
+        &profile("openai", "gpt-b"),
+        &turn(),
+        &context_for_session("session-a", Some("lineage-parent")),
+    )
+    .unwrap();
+    let inherited_lineage_other_provider = assemble_model_request(
         &profile("deepseek", "deepseek-b"),
         &turn(),
         &context_for_session("session-a", Some("lineage-parent")),
@@ -3226,8 +3233,13 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_identity() {
         &openai_responses_request_body(&inherited_lineage_openai).unwrap(),
     )
     .unwrap();
-    let inherited_lineage_other_value: serde_json::Value = serde_json::from_str(
-        &openai_responses_request_body(&inherited_lineage_other_model).unwrap(),
+    let inherited_lineage_same_provider_other_model_value: serde_json::Value =
+        serde_json::from_str(
+            &openai_responses_request_body(&inherited_lineage_same_provider_other_model).unwrap(),
+        )
+        .unwrap();
+    let inherited_lineage_other_provider_value: serde_json::Value = serde_json::from_str(
+        &openai_responses_request_body(&inherited_lineage_other_provider).unwrap(),
     )
     .unwrap();
     let resumed_session_value: serde_json::Value = serde_json::from_str(
@@ -3243,9 +3255,13 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_identity() {
         serde_json::from_str(&openai_responses_request_body(&lineage_fallback_session_b).unwrap())
             .unwrap();
 
+    assert_eq!(
+        inherited_lineage_value["prompt_cache_key"],
+        inherited_lineage_same_provider_other_model_value["prompt_cache_key"]
+    );
     assert_ne!(
         inherited_lineage_value["prompt_cache_key"],
-        inherited_lineage_other_value["prompt_cache_key"]
+        inherited_lineage_other_provider_value["prompt_cache_key"]
     );
     assert_eq!(
         inherited_lineage_value["prompt_cache_key"],
@@ -3264,7 +3280,7 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_identity() {
 /// Verifies OpenAI prompt-cache routing keys do not use live session fallback.
 ///
 /// When no explicit lineage id is present, the key should use the stable unknown
-/// lineage namespace plus provider/model identity instead of volatile session ids.
+/// lineage namespace plus provider identity instead of volatile session ids.
 #[test]
 fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
     let context_for_session = |session_id: &str| {
@@ -4319,7 +4335,7 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     }));
     assert_eq!(body["prompt_cache_key"], diagnostics.prompt_cache_key);
 
-    assert_eq!(diagnostics.prompt_cache_key, "mez-c5e815134a88da86e22eb961d0d14c3d");
+    assert_eq!(diagnostics.prompt_cache_key, "mez-fcc0c3076055b2040cb8727ead0dbe7c");
     assert_eq!(diagnostics.instructions_bytes, 44_280);
     assert_eq!(diagnostics.instructions_sha256, "7c58edce792d419411ad3034fb46572a1a82e15b51686c7f164d2324328216c1");
     assert_eq!(diagnostics.response_format_bytes, 4);

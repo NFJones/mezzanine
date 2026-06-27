@@ -2741,8 +2741,8 @@ documented `OpenAI-Organization` and `OpenAI-Project` headers on direct OpenAI
 API-key requests. These options MUST NOT be sent to ChatGPT browser/device
 credential backends.
 OpenAI Responses requests SHOULD include a stable, non-secret
-`prompt_cache_key` derived from Mezzanine's prompt profile, provider, model,
-and cache-family identity. When no stable lineage id is available, the key
+`prompt_cache_key` derived from Mezzanine's prompt profile, provider, lineage,
+and cache-family identity, not the exact selected model. When no stable lineage id is available, the key
 MUST use a stable unknown-lineage component rather than the live runtime session
 UUID. The key SHOULD NOT vary only because the interaction kind, exposed action
 surface, MCP tool catalog, or current user prompt changed;

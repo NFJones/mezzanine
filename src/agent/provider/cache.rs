@@ -358,9 +358,6 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     material.push_str("provider=");
     material.push_str(&request.provider);
     material.push('\n');
-    material.push_str("model=");
-    material.push_str(&request.model);
-    material.push('\n');
     material.push_str("lineage_id=");
     material.push_str(
         request
