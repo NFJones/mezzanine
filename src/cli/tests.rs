@@ -2331,6 +2331,47 @@ fn auth_login_rejects_non_openai_browser_and_device_code_with_api_key_guidance()
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies noninteractive Anthropic API-key login requires an out-of-band secret source.
+///
+/// This regression scenario documents the behavior being protected so a
+/// failure points at a concrete contract change rather than an incidental
+/// implementation detail.
+#[test]
+fn auth_login_noninteractive_anthropic_api_key_requires_api_key_file() {
+    let (env, home) = test_env("auth-login-anthropic-api-key-noninteractive");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = run_with_plain(
+        vec![
+            "mez".to_string(),
+            "auth".to_string(),
+            "login".to_string(),
+            "--provider".to_string(),
+            "anthropic".to_string(),
+            "--api-key".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(
+        error
+            .message()
+            .contains("requires noninteractive API-key input")
+    );
+    assert!(error.message().contains("--api-key-file PATH"));
+    assert!(error.message().contains("--provider anthropic --api-key"));
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies auth login rejects conflicting method flags.
 ///
 /// This regression scenario documents the behavior being protected so a

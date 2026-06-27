@@ -157,11 +157,13 @@ Existing primary config files are migrated on launch to the current schema
 version before Mezzanine validates them. Newer config schema versions than the
 running binary understands are rejected.
 
-If you are using an API key for Anthropic or another API-key-backed provider instead of OpenAI browser auth:
+If you are using an API key for Anthropic or another API-key-backed provider instead of OpenAI browser auth, select the provider explicitly:
 
 ```sh
 mez auth login --provider anthropic --api-key
 ```
+
+For noninteractive setup, add `--api-key-file PATH`.
 
 ### 3. Start Mezzanine inside a repository
 
@@ -449,7 +451,7 @@ mez [--json] <command> [options]
 | Command                    | Purpose                                                         |
 | -------------------------- | --------------------------------------------------------------- |
 | `mez auth login`           | Authenticate with the active provider.                          |
-| `mez auth login --api-key` | Authenticate with an API key.                                   |
+| `mez auth login --api-key` | Authenticate with an API key for the selected provider.         |
 | `mez auth status`          | Show auth state.                                                |
 | `mez auth logout`          | Remove stored auth for the active profile.                      |
 | `mez mcp ...`              | List, add, remove, enable, disable, inspect, login, logout, and status MCP servers. |

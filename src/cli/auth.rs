@@ -108,15 +108,16 @@ pub(super) async fn run_auth<W: Write>(
                         noninteractive_api_key_login_error()
                     } else {
                         MezError::invalid_args(format!(
-                            "auth login for `{provider}` requires an API key in noninteractive mode; \
-                             pass --api-key-file PATH or run from an interactive terminal"
+                            "auth login for `{provider}` requires noninteractive API-key input; \
+                             pass --api-key-file PATH or run `mez auth login --provider {provider} --api-key` \
+                             from an interactive terminal"
                         ))
                     });
                 }
                 AuthMethod::Browser => {
                     if provider != "openai" {
                         return Err(MezError::invalid_args(
-                            "browser-based login is only supported for OpenAI; use `mez auth login --provider anthropic --api-key` or another provider-specific API-key flow",
+                            "browser-based login is only supported for OpenAI; use `mez auth login --provider anthropic --api-key` for Anthropic or another provider-specific API-key flow",
                         ));
                     }
                     if !interactive {
@@ -143,7 +144,7 @@ pub(super) async fn run_auth<W: Write>(
                 AuthMethod::DeviceCode => {
                     if provider != "openai" {
                         return Err(MezError::invalid_args(
-                            "device-code login is only supported for OpenAI; use `mez auth login --provider anthropic --api-key` or another provider-specific API-key flow",
+                            "device-code login is only supported for OpenAI; use `mez auth login --provider anthropic --api-key` for Anthropic or another provider-specific API-key flow",
                         ));
                     }
                     let credential = run_openai_device_code_login_async().await?;
@@ -215,7 +216,7 @@ pub(super) struct AuthLoginCliArgs {
     /// Selects out-of-band device-code ChatGPT sign-in.
     #[arg(long, alias = "device-auth")]
     device_code: bool,
-    /// Reads the OpenAI API key from a file.
+    /// Reads a provider API key from a file.
     #[arg(long)]
     api_key_file: Option<PathBuf>,
     /// Selected model profile metadata to store.
@@ -290,8 +291,8 @@ pub(super) fn auth_login_method(args: &[String]) -> Result<AuthMethod> {
 /// on duplicated control-flow logic.
 fn noninteractive_api_key_login_error() -> MezError {
     MezError::invalid_args(
-        "auth login requires an OpenAI API key in noninteractive mode; pass \
-         --api-key-file PATH or run `mez auth login --api-key` from an interactive terminal",
+        "auth login requires noninteractive API-key input; pass --api-key-file \
+         PATH or run `mez auth login --api-key` from an interactive terminal",
     )
 }
 
@@ -304,8 +305,9 @@ fn noninteractive_browser_login_error() -> MezError {
     MezError::invalid_args(
         "auth login defaults to browser-based ChatGPT sign-in and requires an \
          interactive terminal; use `mez auth login --device-code` for out-of-band \
-         ChatGPT sign-in or `mez auth login --api-key --api-key-file PATH` for \
-         noninteractive API-key setup",
+         ChatGPT sign-in or `mez auth login --provider anthropic --api-key \
+         --api-key-file PATH` for noninteractive API-key-backed providers such \
+         as Anthropic",
     )
 }
 
