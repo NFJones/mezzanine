@@ -1511,6 +1511,20 @@ async fn execute_runtime_agent_provider_dispatch(
                 );
                 selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
             }
+            RuntimeAgentProviderDispatchProvider::ClaudeCode(router_provider) => {
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await?;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
+            }
         }
     }
     let mut provider = provider;
@@ -1562,6 +1576,20 @@ async fn execute_runtime_agent_provider_dispatch(
                 Some(auto_sizing_execution.selected_profile)
             }
             RuntimeAgentProviderDispatchProvider::OpenAiCompatible(router_provider) => {
+                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
+                    router_provider,
+                    auto_sizing,
+                    &turn,
+                    &context,
+                )
+                .await?;
+                merge_model_token_usage_by_model(
+                    &mut routing_token_usage_by_model,
+                    auto_sizing_execution.token_usage_by_model(),
+                );
+                Some(auto_sizing_execution.selected_profile)
+            }
+            RuntimeAgentProviderDispatchProvider::ClaudeCode(router_provider) => {
                 let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
                     router_provider,
                     auto_sizing,
@@ -1690,6 +1718,41 @@ async fn execute_runtime_agent_provider_dispatch(
             Ok(execution)
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+            let mut ledger = AgentTurnLedger::new(false);
+            let runner = AgentTurnRunner {
+                provider: &provider,
+                model_profile,
+                permissions: &permission_policy,
+                approvals: &session_approvals,
+                path_scopes: path_scopes.as_ref(),
+                subagent_scope: subagent_scope.as_ref(),
+                available_mcp_servers,
+                available_mcp_tools: &available_mcp_tools,
+                memory_actions_enabled,
+                issue_actions_enabled,
+            };
+            let execution = runner
+                .run_turn_async_ref_with_allowed_actions(
+                    &mut ledger,
+                    turn.clone(),
+                    &context,
+                    loop_allowed_actions.clone(),
+                )
+                .await?;
+            let execution = execute_provider_worker_native_local_actions_async(
+                turn.clone(),
+                execution,
+                local_action_executor,
+                native_shell_path.clone(),
+                native_working_directory.clone(),
+                output_progress_sender_ref.cloned(),
+            )
+            .await?;
+            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
+            execution.routing_token_usage_by_model = routing_token_usage_by_model;
+            Ok(execution)
+        }
+        RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider: &provider,
@@ -2114,6 +2177,14 @@ async fn execute_runtime_agent_compaction_dispatch(
             )
             .await
         }
+        RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
+            runtime_send_compaction_request_with_output_limit_retry(
+                &provider,
+                task.request,
+                &task.model_profile,
+            )
+            .await
+        }
     }
 }
 
@@ -2133,6 +2204,9 @@ async fn execute_runtime_agent_remember_dispatch(
             provider.send_request_async(&task.request).await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+            provider.send_request_async(&task.request).await
+        }
+        RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
             provider.send_request_async(&task.request).await
         }
     }

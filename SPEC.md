@@ -2681,8 +2681,9 @@ entry MUST support `kind`, `api`, `auth_profile`, `base_url` when applicable,
 `models`, `default_model`, and provider-specific options. The `kind` field MUST
 identify the provider brand/default profile, while `api` MUST identify the wire
 API compatibility implementation. Supported API compatibility identifiers are
-`openai-responses`, `openai-chat-completions`, `anthropic-messages`, and
-`deepseek-chat-completions`. The schema version 7 to version 8 migration MUST
+`openai-responses`, `openai-chat-completions`, `anthropic-messages`,
+`deepseek-chat-completions`, and the planned `claude-code` compatibility mode.
+The schema version 7 to version 8 migration MUST
 backfill missing provider `api` values from historical provider-kind defaults:
 `openai` to `openai-responses`, `openai-compatible` to
 `openai-chat-completions`, `anthropic` to `anthropic-messages`, and
@@ -2717,10 +2718,12 @@ content. When a compatible model catalog reports model capability tags such as
 LM Studio's `tool_use`, Mezzanine MUST preserve those tags in provider model
 metadata and propagate them into runtime-generated model profile options.
 The `anthropic-messages` adapter MUST use Anthropic Messages semantics, send
-API-key credentials with `x-api-key`, send an `anthropic-version` header, map
-profile `max_output_tokens` to Anthropic wire `max_tokens`, and carry MAAP
-action batches through one Anthropic-native `tool_use` block named
-`submit_maap_action_batch`. Anthropic provider options MAY include
+Anthropic Console API-key credentials with `x-api-key`, send an
+`anthropic-version` header, map profile `max_output_tokens` to Anthropic wire
+`max_tokens`, and carry MAAP action batches through one Anthropic-native
+`tool_use` block named `submit_maap_action_batch`. Claude subscription or
+Claude Code browser-login credentials MUST NOT be sent to the
+`anthropic-messages` endpoint. Anthropic provider options MAY include
 `anthropic_version` and a fallback `default_max_tokens`/`max_tokens` value; the
 adapter MUST reject OpenAI-compatible and DeepSeek-only options such as
 `maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
@@ -5970,7 +5973,10 @@ The direct `mez auth login` command MUST prefer browser-based ChatGPT sign-in
 by default when an interactive terminal is available. It MUST also provide an
 explicit device-code ChatGPT sign-in option for out-of-band authentication and
 an explicit API-key option for users or environments that require API keys,
-including API-key-only providers such as Anthropic.
+including Anthropic Console API-key credentials for the `anthropic-messages`
+provider API. Claude subscription access, when supported, MUST be modeled as a
+separate Claude Code-backed authentication and provider mode rather than as an
+Anthropic Console API key.
 Noninteractive API-key setup MUST require an explicit API-key method and an
 out-of-band secret source such as an API-key file.
 Browser-based and device-code ChatGPT sign-in MUST request only OAuth scopes
@@ -6020,6 +6026,15 @@ and raw credential-store references unless the user explicitly requests a
 verbose or debug view. Status output MAY report coarse non-secret fields such as
 authenticated state, provider identity, credential kind, selected model profile,
 and token expiration metadata.
+
+Mezzanine MUST distinguish Anthropic Console API-key credentials from Claude
+Code or Claude subscription browser-auth credentials. Anthropic Console API keys
+MUST be used only with `anthropic-messages` unless a user explicitly configures
+a compatible API-key endpoint override. Claude Code subscription credentials
+MUST be used only by a Claude Code-backed provider mode that relies on Claude
+Code for browser login, token refresh, subscription entitlement checks, and
+provider transport; Mezzanine MUST NOT convert Claude subscription credentials
+into `x-api-key` requests.
 
 Mezzanine MUST distinguish direct OpenAI API-key credentials from ChatGPT
 browser/device-code OAuth credentials. OpenAI ChatGPT browser/device-code login
@@ -7612,7 +7627,9 @@ Provider-backed browser authentication does not imply that the provider exposes
 the same model-catalog endpoint as API-key authentication. Mezzanine MUST NOT
 derive or call undocumented model-catalog URLs from provider response endpoints;
 when a browser-authenticated provider lacks an explicit catalog endpoint,
-`/model list` MUST use configured provider models instead.
+`/model list` MUST use configured provider models instead. A Claude Code-backed
+provider mode MUST use configured models unless Claude Code exposes a documented
+model-catalog mechanism for the adapter to call.
 
 When provider metadata exposes supported reasoning levels, `/model` MUST
 validate the requested reasoning level against that metadata. When provider

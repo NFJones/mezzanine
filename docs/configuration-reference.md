@@ -452,7 +452,7 @@ issue surfaces can update notes without rewriting the issue description.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider brand/default profile kind. Built-ins include `openai`, `anthropic`, `deepseek`, and legacy `openai-compatible`. |
-| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, `anthropic-messages`, or `deepseek-chat-completions`. |
+| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, `anthropic-messages`, `deepseek-chat-completions`, or planned `claude-code`. |
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
@@ -484,8 +484,9 @@ Default `providers.deepseek.models`:
 Provider `api` selects the reusable wire adapter independently from provider
 brand/defaults. Use `openai-responses` for Responses-compatible backends,
 `openai-chat-completions` for generic Chat Completions-compatible backends,
-`anthropic-messages` for the Anthropic Messages dialect, and
-`deepseek-chat-completions` for the DeepSeek Chat Completions dialect. Configure
+`anthropic-messages` for the Anthropic Messages dialect,
+`deepseek-chat-completions` for the DeepSeek Chat Completions dialect, and the
+planned `claude-code` mode for a Claude Code subprocess backend. Configure
 one provider entry per backend, set `base_url` to the backend API base such as
 `https://api.example.com/v1`, and provide `models` plus `default_model` unless
 the backend's `/models` endpoint is sufficient for live catalog refresh.
@@ -509,10 +510,18 @@ selection. Set `maap_output = "structured_json"` and
 Schema response formats more reliably than native OpenAI tool-call emission.
 The native `anthropic-messages` adapter uses Anthropic `tool_use` as the MAAP
 carrier, maps profile `max_output_tokens` to wire `max_tokens`, and accepts
-provider options `anthropic_version` plus `default_max_tokens`. Anthropic
+provider options `anthropic_version` plus `default_max_tokens`. It uses
+Anthropic Console API-key credentials; Claude Code or Claude subscription
+browser-login credentials are a separate planned provider mode and are not
+valid `x-api-key` material for `anthropic-messages`. Anthropic
 providers reject OpenAI-compatible or DeepSeek-only provider options such as
 `maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
 `output_token_field`, `maap_surface`, `prompt_cache_retention`, and `thinking`.
+
+A future `claude-code` provider mode should be configured as a separate provider
+entry, use Claude Code authentication established outside Mez, rely on
+configured model ids when no documented Claude Code catalog is available, and
+keep Mez shell, patch, approval, and audit paths as the only action executor.
 
 Example LM Studio-compatible provider:
 

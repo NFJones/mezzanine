@@ -78,7 +78,9 @@ impl RuntimeSessionService {
                     quota_usage: Vec::new(),
                 }),
             },
-            ProviderApiCompatibility::AnthropicMessages => Ok(fallback),
+            ProviderApiCompatibility::AnthropicMessages | ProviderApiCompatibility::ClaudeCode => {
+                Ok(fallback)
+            }
         }
     }
 
@@ -247,6 +249,9 @@ impl RuntimeSessionService {
             }
             ProviderApiCompatibility::AnthropicMessages => Err(MezError::invalid_state(
                 "Anthropic provider model listing is not implemented yet",
+            )),
+            ProviderApiCompatibility::ClaudeCode => Err(MezError::invalid_state(
+                "Claude Code provider model listing uses configured models",
             )),
         };
         let provider = match provider_result {
@@ -467,7 +472,8 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
                 levels.extend(deepseek_default_reasoning_effort_levels());
             }
             ProviderApiCompatibility::OpenAiChatCompletions
-            | ProviderApiCompatibility::AnthropicMessages => {}
+            | ProviderApiCompatibility::AnthropicMessages
+            | ProviderApiCompatibility::ClaudeCode => {}
         }
     }
     dedupe_runtime_strings(levels)

@@ -392,6 +392,10 @@ impl RuntimeSessionService {
                 )
                 .map(RuntimeAgentProviderDispatchProvider::Anthropic)
             }
+            ProviderApiCompatibility::ClaudeCode => {
+                ClaudeCodeProvider::new(&task.model_profile.provider, DEFAULT_PROVIDER_TIMEOUT_MS)
+                    .map(RuntimeAgentProviderDispatchProvider::ClaudeCode)
+            }
         }?;
         self.append_credential_access_audit(
             &task.model_profile.provider,

@@ -7,7 +7,7 @@
 //! async actor and tests.
 
 use super::*;
-use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
+use crate::agent::{ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options};
 
 impl RuntimeSessionService {
     /// Builds a runtime provider dispatch from one configured provider API.
@@ -30,6 +30,10 @@ impl RuntimeSessionService {
             "requested",
         )?;
         let provider_result = (|| {
+            if api == ProviderApiCompatibility::ClaudeCode {
+                return ClaudeCodeProvider::new(provider_name, DEFAULT_PROVIDER_TIMEOUT_MS)
+                    .map(RuntimeAgentProviderDispatchProvider::ClaudeCode);
+            }
             let auth_store = self.auth_store.as_ref().ok_or_else(|| {
                 MezError::invalid_state(format!(
                     "provider `{provider_name}` execution requires an attached auth store"
@@ -83,6 +87,7 @@ impl RuntimeSessionService {
                     )
                     .map(RuntimeAgentProviderDispatchProvider::Anthropic)
                 }
+                ProviderApiCompatibility::ClaudeCode => unreachable!(),
             }
         })();
         match provider_result {

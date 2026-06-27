@@ -772,6 +772,10 @@ impl RuntimeSessionService {
                 )
                 .map(RuntimeAgentProviderDispatchProvider::Anthropic)
             }
+            ProviderApiCompatibility::ClaudeCode => {
+                ClaudeCodeProvider::new(&model_profile.provider, DEFAULT_PROVIDER_TIMEOUT_MS)
+                    .map(RuntimeAgentProviderDispatchProvider::ClaudeCode)
+            }
         };
         match provider_result {
             Ok(provider) => {

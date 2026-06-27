@@ -20,6 +20,7 @@ mod anthropic;
 mod cache;
 mod catalog;
 mod chat_completions;
+mod claude_code;
 mod deepseek;
 mod errors;
 mod http;
@@ -39,6 +40,7 @@ pub use catalog::{
     parse_openai_models_http_body,
 };
 pub use chat_completions::ChatCompletionsProvider;
+pub use claude_code::ClaudeCodeProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
 pub(crate) use errors::{
@@ -106,6 +108,8 @@ pub const OPENAI_CHAT_COMPLETIONS_API: &str = "openai-chat-completions";
 pub const DEEPSEEK_CHAT_COMPLETIONS_API: &str = "deepseek-chat-completions";
 /// API compatibility id for the Anthropic Messages API.
 pub const ANTHROPIC_MESSAGES_API: &str = "anthropic-messages";
+/// API compatibility id for the Claude Code subprocess adapter.
+pub const CLAUDE_CODE_API: &str = "claude-code";
 
 /// Wire API compatibility selected for one configured provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +122,8 @@ pub enum ProviderApiCompatibility {
     DeepSeekChatCompletions,
     /// Anthropic Messages request, response, and tool-use shape.
     AnthropicMessages,
+    /// Claude Code subprocess request and response shape.
+    ClaudeCode,
 }
 
 impl ProviderApiCompatibility {
@@ -128,6 +134,7 @@ impl ProviderApiCompatibility {
             Self::OpenAiChatCompletions => OPENAI_CHAT_COMPLETIONS_API,
             Self::DeepSeekChatCompletions => DEEPSEEK_CHAT_COMPLETIONS_API,
             Self::AnthropicMessages => ANTHROPIC_MESSAGES_API,
+            Self::ClaudeCode => CLAUDE_CODE_API,
         }
     }
 
@@ -138,6 +145,7 @@ impl ProviderApiCompatibility {
             OPENAI_CHAT_COMPLETIONS_API => Some(Self::OpenAiChatCompletions),
             DEEPSEEK_CHAT_COMPLETIONS_API => Some(Self::DeepSeekChatCompletions),
             ANTHROPIC_MESSAGES_API => Some(Self::AnthropicMessages),
+            CLAUDE_CODE_API => Some(Self::ClaudeCode),
             _ => None,
         }
     }
@@ -149,6 +157,7 @@ impl ProviderApiCompatibility {
             "openai-compatible" => Some(Self::OpenAiChatCompletions),
             "deepseek" => Some(Self::DeepSeekChatCompletions),
             "anthropic" => Some(Self::AnthropicMessages),
+            "claude-code" => Some(Self::ClaudeCode),
             _ => None,
         }
     }
@@ -159,7 +168,7 @@ pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderA
     match api.map(str::trim).filter(|api| !api.is_empty()) {
         Some(api) => ProviderApiCompatibility::from_id(api).ok_or_else(|| {
             MezError::config(format!(
-                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, {DEEPSEEK_CHAT_COMPLETIONS_API}, or {ANTHROPIC_MESSAGES_API}"
+                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, {DEEPSEEK_CHAT_COMPLETIONS_API}, {ANTHROPIC_MESSAGES_API}, or {CLAUDE_CODE_API}"
             ))
         }),
         None => ProviderApiCompatibility::default_for_kind(kind).ok_or_else(|| {
@@ -485,6 +494,17 @@ impl ProviderCapabilities {
                 supports_prompt_cache_retention: false,
                 supports_streaming: true,
                 supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
+            ProviderApiCompatibility::ClaudeCode => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: false,
+                supports_reasoning_controls: false,
+                supports_thinking_toggle: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: false,
+                supports_tool_calls: false,
                 supports_parallel_tool_calls: false,
             },
         }

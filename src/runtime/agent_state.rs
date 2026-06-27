@@ -14,7 +14,7 @@ use super::{
     ReqwestProviderHttpTransport, RuntimeLocalActionExecutor, SessionApprovalStore,
     SubagentScopeDeclaration,
 };
-use crate::agent::AnthropicMessagesProvider;
+use crate::agent::{AnthropicMessagesProvider, ClaudeCodeProvider};
 use crate::mcp::McpPromptTool;
 use std::path::PathBuf;
 
@@ -192,6 +192,11 @@ pub enum RuntimeAgentProviderDispatchProvider {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Anthropic(AnthropicMessagesProvider<ReqwestProviderHttpTransport>),
+    /// Represents the Claude Code subprocess provider case.
+    ///
+    /// Callers use this variant for configured provider instances that rely on
+    /// a local Claude Code session instead of direct API credentials.
+    ClaudeCode(ClaudeCodeProvider),
     /// Represents a named OpenAI-compatible Chat Completions provider.
     ///
     /// Callers use this variant for configured provider instances that share
@@ -211,6 +216,7 @@ impl RuntimeAgentProviderDispatchProvider {
             Self::OpenAi(provider) => provider.provider_id(),
             Self::DeepSeek(provider) => provider.provider_id(),
             Self::Anthropic(provider) => provider.provider_id(),
+            Self::ClaudeCode(provider) => provider.provider_id(),
             Self::OpenAiCompatible(provider) => provider.provider_id(),
         }
     }

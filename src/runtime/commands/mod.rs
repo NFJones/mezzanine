@@ -41,12 +41,12 @@ use super::{
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::agent::{
-    AgentActionPayload, AllowedActionSet, AsyncModelProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
-    EnvironmentEquivalence, EnvironmentEquivalenceProbe, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderApiCompatibility, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
-    ProviderQuotaUsage, ReqwestProviderHttpTransport, append_mcp_context,
-    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    AgentActionPayload, AllowedActionSet, AsyncModelProvider, ClaudeCodeProvider,
+    DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentEquivalence, EnvironmentEquivalenceProbe,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility, ProviderCapabilities,
+    ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport,
+    append_mcp_context, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_default_reasoning_levels_for_model,
