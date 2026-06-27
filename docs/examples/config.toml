@@ -208,6 +208,26 @@ default_model = "gpt-5.5"
 # organization_id = "org_..."
 # project_id = "proj_..."
 
+[providers.anthropic]
+kind = "anthropic"
+api = "anthropic-messages"
+auth_profile = "default"
+# Optional API base URL, such as "https://api.anthropic.com/v1".
+# Mezzanine derives the Anthropic Messages endpoint from this base.
+base_url = ""
+# Anthropic model IDs supported by the built-in Claude provider defaults.
+models = [
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+]
+default_model = "claude-fable-5"
+
+[providers.anthropic.options]
+# anthropic_version = "2023-06-01"
+# default_max_tokens = 4096
+
 # Example local OpenAI-compatible Chat Completions backend, such as LM Studio.
 # Uncomment and select this provider from a model profile when a local server is
 # listening on the configured base URL. Missing stored auth metadata is allowed;

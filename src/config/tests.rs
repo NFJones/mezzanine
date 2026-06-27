@@ -205,6 +205,54 @@ fn default_config_matches_documented_example() {
     assert_eq!(DEFAULT_CONFIG_TOML.trim(), documented.trim());
 }
 
+/// Verifies generated defaults include the built-in Anthropic provider entry
+/// and Claude model list used by runtime fallback catalog behavior.
+///
+/// Keeping the generated config aligned with the runtime built-ins prevents
+/// docs and defaults from drifting back to OpenAI/DeepSeek-only provider
+/// support while Anthropic remains implemented in code.
+#[test]
+fn default_config_includes_anthropic_provider_defaults() {
+    let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let anthropic = parsed
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get("anthropic"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        anthropic.get("kind").and_then(toml::Value::as_str),
+        Some("anthropic")
+    );
+    assert_eq!(
+        anthropic.get("api").and_then(toml::Value::as_str),
+        Some("anthropic-messages")
+    );
+    assert_eq!(
+        anthropic.get("default_model").and_then(toml::Value::as_str),
+        Some("claude-fable-5")
+    );
+
+    let models = anthropic
+        .get("models")
+        .and_then(toml::Value::as_array)
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        models,
+        vec![
+            "claude-fable-5",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ]
+    );
+}
+
 /// Verifies generated defaults use provider-aware output token caps for known agent profiles.
 ///
 /// A single universal output cap is not correct for all providers, but the

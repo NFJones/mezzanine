@@ -451,13 +451,15 @@ issue surfaces can update notes without rewriting the issue description.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider brand/default profile kind. Built-ins include `openai`, `deepseek`, and legacy `openai-compatible`. |
-| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, or `deepseek-chat-completions`. |
+| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider brand/default profile kind. Built-ins include `openai`, `anthropic`, `deepseek`, and legacy `openai-compatible`. |
+| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, `anthropic-messages`, or `deepseek-chat-completions`. |
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
 | `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.5"` | Default model for the provider. |
 | `providers.<name>.options` | table | `{}` | Provider-specific non-secret options. |
+| `providers.anthropic.options.anthropic_version` | string | omitted | Optional Anthropic Messages API version header; defaults to `2023-06-01`. |
+| `providers.anthropic.options.default_max_tokens` | integer | omitted | Fallback Anthropic `max_tokens` budget when the selected model profile omits `max_output_tokens`; `max_tokens` is accepted as an alias. |
 | `providers.openai.options.organization_id` | string | omitted | Optional OpenAI organization header for API-key requests. |
 | `providers.openai.options.project_id` | string | omitted | Optional OpenAI project header for API-key requests. |
 
@@ -465,6 +467,12 @@ Default `providers.openai.models`:
 
 ```toml
 ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"]
+```
+
+Default `providers.anthropic.models`:
+
+```toml
+["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
 ```
 
 Default `providers.deepseek.models`:
@@ -475,7 +483,8 @@ Default `providers.deepseek.models`:
 
 Provider `api` selects the reusable wire adapter independently from provider
 brand/defaults. Use `openai-responses` for Responses-compatible backends,
-`openai-chat-completions` for generic Chat Completions-compatible backends, and
+`openai-chat-completions` for generic Chat Completions-compatible backends,
+`anthropic-messages` for the Anthropic Messages dialect, and
 `deepseek-chat-completions` for the DeepSeek Chat Completions dialect. Configure
 one provider entry per backend, set `base_url` to the backend API base such as
 `https://api.example.com/v1`, and provide `models` plus `default_model` unless
@@ -498,6 +507,12 @@ metadata and copied into runtime-generated profile options as
 selection. Set `maap_output = "structured_json"` and
 `structured_output = "json_schema"` for LM Studio/local models that obey JSON
 Schema response formats more reliably than native OpenAI tool-call emission.
+The native `anthropic-messages` adapter uses Anthropic `tool_use` as the MAAP
+carrier, maps profile `max_output_tokens` to wire `max_tokens`, and accepts
+provider options `anthropic_version` plus `default_max_tokens`. Anthropic
+providers reject OpenAI-compatible or DeepSeek-only provider options such as
+`maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
+`output_token_field`, `maap_surface`, `prompt_cache_retention`, and `thinking`.
 
 Example LM Studio-compatible provider:
 

@@ -2681,18 +2681,23 @@ entry MUST support `kind`, `api`, `auth_profile`, `base_url` when applicable,
 `models`, `default_model`, and provider-specific options. The `kind` field MUST
 identify the provider brand/default profile, while `api` MUST identify the wire
 API compatibility implementation. Supported API compatibility identifiers are
-`openai-responses`, `openai-chat-completions`, and
+`openai-responses`, `openai-chat-completions`, `anthropic-messages`, and
 `deepseek-chat-completions`. The schema version 7 to version 8 migration MUST
 backfill missing provider `api` values from historical provider-kind defaults:
 `openai` to `openai-responses`, `openai-compatible` to
-`openai-chat-completions`, and `deepseek` to `deepseek-chat-completions`.
+`openai-chat-completions`, `anthropic` to `anthropic-messages`, and
+`deepseek` to `deepseek-chat-completions`.
 For providers whose `api` is `openai-responses`, `base_url` MUST be interpreted
 as an API base URL such as `https://api.openai.com/v1`; Mezzanine MUST derive
 the documented `/responses` request endpoint and `/models` catalog endpoint
-from that base. For providers whose `api` is `openai-chat-completions` or
-`deepseek-chat-completions`, `base_url` MUST be interpreted as a compatible API
-base URL; Mezzanine MUST derive the documented `/chat/completions` request
-endpoint and `/models` catalog endpoint from that base. Compatible providers
+from that base. For providers whose `api` is `anthropic-messages`,
+`base_url` MUST be interpreted as an Anthropic API base URL such as
+`https://api.anthropic.com/v1`; Mezzanine MUST derive the documented
+`/messages` request endpoint from that base. For providers whose `api` is
+`openai-chat-completions` or `deepseek-chat-completions`, `base_url` MUST be
+interpreted as a compatible API base URL; Mezzanine MUST derive the documented
+`/chat/completions` request endpoint and `/models` catalog endpoint from that
+base. Compatible providers
 MUST use the named provider entry as the configuration boundary so each backend
 can declare its own base URL, auth profile, model list, default model, and
 provider-level compatibility options. The `openai-chat-completions` adapter MUST
@@ -2711,6 +2716,15 @@ canonical function tool and MUST be parsed as a MAAP batch from assistant
 content. When a compatible model catalog reports model capability tags such as
 LM Studio's `tool_use`, Mezzanine MUST preserve those tags in provider model
 metadata and propagate them into runtime-generated model profile options.
+The `anthropic-messages` adapter MUST use Anthropic Messages semantics, send
+API-key credentials with `x-api-key`, send an `anthropic-version` header, map
+profile `max_output_tokens` to Anthropic wire `max_tokens`, and carry MAAP
+action batches through one Anthropic-native `tool_use` block named
+`submit_maap_action_batch`. Anthropic provider options MAY include
+`anthropic_version` and a fallback `default_max_tokens`/`max_tokens` value; the
+adapter MUST reject OpenAI-compatible and DeepSeek-only options such as
+`maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
+`output_token_field`, `maap_surface`, `prompt_cache_retention`, and `thinking`.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider
@@ -2765,6 +2779,12 @@ OpenAI provider model list SHOULD include only coding-agent harness models:
 `gpt-5.3-codex-spark`, and `gpt-5.2`. When a provider configuration leaves
 `models` empty, Mezzanine MUST load the provider's built-in code-defined model
 list instead of treating the provider as having no selectable models.
+The built-in Anthropic provider default model MUST be `claude-fable-5` unless
+the user overrides it through provider or model-profile configuration. The
+built-in Anthropic provider model list SHOULD include `claude-fable-5`,
+`claude-opus-4-8`, `claude-sonnet-4-6`, and
+`claude-haiku-4-5-20251001`; generated Anthropic profiles SHOULD use built-in
+context metadata for those Claude model families.
 The built-in DeepSeek provider default model MUST be `deepseek-v4-pro` unless
 the user overrides it through provider or model-profile configuration. The
 built-in DeepSeek provider model list SHOULD include `deepseek-v4-pro` and
@@ -3605,10 +3625,18 @@ structured mechanism.
 For OpenAI Responses-compatible providers, Mezzanine MUST prefer a strict
 function tool carrying one complete `maap/1` action batch, MUST force that
 function tool when the provider supports forced function choice, and SHOULD keep
-strict JSON-schema text output as a compatibility fallback. Function-call
+strict JSON-schema text output as a compatibility fallback. OpenAI function-call
 arguments MUST be parsed as untrusted MAAP JSON and validated by the same
 identity, schema, permission, and audit rules as any other provider-native action
 batch.
+
+For Anthropic Messages-compatible providers, Mezzanine MUST expose the same
+active `maap/1` action-batch schema through one Anthropic client tool named
+`submit_maap_action_batch`, MUST use Anthropic-native `tool_choice` to request
+that carrier tool when MAAP actions are required, and MUST parse exactly one
+matching `tool_use` input as the action batch. Anthropic text fallback parsing
+MAY be used only as a recovery path and MUST enter the same MAAP validation,
+permission, and audit pipeline as provider-native tool input.
 
 For providers whose reasoning or thinking mode supports tool calls but rejects
 forced function choice, Mezzanine MAY use a provider-specific MAAP strategy that

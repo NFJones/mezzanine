@@ -329,7 +329,7 @@ Abstract feature labels in the table mean:
 | OpenAI              | Supported   | Native Responses API                                                         | Yes       | Yes   | Yes               | Partial            | Yes             |
 | Generic OpenAI API  | Supported   | OpenAI-compatible Chat Completions API                                        | No        | Yes   | Partial           | No                 | Partial         |
 | DeepSeek            | Supported   | Native Chat Completions API                                                  | Partial   | Yes   | Partial           | Yes                | Partial         |
-| Anthropic           | Unsupported | Native Messages API                                                          |           |       |                   |                    |                 |
+| Anthropic           | Supported   | Native Messages API                                                          | Yes       | Yes   | No                | No                 | No              |
 | Gemini direct API   | Unsupported | OpenAI-compatible first, native later if needed                              |           |       |                   |                    |                 |
 | Mistral             | Unsupported | OpenAI-compatible or native API                                              |           |       |                   |                    |                 |
 | Perplexity          | Unsupported | Native API or compatibility path to be determined                            |           |       |                   |                    |                 |
