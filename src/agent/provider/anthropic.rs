@@ -704,7 +704,20 @@ fn anthropic_stop_reason_error(
         "raw_text_bytes": raw_text.len(),
     });
     match stop_reason {
-        "end_turn" | "stop_sequence" | "tool_use" => None,
+        "stop_sequence" | "tool_use" => None,
+        "end_turn" => {
+            if requires_maap {
+                Some(
+                    MezError::invalid_state(
+                        "Anthropic Messages response ended turn before producing MAAP output",
+                    )
+                    .with_provider_failure_json(base.to_string())
+                    .with_provider_raw_text(raw_text.to_string()),
+                )
+            } else {
+                None
+            }
+        }
         "max_tokens" => Some(
             MezError::invalid_state(if requires_maap {
                 "Anthropic Messages response hit max_tokens before completing MAAP output"
