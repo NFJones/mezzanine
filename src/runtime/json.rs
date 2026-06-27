@@ -914,6 +914,7 @@ pub(super) fn runtime_subagent_role_name(value: &str) -> Result<String> {
 /// on duplicated control-flow logic.
 pub(super) fn runtime_cooperation_mode(value: &str) -> Result<CooperationMode> {
     match value {
+        "safety" | "scope" | "scoped" => Ok(CooperationMode::ExploreOnly),
         "explore-only" | "explore_only" => Ok(CooperationMode::ExploreOnly),
         "read-only" | "read_only" | "readonly" | "read" => Ok(CooperationMode::ExploreOnly),
         "parallel" | "parallel-read" | "parallel_read" => Ok(CooperationMode::ExploreOnly),

@@ -4931,5 +4931,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("display-only unless the user explicitly asked to see them"));
     assert!(prompt.contains("shell_command requires summary and command"));
     assert!(prompt.contains("explorer=read-only search"));
+    assert!(prompt.contains("Cooperation mode is about filesystem scope safety, not scheduling"));
+    assert!(prompt.contains("never use safety or scope as literal mode values"));
+    assert!(prompt.contains("supported cooperation_mode values are explore-only, owned-write, coordinated-write, serial-write, and unrestricted"));
     assert!(prompt.contains("cooperation_mode=parallel"));
 }

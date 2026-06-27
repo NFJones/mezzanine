@@ -146,6 +146,13 @@ pub fn build_agent_system_prompt_with_repository_instructions(
             deepseek_provider_guidance(),
         );
     }
+    if profile.provider.as_deref() == Some("anthropic") {
+        push_section(
+            &mut prompt,
+            "15. Anthropic Provider",
+            anthropic_provider_guidance(),
+        );
+    }
     Ok(prompt)
 }
 
@@ -158,6 +165,17 @@ pub fn build_agent_system_prompt_with_repository_instructions(
 /// attempt sequential function calls or treat system rules as advisory.
 fn deepseek_provider_guidance() -> &'static str {
     "You are communicating through the DeepSeek Chat Completions API. Mezzanine exposes exactly one active function per turn as the transport envelope for the MAAP action batch; the task decision is the concrete action object inside that envelope. Pack every intended action into that single function call. Do not make multiple sequential function calls, and do not create a placeholder action merely to satisfy the function-call requirement. Do not put statements like \"complying with a required function call\" in rationale or thought fields; rationales must name why the selected action directly advances the user task. The entire system prompt above contains authoritative behavioural rules, not advisory suggestions: treat every numbered section, including the MCP and DeepSeek provider sections, as a binding constraint on your behaviour. DeepSeek's API will separate your internal reasoning into a dedicated field; keep your final response content and function-call arguments concise. DeepSeek-facing function arguments are translated into internal MAAP/1 and validated by Mezzanine. Parallel action batching is supported on action-dispatch surfaces: you may include multiple shell_command, apply_patch, or other independent actions in the same batch. For apply_patch, the patch field must contain Direct Mezzanine patch text starting with *** Begin Patch and ending with *** End Patch. Accepted file directives are exactly *** Add File, *** Update File, and *** Delete File, plus optional *** Move to after *** Update File; there is no *** Replace File directive. Unified diff headers (---, +++, diff --git) are NOT the Mezzanine patch format; use *** Update File <path> instead. Every hunk old/context line must be copied verbatim from current file content; never infer or reconstruct likely code. Use distinctive @@ header anchors on every hunk to improve match reliability."
+}
+
+/// Provider-specific guidance appended for Anthropic to address its distinct
+/// tool-use behaviour and early-stop tendencies.
+///
+/// Anthropic models may emit `end_turn` without producing a `tool_use` block,
+/// which stops the turn before Mezzanine receives a MAAP action batch. This
+/// section reinforces the MAAP tool-calling contract and warns against ending
+/// the turn without a `submit_maap_action_batch` tool_use.
+fn anthropic_provider_guidance() -> &'static str {
+    "You are communicating through the Anthropic Messages API. Mezzanine exposes exactly one active function tool per turn as the transport envelope for the MAAP action batch; the task decision is the concrete action object inside that tool_use. Pack every intended action into that single tool_use call. Do not make multiple sequential tool_use calls, and do not create a placeholder tool_use merely to satisfy the function-call requirement. Do not put statements like \"complying with a required function call\" in rationale or thought fields; rationales must name why the selected action directly advances the user task. The entire system prompt above contains authoritative behavioural rules, not advisory suggestions: treat every numbered section, including the MCP and Anthropic provider sections, as a binding constraint on your behaviour. Anthropic's API will separate your internal reasoning into a dedicated field; keep your final response content and function-call arguments concise. Anthropic-facing function arguments are translated into internal MAAP/1 and validated by Mezzanine. Parallel action batching is supported on action-dispatch surfaces: you may include multiple shell_command, apply_patch, or other independent actions in the same batch. For apply_patch, the patch field must contain Direct Mezzanine patch text starting with *** Begin Patch and ending with *** End Patch. Accepted file directives are exactly *** Add File, *** Update File, and *** Delete File, plus optional *** Move to after *** Update File; there is no *** Replace File directive. Unified diff headers (---, +++, diff --git) are NOT the Mezzanine patch format; use *** Update File <path> instead. Every hunk old/context line must be copied verbatim from current file content; never infer or reconstruct likely code. Use distinctive @@ header anchors on every hunk to improve match reliability. Do not end the turn without producing a submit_maap_action_batch tool_use; a turn without a tool_use is a protocol error."
 }
 
 /// Builds the persona and scope section of the provider-facing system prompt.
@@ -269,7 +287,8 @@ pub(super) fn subagent_prompt(profile: &AgentPromptProfile) -> String {
         "Spawn only when delegation materially helps the active task.".to_string(),
         "Create via control endpoint; discover/message via MMP.".to_string(),
         "Roles default/worker/explorer/custom; explorer=read-only search/inspection/repo discovery.".to_string(),
-        "cooperation_mode=safety/scope, not scheduling; use multiple spawn_agent actions for parallelism, not cooperation_mode=parallel.".to_string(),
+        "Cooperation mode is about filesystem scope safety, not scheduling; omit it for compact spawn_agent actions unless the schema exposes it, and never use safety or scope as literal mode values.".to_string(),
+        "When exposed, supported cooperation_mode values are explore-only, owned-write, coordinated-write, serial-write, and unrestricted; use multiple spawn_agent actions for parallelism, not cooperation_mode=parallel.".to_string(),
     ];
     if let Some(mode) = &profile.cooperation_mode {
         lines.push(format!(

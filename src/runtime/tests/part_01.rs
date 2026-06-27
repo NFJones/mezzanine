@@ -22,7 +22,8 @@ use super::{
     bind_control_socket, default_socket_directory, effective_uid, ensure_private_socket_directory,
     fs, json_escape, pane_environment, pane_environment_with_term,
     prune_stale_socket_files_in_directory, runtime_hook_event_for_lifecycle,
-    runtime_hook_event_name, runtime_marker_for_action, socket_path_for_name,
+    runtime_hook_event_name, runtime_marker_for_action, runtime_cooperation_mode,
+    socket_path_for_name,
 };
 use crate::MezError;
 use crate::agent::AgentLogLevel;
@@ -3976,6 +3977,28 @@ fn runtime_subagent_auto_sizing_inherits_parent_pane_setting() {
     assert_eq!(
         service.inherited_auto_sizing_for_child_agent("agent-%1"),
         Some(parent_auto_sizing)
+    );
+}
+
+/// Verifies shorthand prompt words still resolve to the read-only subagent mode.
+///
+/// Provider prompts describe cooperation mode as a safety/scope concept, and
+/// some models may echo those words back even when the compact spawn schema
+/// omits the explicit field. Accepting these shorthands keeps runtime subagent
+/// spawns compatible with that model behavior instead of failing validation.
+#[test]
+fn runtime_cooperation_mode_accepts_prompt_shorthand_scope_words() {
+    assert_eq!(
+        runtime_cooperation_mode("safety").unwrap(),
+        CooperationMode::ExploreOnly
+    );
+    assert_eq!(
+        runtime_cooperation_mode("scope").unwrap(),
+        CooperationMode::ExploreOnly
+    );
+    assert_eq!(
+        runtime_cooperation_mode("scoped").unwrap(),
+        CooperationMode::ExploreOnly
     );
 }
 

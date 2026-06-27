@@ -4336,16 +4336,16 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     assert_eq!(body["prompt_cache_key"], diagnostics.prompt_cache_key);
 
     assert_eq!(diagnostics.prompt_cache_key, "mez-fcc0c3076055b2040cb8727ead0dbe7c");
-    assert_eq!(diagnostics.instructions_bytes, 44_280);
-    assert_eq!(diagnostics.instructions_sha256, "7c58edce792d419411ad3034fb46572a1a82e15b51686c7f164d2324328216c1");
+    assert_eq!(diagnostics.instructions_bytes, 44_554);
+    assert_eq!(diagnostics.instructions_sha256, "de520b823e239da6ef5ba16e2175afeb7341961c1cc1137a81374ac313d0e937");
     assert_eq!(diagnostics.response_format_bytes, 4);
     assert_eq!(diagnostics.response_format_sha256, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b");
     assert_eq!(diagnostics.tools_bytes, 27_281);
     assert_eq!(diagnostics.tools_sha256, "3fe8c23aa136005b8114ec893aa89f1f9cff6cf39689dc0a7654096fa4dbfff0");
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
-    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_441);
-    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "7bef2b69c46ecd779236e5fff02e891bcb3dfa5d9f3fb81ebf51806bf9c73df1");
+    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_715);
+    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "cbc04cc7d90997b2c8c8c8a0d4e2f05d87e466ed0d47c4edefa68d3eb582b07f");
     assert_eq!(diagnostics.provider_request_shape_bytes, 27_573);
     assert_eq!(diagnostics.provider_request_shape_sha256, "2f89d651ae06b554c8185872372a0a3a78d01bc49244cc5db2ba4a77b8e70189");
 }
