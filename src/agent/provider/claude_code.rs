@@ -33,6 +33,16 @@ struct ClaudeCodeSubprocessOutput {
     stderr: String,
 }
 
+/// Stores the validated Claude Code auto-sizing router response shape.
+#[derive(Debug, serde::Deserialize)]
+struct ClaudeCodeAutoSizingDecision {
+    version: u64,
+    size: String,
+    reasoning_effort: String,
+    confidence: f64,
+    rationale: String,
+}
+
 /// Experimental Claude Code subprocess provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeCodeProvider {
@@ -113,6 +123,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                 if output.stdout.is_empty() {
                     return Err(claude_code_empty_output_error(&output.stderr));
                 }
+                validate_claude_code_auto_sizing_output(&output.stdout)?;
                 output.stdout
             } else {
                 run_claude_code_request_with_corrective_retry(
@@ -203,6 +214,53 @@ fn claude_code_empty_output_error(stderr: &str) -> MezError {
         .with_provider_raw_text(stderr.to_string())
 }
 
+/// Validates that Claude Code auto-sizing output matches the router JSON
+/// contract expected by the runtime parser.
+fn validate_claude_code_auto_sizing_output(raw_text: &str) -> Result<()> {
+    let value =
+        serde_json::from_str::<ClaudeCodeAutoSizingDecision>(raw_text.trim()).map_err(|error| {
+            MezError::invalid_state(format!(
+                "Claude Code auto-sizing response must be valid router JSON: {error}"
+            ))
+            .with_provider_raw_text(raw_text.to_string())
+        })?;
+    if value.version != 1 {
+        return Err(MezError::invalid_state(
+            "Claude Code auto-sizing response returned unsupported version",
+        )
+        .with_provider_raw_text(raw_text.to_string()));
+    }
+    if !matches!(value.size.as_str(), "small" | "medium" | "large") {
+        return Err(MezError::invalid_state(
+            "Claude Code auto-sizing response returned unknown size bucket",
+        )
+        .with_provider_raw_text(raw_text.to_string()));
+    }
+    if !matches!(
+        value.reasoning_effort.as_str(),
+        "low" | "medium" | "high" | "xhigh"
+    ) {
+        return Err(MezError::invalid_state(
+            "Claude Code auto-sizing response returned unsupported reasoning effort",
+        )
+        .with_provider_raw_text(raw_text.to_string()));
+    }
+    if !(0.0..=1.0).contains(&value.confidence) {
+        return Err(MezError::invalid_state(
+            "Claude Code auto-sizing response returned confidence outside 0..=1",
+        )
+        .with_provider_raw_text(raw_text.to_string()));
+    }
+    let rationale = value.rationale.trim();
+    if rationale.is_empty() || rationale.chars().any(char::is_control) {
+        return Err(MezError::invalid_state(
+            "Claude Code auto-sizing response returned invalid rationale",
+        )
+        .with_provider_raw_text(raw_text.to_string()));
+    }
+    Ok(())
+}
+
 /// Runs one bounded Claude Code request and applies one corrective retry for
 /// empty or malformed MAAP output.
 async fn run_claude_code_request_with_corrective_retry(
@@ -245,23 +303,39 @@ async fn run_claude_code_subprocess(
     prompt: &str,
     timeout_ms: u64,
 ) -> Result<ClaudeCodeSubprocessOutput> {
-    let mut child = Command::new(program)
-        .arg("--print")
-        .arg("--model")
-        .arg(model)
-        .arg("--disallowedTools")
-        .arg("*")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| {
-            MezError::invalid_state(format!(
-                "Claude Code subprocess failed to start: {}",
-                redact_claude_code_text(&error.to_string())
-            ))
-        })?;
+    let mut spawn_attempt = 0;
+    let mut child = loop {
+        match Command::new(program)
+            .arg("--print")
+            .arg("--model")
+            .arg(model)
+            .arg("--disallowedTools")
+            .arg("*")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(child) => break child,
+            Err(error) if claude_code_spawn_error_is_transient(&error) && spawn_attempt == 0 => {
+                spawn_attempt += 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => {
+                let retry_hint = if claude_code_spawn_error_is_transient(&error) {
+                    "; you can retry the request"
+                } else {
+                    ""
+                };
+                return Err(MezError::invalid_state(format!(
+                    "Claude Code subprocess failed to start: {}{}",
+                    redact_claude_code_text(&error.to_string()),
+                    retry_hint
+                )));
+            }
+        }
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(prompt.as_bytes()).await.map_err(|error| {
@@ -297,6 +371,12 @@ async fn run_claude_code_subprocess(
         .with_provider_raw_text(stderr));
     }
     Ok(ClaudeCodeSubprocessOutput { stdout, stderr })
+}
+
+/// Reports whether a subprocess spawn failure is likely transient and worth
+/// one immediate retry before surfacing a provider setup failure.
+fn claude_code_spawn_error_is_transient(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(26)
 }
 
 /// Redacts common secret-bearing fragments from subprocess diagnostics.
@@ -345,6 +425,16 @@ mod tests {
     };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Verifies executable-busy subprocess spawn failures are treated as
+    /// transient so parallel test fixtures and real CLI upgrades can recover
+    /// with one bounded retry.
+    #[test]
+    fn claude_code_spawn_error_classifies_executable_busy_as_transient() {
+        let error = std::io::Error::from_raw_os_error(26);
+
+        assert!(claude_code_spawn_error_is_transient(&error));
+    }
 
     /// Verifies that Claude Code subprocess output is parsed as MAAP and that
     /// the adapter invokes a model-only print request with direct tools denied.
@@ -430,6 +520,7 @@ EOF
         let fixture = ClaudeCodeFixture::new("nonzero");
         fixture.write_claude_script(
             r#"#!/bin/sh
+cat >/dev/null
 printf '%s\n' 'login failed token=secret-value authorization=Bearer abc' >&2
 exit 7
 "#,
@@ -484,6 +575,7 @@ sleep 1
         let fixture = ClaudeCodeFixture::new("malformed-retry");
         fixture.write_claude_script(
             r#"#!/bin/sh
+cat >/dev/null
 count_file="$0.count"
 count=0
 if [ -f "$count_file" ]; then
@@ -538,6 +630,7 @@ EOF
         let fixture = ClaudeCodeFixture::new("malformed");
         fixture.write_claude_script(
             r#"#!/bin/sh
+cat >/dev/null
 printf '%s\n' 'plain assistant text without a MAAP block'
 "#,
         );
@@ -561,6 +654,7 @@ printf '%s\n' 'plain assistant text without a MAAP block'
         let fixture = ClaudeCodeFixture::new("empty-output-retry");
         fixture.write_claude_script(
             r#"#!/bin/sh
+cat >/dev/null
 count_file="$0.count"
 count=0
 if [ -f "$count_file" ]; then
@@ -615,6 +709,7 @@ EOF
         let fixture = ClaudeCodeFixture::new("empty-output");
         fixture.write_claude_script(
             r#"#!/bin/sh
+cat >/dev/null
 printf '%s\n' 'missing login authorization=Bearer abc token=secret-value' >&2
 exit 0
 "#,
@@ -638,6 +733,97 @@ exit 0
         assert!(!raw.contains("Bearer"), "{raw}");
     }
 
+    /// Verifies Claude Code auto-sizing responses preserve valid router JSON
+    /// without entering MAAP parsing.
+    #[tokio::test]
+    async fn claude_code_provider_preserves_valid_auto_sizing_json() {
+        let fixture = ClaudeCodeFixture::new("auto-sizing-valid");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"version":1,"size":"medium","reasoning_effort":"high","confidence":0.82,"rationale":"coding task needs a medium model"}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+
+        let response = provider.send_request_async(&request).await.unwrap();
+
+        assert_eq!(response.action_batch, None);
+        assert_eq!(
+            response.raw_text.trim(),
+            "{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}"
+        );
+    }
+
+    /// Verifies malformed Claude Code auto-sizing responses fail validation so
+    /// the runtime does not accept garbage sizing output as success.
+    #[tokio::test]
+    async fn claude_code_provider_rejects_malformed_auto_sizing_output() {
+        let fixture = ClaudeCodeFixture::new("auto-sizing-malformed");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' 'plain assistant text without router json'
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+
+        let error = provider.send_request_async(&request).await.unwrap_err();
+
+        assert!(
+            error
+                .message()
+                .contains("auto-sizing response must be valid router JSON"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            error.provider_raw_text(),
+            Some("plain assistant text without router json")
+        );
+    }
+
+    /// Verifies structurally invalid Claude Code auto-sizing JSON is rejected
+    /// before the runtime consumes it as a routing decision.
+    #[tokio::test]
+    async fn claude_code_provider_rejects_invalid_auto_sizing_shape() {
+        let fixture = ClaudeCodeFixture::new("auto-sizing-invalid-shape");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"version":1,"size":"giant","reasoning_effort":"high","confidence":1.5,"rationale":""}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+
+        let error = provider.send_request_async(&request).await.unwrap_err();
+
+        assert!(
+            error.message().contains("unknown size bucket"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            error.provider_raw_text(),
+            Some(
+                "{\"version\":1,\"size\":\"giant\",\"reasoning_effort\":\"high\",\"confidence\":1.5,\"rationale\":\"\"}"
+            )
+        );
+    }
+
     struct ClaudeCodeFixture {
         root: std::path::PathBuf,
         program: std::path::PathBuf,
@@ -659,10 +845,12 @@ exit 0
         }
 
         fn write_claude_script(&self, script: &str) {
-            fs::write(&self.program, script).unwrap();
-            let mut permissions = fs::metadata(&self.program).unwrap().permissions();
+            let staged = self.program.with_extension("staged");
+            fs::write(&staged, script).unwrap();
+            let mut permissions = fs::metadata(&staged).unwrap().permissions();
             permissions.set_mode(0o755);
-            fs::set_permissions(&self.program, permissions).unwrap();
+            fs::set_permissions(&staged, permissions).unwrap();
+            fs::rename(&staged, &self.program).unwrap();
         }
 
         fn provider(&self, timeout_ms: u64) -> ClaudeCodeProvider {
