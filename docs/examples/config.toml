@@ -276,6 +276,34 @@ models = [
 ]
 default_model = "deepseek-v4-pro"
 
+[model_profiles.anthropic-default]
+provider = "anthropic"
+model = "claude-fable-5"
+reasoning_profile = "high"
+latency_preference = "default"
+multimodal_required = false
+context_window_tokens = 200000
+max_output_tokens = 4096
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.anthropic-fast]
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+reasoning_profile = "medium"
+latency_preference = "fast"
+multimodal_required = false
+context_window_tokens = 200000
+max_output_tokens = 4096
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
 [model_profiles.default]
 provider = "openai"
 model = "gpt-5.5"
@@ -418,6 +446,14 @@ auto_sizing_small_model_profile = "deepseek-fast"
 auto_sizing_medium_model_profile = "deepseek-default"
 auto_sizing_large_model_profile = "deepseek-default"
 allowed_reasoning_efforts = ["high", "xhigh"]
+
+[model_presets.anthropic]
+default_model_profile = "anthropic-fast"
+auto_sizing_router_model_profile = "anthropic-fast"
+auto_sizing_small_model_profile = "anthropic-fast"
+auto_sizing_medium_model_profile = "anthropic-default"
+auto_sizing_large_model_profile = "anthropic-default"
+allowed_reasoning_efforts = ["medium", "high"]
 
 [permissions]
 approval_policy = "ask"
