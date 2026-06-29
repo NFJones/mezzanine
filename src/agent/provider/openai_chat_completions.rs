@@ -791,7 +791,13 @@ fn openai_chat_completions_maap_tool_arguments(
         matches.push(arguments);
     }
     match matches.len() {
-        0 => Ok(None),
+        0 if tool_calls.is_empty() => Ok(None),
+        0 => Err(provider_maap_parse_error(
+            MezError::invalid_state(
+                "OpenAI-compatible Chat Completions response returned non-MAAP tool calls without a MAAP action batch",
+            ),
+            &serde_json::Value::Array(tool_calls.clone()).to_string(),
+        )),
         1 => Ok(matches.pop()),
         _ => Err(provider_maap_parse_error(
             MezError::invalid_state(
@@ -870,5 +876,38 @@ mod tests {
         let developer_messages =
             openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
         assert_eq!(developer_messages[0]["role"], "developer");
+    }
+
+    /// Verifies hallucinated or otherwise unsupported OpenAI-compatible tool
+    /// calls fail visibly instead of falling through to content parsing, so the
+    /// runtime can report model protocol drift rather than silently accepting an
+    /// empty or unrelated response body.
+    #[test]
+    fn openai_chat_completions_non_maap_tool_calls_are_malformed_output() {
+        let message = serde_json::json!({
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "unexpected_tool",
+                        "arguments": {"value": true}
+                    }
+                }
+            ]
+        });
+
+        let error = openai_chat_completions_maap_tool_arguments(&message).unwrap_err();
+
+        assert!(
+            error.message().contains("non-MAAP tool calls"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error
+                .provider_raw_text()
+                .is_some_and(|raw| raw.contains("unexpected_tool")),
+            "{error:?}"
+        );
     }
 }
