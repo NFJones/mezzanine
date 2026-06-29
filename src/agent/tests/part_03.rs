@@ -525,13 +525,19 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             model: "test".to_string(),
             raw_text: "shell action".to_string(),
             usage: ModelTokenUsage {
+                input_tokens: 1151,
+                output_tokens: 50,
+                reasoning_tokens: 12,
+                cached_input_tokens: Some(180),
+                cache_write_input_tokens: None,
+            },
+            latest_request_usage: Some(ModelTokenUsage {
                 input_tokens: 251,
                 output_tokens: 30,
                 reasoning_tokens: 7,
                 cached_input_tokens: Some(80),
                 cache_write_input_tokens: None,
-            },
-            latest_request_usage: None,
+            }),
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -584,9 +590,10 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(execution.response.usage.input_tokens, 1151);
-    assert_eq!(execution.response.usage.output_tokens, 50);
-    assert_eq!(execution.response.usage.reasoning_tokens, 12);
+    assert_eq!(execution.response.usage.input_tokens, 2051);
+    assert_eq!(execution.response.usage.output_tokens, 70);
+    assert_eq!(execution.response.usage.reasoning_tokens, 17);
+    assert_eq!(execution.response.usage.cached_input_tokens, Some(480));
     assert_eq!(execution.latest_response_usage.input_tokens, 251);
     assert_eq!(execution.latest_response_usage.output_tokens, 30);
     assert_eq!(execution.latest_response_usage.reasoning_tokens, 7);
