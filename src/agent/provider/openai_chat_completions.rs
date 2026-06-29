@@ -11,8 +11,8 @@ use super::schema::{maap_action_batch_schema, openai_maap_current_action_batch_d
 use super::{
     MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
-    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
-    provider_quota_usage_from_headers, validate_non_empty,
+    openai_models_endpoint_for_responses_endpoint, parse_fenced_maap_action_batch_for_turn,
+    parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
 use std::collections::BTreeMap;
 
@@ -574,7 +574,15 @@ fn build_openai_chat_completions_models_http_request(
         validate_non_empty("OpenAI-compatible model listing credential", api_key)?;
     }
     let chat_endpoint = openai_chat_completions_endpoint_for_base_url(chat_endpoint)?;
-    let models_endpoint = chat_endpoint.replace("/chat/completions", "/models");
+    let responses_endpoint = chat_endpoint
+        .strip_suffix("/chat/completions")
+        .map(|prefix| format!("{prefix}/responses"))
+        .ok_or_else(|| {
+            MezError::invalid_state(format!(
+                "OpenAI-compatible Chat Completions endpoint must end with /chat/completions: {chat_endpoint}"
+            ))
+        })?;
+    let models_endpoint = openai_models_endpoint_for_responses_endpoint(&responses_endpoint)?;
     let mut headers = BTreeMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
     if let Some(api_key) = api_key {
@@ -908,6 +916,30 @@ mod tests {
                 .provider_raw_text()
                 .is_some_and(|raw| raw.contains("unexpected_tool")),
             "{error:?}"
+        );
+    }
+
+    /// Verifies model listing derives the sibling `/models` endpoint only from
+    /// the normalized trailing Chat Completions suffix, so compatible proxy
+    /// base URLs that contain `/chat/completions` earlier in the path are not
+    /// corrupted by a global string replacement.
+    #[test]
+    fn openai_chat_completions_models_request_only_rewrites_trailing_suffix() {
+        let request = build_openai_chat_completions_models_http_request(
+            Some("test-key"),
+            "https://proxy.example/custom/chat/completions-proxy/v1",
+            30_000,
+        )
+        .unwrap();
+
+        assert_eq!(request.method, "GET");
+        assert_eq!(
+            request.url,
+            "https://proxy.example/custom/chat/completions-proxy/v1/models"
+        );
+        assert_eq!(
+            request.headers.get("Authorization").map(String::as_str),
+            Some("Bearer test-key")
         );
     }
 }
