@@ -424,6 +424,12 @@ async fn run_claude_code_subprocess(
                 redact_claude_code_text(&error.to_string())
             ))
         })?;
+        stdin.shutdown().await.map_err(|error| {
+            MezError::invalid_state(format!(
+                "Claude Code subprocess stdin shutdown failed: {}; you can retry the request",
+                redact_claude_code_text(&error.to_string())
+            ))
+        })?;
     }
 
     let output = tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
@@ -670,6 +676,56 @@ EOF
             stdin.contains("Do not run tools or mutate files directly"),
             "{stdin}"
         );
+    }
+
+    /// Verifies Claude Code subprocess prompts are fully delivered and closed
+    /// before waiting, so subprocesses that read stdin to EOF do not observe a
+    /// truncated prompt or hang behind buffered writer state.
+    #[tokio::test]
+    async fn claude_code_provider_closes_stdin_after_prompt_write() {
+        let fixture = ClaudeCodeFixture::new("stdin-eof");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat > "$0.stdin"
+wc -c < "$0.stdin" > "$0.stdin-bytes"
+cat <<'EOF'
+```mezzanine-action-json
+{
+  "protocol": "maap/1",
+  "turn_id": "turn-1",
+  "agent_id": "agent-1",
+  "rationale": "return final text",
+  "actions": [
+    {
+      "id": "say-1",
+      "type": "say",
+      "status": "final",
+      "rationale": "Reply",
+      "text": "hello"
+    }
+  ],
+  "final": true
+}
+```
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let response = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap();
+
+        assert!(response.action_batch.is_some());
+        let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
+        let recorded_len = fs::read_to_string(fixture.program.with_extension("stdin-bytes"))
+            .unwrap()
+            .trim()
+            .parse::<usize>()
+            .unwrap();
+        assert_eq!(recorded_len, stdin.len());
+        assert!(stdin.ends_with("directly.\n"), "{stdin}");
     }
 
     /// Verifies missing Claude Code executables are classified as provider
