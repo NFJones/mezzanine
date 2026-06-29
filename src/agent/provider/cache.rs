@@ -303,7 +303,6 @@ fn openai_message_is_volatile_configuration_state(message: &ModelMessage) -> boo
     let content = message.content.trim_start();
     content.starts_with("[session identity]")
         || content.starts_with("[pane identity]")
-        || content.starts_with("[mcp integrations]")
         || content.starts_with("[provider output-limit retry guidance]")
         || content.starts_with("[environment signature for pane ")
 }

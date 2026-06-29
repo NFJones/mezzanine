@@ -3540,14 +3540,14 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
     );
 }
 
-/// Verifies volatile MCP integration context does not perturb OpenAI stable-prefix material.
+/// Verifies MCP integration context remains in the OpenAI stable prefix.
 ///
-/// Runtime-derived integration summaries can change between turns as MCP
-/// discovery refreshes. The stable prefix should continue to reuse the same
-/// durable prompt material when the user, repository guidance, and system
-/// prompt summary are otherwise unchanged.
+/// MCP integration summaries are configuration guidance for the model rather
+/// than late controller state. Keeping them stable-prefix eligible prevents the
+/// block from prematurely closing reusable input before later durable transcript
+/// content is rendered.
 #[test]
-fn openai_stable_prefix_excludes_volatile_mcp_integration_context() {
+fn openai_stable_prefix_keeps_mcp_integration_context() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -3557,48 +3557,49 @@ fn openai_stable_prefix_excludes_volatile_mcp_integration_context() {
         provider_options: std::collections::BTreeMap::new(),
         safety_tier: None,
     };
-    let context_with_mcp_detail = |detail: &str| {
-        AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                label: "project guidance".to_string(),
-                content: "use stable project style".to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::Configuration,
-                label: "mcp integrations".to_string(),
-                content: format!(
-                    "available_servers=1 available_tools=0 unavailable_servers=0\nstatus_detail={detail}"
-                ),
-            },
-            ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                label: "user".to_string(),
-                content: "inspect cache reuse".to_string(),
-            },
-        ])
-        .unwrap()
-    };
+    let context = AgentContext::new(vec![
+        ContextBlock {
+            source: ContextSourceKind::ProjectGuidance,
+            label: "project guidance".to_string(),
+            content: "use stable project style".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: "mcp integrations".to_string(),
+            content: "available_servers=1 available_tools=0 unavailable_servers=0".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::TranscriptAssistant,
+            label: "assistant".to_string(),
+            content: "durable assistant context after mcp".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "inspect cache reuse".to_string(),
+        },
+    ])
+    .unwrap();
 
-    let first = assemble_model_request(&profile, &turn(), &context_with_mcp_detail("starting"))
-        .unwrap();
-    let second = assemble_model_request(&profile, &turn(), &context_with_mcp_detail("ready"))
-        .unwrap();
-    let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
-    let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
+    let request = assemble_model_request(&profile, &turn(), &context).unwrap();
+    let (_, stable_input) = openai_test_stable_prefix_parts(&request);
+    let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
+    let stable_input_text = serde_json::to_string(&stable_input).unwrap();
 
-    assert_eq!(
-        openai_stable_prefix_material_for_request(&first).unwrap(),
-        openai_stable_prefix_material_for_request(&second).unwrap()
+    assert!(
+        stable_input_text.contains("[mcp integrations]"),
+        "{stable_input_text}"
     );
-    assert_eq!(
-        first_diagnostics.cacheable_prefix_sha256,
-        second_diagnostics.cacheable_prefix_sha256
+    assert!(
+        stable_input_text.contains("durable assistant context after mcp"),
+        "{stable_input_text}"
     );
-    assert_ne!(
-        first_diagnostics.volatile_input_sha256,
-        second_diagnostics.volatile_input_sha256
+    assert!(
+        stable_input.len() >= 2,
+        "expected MCP context and following transcript in stable input: {stable_input:?}"
     );
+    assert!(diagnostics.stable_input_bytes > 2);
+    assert!(diagnostics.volatile_input_bytes > 2);
 }
 
 /// Verifies long OpenAI sessions preserve append-only stable-prefix continuity
