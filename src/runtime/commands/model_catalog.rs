@@ -471,9 +471,13 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
             ProviderApiCompatibility::DeepSeekChatCompletions => {
                 levels.extend(deepseek_default_reasoning_effort_levels());
             }
-            ProviderApiCompatibility::OpenAiChatCompletions
-            | ProviderApiCompatibility::AnthropicMessages
-            | ProviderApiCompatibility::ClaudeCode => {}
+            ProviderApiCompatibility::AnthropicMessages => {
+                levels.extend(anthropic_default_reasoning_effort_levels());
+            }
+            ProviderApiCompatibility::ClaudeCode => {
+                levels.extend(claude_code_default_reasoning_effort_levels());
+            }
+            ProviderApiCompatibility::OpenAiChatCompletions => {}
         }
     }
     dedupe_runtime_strings(levels)
@@ -530,6 +534,22 @@ fn runtime_provider_recommended_model(
 /// Returns the reasoning effort levels supported by DeepSeek providers.
 fn deepseek_default_reasoning_effort_levels() -> Vec<String> {
     vec!["high".to_string(), "max".to_string()]
+}
+
+/// Returns the reasoning effort levels supported by Anthropic Messages.
+fn anthropic_default_reasoning_effort_levels() -> Vec<String> {
+    ["low", "medium", "high", "xhigh", "max"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Returns the reasoning effort levels supported by the local Claude Code CLI.
+fn claude_code_default_reasoning_effort_levels() -> Vec<String> {
+    ["low", "medium", "high", "xhigh", "max"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 /// Formats the current routing auto-sizing model profile.
@@ -726,4 +746,65 @@ fn dedupe_runtime_strings(values: Vec<String>) -> Vec<String> {
         }
     }
     deduped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// Verifies configured Claude Code providers expose the local CLI effort
+    /// levels even though Claude Code does not have a documented model-catalog
+    /// API for live discovery.
+    ///
+    /// The `/model` command and pane-frame reasoning picker use configured
+    /// fallback metadata when provider model listing is unavailable. Claude
+    /// Code supports `--effort` values independently of model listing, so the
+    /// fallback catalog must advertise those levels and still preserve an
+    /// explicitly configured default effort first.
+    #[test]
+    fn claude_code_configured_reasoning_levels_include_cli_efforts() {
+        let provider_config = crate::runtime::RuntimeProviderConfig {
+            provider_id: "claude-code".to_string(),
+            kind: "claude-code".to_string(),
+            api: Some("claude-code".to_string()),
+            auth_profile: "default".to_string(),
+            base_url: None,
+            models: vec!["claude-sonnet-test".to_string()],
+            default_model: Some("claude-sonnet-test".to_string()),
+            options: BTreeMap::from([("reasoning_effort".to_string(), "medium".to_string())]),
+        };
+
+        assert_eq!(
+            runtime_configured_reasoning_levels_for_model(&provider_config, "claude-sonnet-test"),
+            vec!["medium", "low", "high", "xhigh", "max"]
+        );
+    }
+
+    /// Verifies configured Anthropic providers expose documented Messages API
+    /// effort levels even when live model listing is unavailable.
+    ///
+    /// The `/model` command and pane-frame reasoning picker use configured
+    /// fallback metadata for Anthropic because there is no implemented live
+    /// model-catalog refresh. Anthropic documents `output_config.effort` values
+    /// `low`, `medium`, `high`, `xhigh`, and `max`; the fallback must preserve
+    /// a configured default first while advertising the remaining choices.
+    #[test]
+    fn anthropic_configured_reasoning_levels_include_api_efforts() {
+        let provider_config = crate::runtime::RuntimeProviderConfig {
+            provider_id: "anthropic".to_string(),
+            kind: "anthropic".to_string(),
+            api: Some("anthropic-messages".to_string()),
+            auth_profile: "default".to_string(),
+            base_url: None,
+            models: vec!["claude-fable-5".to_string()],
+            default_model: Some("claude-fable-5".to_string()),
+            options: BTreeMap::from([("reasoning_effort".to_string(), "high".to_string())]),
+        };
+
+        assert_eq!(
+            runtime_configured_reasoning_levels_for_model(&provider_config, "claude-fable-5"),
+            vec!["high", "low", "medium", "xhigh", "max"]
+        );
+    }
 }

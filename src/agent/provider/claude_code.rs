@@ -53,6 +53,44 @@ struct ClaudeCodeRequestOutput {
     latest_request_usage: Option<ModelTokenUsage>,
 }
 
+/// Carries the shared subprocess inputs for one Claude Code print invocation.
+struct ClaudeCodeSubprocessRequest<'a> {
+    program: &'a str,
+    model: &'a str,
+    session: Option<ClaudeCodeSessionRef<'a>>,
+    system_prompt: &'a str,
+    prompt: &'a str,
+    resume_prompt: Option<&'a str>,
+    reasoning_effort: Option<&'a str>,
+    timeout_ms: u64,
+    json_output: bool,
+}
+
+/// Carries the resume-specific prompt variants for one Claude Code invocation.
+struct ClaudeCodeResumeSubprocessRequest<'a> {
+    program: &'a str,
+    model: &'a str,
+    session: ClaudeCodeSessionRef<'a>,
+    system_prompt: &'a str,
+    resume_prompt: &'a str,
+    create_prompt: &'a str,
+    reasoning_effort: Option<&'a str>,
+    timeout_ms: u64,
+    json_output: bool,
+}
+
+/// Carries the final Claude Code CLI invocation arguments for one subprocess.
+struct ClaudeCodeSessionInvocationRequest<'a> {
+    program: &'a str,
+    model: &'a str,
+    session: Option<ClaudeCodeSessionInvocation<'a>>,
+    system_prompt: &'a str,
+    prompt: &'a str,
+    reasoning_effort: Option<&'a str>,
+    timeout_ms: u64,
+    json_output: bool,
+}
+
 /// Tracks one Claude Code conversation id across short-lived print subprocesses.
 struct ClaudeCodeSessionState {
     lock: tokio::sync::Mutex<()>,
@@ -180,15 +218,19 @@ impl AsyncModelProvider for ClaudeCodeProvider {
             }
             let (raw_text, usage, latest_request_usage) =
                 if request.interaction_kind == ModelInteractionKind::AutoSizing {
-                    let output = run_claude_code_subprocess(
-                        &self.program,
-                        &request.model,
-                        None,
-                        &claude_code_system_prompt(request, None),
-                        &claude_code_prompt(request, None),
-                        self.timeout_ms,
-                        true,
-                    )
+                    let prompt = claude_code_prompt(request, None);
+                    let system_prompt = claude_code_system_prompt(request, None);
+                    let output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
+                        program: &self.program,
+                        model: &request.model,
+                        session: None,
+                        system_prompt: &system_prompt,
+                        prompt: &prompt,
+                        resume_prompt: None,
+                        reasoning_effort: request.reasoning_effort.as_deref(),
+                        timeout_ms: self.timeout_ms,
+                        json_output: true,
+                    })
                     .await?;
                     if output.assistant_text.is_empty() {
                         return Err(claude_code_empty_output_error(&output.stderr));
@@ -260,6 +302,19 @@ fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) 
     let mut prompt = String::new();
 
     append_claude_code_prior_context(&mut prompt, request, final_user_index);
+    append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
+    prompt
+}
+
+/// Builds the current-turn-only stdin prompt used when resuming an existing
+/// Claude Code conversation.
+fn claude_code_current_turn_prompt(request: &ModelRequest) -> String {
+    let final_user_index = request
+        .messages
+        .iter()
+        .rposition(|message| message.role == ModelMessageRole::User);
+    let mut prompt = String::new();
+
     append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
     prompt
 }
@@ -545,15 +600,20 @@ async fn run_claude_code_request_with_corrective_retry(
     let session = session_id
         .as_deref()
         .map(|session_id| ClaudeCodeSessionRef { session_id });
-    let first_output = run_claude_code_subprocess(
+    let first_prompt = claude_code_prompt(request, None);
+    let first_resume_prompt = claude_code_current_turn_prompt(request);
+    let first_system_prompt = claude_code_system_prompt(request, None);
+    let first_output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
         program,
-        &request.model,
+        model: &request.model,
         session,
-        &claude_code_system_prompt(request, None),
-        &claude_code_prompt(request, None),
+        system_prompt: &first_system_prompt,
+        prompt: &first_prompt,
+        resume_prompt: Some(&first_resume_prompt),
+        reasoning_effort: request.reasoning_effort.as_deref(),
         timeout_ms,
-        true,
-    )
+        json_output: true,
+    })
     .await?;
     if !claude_code_output_needs_corrective_retry(request, &first_output.assistant_text) {
         return Ok(ClaudeCodeRequestOutput {
@@ -567,15 +627,20 @@ async fn run_claude_code_request_with_corrective_retry(
     } else {
         CLAUDE_CODE_MAAP_RETRY_INSTRUCTION
     };
-    let retry_output = run_claude_code_subprocess(
+    let retry_prompt = claude_code_prompt(request, Some(retry_instruction));
+    let retry_resume_prompt = claude_code_current_turn_prompt(request);
+    let retry_system_prompt = claude_code_system_prompt(request, Some(retry_instruction));
+    let retry_output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
         program,
-        &request.model,
+        model: &request.model,
         session,
-        &claude_code_system_prompt(request, Some(retry_instruction)),
-        &claude_code_prompt(request, Some(retry_instruction)),
+        system_prompt: &retry_system_prompt,
+        prompt: &retry_prompt,
+        resume_prompt: Some(&retry_resume_prompt),
+        reasoning_effort: request.reasoning_effort.as_deref(),
         timeout_ms,
-        true,
-    )
+        json_output: true,
+    })
     .await?;
     if retry_output.assistant_text.is_empty() {
         return Err(claude_code_empty_output_error(&retry_output.stderr));
@@ -592,60 +657,57 @@ async fn run_claude_code_request_with_corrective_retry(
 
 /// Invokes Claude Code in print mode with direct tool use disabled.
 async fn run_claude_code_subprocess(
-    program: &str,
-    model: &str,
-    session: Option<ClaudeCodeSessionRef<'_>>,
-    system_prompt: &str,
-    prompt: &str,
-    timeout_ms: u64,
-    json_output: bool,
+    request: ClaudeCodeSubprocessRequest<'_>,
 ) -> Result<ClaudeCodeSubprocessOutput> {
-    let Some(session) = session else {
+    let Some(session) = request.session else {
         return run_claude_code_subprocess_with_session_invocation(
-            program,
-            model,
-            None,
-            system_prompt,
-            prompt,
-            timeout_ms,
-            json_output,
+            ClaudeCodeSessionInvocationRequest {
+                program: request.program,
+                model: request.model,
+                session: None,
+                system_prompt: request.system_prompt,
+                prompt: request.prompt,
+                reasoning_effort: request.reasoning_effort,
+                timeout_ms: request.timeout_ms,
+                json_output: request.json_output,
+            },
         )
         .await;
     };
 
-    run_claude_code_resume_subprocess(
-        program,
-        model,
+    let resume_prompt = request.resume_prompt.unwrap_or(request.prompt);
+    run_claude_code_resume_subprocess(ClaudeCodeResumeSubprocessRequest {
+        program: request.program,
+        model: request.model,
         session,
-        system_prompt,
-        prompt,
-        timeout_ms,
-        json_output,
-    )
+        system_prompt: request.system_prompt,
+        resume_prompt,
+        create_prompt: request.prompt,
+        reasoning_effort: request.reasoning_effort,
+        timeout_ms: request.timeout_ms,
+        json_output: request.json_output,
+    })
     .await
 }
 
 /// Invokes an initialized Claude Code conversation through `--resume`.
 async fn run_claude_code_resume_subprocess(
-    program: &str,
-    model: &str,
-    session: ClaudeCodeSessionRef<'_>,
-    system_prompt: &str,
-    prompt: &str,
-    timeout_ms: u64,
-    json_output: bool,
+    request: ClaudeCodeResumeSubprocessRequest<'_>,
 ) -> Result<ClaudeCodeSubprocessOutput> {
     for attempt in 0..=CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS {
         let result = run_claude_code_subprocess_with_session_invocation(
-            program,
-            model,
-            Some(ClaudeCodeSessionInvocation::Resume {
-                session_id: session.session_id,
-            }),
-            system_prompt,
-            prompt,
-            timeout_ms,
-            json_output,
+            ClaudeCodeSessionInvocationRequest {
+                program: request.program,
+                model: request.model,
+                session: Some(ClaudeCodeSessionInvocation::Resume {
+                    session_id: request.session.session_id,
+                }),
+                system_prompt: request.system_prompt,
+                prompt: request.resume_prompt,
+                reasoning_effort: request.reasoning_effort,
+                timeout_ms: request.timeout_ms,
+                json_output: request.json_output,
+            },
         )
         .await;
         match result {
@@ -661,15 +723,18 @@ async fn run_claude_code_resume_subprocess(
             }
             Err(error) if claude_code_error_indicates_missing_session(&error) => {
                 let create_result = run_claude_code_subprocess_with_session_invocation(
-                    program,
-                    model,
-                    Some(ClaudeCodeSessionInvocation::Create {
-                        session_id: session.session_id,
-                    }),
-                    system_prompt,
-                    prompt,
-                    timeout_ms,
-                    json_output,
+                    ClaudeCodeSessionInvocationRequest {
+                        program: request.program,
+                        model: request.model,
+                        session: Some(ClaudeCodeSessionInvocation::Create {
+                            session_id: request.session.session_id,
+                        }),
+                        system_prompt: request.system_prompt,
+                        prompt: request.create_prompt,
+                        reasoning_effort: request.reasoning_effort,
+                        timeout_ms: request.timeout_ms,
+                        json_output: request.json_output,
+                    },
                 )
                 .await;
                 match create_result {
@@ -695,24 +760,18 @@ async fn run_claude_code_resume_subprocess(
 
 /// Invokes Claude Code in print mode with an explicit session flag selection.
 async fn run_claude_code_subprocess_with_session_invocation(
-    program: &str,
-    model: &str,
-    session: Option<ClaudeCodeSessionInvocation<'_>>,
-    system_prompt: &str,
-    prompt: &str,
-    timeout_ms: u64,
-    json_output: bool,
+    request: ClaudeCodeSessionInvocationRequest<'_>,
 ) -> Result<ClaudeCodeSubprocessOutput> {
     let mut spawn_attempt = 0;
     let mut child = loop {
-        let mut command = Command::new(program);
+        let mut command = Command::new(request.program);
         command
             .arg("--print")
             .arg("--model")
-            .arg(model)
+            .arg(request.model)
             .arg("--disallowedTools")
             .arg("*");
-        match session {
+        match request.session {
             Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
                 command.arg("--session-id").arg(session_id);
             }
@@ -721,10 +780,13 @@ async fn run_claude_code_subprocess_with_session_invocation(
             }
             None => {}
         }
-        if !system_prompt.is_empty() {
-            command.arg("--system-prompt").arg(system_prompt);
+        if !request.system_prompt.is_empty() {
+            command.arg("--system-prompt").arg(request.system_prompt);
         }
-        if json_output {
+        if let Some(effort) = request.reasoning_effort.filter(|effort| !effort.is_empty()) {
+            command.arg("--effort").arg(effort);
+        }
+        if request.json_output {
             command.arg("--output-format").arg("json");
         }
         match command
@@ -755,12 +817,15 @@ async fn run_claude_code_subprocess_with_session_invocation(
     };
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes()).await.map_err(|error| {
-            MezError::invalid_state(format!(
-                "Claude Code subprocess stdin write failed: {}; you can retry the request",
-                redact_claude_code_text(&error.to_string())
-            ))
-        })?;
+        stdin
+            .write_all(request.prompt.as_bytes())
+            .await
+            .map_err(|error| {
+                MezError::invalid_state(format!(
+                    "Claude Code subprocess stdin write failed: {}; you can retry the request",
+                    redact_claude_code_text(&error.to_string())
+                ))
+            })?;
         stdin.shutdown().await.map_err(|error| {
             MezError::invalid_state(format!(
                 "Claude Code subprocess stdin shutdown failed: {}; you can retry the request",
@@ -769,19 +834,23 @@ async fn run_claude_code_subprocess_with_session_invocation(
         })?;
     }
 
-    let output = tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
-        .await
-        .map_err(|_| {
-            MezError::invalid_state(format!(
-                "Claude Code subprocess timed out after {timeout_ms}ms; you can retry the request"
-            ))
-        })?
-        .map_err(|error| {
-            MezError::invalid_state(format!(
-                "Claude Code subprocess wait failed: {}; you can retry the request",
-                redact_claude_code_text(&error.to_string())
-            ))
-        })?;
+    let output = tokio::time::timeout(
+        Duration::from_millis(request.timeout_ms),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| {
+        MezError::invalid_state(format!(
+            "Claude Code subprocess timed out after {}ms; you can retry the request",
+            request.timeout_ms
+        ))
+    })?
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "Claude Code subprocess wait failed: {}; you can retry the request",
+            redact_claude_code_text(&error.to_string())
+        ))
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = redact_claude_code_text(&String::from_utf8_lossy(&output.stderr));
@@ -793,7 +862,7 @@ async fn run_claude_code_subprocess_with_session_invocation(
         ))
         .with_provider_raw_text(stderr));
     }
-    let (assistant_text, usage) = if json_output {
+    let (assistant_text, usage) = if request.json_output {
         parse_claude_code_json_output(&stdout)?
     } else {
         (stdout, ModelTokenUsage::default())
@@ -1306,11 +1375,10 @@ EOF
 "#,
         );
         let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.reasoning_effort = Some("high".to_string());
 
-        let response = provider
-            .send_request_async(&claude_request())
-            .await
-            .unwrap();
+        let response = provider.send_request_async(&request).await.unwrap();
 
         assert_eq!(response.provider, "claude-code");
         assert_eq!(response.model, "claude-sonnet-test");
@@ -1327,6 +1395,8 @@ EOF
             args.contains("Developer instruction:\nReturn a final say action."),
             "{args}"
         );
+        assert!(args.contains("--effort"), "{args}");
+        assert!(args.contains("high"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
         assert!(args.contains('*'), "{args}");
@@ -1357,7 +1427,7 @@ fi
 count=$((count + 1))
 printf '%s' "$count" > "$count_file"
 printf '%s\n' "$@" > "$0.args.$count"
-cat >/dev/null
+cat > "$0.stdin.$count"
 case " $* " in
     *" --resume "*)
         if [ "$count" -eq 1 ]; then
@@ -1414,6 +1484,27 @@ EOF
         assert!(
             !second_turn_args.contains("--session-id"),
             "{second_turn_args}"
+        );
+        let first_resume_stdin =
+            fs::read_to_string(fixture.program.with_extension("stdin.1")).unwrap();
+        let create_stdin = fs::read_to_string(fixture.program.with_extension("stdin.2")).unwrap();
+        let second_turn_stdin =
+            fs::read_to_string(fixture.program.with_extension("stdin.3")).unwrap();
+        assert!(
+            first_resume_stdin.contains("Current user request:\nFollow the system prompt."),
+            "{first_resume_stdin}"
+        );
+        assert!(
+            create_stdin.contains("Current user request:\nFollow the system prompt."),
+            "{create_stdin}"
+        );
+        assert!(
+            second_turn_stdin.contains("Current user request:\nFollow the system prompt."),
+            "{second_turn_stdin}"
+        );
+        assert!(
+            !second_turn_stdin.contains("Prior conversation context"),
+            "{second_turn_stdin}"
         );
     }
 
@@ -1634,6 +1725,36 @@ EOF
         assert_eq!(response.usage.cache_write_input_tokens, Some(6_112));
         assert_eq!(response.usage.total_tokens(), 16_622);
         assert_eq!(response.latest_request_usage, None);
+    }
+
+    /// Verifies Claude Code JSON usage parsing preserves omitted cache counters
+    /// separately from explicit zero cache counters.
+    ///
+    /// Cache accounting displays provider-omitted fields as unknown while
+    /// explicit provider zeros should remain known zero values. This protects
+    /// the provider boundary from collapsing `None` and `Some(0)` as Claude
+    /// Code print-mode usage envelopes evolve.
+    #[test]
+    fn claude_code_json_usage_distinguishes_missing_and_zero_cache_counters() {
+        let omitted = r#"{"result":"hello","usage":{"input_tokens":2,"output_tokens":12}}"#;
+        let explicit_zero = r#"{"result":"hello","usage":{"input_tokens":2,"output_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#;
+
+        let (_, omitted_usage) = parse_claude_code_json_output(omitted).unwrap();
+        let (_, explicit_zero_usage) = parse_claude_code_json_output(explicit_zero).unwrap();
+
+        assert_eq!(omitted_usage.input_tokens, 2);
+        assert_eq!(omitted_usage.cached_input_tokens, None);
+        assert_eq!(omitted_usage.cached_input_tokens_display(), "unknown");
+        assert_eq!(omitted_usage.cached_input_hit_ratio_display(), "unknown");
+        assert_eq!(omitted_usage.cache_write_input_tokens, None);
+        assert_eq!(explicit_zero_usage.input_tokens, 2);
+        assert_eq!(explicit_zero_usage.cached_input_tokens, Some(0));
+        assert_eq!(explicit_zero_usage.cached_input_tokens_display(), "0");
+        assert_eq!(
+            explicit_zero_usage.cached_input_hit_ratio_display(),
+            "0.00%"
+        );
+        assert_eq!(explicit_zero_usage.cache_write_input_tokens, Some(0));
     }
 
     /// Verifies missing Claude Code executables are classified as provider

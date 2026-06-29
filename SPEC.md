@@ -2634,7 +2634,9 @@ system prompt is present, the Anthropic Messages adapter MUST serialize the
 system prompt as a text block with `cache_control: { type: "ephemeral" }` so
 Anthropic can establish a stable prompt-cache breakpoint. When disabled, the
 adapter MUST preserve the plain-string system prompt shape and omit the
-cache-control marker.
+cache-control marker. Anthropic profiles MAY set `provider_options.reasoning_effort`
+to `low`, `medium`, `high`, `xhigh`, or `max`; the Anthropic Messages adapter
+MUST serialize non-empty values as `output_config.effort`.
 For DeepSeek profiles, `provider_options.thinking` MAY be set to `enabled` or
 `disabled` to explicitly control native thinking mode independently of
 `provider_options.reasoning_effort`. When omitted, Mezzanine MAY infer DeepSeek
@@ -2735,16 +2737,20 @@ Anthropic Console API-key credentials with `x-api-key`, send an
 `tool_use` block named `submit_maap_action_batch`. Claude subscription or
 Claude Code browser-login credentials MUST NOT be sent to the
 `anthropic-messages` endpoint. Anthropic provider options MAY include
-`anthropic_version` and a fallback `default_max_tokens`/`max_tokens` value; the
-adapter MUST reject OpenAI-compatible and DeepSeek-only options such as
-`maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
-`output_token_field`, `maap_surface`, `prompt_cache_retention`, and `thinking`.
+`anthropic_version`, `reasoning_effort`, and a fallback
+`default_max_tokens`/`max_tokens` value; the adapter MUST serialize non-empty
+reasoning effort as `output_config.effort` and MUST reject OpenAI-compatible
+and DeepSeek-only options such as `maap_output`, `structured_output`,
+`tool_choice`, `parallel_tool_calls`, `output_token_field`, `maap_surface`,
+`prompt_cache_retention`, and `thinking`.
 The `claude-code` adapter MUST bind normal prompt-cacheable conversation turns
 to a stable Claude Code session id, resume existing Claude Code conversations
-with `--resume`, and create the session with `--session-id` only when Claude
-reports the resume target is missing. Auto-sizing and other requests without a
-Mezzanine prompt-cache session or lineage id MUST remain one-shot Claude Code
-print invocations.
+with `--resume`, create the session with `--session-id` only when Claude
+reports the resume target is missing, and pass selected reasoning efforts to
+the CLI with `--effort` using the local Claude Code levels `low`, `medium`,
+`high`, `xhigh`, and `max`. Auto-sizing and other requests without a Mezzanine
+prompt-cache session or lineage id MUST remain one-shot Claude Code print
+invocations.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider

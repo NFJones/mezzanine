@@ -516,13 +516,15 @@ selection. Set `maap_output = "structured_json"` and
 Schema response formats more reliably than native OpenAI tool-call emission.
 The native `anthropic-messages` adapter uses Anthropic `tool_use` as the MAAP
 carrier, maps profile `max_output_tokens` to wire `max_tokens`, and accepts
-provider options `anthropic_version` plus `default_max_tokens`. It uses
-Anthropic Console API-key credentials; Claude Code or Claude subscription
-browser-login credentials belong to the `claude-code` provider mode and are not
-valid `x-api-key` material for `anthropic-messages`. Anthropic
-providers reject OpenAI-compatible or DeepSeek-only provider options such as
-`maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
-`output_token_field`, `maap_surface`, `prompt_cache_retention`, and `thinking`.
+provider options `anthropic_version`, `reasoning_effort`, plus
+`default_max_tokens`. It serializes non-empty reasoning effort as Anthropic
+`output_config.effort`. It uses Anthropic Console API-key credentials; Claude
+Code or Claude subscription browser-login credentials belong to the
+`claude-code` provider mode and are not valid `x-api-key` material for
+`anthropic-messages`. Anthropic providers reject OpenAI-compatible or
+DeepSeek-only provider options such as `maap_output`, `structured_output`,
+`tool_choice`, `parallel_tool_calls`, `output_token_field`, `maap_surface`,
+`prompt_cache_retention`, and `thinking`.
 
 The `claude-code` provider mode is configured as a separate provider entry, uses
 Claude Code authentication established outside Mez, relies on configured model
@@ -530,9 +532,11 @@ ids because no documented Claude Code catalog is available, and keeps Mez shell,
 patch, approval, and audit paths as the only action executor. For normal
 conversation turns with Mezzanine prompt-cache identity, Mez resumes existing
 Claude Code conversations with `--resume` and creates the session with
-`--session-id` only when Claude reports the resume target is missing;
-auto-sizing and requests without prompt-cache identity remain one-shot print
-invocations.
+`--session-id` only when Claude reports the resume target is missing. Selected
+reasoning efforts are passed to Claude Code as `--effort`; configured fallback
+metadata exposes the local CLI levels `low`, `medium`, `high`, `xhigh`, and
+`max`. Auto-sizing and requests without prompt-cache identity remain one-shot
+print invocations.
 
 Example LM Studio-compatible provider:
 

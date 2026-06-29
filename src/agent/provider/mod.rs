@@ -507,7 +507,7 @@ impl ProviderCapabilities {
             ProviderApiCompatibility::AnthropicMessages => Self {
                 supports_responses_api: false,
                 supports_max_output_tokens: true,
-                supports_reasoning_controls: false,
+                supports_reasoning_controls: true,
                 supports_thinking_toggle: false,
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
@@ -518,7 +518,7 @@ impl ProviderCapabilities {
             ProviderApiCompatibility::ClaudeCode => Self {
                 supports_responses_api: false,
                 supports_max_output_tokens: false,
-                supports_reasoning_controls: false,
+                supports_reasoning_controls: true,
                 supports_thinking_toggle: false,
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
@@ -1665,9 +1665,10 @@ mod tests {
     /// for native Messages integration.
     ///
     /// The Anthropic adapter should allow provider-neutral output caps,
-    /// streaming, and tool use without implying OpenAI Responses support,
-    /// service tiers, prompt-cache retention, reasoning controls, or parallel
-    /// tool-call semantics.
+    /// streaming, tool use, and the native `output_config.effort` reasoning
+    /// control without implying OpenAI Responses support, service tiers,
+    /// prompt-cache retention, thinking toggles, or parallel tool-call
+    /// semantics.
     #[test]
     fn anthropic_messages_capabilities_are_conservative() {
         let capabilities =
@@ -1675,12 +1676,34 @@ mod tests {
 
         assert!(!capabilities.supports_responses_api);
         assert!(capabilities.supports_max_output_tokens);
-        assert!(!capabilities.supports_reasoning_controls);
+        assert!(capabilities.supports_reasoning_controls);
         assert!(!capabilities.supports_thinking_toggle);
         assert!(!capabilities.supports_service_tier);
         assert!(!capabilities.supports_prompt_cache_retention);
         assert!(capabilities.supports_streaming);
         assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_parallel_tool_calls);
+    }
+
+    /// Verifies Claude Code advertises only the local CLI reasoning control it
+    /// can actually map to subprocess arguments.
+    ///
+    /// Claude Code does not expose native tool execution, streaming, service
+    /// tiers, or a documented model catalog through Mez. It does accept
+    /// `--effort`, so the capability metadata must allow reasoning controls
+    /// without implying unrelated provider features.
+    #[test]
+    fn claude_code_capabilities_expose_cli_reasoning_only() {
+        let capabilities = ProviderCapabilities::for_api(ProviderApiCompatibility::ClaudeCode);
+
+        assert!(!capabilities.supports_responses_api);
+        assert!(!capabilities.supports_max_output_tokens);
+        assert!(capabilities.supports_reasoning_controls);
+        assert!(!capabilities.supports_thinking_toggle);
+        assert!(!capabilities.supports_service_tier);
+        assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(!capabilities.supports_streaming);
+        assert!(!capabilities.supports_tool_calls);
         assert!(!capabilities.supports_parallel_tool_calls);
     }
 }

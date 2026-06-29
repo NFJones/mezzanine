@@ -245,7 +245,7 @@ kind = "claude-code"
 api = "claude-code"
 auth_profile = "default"
 # Claude Code uses authentication and transport configured outside Mezzanine.
-# Mezzanine passes the selected model id to the local Claude Code CLI.
+# Mezzanine passes the selected model id and reasoning effort to the local Claude Code CLI.
 models = [
     "claude-fable-5",
     "claude-opus-4-8",
@@ -318,6 +318,7 @@ fallback_profiles = []
 
 [model_profiles.anthropic-default.provider_options]
 prompt_caching = "enabled"
+reasoning_effort = "high"
 
 [model_profiles.anthropic-fast]
 provider = "anthropic"
@@ -335,6 +336,7 @@ fallback_profiles = []
 
 [model_profiles.anthropic-fast.provider_options]
 prompt_caching = "enabled"
+reasoning_effort = "medium"
 
 [model_profiles.default]
 provider = "openai"

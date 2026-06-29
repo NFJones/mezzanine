@@ -347,6 +347,13 @@ fn anthropic_messages_request_body(
         "messages": messages,
         "stream": stream,
     });
+    if let Some(effort) = request
+        .reasoning_effort
+        .as_deref()
+        .filter(|effort| !effort.is_empty())
+    {
+        body["output_config"] = serde_json::json!({ "effort": effort });
+    }
     if !system_parts.is_empty() {
         let system_text = system_parts.join("\n\n");
         body["system"] = if options.prompt_caching {
@@ -1504,6 +1511,50 @@ mod tests {
             value["messages"][0]["content"],
             "summarize this conversation"
         );
+    }
+
+    /// Verifies Anthropic request bodies serialize the provider-native effort
+    /// control through `output_config.effort`.
+    ///
+    /// Anthropic documents `output_config.effort` as the Messages API control
+    /// for response thoroughness and token efficiency. This regression keeps
+    /// Mezzanine model profile reasoning selections wired to that native field
+    /// without enabling the separate DeepSeek thinking toggle.
+    #[test]
+    fn anthropic_request_body_serializes_reasoning_effort() {
+        let request = ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-fable-5".to_string(),
+            reasoning_effort: Some("medium".to_string()),
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![crate::agent::ModelMessage {
+                role: crate::agent::ModelMessageRole::User,
+                source: crate::agent::ContextSourceKind::UserInstruction,
+                content: "summarize this conversation".to_string(),
+            }],
+        };
+
+        let body =
+            anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(value["output_config"]["effort"], "medium");
+        assert!(value.get("thinking").is_none(), "{value}");
     }
 
     /// Verifies empty system and developer messages do not create cached
