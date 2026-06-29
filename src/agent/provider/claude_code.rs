@@ -467,23 +467,216 @@ fn claude_code_spawn_error_is_transient(error: &std::io::Error) -> bool {
 
 /// Redacts common secret-bearing fragments from subprocess diagnostics.
 fn redact_claude_code_text(value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|token| {
-            let lower = token.to_ascii_lowercase();
-            if lower.contains("token")
-                || lower.contains("secret")
-                || lower.contains("apikey")
-                || lower.contains("api_key")
-                || lower.contains("authorization")
+    let mut ranges = Vec::new();
+    collect_bearer_secret_ranges(value, &mut ranges);
+    collect_secret_key_value_ranges(value, &mut ranges);
+    collect_openai_secret_key_ranges(value, &mut ranges);
+    apply_secret_redactions(value, ranges)
+}
+
+/// Records ranges for bearer credentials, including compact URL-style
+/// separators that whitespace tokenization would miss.
+fn collect_bearer_secret_ranges(value: &str, ranges: &mut Vec<(usize, usize)>) {
+    let mut index = 0;
+    while index < value.len() {
+        if !ascii_case_insensitive_starts_with_at(value, index, "bearer")
+            || !has_secret_left_boundary(value, index)
+        {
+            index = next_char_boundary(value, index);
+            continue;
+        }
+
+        let mut credential_start = index + "bearer".len();
+        let Some(separator) = value[credential_start..].chars().next() else {
+            break;
+        };
+        if !separator.is_whitespace()
+            && separator != '+'
+            && !ascii_case_insensitive_starts_with_at(value, credential_start, "%20")
+            && !ascii_case_insensitive_starts_with_at(value, credential_start, "%2b")
+        {
+            index = credential_start;
+            continue;
+        }
+
+        credential_start = skip_bearer_separators(value, credential_start);
+        let credential_end = secret_value_end(value, credential_start);
+        if credential_end > credential_start {
+            ranges.push((index, credential_end));
+            index = credential_end;
+        } else {
+            index = credential_start;
+        }
+    }
+}
+
+/// Records ranges for explicit secret-bearing key/value fields while avoiding
+/// substring matches such as `tokenization` or `access_token_count`.
+fn collect_secret_key_value_ranges(value: &str, ranges: &mut Vec<(usize, usize)>) {
+    const SECRET_KEYS: &[&str] = &[
+        "access_token",
+        "access-token",
+        "authorization",
+        "api_key",
+        "api-key",
+        "apikey",
+        "secret",
+        "token",
+    ];
+
+    let mut index = 0;
+    while index < value.len() {
+        let mut matched = false;
+        for key in SECRET_KEYS {
+            if !ascii_case_insensitive_starts_with_at(value, index, key)
+                || !has_secret_left_boundary(value, index)
             {
-                "[redacted]".to_string()
-            } else {
-                token.to_string()
+                continue;
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+
+            let Some(value_start) = secret_key_value_start(value, index + key.len()) else {
+                continue;
+            };
+            let value_end = secret_value_end(value, value_start);
+            if value_end > value_start {
+                ranges.push((index, value_end));
+                index = value_end;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            index = next_char_boundary(value, index);
+        }
+    }
+}
+
+/// Records ranges for OpenAI-style `sk-...` secret tokens embedded in compact
+/// diagnostics.
+fn collect_openai_secret_key_ranges(value: &str, ranges: &mut Vec<(usize, usize)>) {
+    let mut index = 0;
+    while index < value.len() {
+        if !value[index..].starts_with("sk-") || !has_secret_left_boundary(value, index) {
+            index = next_char_boundary(value, index);
+            continue;
+        }
+        let credential_start = index + "sk-".len();
+        if value[credential_start..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric())
+        {
+            index = credential_start;
+            continue;
+        }
+        let credential_end = secret_value_end(value, credential_start);
+        ranges.push((index, credential_end));
+        index = credential_end;
+    }
+}
+
+/// Returns the start index of a key/value secret value after a matched key.
+fn secret_key_value_start(value: &str, mut cursor: usize) -> Option<usize> {
+    if matches!(value[cursor..].chars().next(), Some('\'' | '"')) {
+        cursor = next_char_boundary(value, cursor);
+    }
+    if !matches!(value[cursor..].chars().next(), Some(':' | '=')) {
+        return None;
+    }
+    cursor = next_char_boundary(value, cursor);
+    while matches!(value[cursor..].chars().next(), Some(ch) if ch.is_whitespace()) {
+        cursor = next_char_boundary(value, cursor);
+    }
+    if matches!(value[cursor..].chars().next(), Some('\'' | '"')) {
+        cursor = next_char_boundary(value, cursor);
+    }
+    Some(cursor)
+}
+
+/// Skips separators that can appear between `Bearer` and its credential.
+fn skip_bearer_separators(value: &str, mut cursor: usize) -> usize {
+    loop {
+        if ascii_case_insensitive_starts_with_at(value, cursor, "%20")
+            || ascii_case_insensitive_starts_with_at(value, cursor, "%2b")
+        {
+            cursor += 3;
+            continue;
+        }
+        match value[cursor..].chars().next() {
+            Some(ch) if ch.is_whitespace() || ch == '+' => {
+                cursor += ch.len_utf8();
+            }
+            _ => break cursor,
+        }
+    }
+}
+
+/// Returns the end of a compact secret value without consuming surrounding
+/// structured punctuation.
+fn secret_value_end(value: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in value[start..].char_indices() {
+        if ch.is_whitespace() || matches!(ch, '\'' | '"' | ',' | ';' | ')' | ']' | '}' | '<' | '>')
+        {
+            return start + offset;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    end
+}
+
+/// Applies sorted and merged redaction ranges to diagnostic text.
+fn apply_secret_redactions(value: &str, mut ranges: Vec<(usize, usize)>) -> String {
+    ranges.retain(|(start, end)| start < end);
+    if ranges.is_empty() {
+        return value.to_string();
+    }
+
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut merged = Vec::<(usize, usize)>::new();
+    for (start, end) in ranges {
+        if let Some((_, last_end)) = merged.last_mut()
+            && start <= *last_end
+        {
+            *last_end = (*last_end).max(end);
+            continue;
+        }
+        merged.push((start, end));
+    }
+
+    let mut redacted = String::with_capacity(value.len());
+    let mut cursor = 0;
+    for (start, end) in merged {
+        redacted.push_str(&value[cursor..start]);
+        redacted.push_str("[redacted]");
+        cursor = end;
+    }
+    redacted.push_str(&value[cursor..]);
+    redacted
+}
+
+/// Reports whether an ASCII secret marker starts at a byte index.
+fn ascii_case_insensitive_starts_with_at(value: &str, start: usize, needle: &str) -> bool {
+    start.checked_add(needle.len()).is_some_and(|end| {
+        end <= value.len() && value.as_bytes()[start..end].eq_ignore_ascii_case(needle.as_bytes())
+    })
+}
+
+/// Reports whether a secret marker is not embedded inside an identifier-like
+/// word.
+fn has_secret_left_boundary(value: &str, start: usize) -> bool {
+    value[..start]
+        .chars()
+        .next_back()
+        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+}
+
+/// Advances one UTF-8 scalar from a valid string boundary.
+fn next_char_boundary(value: &str, index: usize) -> usize {
+    value[index..]
+        .chars()
+        .next()
+        .map_or(value.len(), |ch| index + ch.len_utf8())
 }
 
 /// Bounds diagnostic text retained from Claude Code stderr.
@@ -511,6 +704,36 @@ mod tests {
     };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Verifies Claude Code diagnostic redaction no longer uses broad
+    /// substring matching that corrupts ordinary words and metric names.
+    #[test]
+    fn claude_code_redaction_preserves_non_secret_substrings() {
+        let redacted = redact_claude_code_text(
+            "tokenization access_token_count secretive authorization_count",
+        );
+
+        assert_eq!(
+            redacted,
+            "tokenization access_token_count secretive authorization_count"
+        );
+    }
+
+    /// Verifies Claude Code diagnostic redaction catches structured and compact
+    /// secret shapes without depending on whitespace-delimited tokens.
+    #[test]
+    fn claude_code_redaction_targets_secret_patterns() {
+        let redacted = redact_claude_code_text(
+            r#"login auth="Bearer+sk-abc123" api_key=sk-def456 token=secret-value"#,
+        );
+
+        assert!(redacted.contains("login"), "{redacted}");
+        assert!(redacted.contains("[redacted]"), "{redacted}");
+        assert!(!redacted.contains("Bearer"), "{redacted}");
+        assert!(!redacted.contains("sk-abc123"), "{redacted}");
+        assert!(!redacted.contains("sk-def456"), "{redacted}");
+        assert!(!redacted.contains("secret-value"), "{redacted}");
+    }
 
     /// Verifies executable-busy subprocess spawn failures are treated as
     /// transient so parallel test fixtures and real CLI upgrades can recover
