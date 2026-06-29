@@ -187,14 +187,14 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                         &claude_code_system_prompt(request, None),
                         &claude_code_prompt(request, None),
                         self.timeout_ms,
-                        false,
+                        true,
                     )
                     .await?;
                     if output.assistant_text.is_empty() {
                         return Err(claude_code_empty_output_error(&output.stderr));
                     }
                     validate_claude_code_auto_sizing_output(&output.assistant_text)?;
-                    (output.assistant_text, ModelTokenUsage::default(), None)
+                    (output.assistant_text, output.usage, None)
                 } else {
                     let output = run_claude_code_request_with_corrective_retry(
                         &self.program,
@@ -1887,7 +1887,7 @@ exit 0
             r#"#!/bin/sh
 cat >/dev/null
 cat <<'EOF'
-{"version":1,"size":"medium","reasoning_effort":"high","confidence":0.82,"rationale":"coding task needs a medium model"}
+{"type":"result","subtype":"success","is_error":false,"result":"{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}","usage":{"input_tokens":7,"output_tokens":11,"cache_creation_input_tokens":13,"cache_read_input_tokens":17}}
 EOF
 "#,
         );
@@ -1903,6 +1903,10 @@ EOF
             response.raw_text.trim(),
             "{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}"
         );
+        assert_eq!(response.usage.input_tokens, 24);
+        assert_eq!(response.usage.output_tokens, 11);
+        assert_eq!(response.usage.cached_input_tokens, Some(17));
+        assert_eq!(response.usage.cache_write_input_tokens, Some(13));
     }
 
     /// Verifies malformed Claude Code auto-sizing responses fail validation so
@@ -1945,7 +1949,7 @@ printf '%s\n' 'plain assistant text without router json'
             r#"#!/bin/sh
 cat >/dev/null
 cat <<'EOF'
-{"version":1,"size":"giant","reasoning_effort":"high","confidence":1.5,"rationale":""}
+{"type":"result","subtype":"success","is_error":false,"result":"{\"version\":1,\"size\":\"giant\",\"reasoning_effort\":\"high\",\"confidence\":1.5,\"rationale\":\"\"}","usage":{"input_tokens":3,"output_tokens":5}}
 EOF
 "#,
         );
