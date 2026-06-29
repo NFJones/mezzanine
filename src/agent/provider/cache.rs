@@ -409,6 +409,20 @@ pub(super) fn openai_prompt_cache_retention_request_value(
     }
 }
 
+/// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
+pub(super) fn openai_service_tier_for_latency_preference(
+    preference: Option<&str>,
+) -> Result<Option<&'static str>> {
+    match preference.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("slow") | Some("default") => Ok(Some("default")),
+        None => Ok(None),
+        Some("fast") => Ok(Some("priority")),
+        Some(other) => Err(MezError::invalid_args(format!(
+            "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
+        ))),
+    }
+}
+
 /// Reports whether one OpenAI model id is known to support extended prompt cache retention.
 fn openai_model_supports_extended_prompt_cache_retention(model: &str) -> bool {
     let model = model.trim();
@@ -461,6 +475,14 @@ fn openai_gpt_model_version_at_least(model: &str, min_major: u16, min_minor: u16
 pub fn openai_prompt_cache_diagnostics_for_request(
     request: &ModelRequest,
 ) -> Result<OpenAiPromptCacheDiagnostics> {
+    openai_prompt_cache_diagnostics_for_request_with_stream(request, false)
+}
+
+/// Returns non-model-visible OpenAI prompt-cache diagnostics for one request and stream mode.
+pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
+    request: &ModelRequest,
+    stream: bool,
+) -> Result<OpenAiPromptCacheDiagnostics> {
     validate_non_empty("OpenAI model", &request.model)?;
     let rendered = openai_render_request_messages(request)?;
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
@@ -506,10 +528,11 @@ pub fn openai_prompt_cache_diagnostics_for_request(
         "cache_family": "responses-request-shape-v1",
         "model": request.model,
         "reasoning_effort": request.reasoning_effort,
-        "latency_preference": request.latency_preference,
+        "service_tier": openai_service_tier_for_latency_preference(request.latency_preference.as_deref())?,
         "prompt_cache_retention": openai_prompt_cache_retention_request_value(request)?,
         "parallel_tool_calls": false,
         "store": false,
+        "stream": stream,
         "response_format": response_format,
         "tools": tools,
         "tool_choice": tool_choice,

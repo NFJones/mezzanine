@@ -8,6 +8,7 @@
 use super::cache::{
     openai_prompt_cache_key, openai_prompt_cache_retention_request_value,
     openai_render_request_messages, openai_response_format,
+    openai_service_tier_for_latency_preference,
 };
 use super::schema::openai_maap_action_batch_tools;
 use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
@@ -75,18 +76,4 @@ pub(super) fn openai_responses_request_body_with_stream(
     serde_json::to_string(&body).map_err(|error| {
         MezError::invalid_state(format!("OpenAI request encoding failed: {error}"))
     })
-}
-
-/// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
-fn openai_service_tier_for_latency_preference(
-    preference: Option<&str>,
-) -> Result<Option<&'static str>> {
-    match preference.map(str::trim).filter(|value| !value.is_empty()) {
-        Some("slow") | Some("default") => Ok(Some("default")),
-        None => Ok(None),
-        Some("fast") => Ok(Some("priority")),
-        Some(other) => Err(MezError::invalid_args(format!(
-            "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
-        ))),
-    }
 }
