@@ -787,5 +787,6 @@ fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
             .get("prompt_tokens_details")
             .and_then(|details| details.get("cached_tokens"))
             .and_then(serde_json::Value::as_u64),
+        cache_write_input_tokens: None,
     }
 }

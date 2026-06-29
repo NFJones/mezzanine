@@ -4211,6 +4211,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
     );
     service.record_agent_provider_token_usage(
@@ -4220,6 +4221,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             output_tokens: 0,
             reasoning_tokens: 0,
             cached_input_tokens: None,
+            cache_write_input_tokens: None,
         },
     );
     let deepseek_profile = runtime_model_profile("deepseek", "deepseek-chat");
@@ -4230,12 +4232,14 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
         },
         Some(&deepseek_profile),
     );
@@ -4246,6 +4250,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             output_tokens: 10,
             reasoning_tokens: 4,
             cached_input_tokens: Some(30),
+            cache_write_input_tokens: None,
         },
     );
     service.runtime_metrics.record_provider_token_usage(
@@ -4254,12 +4259,14 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             output_tokens: 75,
             reasoning_tokens: 15,
             cached_input_tokens: Some(120),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 300,
             output_tokens: 75,
             reasoning_tokens: 15,
             cached_input_tokens: Some(120),
+            cache_write_input_tokens: None,
         },
         &crate::agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
     );
@@ -4373,6 +4380,7 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
         output_tokens: 34,
         reasoning_tokens: 9,
         cached_input_tokens: Some(80),
+        cache_write_input_tokens: None,
     };
     service.record_agent_provider_token_usage_with_profile(
         "%1",
@@ -4389,6 +4397,7 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
         output_tokens: 0,
         reasoning_tokens: 0,
         cached_input_tokens: None,
+        cache_write_input_tokens: None,
     };
     service.record_agent_provider_token_usage_with_profile(
         "%1",
@@ -4426,12 +4435,14 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 120,
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
         &crate::agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
     );
@@ -4441,12 +4452,14 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
         },
         &crate::agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
     );

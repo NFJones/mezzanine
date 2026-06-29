@@ -671,6 +671,7 @@ reasoning_profile = "high"
             output_tokens: 10,
             reasoning_tokens: 3,
             cached_input_tokens: Some(30),
+            cache_write_input_tokens: None,
         })
     );
     let status = service.dispatch_runtime_control_body(
@@ -4152,6 +4153,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         output_tokens: 45,
         reasoning_tokens: 12,
         cached_input_tokens: Some(123),
+        cache_write_input_tokens: None,
     };
     service.record_agent_provider_token_usage("%1", saved_token_usage);
     let routing = service.dispatch_runtime_control_body(
@@ -4301,6 +4303,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         output_tokens: 80,
         reasoning_tokens: 33,
         cached_input_tokens: Some(450),
+        cache_write_input_tokens: None,
     };
     transcript_store
         .save_agent_session_metadata(
@@ -4327,7 +4330,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                     input_tokens: 420,
                     context_window_tokens: 1000,
                     cached_input_tokens: Some(450),
-                }),
+                        }),
                 token_usage: saved_token_usage,
                 token_usage_by_model: std::collections::BTreeMap::from([(
                     saved_token_usage_key.clone(),
@@ -4414,12 +4417,14 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
             output_tokens: 20,
             reasoning_tokens: 5,
             cached_input_tokens: Some(25),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 100,
             output_tokens: 20,
             reasoning_tokens: 5,
             cached_input_tokens: Some(25),
+            cache_write_input_tokens: None,
         },
         Some(&profile),
     );
@@ -4444,7 +4449,8 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 output_tokens: 100,
                 reasoning_tokens: 38,
                 cached_input_tokens: Some(475),
-            },
+                cache_write_input_tokens: None,
+                },
         )]),
         "{resumed_metadata:#?}"
     );

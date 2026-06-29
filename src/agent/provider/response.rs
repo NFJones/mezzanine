@@ -240,6 +240,7 @@ fn openai_token_usage_from_response_value(value: &serde_json::Value) -> ModelTok
             ],
         ),
         cached_input_tokens: openai_cached_input_tokens(usage),
+        cache_write_input_tokens: None,
     }
 }
 

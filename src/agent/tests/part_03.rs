@@ -117,6 +117,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
             output_tokens: 6,
             reasoning_tokens: 0,
             cached_input_tokens: None,
+            cache_write_input_tokens: None,
         })
     );
     let batch = response.action_batch.unwrap();
@@ -504,6 +505,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 output_tokens: 20,
                 reasoning_tokens: 5,
                 cached_input_tokens: Some(300),
+                cache_write_input_tokens: None,
             },
             latest_request_usage: None,
             quota_usage: Default::default(),
@@ -527,6 +529,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
                 output_tokens: 30,
                 reasoning_tokens: 7,
                 cached_input_tokens: Some(80),
+                cache_write_input_tokens: None,
             },
             latest_request_usage: None,
             quota_usage: Default::default(),

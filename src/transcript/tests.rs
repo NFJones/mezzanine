@@ -551,6 +551,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         output_tokens: 20,
         reasoning_tokens: 5,
         cached_input_tokens: Some(80),
+        cache_write_input_tokens: None,
     };
     let owned = AgentSessionMetadata {
         mezzanine_session_id: "$live".to_string(),

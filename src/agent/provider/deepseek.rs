@@ -1007,6 +1007,7 @@ fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
         cached_input_tokens: usage
             .get("prompt_cache_hit_tokens")
             .and_then(serde_json::Value::as_u64),
+        cache_write_input_tokens: None,
     }
 }
 

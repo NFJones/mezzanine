@@ -846,6 +846,9 @@ fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUs
         cached_input_tokens: value
             .get("cache_read_input_tokens")
             .and_then(serde_json::Value::as_u64),
+        cache_write_input_tokens: value
+            .get("cache_creation_input_tokens")
+            .and_then(serde_json::Value::as_u64),
     }
 }
 
@@ -863,6 +866,9 @@ fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&serde_j
     }
     if next.cached_input_tokens.is_some() {
         current.cached_input_tokens = next.cached_input_tokens;
+    }
+    if next.cache_write_input_tokens.is_some() {
+        current.cache_write_input_tokens = next.cache_write_input_tokens;
     }
 }
 
@@ -1124,6 +1130,38 @@ mod tests {
 
         assert_eq!(provider.provider_id(), "anthropic");
         assert_eq!(provider.endpoint, ANTHROPIC_MESSAGES_ENDPOINT);
+    }
+
+    /// Verifies Anthropic usage parsing keeps prompt-cache read and write
+    /// counters distinct.
+    ///
+    /// Anthropic reports prompt-cache hits as `cache_read_input_tokens` and
+    /// prompt-cache writes as `cache_creation_input_tokens`. The provider must
+    /// preserve both counters so downstream accounting can distinguish cached
+    /// reads from newly written cache tokens.
+    #[test]
+    fn anthropic_usage_parses_cache_creation_tokens() {
+        let usage = anthropic_usage_from_value(Some(&serde_json::json!({
+            "input_tokens": 42,
+            "output_tokens": 9,
+            "cache_read_input_tokens": 7,
+            "cache_creation_input_tokens": 11
+        })));
+
+        assert_eq!(usage.input_tokens, 42);
+        assert_eq!(usage.output_tokens, 9);
+        assert_eq!(usage.cached_input_tokens, Some(7));
+        assert_eq!(usage.cache_write_input_tokens, Some(11));
+
+        let mut overlaid = ModelTokenUsage::default();
+        anthropic_overlay_usage(
+            &mut overlaid,
+            Some(&serde_json::json!({
+                "cache_creation_input_tokens": 13
+            })),
+        );
+
+        assert_eq!(overlaid.cache_write_input_tokens, Some(13));
     }
 
     /// Verifies Anthropic native `tool_use` blocks are translated into one

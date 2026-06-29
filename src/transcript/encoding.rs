@@ -488,6 +488,7 @@ impl AgentSessionMetadata {
                     .filter(|value| !value.is_empty())
                     .map(|value| parse_u64(value, "agent session cached_input_tokens"))
                     .transpose()?,
+                cache_write_input_tokens: None,
             }
         } else {
             ModelTokenUsage::default()
@@ -606,6 +607,7 @@ fn decode_token_usage_by_model(
             output_tokens: json_u64_field(object, "output_tokens")?,
             reasoning_tokens: json_u64_field(object, "reasoning_tokens")?,
             cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,
+            cache_write_input_tokens: None,
         };
         usage_by_model
             .entry(ModelTokenUsageKey::new(provider, model))

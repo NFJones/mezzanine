@@ -1321,6 +1321,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
                     output_tokens: 10,
                     reasoning_tokens: 3,
                     cached_input_tokens: Some(30),
+                    cache_write_input_tokens: None,
                 },
                 latest_request_usage: None,
                 quota_usage: Default::default(),
@@ -1338,6 +1339,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
             output_tokens: 40,
             reasoning_tokens: 12,
             cached_input_tokens: Some(50),
+            cache_write_input_tokens: None,
         };
         Ok(response)
     }

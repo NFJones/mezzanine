@@ -897,6 +897,7 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
     );
     let recorded_config = service
@@ -918,12 +919,14 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
             output_tokens: 10,
             reasoning_tokens: 5,
             cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 251,
             output_tokens: 10,
             reasoning_tokens: 5,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
         Some(&profile),
     );
@@ -949,12 +952,14 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
             output_tokens: 10,
             reasoning_tokens: 5,
             cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
         },
         crate::agent::ModelTokenUsage {
             input_tokens: 1_200,
             output_tokens: 10,
             reasoning_tokens: 5,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
         Some(&profile),
     );
@@ -1023,6 +1028,7 @@ fn runtime_frame_context_uses_known_openai_model_context_window() {
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
     );
     let config = service
@@ -1088,6 +1094,7 @@ fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
+            cache_write_input_tokens: None,
         },
     );
     let config = service

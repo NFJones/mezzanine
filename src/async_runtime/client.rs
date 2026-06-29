@@ -2682,6 +2682,7 @@ mod tests {
                         output_tokens: 7,
                         reasoning_tokens: 3,
                         cached_input_tokens: Some(11),
+                        cache_write_input_tokens: None,
                     },
                     latest_request_usage: None,
                     quota_usage: Vec::new(),

@@ -233,6 +233,8 @@ pub struct ModelTokenUsage {
     pub reasoning_tokens: u64,
     /// Input tokens served from the provider prompt cache, when reported.
     pub cached_input_tokens: Option<u64>,
+    /// Input tokens written into the provider prompt cache, when reported.
+    pub cache_write_input_tokens: Option<u64>,
 }
 
 impl ModelTokenUsage {
@@ -247,6 +249,15 @@ impl ModelTokenUsage {
             (Some(current), None) => Some(current),
             (None, None) => None,
         };
+        self.cache_write_input_tokens = match (
+            self.cache_write_input_tokens,
+            other.cache_write_input_tokens,
+        ) {
+            (Some(current), Some(next)) => Some(current.saturating_add(next)),
+            (None, Some(next)) => Some(next),
+            (Some(current), None) => Some(current),
+            (None, None) => None,
+        };
     }
 
     /// Returns true when the provider did not report any token usage.
@@ -255,6 +266,7 @@ impl ModelTokenUsage {
             && self.output_tokens == 0
             && self.reasoning_tokens == 0
             && self.cached_input_tokens.unwrap_or(0) == 0
+            && self.cache_write_input_tokens.unwrap_or(0) == 0
     }
 
     /// Returns provider-visible total tokens when input and output are known.
