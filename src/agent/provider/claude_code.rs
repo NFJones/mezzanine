@@ -168,32 +168,112 @@ impl AsyncModelProvider for ClaudeCodeProvider {
 
 /// Builds the text prompt passed to the Claude Code CLI.
 fn claude_code_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
+    let final_user_index = request
+        .messages
+        .iter()
+        .rposition(|message| message.role == ModelMessageRole::User);
     let mut prompt = String::new();
-    for message in &request.messages {
-        let role = match message.role {
-            ModelMessageRole::System => "system",
-            ModelMessageRole::Developer => "developer",
-            ModelMessageRole::User => "user",
-            ModelMessageRole::Assistant => "assistant",
-            ModelMessageRole::Tool => "tool",
-        };
-        prompt.push('<');
-        prompt.push_str(role);
-        prompt.push_str(">\n");
-        prompt.push_str(&message.content);
-        prompt.push_str("\n</");
-        prompt.push_str(role);
-        prompt.push_str(">\n\n");
-    }
-    if let Some(retry_instruction) = retry_instruction {
-        prompt.push_str("<developer>\n");
-        prompt.push_str(retry_instruction);
-        prompt.push_str("\n</developer>\n\n");
-    }
+
+    append_claude_code_instruction_framing(&mut prompt, request, retry_instruction);
+    append_claude_code_prior_context(&mut prompt, request, final_user_index);
+    append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
+
+    prompt.push_str("Output contract:\n");
     prompt.push_str(
         "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly.\n",
     );
     prompt
+}
+
+/// Appends system, developer, and retry instructions as provider framing rather
+/// than pretending Claude Code `--print` accepts a structured role transcript.
+fn append_claude_code_instruction_framing(
+    prompt: &mut String,
+    request: &ModelRequest,
+    retry_instruction: Option<&str>,
+) {
+    let has_instruction_framing = request.messages.iter().any(|message| {
+        matches!(
+            message.role,
+            ModelMessageRole::System | ModelMessageRole::Developer
+        )
+    }) || retry_instruction.is_some();
+
+    if !has_instruction_framing {
+        return;
+    }
+
+    prompt.push_str("Instruction framing for Claude Code:\n");
+    for message in &request.messages {
+        let label = match message.role {
+            ModelMessageRole::System => Some("System instruction"),
+            ModelMessageRole::Developer => Some("Developer instruction"),
+            ModelMessageRole::User | ModelMessageRole::Assistant | ModelMessageRole::Tool => None,
+        };
+        if let Some(label) = label {
+            append_claude_code_section(prompt, label, &message.content);
+        }
+    }
+    if let Some(retry_instruction) = retry_instruction {
+        append_claude_code_section(prompt, "Developer retry instruction", retry_instruction);
+    }
+}
+
+/// Appends non-instruction messages other than the final user turn as bounded
+/// conversation context so they are not presented as the current user prompt.
+fn append_claude_code_prior_context(
+    prompt: &mut String,
+    request: &ModelRequest,
+    final_user_index: Option<usize>,
+) {
+    let mut wrote_heading = false;
+    for (index, message) in request.messages.iter().enumerate() {
+        if Some(index) == final_user_index
+            || matches!(
+                message.role,
+                ModelMessageRole::System | ModelMessageRole::Developer
+            )
+        {
+            continue;
+        }
+
+        if !wrote_heading {
+            prompt.push_str("Prior conversation context (not the current user request):\n");
+            wrote_heading = true;
+        }
+
+        let label = match message.role {
+            ModelMessageRole::User => "Previous user message",
+            ModelMessageRole::Assistant => "Previous assistant message",
+            ModelMessageRole::Tool => "Previous tool result",
+            ModelMessageRole::System | ModelMessageRole::Developer => unreachable!(),
+        };
+        append_claude_code_section(prompt, label, &message.content);
+    }
+}
+
+/// Appends the last user message as Claude Code's current prompt, falling back
+/// to instruction-only execution when callers provide no explicit user turn.
+fn append_claude_code_current_user_prompt(
+    prompt: &mut String,
+    request: &ModelRequest,
+    final_user_index: Option<usize>,
+) {
+    prompt.push_str("Current user request:\n");
+    if let Some(index) = final_user_index {
+        prompt.push_str(&request.messages[index].content);
+    } else {
+        prompt.push_str("Follow the instruction framing above.");
+    }
+    prompt.push_str("\n\n");
+}
+
+/// Appends one labeled plaintext section to the prompt with clear delimiters.
+fn append_claude_code_section(prompt: &mut String, label: &str, content: &str) {
+    prompt.push_str(label);
+    prompt.push_str(":\n");
+    prompt.push_str(content);
+    prompt.push_str("\n\n");
 }
 
 /// Reports whether Claude Code output should receive one corrective retry.
@@ -436,6 +516,107 @@ mod tests {
         assert!(claude_code_spawn_error_is_transient(&error));
     }
 
+    /// Verifies Claude Code prompt construction respects the CLI's single
+    /// stdin prompt contract by framing authoritative instructions separately,
+    /// preserving prior turns only as context, and isolating the final user
+    /// message as the current request.
+    #[test]
+    fn claude_code_prompt_isolates_final_user_request() {
+        let mut request = claude_request();
+        request.messages = vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::UserInstruction,
+                content: "System authority.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::UserInstruction,
+                content: "Developer authority.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "Earlier user turn.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                source: ContextSourceKind::RuntimeHint,
+                content: "Earlier assistant turn.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Tool,
+                source: ContextSourceKind::ActionResult,
+                content: "Prior tool result.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "Final user request.".to_string(),
+            },
+        ];
+
+        let prompt = claude_code_prompt(&request, Some("Retry with a valid MAAP batch."));
+
+        assert!(
+            prompt.contains("Instruction framing for Claude Code:"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("System instruction:\nSystem authority."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Developer instruction:\nDeveloper authority."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Developer retry instruction:\nRetry with a valid MAAP batch."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Prior conversation context (not the current user request):"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Previous user message:\nEarlier user turn."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Previous assistant message:\nEarlier assistant turn."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Previous tool result:\nPrior tool result."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Current user request:\nFinal user request."),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("<system>"), "{prompt}");
+        assert!(!prompt.contains("<developer>"), "{prompt}");
+        assert!(!prompt.contains("<assistant>"), "{prompt}");
+        assert!(!prompt.contains("<tool>"), "{prompt}");
+    }
+
+    /// Verifies instruction-only Claude Code requests still produce a current
+    /// request section instead of recreating role-tagged transcript blocks.
+    #[test]
+    fn claude_code_prompt_handles_instruction_only_requests() {
+        let prompt = claude_code_prompt(&claude_request(), None);
+
+        assert!(
+            prompt.contains("Developer instruction:\nReturn a final say action."),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("Current user request:\nFollow the instruction framing above."),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("<developer>"), "{prompt}");
+    }
+
     /// Verifies that Claude Code subprocess output is parsed as MAAP and that
     /// the adapter invokes a model-only print request with direct tools denied.
     #[tokio::test]
@@ -484,7 +665,7 @@ EOF
         assert!(args.contains("--disallowedTools"), "{args}");
         assert!(args.contains('*'), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
-        assert!(stdin.contains("<developer>"), "{stdin}");
+        assert!(stdin.contains("Developer instruction:"), "{stdin}");
         assert!(
             stdin.contains("Do not run tools or mutate files directly"),
             "{stdin}"
