@@ -767,7 +767,13 @@ fn anthropic_stop_reason_error(
             .with_provider_failure_json(base.to_string())
             .with_provider_raw_text(raw_text.to_string()),
         ),
-        _ => None,
+        _ => Some(
+            MezError::invalid_state(format!(
+                "Anthropic Messages response ended with unrecognized stop_reason `{stop_reason}`"
+            ))
+            .with_provider_failure_json(base.to_string())
+            .with_provider_raw_text(raw_text.to_string()),
+        ),
     }
 }
 
@@ -1379,6 +1385,29 @@ mod tests {
             provider_error_retry_class(&error),
             ProviderErrorRetryClass::NonRetryable
         );
+    }
+
+    /// Verifies newly introduced or vendor-specific Anthropic stop reasons are
+    /// surfaced as provider diagnostics instead of silently converting a
+    /// potentially incomplete response into a successful turn.
+    #[test]
+    fn anthropic_unknown_stop_reason_is_terminal() {
+        let error = anthropic_stop_reason_error(Some("future_reason"), "partial", true).unwrap();
+
+        assert!(
+            error
+                .message()
+                .contains("unrecognized stop_reason `future_reason`"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::NonRetryable
+        );
+        assert_eq!(error.provider_raw_text(), Some("partial"));
+        let failure_json = error.provider_failure_json().unwrap();
+        assert!(failure_json.contains("future_reason"), "{failure_json}");
     }
 
     /// Verifies Anthropic action-execution requests advertise one provider-native
