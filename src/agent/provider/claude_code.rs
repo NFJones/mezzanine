@@ -12,9 +12,11 @@ use super::{
     parse_fenced_maap_action_batch_for_turn, provider_maap_parse_error, validate_non_empty,
 };
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -27,6 +29,15 @@ const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was inv
 const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response was empty. Return only one validated Mezzanine MAAP action batch fenced in ```mezzanine-action-json``` with no surrounding prose.";
 /// Maximum stderr bytes retained in provider diagnostics.
 const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
+/// Number of short retries after Claude reports a session lock is still active.
+const CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS: usize = 4;
+/// Delay between Claude Code session-lock retries.
+const CLAUDE_CODE_SESSION_LOCK_RETRY_DELAY_MS: u64 = 50;
+
+/// Process-local registry for serializing Claude Code print invocations by
+/// stable Claude session id.
+static CLAUDE_CODE_SESSION_STATES: OnceLock<Mutex<BTreeMap<String, Arc<ClaudeCodeSessionState>>>> =
+    OnceLock::new();
 
 /// Captures one Claude Code subprocess completion for retry and validation.
 struct ClaudeCodeSubprocessOutput {
@@ -40,6 +51,35 @@ struct ClaudeCodeRequestOutput {
     raw_text: String,
     usage: ModelTokenUsage,
     latest_request_usage: Option<ModelTokenUsage>,
+}
+
+/// Tracks one Claude Code conversation id across short-lived print subprocesses.
+struct ClaudeCodeSessionState {
+    lock: tokio::sync::Mutex<()>,
+}
+
+impl ClaudeCodeSessionState {
+    /// Creates unlocked Claude session state.
+    fn new() -> Self {
+        Self {
+            lock: tokio::sync::Mutex::new(()),
+        }
+    }
+}
+
+/// Borrowed state for one locked Claude Code conversation.
+#[derive(Clone, Copy)]
+struct ClaudeCodeSessionRef<'a> {
+    session_id: &'a str,
+}
+
+/// Selects the Claude Code CLI session flag for one subprocess.
+#[derive(Clone, Copy)]
+enum ClaudeCodeSessionInvocation<'a> {
+    /// Create a subprocess conversation with a caller-provided id.
+    Create { session_id: &'a str },
+    /// Resume an existing subprocess conversation.
+    Resume { session_id: &'a str },
 }
 
 /// Stores the Claude Code JSON usage counters relevant to provider accounting.
@@ -409,7 +449,7 @@ fn validate_claude_code_auto_sizing_output(raw_text: &str) -> Result<()> {
 }
 
 /// Returns the Claude Code session id used to resume one Mez conversation.
-fn claude_code_session_id(request: &ModelRequest) -> String {
+fn claude_code_session_id(request: &ModelRequest) -> Option<String> {
     if let Some(session_id) = request
         .prompt_cache_session_id
         .as_deref()
@@ -417,9 +457,11 @@ fn claude_code_session_id(request: &ModelRequest) -> String {
         .filter(|session_id| !session_id.is_empty())
     {
         if claude_code_uuid_is_valid(session_id) {
-            return session_id.to_ascii_lowercase();
+            return Some(session_id.to_ascii_lowercase());
         }
-        return claude_code_uuid_from_stable_key(&format!("session:{session_id}"));
+        return Some(claude_code_uuid_from_stable_key(&format!(
+            "session:{session_id}"
+        )));
     }
     if let Some(lineage_id) = request
         .prompt_cache_lineage_id
@@ -427,12 +469,23 @@ fn claude_code_session_id(request: &ModelRequest) -> String {
         .map(str::trim)
         .filter(|lineage_id| !lineage_id.is_empty())
     {
-        return claude_code_uuid_from_stable_key(&format!("lineage:{lineage_id}"));
+        return Some(claude_code_uuid_from_stable_key(&format!(
+            "lineage:{lineage_id}"
+        )));
     }
-    claude_code_uuid_from_stable_key(&format!(
-        "provider:{}\nagent:{}",
-        request.provider, request.agent_id
-    ))
+    None
+}
+
+/// Returns shared process-local state for one Claude Code session id.
+fn claude_code_session_state(session_id: &str) -> Arc<ClaudeCodeSessionState> {
+    let registry = CLAUDE_CODE_SESSION_STATES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut sessions = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    sessions
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(ClaudeCodeSessionState::new()))
+        .clone()
 }
 
 /// Reports whether a string already has Claude's UUID-shaped session id form.
@@ -482,10 +535,18 @@ async fn run_claude_code_request_with_corrective_retry(
     timeout_ms: u64,
 ) -> Result<ClaudeCodeRequestOutput> {
     let session_id = claude_code_session_id(request);
+    let session_state = session_id.as_deref().map(claude_code_session_state);
+    let _session_guard = match session_state.as_ref() {
+        Some(state) => Some(state.lock.lock().await),
+        None => None,
+    };
+    let session = session_id
+        .as_deref()
+        .map(|session_id| ClaudeCodeSessionRef { session_id });
     let first_output = run_claude_code_subprocess(
         program,
         &request.model,
-        Some(&session_id),
+        session,
         &claude_code_system_prompt(request, None),
         &claude_code_prompt(request, None),
         timeout_ms,
@@ -507,7 +568,7 @@ async fn run_claude_code_request_with_corrective_retry(
     let retry_output = run_claude_code_subprocess(
         program,
         &request.model,
-        Some(&session_id),
+        session,
         &claude_code_system_prompt(request, Some(retry_instruction)),
         &claude_code_prompt(request, Some(retry_instruction)),
         timeout_ms,
@@ -531,7 +592,110 @@ async fn run_claude_code_request_with_corrective_retry(
 async fn run_claude_code_subprocess(
     program: &str,
     model: &str,
-    session_id: Option<&str>,
+    session: Option<ClaudeCodeSessionRef<'_>>,
+    system_prompt: &str,
+    prompt: &str,
+    timeout_ms: u64,
+    json_output: bool,
+) -> Result<ClaudeCodeSubprocessOutput> {
+    let Some(session) = session else {
+        return run_claude_code_subprocess_with_session_invocation(
+            program,
+            model,
+            None,
+            system_prompt,
+            prompt,
+            timeout_ms,
+            json_output,
+        )
+        .await;
+    };
+
+    run_claude_code_resume_subprocess(
+        program,
+        model,
+        session,
+        system_prompt,
+        prompt,
+        timeout_ms,
+        json_output,
+    )
+    .await
+}
+
+/// Invokes an initialized Claude Code conversation through `--resume`.
+async fn run_claude_code_resume_subprocess(
+    program: &str,
+    model: &str,
+    session: ClaudeCodeSessionRef<'_>,
+    system_prompt: &str,
+    prompt: &str,
+    timeout_ms: u64,
+    json_output: bool,
+) -> Result<ClaudeCodeSubprocessOutput> {
+    for attempt in 0..=CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS {
+        let result = run_claude_code_subprocess_with_session_invocation(
+            program,
+            model,
+            Some(ClaudeCodeSessionInvocation::Resume {
+                session_id: session.session_id,
+            }),
+            system_prompt,
+            prompt,
+            timeout_ms,
+            json_output,
+        )
+        .await;
+        match result {
+            Ok(output) => return Ok(output),
+            Err(error)
+                if claude_code_error_indicates_active_session(&error)
+                    && attempt < CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS =>
+            {
+                tokio::time::sleep(Duration::from_millis(
+                    CLAUDE_CODE_SESSION_LOCK_RETRY_DELAY_MS,
+                ))
+                .await;
+            }
+            Err(error) if claude_code_error_indicates_missing_session(&error) => {
+                let create_result = run_claude_code_subprocess_with_session_invocation(
+                    program,
+                    model,
+                    Some(ClaudeCodeSessionInvocation::Create {
+                        session_id: session.session_id,
+                    }),
+                    system_prompt,
+                    prompt,
+                    timeout_ms,
+                    json_output,
+                )
+                .await;
+                match create_result {
+                    Ok(output) => return Ok(output),
+                    Err(error)
+                        if claude_code_error_indicates_existing_session(&error)
+                            && attempt < CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(
+                            CLAUDE_CODE_SESSION_LOCK_RETRY_DELAY_MS,
+                        ))
+                        .await;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded Claude Code resume retry loop always returns")
+}
+
+/// Invokes Claude Code in print mode with an explicit session flag selection.
+async fn run_claude_code_subprocess_with_session_invocation(
+    program: &str,
+    model: &str,
+    session: Option<ClaudeCodeSessionInvocation<'_>>,
     system_prompt: &str,
     prompt: &str,
     timeout_ms: u64,
@@ -546,8 +710,14 @@ async fn run_claude_code_subprocess(
             .arg(model)
             .arg("--disallowedTools")
             .arg("*");
-        if let Some(session_id) = session_id {
-            command.arg("--session-id").arg(session_id);
+        match session {
+            Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
+                command.arg("--session-id").arg(session_id);
+            }
+            Some(ClaudeCodeSessionInvocation::Resume { session_id }) => {
+                command.arg("--resume").arg(session_id);
+            }
+            None => {}
         }
         if !system_prompt.is_empty() {
             command.arg("--system-prompt").arg(system_prompt);
@@ -637,6 +807,50 @@ async fn run_claude_code_subprocess(
 /// one immediate retry before surfacing a provider setup failure.
 fn claude_code_spawn_error_is_transient(error: &std::io::Error) -> bool {
     error.raw_os_error() == Some(26)
+}
+
+/// Reports whether Claude Code says the requested session already exists or is
+/// still locked by a recent invocation.
+fn claude_code_error_indicates_existing_session(error: &MezError) -> bool {
+    let text = claude_code_error_search_text(error);
+    claude_code_error_indicates_active_session_text(&text)
+        || text.contains("already exists")
+        || (text.contains("session id") && text.contains("already"))
+}
+
+/// Reports whether Claude Code says the requested session is currently locked.
+fn claude_code_error_indicates_active_session(error: &MezError) -> bool {
+    claude_code_error_indicates_active_session_text(&claude_code_error_search_text(error))
+}
+
+/// Reports whether Claude Code says a resume target is absent.
+fn claude_code_error_indicates_missing_session(error: &MezError) -> bool {
+    let text = claude_code_error_search_text(error);
+    (text.contains("session") || text.contains("conversation"))
+        && (text.contains("not found")
+            || text.contains("does not exist")
+            || text.contains("could not find")
+            || text.contains("no conversation")
+            || text.contains("unknown"))
+}
+
+/// Reports whether normalized diagnostic text describes an active session lock.
+fn claude_code_error_indicates_active_session_text(text: &str) -> bool {
+    (text.contains("session") || text.contains("conversation"))
+        && (text.contains("already in use")
+            || text.contains("currently in use")
+            || text.contains("is in use")
+            || text.contains("locked"))
+}
+
+/// Builds lowercase diagnostic text for session error classifiers.
+fn claude_code_error_search_text(error: &MezError) -> String {
+    let mut text = error.message().to_string();
+    if let Some(raw) = error.provider_raw_text() {
+        text.push('\n');
+        text.push_str(raw);
+    }
+    text.to_ascii_lowercase()
 }
 
 /// Redacts common secret-bearing fragments from subprocess diagnostics.
@@ -925,18 +1139,20 @@ mod tests {
     #[test]
     fn claude_code_session_id_uses_stable_mez_session_key() {
         let mut request = claude_request();
+        assert_eq!(claude_code_session_id(&request), None);
+
         request.prompt_cache_session_id = Some("018f6b3a-1b2c-7000-9000-cafebabefeed".to_string());
 
         assert_eq!(
             claude_code_session_id(&request),
-            "018f6b3a-1b2c-7000-9000-cafebabefeed"
+            Some("018f6b3a-1b2c-7000-9000-cafebabefeed".to_string())
         );
 
         request.prompt_cache_session_id = Some("mez-session-A".to_string());
-        let derived_a = claude_code_session_id(&request);
-        let derived_a_again = claude_code_session_id(&request);
+        let derived_a = claude_code_session_id(&request).unwrap();
+        let derived_a_again = claude_code_session_id(&request).unwrap();
         request.prompt_cache_session_id = Some("mez-session-B".to_string());
-        let derived_b = claude_code_session_id(&request);
+        let derived_b = claude_code_session_id(&request).unwrap();
 
         assert_eq!(derived_a, derived_a_again);
         assert_ne!(derived_a, derived_b);
@@ -1102,7 +1318,8 @@ EOF
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
         assert!(args.contains("--disallowedTools"), "{args}");
-        assert!(args.contains("--session-id"), "{args}");
+        assert!(!args.contains("--session-id"), "{args}");
+        assert!(!args.contains("--resume"), "{args}");
         assert!(args.contains("--system-prompt"), "{args}");
         assert!(
             args.contains("Developer instruction:\nReturn a final say action."),
@@ -1117,6 +1334,222 @@ EOF
             "{stdin}"
         );
         assert!(!stdin.contains("Developer instruction:"), "{stdin}");
+    }
+
+    /// Verifies repeated Claude Code turns with the same Mez session id create
+    /// the Claude conversation once and then resume it.
+    ///
+    /// Claude Code distinguishes `--session-id` from `--resume`; repeatedly
+    /// passing `--session-id` can collide with Claude's active-session lock
+    /// instead of behaving like a conversation resume.
+    #[tokio::test]
+    async fn claude_code_provider_resumes_stable_session_after_creation() {
+        let fixture = ClaudeCodeFixture::new("session-resume");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+count_file="$0.count"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+printf '%s\n' "$@" > "$0.args.$count"
+cat >/dev/null
+case " $* " in
+    *" --resume "*)
+        if [ "$count" -eq 1 ]; then
+            printf '%s\n' 'Error: No conversation found for session.' >&2
+            exit 1
+        fi
+        ;;
+esac
+cat <<'EOF'
+```mezzanine-action-json
+{
+  "protocol": "maap/1",
+  "turn_id": "turn-1",
+  "agent_id": "agent-1",
+  "rationale": "return final text",
+  "actions": [
+    {
+      "id": "say-1",
+      "type": "say",
+      "status": "final",
+      "rationale": "Reply",
+      "text": "hello"
+    }
+  ],
+  "final": true
+}
+```
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.prompt_cache_session_id = Some(format!("mez-session-{}", current_test_nonce()));
+
+        provider.send_request_async(&request).await.unwrap();
+        provider.send_request_async(&request).await.unwrap();
+
+        let first_resume_args =
+            fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
+        let create_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
+        let second_turn_args =
+            fs::read_to_string(fixture.program.with_extension("args.3")).unwrap();
+        assert!(
+            first_resume_args.contains("--resume"),
+            "{first_resume_args}"
+        );
+        assert!(
+            !first_resume_args.contains("--session-id"),
+            "{first_resume_args}"
+        );
+        assert!(create_args.contains("--session-id"), "{create_args}");
+        assert!(!create_args.contains("--resume"), "{create_args}");
+        assert!(second_turn_args.contains("--resume"), "{second_turn_args}");
+        assert!(
+            !second_turn_args.contains("--session-id"),
+            "{second_turn_args}"
+        );
+    }
+
+    /// Verifies corrective retries resume the just-created Claude session.
+    ///
+    /// The first subprocess may return malformed MAAP while still creating the
+    /// Claude conversation. The retry must use `--resume` so it can benefit from
+    /// that prompt context without colliding on `--session-id`.
+    #[tokio::test]
+    async fn claude_code_provider_corrective_retry_resumes_created_session() {
+        let fixture = ClaudeCodeFixture::new("session-retry-resume");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+count_file="$0.count"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+printf '%s\n' "$@" > "$0.args.$count"
+cat >/dev/null
+if [ "$count" -eq 1 ]; then
+    printf '%s\n' 'Error: No conversation found for session.' >&2
+    exit 1
+fi
+if [ "$count" -eq 2 ]; then
+    printf '%s\n' 'plain assistant text without a MAAP block'
+    exit 0
+fi
+cat <<'EOF'
+```mezzanine-action-json
+{
+  "protocol": "maap/1",
+  "turn_id": "turn-1",
+  "agent_id": "agent-1",
+  "rationale": "return final text",
+  "actions": [
+    {
+      "id": "say-1",
+      "type": "say",
+      "status": "final",
+      "rationale": "Reply",
+      "text": "hello"
+    }
+  ],
+  "final": true
+}
+```
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.prompt_cache_session_id = Some(format!("mez-retry-{}", current_test_nonce()));
+
+        let response = provider.send_request_async(&request).await.unwrap();
+
+        assert!(response.action_batch.is_some());
+        let initial_resume_args =
+            fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
+        let create_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
+        let retry_args = fs::read_to_string(fixture.program.with_extension("args.3")).unwrap();
+        assert!(
+            initial_resume_args.contains("--resume"),
+            "{initial_resume_args}"
+        );
+        assert!(
+            !initial_resume_args.contains("--session-id"),
+            "{initial_resume_args}"
+        );
+        assert!(create_args.contains("--session-id"), "{create_args}");
+        assert!(!create_args.contains("--resume"), "{create_args}");
+        assert!(retry_args.contains("--resume"), "{retry_args}");
+        assert!(!retry_args.contains("--session-id"), "{retry_args}");
+    }
+
+    /// Verifies an active-session failure from `--resume` gets a short retry.
+    ///
+    /// This covers the provider error where Claude reports `Session ID ... is
+    /// already in use` before producing a MAAP action batch.
+    #[tokio::test]
+    async fn claude_code_provider_resumes_after_active_session_id_failure() {
+        let fixture = ClaudeCodeFixture::new("session-active-fallback");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+count_file="$0.count"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+printf '%s\n' "$@" > "$0.args.$count"
+cat >/dev/null
+case " $* " in
+    *" --resume "*)
+        if [ "$count" -eq 1 ]; then
+            printf '%s\n' 'Error: Session ID 10221f2b-78e3-557a-b2aa-bd3c9049c983 is already in use.' >&2
+            exit 1
+        fi
+        ;;
+esac
+cat <<'EOF'
+```mezzanine-action-json
+{
+  "protocol": "maap/1",
+  "turn_id": "turn-1",
+  "agent_id": "agent-1",
+  "rationale": "return final text",
+  "actions": [
+    {
+      "id": "say-1",
+      "type": "say",
+      "status": "final",
+      "rationale": "Reply",
+      "text": "hello"
+    }
+  ],
+  "final": true
+}
+```
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.prompt_cache_session_id = Some(format!("mez-active-{}", current_test_nonce()));
+
+        let response = provider.send_request_async(&request).await.unwrap();
+
+        assert!(response.action_batch.is_some());
+        let first_args = fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
+        let retry_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
+        assert!(first_args.contains("--resume"), "{first_args}");
+        assert!(!first_args.contains("--session-id"), "{first_args}");
+        assert!(retry_args.contains("--resume"), "{retry_args}");
+        assert!(!retry_args.contains("--session-id"), "{retry_args}");
     }
 
     /// Verifies Claude Code subprocess prompts are fully delivered and closed

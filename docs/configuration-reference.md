@@ -527,7 +527,12 @@ providers reject OpenAI-compatible or DeepSeek-only provider options such as
 The `claude-code` provider mode is configured as a separate provider entry, uses
 Claude Code authentication established outside Mez, relies on configured model
 ids because no documented Claude Code catalog is available, and keeps Mez shell,
-patch, approval, and audit paths as the only action executor.
+patch, approval, and audit paths as the only action executor. For normal
+conversation turns with Mezzanine prompt-cache identity, Mez resumes existing
+Claude Code conversations with `--resume` and creates the session with
+`--session-id` only when Claude reports the resume target is missing;
+auto-sizing and requests without prompt-cache identity remain one-shot print
+invocations.
 
 Example LM Studio-compatible provider:
 

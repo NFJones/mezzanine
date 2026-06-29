@@ -2731,6 +2731,12 @@ Claude Code browser-login credentials MUST NOT be sent to the
 adapter MUST reject OpenAI-compatible and DeepSeek-only options such as
 `maap_output`, `structured_output`, `tool_choice`, `parallel_tool_calls`,
 `output_token_field`, `maap_surface`, `prompt_cache_retention`, and `thinking`.
+The `claude-code` adapter MUST bind normal prompt-cacheable conversation turns
+to a stable Claude Code session id, resume existing Claude Code conversations
+with `--resume`, and create the session with `--session-id` only when Claude
+reports the resume target is missing. Auto-sizing and other requests without a
+Mezzanine prompt-cache session or lineage id MUST remain one-shot Claude Code
+print invocations.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider
