@@ -326,6 +326,10 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
         parse_openai_chat_completions_http_response(response, request, provider_id, stream)
     }
 
+    fn effective_stream(&self, _request: &ModelRequest, _stream: bool) -> bool {
+        false
+    }
+
     fn build_models_request(
         &self,
         api_key: Option<&str>,
@@ -354,7 +358,7 @@ fn build_openai_chat_completions_http_request(
     request: &ModelRequest,
     api_key: Option<&str>,
     endpoint: &str,
-    stream: bool,
+    _stream: bool,
     timeout_ms: u64,
     options: OpenAiChatCompletionsOptions,
 ) -> Result<ProviderHttpRequest> {
@@ -368,6 +372,7 @@ fn build_openai_chat_completions_http_request(
             "OpenAI-compatible provider timeout must be greater than zero",
         ));
     }
+    let stream = false;
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": openai_chat_completions_messages(request),

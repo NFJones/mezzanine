@@ -279,7 +279,8 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         120_000,
         transport,
     )
-    .unwrap();
+    .unwrap()
+    .with_stream(true);
     let response = provider.send_request(&request).unwrap();
 
     assert_eq!(response.provider, "local-openai-chat");
@@ -293,7 +294,12 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     let sent = provider.transport.requests.borrow();
     assert_eq!(sent[0].url, "http://localhost:1234/v1/chat/completions");
     assert_eq!(sent[0].headers.get("Authorization"), None);
+    assert_eq!(
+        sent[0].headers.get("Accept").map(String::as_str),
+        Some("application/json")
+    );
     let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["stream"], false);
     let body_text = sent[0].body.as_str();
     assert_eq!(body["tool_choice"], "required");
     assert_eq!(body["tools"][0]["function"]["name"], OPENAI_MAAP_FUNCTION_TOOL_NAME);
