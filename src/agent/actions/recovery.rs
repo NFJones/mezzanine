@@ -41,6 +41,84 @@ pub(super) fn validate_batch_allowed_actions(
     Ok(())
 }
 
+/// Builds a capability continuation when a model emits an action that is valid
+/// for some broader capability but absent from the current action surface.
+pub(super) fn disallowed_action_capability_continuation_request(
+    previous_request: &ModelRequest,
+    batch: &MaapBatch,
+    error: &MezError,
+) -> Option<ModelRequest> {
+    if !previous_request
+        .allowed_actions
+        .contains(AllowedAction::RequestCapability)
+    {
+        return None;
+    }
+
+    let mut requests = Vec::new();
+    for action in &batch.actions {
+        let action_type = action.action_type();
+        let allowed_action = AllowedAction::from_action_type(action_type)?;
+        if previous_request.allowed_actions.contains(allowed_action) {
+            continue;
+        }
+        let capability = capability_for_allowed_action(allowed_action)?;
+        if requests
+            .iter()
+            .any(|request: &CapabilityRequest| request.capability == capability)
+        {
+            continue;
+        }
+        requests.push(CapabilityRequest {
+            capability,
+            reason: format!(
+                "needed to retry `{action_type}` after current action-surface validation rejected it: {}",
+                error.message()
+            ),
+        });
+    }
+
+    if requests.is_empty() {
+        return None;
+    }
+
+    let mut request = capability_continuation_request(previous_request, &requests);
+    request.messages.push(ModelMessage {
+        role: ModelMessageRole::Developer,
+        source: ContextSourceKind::DeveloperInstruction,
+        content: format!(
+            "[disallowed action capability recovery]\n\
+             The previous provider response used an action type outside the current allowed action surface. \
+             Mezzanine converted the rejected action into capability routing before running a terminal failure summary. \
+             Re-emit the work as one valid action batch on the current allowed action surface.\n\
+             validation_error={}",
+            error.message()
+        ),
+    });
+    Some(request)
+}
+
+/// Returns the coarse capability that exposes one concrete action type.
+fn capability_for_allowed_action(action: AllowedAction) -> Option<AgentCapability> {
+    match action {
+        AllowedAction::ShellCommand | AllowedAction::ApplyPatch => Some(AgentCapability::Shell),
+        AllowedAction::WebSearch => Some(AgentCapability::NetworkSearch),
+        AllowedAction::FetchUrl => Some(AgentCapability::NetworkFetch),
+        AllowedAction::McpCall => Some(AgentCapability::Mcp),
+        AllowedAction::SendMessage | AllowedAction::SpawnAgent => Some(AgentCapability::Subagent),
+        AllowedAction::ConfigChange => Some(AgentCapability::ConfigChange),
+        AllowedAction::MemorySearch | AllowedAction::MemoryStore => Some(AgentCapability::Memory),
+        AllowedAction::IssueAdd
+        | AllowedAction::IssueUpdate
+        | AllowedAction::IssueQuery
+        | AllowedAction::IssueDelete => Some(AgentCapability::Issues),
+        AllowedAction::Say => Some(AgentCapability::RespondOnly),
+        AllowedAction::RequestCapability
+        | AllowedAction::RequestSkills
+        | AllowedAction::CallSkill => None,
+    }
+}
+
 /// One model-requested coarse capability and its task-specific reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CapabilityRequest {

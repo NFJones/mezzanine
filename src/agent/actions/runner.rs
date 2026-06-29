@@ -25,8 +25,9 @@ use super::execution::{
 };
 use super::recovery::{
     FailureSummaryInput, FailureSummaryScope, capability_continuation_request,
-    capability_requests_from_batch, failed_maap_validation_execution_with_summary_async,
-    maap_provider_error_is_repairable, maap_repair_request, mixed_capability_continuation_request,
+    capability_requests_from_batch, disallowed_action_capability_continuation_request,
+    failed_maap_validation_execution_with_summary_async, maap_provider_error_is_repairable,
+    maap_repair_request, mixed_capability_continuation_request,
     provider_error_should_retry_without_summary, summarize_controller_failure_execution_async,
     summarize_provider_failure_execution_async, validate_batch_allowed_actions,
 };
@@ -491,6 +492,21 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 continue;
             }
             if let Err(error) = validate_batch_allowed_actions(batch, &request) {
+                let capability_recovery_base =
+                    if response_request.interaction_kind == ModelInteractionKind::Repair {
+                        &durable_response_request
+                    } else {
+                        &response_request
+                    };
+                if let Some(next_request) = disallowed_action_capability_continuation_request(
+                    capability_recovery_base,
+                    batch,
+                    &error,
+                ) {
+                    request = next_request;
+                    repair_attempts = 0;
+                    continue;
+                }
                 if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
                     repair_attempts = repair_attempts.saturating_add(1);
                     request = maap_repair_request(
@@ -924,6 +940,21 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 continue;
             }
             if let Err(error) = validate_batch_allowed_actions(batch, &request) {
+                let capability_recovery_base =
+                    if response_request.interaction_kind == ModelInteractionKind::Repair {
+                        &durable_response_request
+                    } else {
+                        &response_request
+                    };
+                if let Some(next_request) = disallowed_action_capability_continuation_request(
+                    capability_recovery_base,
+                    batch,
+                    &error,
+                ) {
+                    request = next_request;
+                    repair_attempts = 0;
+                    continue;
+                }
                 if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
                     repair_attempts = repair_attempts.saturating_add(1);
                     request = maap_repair_request(

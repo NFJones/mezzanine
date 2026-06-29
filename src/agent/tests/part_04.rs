@@ -3616,6 +3616,136 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
     assert!(repair_message.contains("apply_patch"), "{repair_message}");
 }
 
+/// Verifies repair responses can recover by routing disallowed actions through capability negotiation.
+///
+/// A repair interaction may expose only `say` and `request_capability` while
+/// the model still emits a valid concrete action such as `shell_command`. The
+/// runner should convert that disallowed concrete action into a capability
+/// continuation, avoid the terminal failure-summary path, and keep ephemeral
+/// repair instructions out of the durable request.
+#[test]
+fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery() {
+    let turn = turn();
+    let provider = SequencedProvider::new(vec![
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "malformed response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "repair emitted shell command".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![shell_action("shell-repair")],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+        Ok(ModelResponse {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "ready".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![say_action("say-1", "Ready.")],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        }),
+    ]);
+    let policy = PermissionPolicy::default()
+        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "batch".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &policy,
+        approvals: &approvals,
+        path_scopes: None,
+        subagent_scope: None,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let execution = runner
+        .run_turn(
+            &mut ledger,
+            turn.clone(),
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "inspect the workspace".to_string(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(execution.response.raw_text, "ready");
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[1].interaction_kind,
+        crate::agent::ModelInteractionKind::Repair
+    );
+    let recovery_request = &requests[2];
+    let action_types = recovery_request.allowed_actions.action_type_names();
+    assert!(action_types.contains(&"shell_command"), "{action_types:?}");
+    assert!(action_types.contains(&"apply_patch"), "{action_types:?}");
+    assert!(recovery_request.messages.iter().any(|message| message
+        .content
+        .contains("[disallowed action capability recovery]")));
+    assert!(
+        recovery_request
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("[ephemeral maap repair]")),
+        "{:?}",
+        recovery_request.messages
+    );
+    assert!(
+        execution
+            .request
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("[ephemeral maap repair]")),
+        "{:?}",
+        execution.request.messages
+    );
+}
+
 /// Verifies mixed capability-routing batches defer heredoc shell validation.
 /// 
 /// When a provider combines `request_capability` with a shell command that
