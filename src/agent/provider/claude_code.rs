@@ -142,6 +142,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     let output = run_claude_code_subprocess(
                         &self.program,
                         &request.model,
+                        &claude_code_system_prompt(request, None),
                         &claude_code_prompt(request, None),
                         self.timeout_ms,
                         false,
@@ -194,27 +195,35 @@ impl AsyncModelProvider for ClaudeCodeProvider {
     }
 }
 
-/// Builds the text prompt passed to the Claude Code CLI.
-fn claude_code_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
+/// Builds the Claude system prompt passed via the dedicated CLI flag.
+fn claude_code_system_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
+    let mut prompt = String::new();
+
+    append_claude_code_instruction_framing(&mut prompt, request, retry_instruction);
+    if request.interaction_kind != ModelInteractionKind::AutoSizing {
+        prompt.push_str("Output contract:\n");
+        prompt.push_str(
+            "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly.\n",
+        );
+    }
+    prompt
+}
+
+/// Builds the text prompt passed to the Claude Code CLI stdin channel.
+fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) -> String {
     let final_user_index = request
         .messages
         .iter()
         .rposition(|message| message.role == ModelMessageRole::User);
     let mut prompt = String::new();
 
-    append_claude_code_instruction_framing(&mut prompt, request, retry_instruction);
     append_claude_code_prior_context(&mut prompt, request, final_user_index);
     append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
-
-    prompt.push_str("Output contract:\n");
-    prompt.push_str(
-        "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly.\n",
-    );
     prompt
 }
 
-/// Appends system, developer, and retry instructions as provider framing rather
-/// than pretending Claude Code `--print` accepts a structured role transcript.
+/// Appends system, developer, and retry instructions to Claude's dedicated
+/// system-prompt channel instead of flattening them into the stdin prompt.
 fn append_claude_code_instruction_framing(
     prompt: &mut String,
     request: &ModelRequest,
@@ -291,7 +300,7 @@ fn append_claude_code_current_user_prompt(
     if let Some(index) = final_user_index {
         prompt.push_str(&request.messages[index].content);
     } else {
-        prompt.push_str("Follow the instruction framing above.");
+        prompt.push_str("Follow the system prompt.");
     }
     prompt.push_str("\n\n");
 }
@@ -407,6 +416,7 @@ async fn run_claude_code_request_with_corrective_retry(
     let first_output = run_claude_code_subprocess(
         program,
         &request.model,
+        &claude_code_system_prompt(request, None),
         &claude_code_prompt(request, None),
         timeout_ms,
         true,
@@ -427,6 +437,7 @@ async fn run_claude_code_request_with_corrective_retry(
     let retry_output = run_claude_code_subprocess(
         program,
         &request.model,
+        &claude_code_system_prompt(request, Some(retry_instruction)),
         &claude_code_prompt(request, Some(retry_instruction)),
         timeout_ms,
         true,
@@ -449,6 +460,7 @@ async fn run_claude_code_request_with_corrective_retry(
 async fn run_claude_code_subprocess(
     program: &str,
     model: &str,
+    system_prompt: &str,
     prompt: &str,
     timeout_ms: u64,
     json_output: bool,
@@ -462,6 +474,9 @@ async fn run_claude_code_subprocess(
             .arg(model)
             .arg("--disallowedTools")
             .arg("*");
+        if !system_prompt.is_empty() {
+            command.arg("--system-prompt").arg(system_prompt);
+        }
         if json_output {
             command.arg("--output-format").arg("json");
         }
@@ -869,23 +884,29 @@ mod tests {
             },
         ];
 
+        let system_prompt =
+            claude_code_system_prompt(&request, Some("Retry with a valid MAAP batch."));
         let prompt = claude_code_prompt(&request, Some("Retry with a valid MAAP batch."));
 
         assert!(
-            prompt.contains("Instruction framing for Claude Code:"),
-            "{prompt}"
+            system_prompt.contains("Instruction framing for Claude Code:"),
+            "{system_prompt}"
         );
         assert!(
-            prompt.contains("System instruction:\nSystem authority."),
-            "{prompt}"
+            system_prompt.contains("System instruction:\nSystem authority."),
+            "{system_prompt}"
         );
         assert!(
-            prompt.contains("Developer instruction:\nDeveloper authority."),
-            "{prompt}"
+            system_prompt.contains("Developer instruction:\nDeveloper authority."),
+            "{system_prompt}"
         );
         assert!(
-            prompt.contains("Developer retry instruction:\nRetry with a valid MAAP batch."),
-            "{prompt}"
+            system_prompt.contains("Developer retry instruction:\nRetry with a valid MAAP batch."),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("Output contract:"),
+            "{system_prompt}"
         );
         assert!(
             prompt.contains("Prior conversation context (not the current user request):"),
@@ -907,6 +928,9 @@ mod tests {
             prompt.contains("Current user request:\nFinal user request."),
             "{prompt}"
         );
+        assert!(!prompt.contains("System instruction:"), "{prompt}");
+        assert!(!prompt.contains("Developer instruction:"), "{prompt}");
+        assert!(!prompt.contains("Developer retry instruction:"), "{prompt}");
         assert!(!prompt.contains("<system>"), "{prompt}");
         assert!(!prompt.contains("<developer>"), "{prompt}");
         assert!(!prompt.contains("<assistant>"), "{prompt}");
@@ -917,16 +941,18 @@ mod tests {
     /// request section instead of recreating role-tagged transcript blocks.
     #[test]
     fn claude_code_prompt_handles_instruction_only_requests() {
+        let system_prompt = claude_code_system_prompt(&claude_request(), None);
         let prompt = claude_code_prompt(&claude_request(), None);
 
         assert!(
-            prompt.contains("Developer instruction:\nReturn a final say action."),
-            "{prompt}"
+            system_prompt.contains("Developer instruction:\nReturn a final say action."),
+            "{system_prompt}"
         );
         assert!(
-            prompt.contains("Current user request:\nFollow the instruction framing above."),
+            prompt.contains("Current user request:\nFollow the system prompt."),
             "{prompt}"
         );
+        assert!(!prompt.contains("Developer instruction:"), "{prompt}");
         assert!(!prompt.contains("<developer>"), "{prompt}");
     }
 
@@ -976,15 +1002,20 @@ EOF
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
         assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("--system-prompt"), "{args}");
+        assert!(
+            args.contains("Developer instruction:\nReturn a final say action."),
+            "{args}"
+        );
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
         assert!(args.contains('*'), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
-        assert!(stdin.contains("Developer instruction:"), "{stdin}");
         assert!(
-            stdin.contains("Do not run tools or mutate files directly"),
+            stdin.contains("Current user request:\nFollow the system prompt."),
             "{stdin}"
         );
+        assert!(!stdin.contains("Developer instruction:"), "{stdin}");
     }
 
     /// Verifies Claude Code subprocess prompts are fully delivered and closed
@@ -1034,7 +1065,7 @@ EOF
             .parse::<usize>()
             .unwrap();
         assert_eq!(recorded_len, stdin.len());
-        assert!(stdin.ends_with("directly.\n"), "{stdin}");
+        assert!(stdin.ends_with("Follow the system prompt.\n\n"), "{stdin}");
     }
 
     /// Verifies Claude Code JSON print envelopes populate provider token usage
