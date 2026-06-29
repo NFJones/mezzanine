@@ -11,6 +11,7 @@ use super::{
     ModelResponse, ModelTokenUsage, ProviderModelCatalog, Result,
     parse_fenced_maap_action_batch_for_turn, provider_maap_parse_error, validate_non_empty,
 };
+use sha2::Digest;
 use std::future::Future;
 use std::pin::Pin;
 use std::process::Stdio;
@@ -142,6 +143,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     let output = run_claude_code_subprocess(
                         &self.program,
                         &request.model,
+                        None,
                         &claude_code_system_prompt(request, None),
                         &claude_code_prompt(request, None),
                         self.timeout_ms,
@@ -406,6 +408,72 @@ fn validate_claude_code_auto_sizing_output(raw_text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Returns the Claude Code session id used to resume one Mez conversation.
+fn claude_code_session_id(request: &ModelRequest) -> String {
+    if let Some(session_id) = request
+        .prompt_cache_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        if claude_code_uuid_is_valid(session_id) {
+            return session_id.to_ascii_lowercase();
+        }
+        return claude_code_uuid_from_stable_key(&format!("session:{session_id}"));
+    }
+    if let Some(lineage_id) = request
+        .prompt_cache_lineage_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|lineage_id| !lineage_id.is_empty())
+    {
+        return claude_code_uuid_from_stable_key(&format!("lineage:{lineage_id}"));
+    }
+    claude_code_uuid_from_stable_key(&format!(
+        "provider:{}\nagent:{}",
+        request.provider, request.agent_id
+    ))
+}
+
+/// Reports whether a string already has Claude's UUID-shaped session id form.
+fn claude_code_uuid_is_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| [8, 13, 18, 23].contains(&index) || byte.is_ascii_hexdigit())
+}
+
+/// Derives a deterministic UUID-shaped Claude session id from stable Mez data.
+fn claude_code_uuid_from_stable_key(key: &str) -> String {
+    let digest = sha2::Sha256::digest(format!("mezzanine-claude-code-session-v1\n{key}"));
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
 /// Runs one bounded Claude Code request and applies one corrective retry for
 /// empty or malformed MAAP output.
 async fn run_claude_code_request_with_corrective_retry(
@@ -413,9 +481,11 @@ async fn run_claude_code_request_with_corrective_retry(
     request: &ModelRequest,
     timeout_ms: u64,
 ) -> Result<ClaudeCodeRequestOutput> {
+    let session_id = claude_code_session_id(request);
     let first_output = run_claude_code_subprocess(
         program,
         &request.model,
+        Some(&session_id),
         &claude_code_system_prompt(request, None),
         &claude_code_prompt(request, None),
         timeout_ms,
@@ -437,6 +507,7 @@ async fn run_claude_code_request_with_corrective_retry(
     let retry_output = run_claude_code_subprocess(
         program,
         &request.model,
+        Some(&session_id),
         &claude_code_system_prompt(request, Some(retry_instruction)),
         &claude_code_prompt(request, Some(retry_instruction)),
         timeout_ms,
@@ -460,6 +531,7 @@ async fn run_claude_code_request_with_corrective_retry(
 async fn run_claude_code_subprocess(
     program: &str,
     model: &str,
+    session_id: Option<&str>,
     system_prompt: &str,
     prompt: &str,
     timeout_ms: u64,
@@ -474,6 +546,9 @@ async fn run_claude_code_subprocess(
             .arg(model)
             .arg("--disallowedTools")
             .arg("*");
+        if let Some(session_id) = session_id {
+            command.arg("--session-id").arg(session_id);
+        }
         if !system_prompt.is_empty() {
             command.arg("--system-prompt").arg(system_prompt);
         }
@@ -844,6 +919,31 @@ mod tests {
         assert!(claude_code_spawn_error_is_transient(&error));
     }
 
+    /// Verifies Claude Code session ids are stable per Mezzanine session and
+    /// still satisfy Claude's UUID argument contract when Mezzanine only has a
+    /// non-UUID fallback key.
+    #[test]
+    fn claude_code_session_id_uses_stable_mez_session_key() {
+        let mut request = claude_request();
+        request.prompt_cache_session_id = Some("018f6b3a-1b2c-7000-9000-cafebabefeed".to_string());
+
+        assert_eq!(
+            claude_code_session_id(&request),
+            "018f6b3a-1b2c-7000-9000-cafebabefeed"
+        );
+
+        request.prompt_cache_session_id = Some("mez-session-A".to_string());
+        let derived_a = claude_code_session_id(&request);
+        let derived_a_again = claude_code_session_id(&request);
+        request.prompt_cache_session_id = Some("mez-session-B".to_string());
+        let derived_b = claude_code_session_id(&request);
+
+        assert_eq!(derived_a, derived_a_again);
+        assert_ne!(derived_a, derived_b);
+        assert!(claude_code_uuid_is_valid(&derived_a));
+        assert!(claude_code_uuid_is_valid(&derived_b));
+    }
+
     /// Verifies Claude Code prompt construction respects the CLI's single
     /// stdin prompt contract by framing authoritative instructions separately,
     /// preserving prior turns only as context, and isolating the final user
@@ -1002,6 +1102,7 @@ EOF
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
         assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("--session-id"), "{args}");
         assert!(args.contains("--system-prompt"), "{args}");
         assert!(
             args.contains("Developer instruction:\nReturn a final say action."),
