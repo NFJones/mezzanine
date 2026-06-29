@@ -4335,7 +4335,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| openai | gpt-fast | 80 | 80 | 34 | 9 | 50.00% |"),
+        response.contains("| openai | gpt-fast | 160 | unknown | 34 | 9 | unknown |"),
         "{response}"
     );
     assert!(
@@ -4343,7 +4343,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| openai | gpt-fast | 110 | 110 | 44 | 13 | 50.00% |"),
+        response.contains("| openai | gpt-fast | 220 | unknown | 44 | 13 | unknown |"),
         "{response}"
     );
     assert!(!response.contains("| runtime-metrics | metrics-only |"), "{response}");
@@ -4413,7 +4413,7 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
 
     assert!(response.contains("### Pane Agent Token Usage"), "{response}");
     assert!(
-        response.contains("| openai | gpt-fast | 80 | 80 | 34 | 9 | 50.00% |"),
+        response.contains("| openai | gpt-fast | 160 | unknown | 34 | 9 | unknown |"),
         "{response}"
     );
 }

@@ -240,23 +240,27 @@ pub struct ModelTokenUsage {
 impl ModelTokenUsage {
     /// Adds provider usage counters with saturating arithmetic.
     pub fn add_assign(&mut self, other: Self) {
+        let had_usage = !self.is_zero();
+        let other_has_usage = !other.is_zero();
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
         self.cached_input_tokens = match (self.cached_input_tokens, other.cached_input_tokens) {
             (Some(current), Some(next)) => Some(current.saturating_add(next)),
-            (None, Some(next)) => Some(next),
-            (Some(current), None) => Some(current),
+            (None, Some(next)) if !had_usage => Some(next),
+            (Some(current), None) if !other_has_usage => Some(current),
             (None, None) => None,
+            _ => None,
         };
         self.cache_write_input_tokens = match (
             self.cache_write_input_tokens,
             other.cache_write_input_tokens,
         ) {
             (Some(current), Some(next)) => Some(current.saturating_add(next)),
-            (None, Some(next)) => Some(next),
-            (Some(current), None) => Some(current),
+            (None, Some(next)) if !had_usage => Some(next),
+            (Some(current), None) if !other_has_usage => Some(current),
             (None, None) => None,
+            _ => None,
         };
     }
 
@@ -1583,6 +1587,40 @@ mod tests {
             ProviderApiCompatibility::AnthropicMessages.as_str(),
             ANTHROPIC_MESSAGES_API
         );
+    }
+
+    /// Verifies mixed known and unknown prompt-cache counters remain unknown
+    /// after aggregation instead of rendering a misleading partial hit ratio.
+    ///
+    /// Runtime retry and pane totals use `ModelTokenUsage::add_assign` to
+    /// combine multiple provider responses. When any response with token usage
+    /// omits cache counters, the aggregate no longer has complete denominator
+    /// information for a precise prompt-cache hit or write total.
+    #[test]
+    fn token_usage_aggregation_preserves_unknown_cache_counters() {
+        let mut usage = ModelTokenUsage::default();
+        usage.add_assign(ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 10,
+            reasoning_tokens: 0,
+            cached_input_tokens: Some(60),
+            cache_write_input_tokens: Some(20),
+        });
+        usage.add_assign(ModelTokenUsage {
+            input_tokens: 50,
+            output_tokens: 5,
+            reasoning_tokens: 0,
+            cached_input_tokens: None,
+            cache_write_input_tokens: None,
+        });
+
+        assert_eq!(usage.input_tokens, 150);
+        assert_eq!(usage.output_tokens, 15);
+        assert_eq!(usage.cached_input_tokens, None);
+        assert_eq!(usage.cache_write_input_tokens, None);
+        assert_eq!(usage.cached_input_tokens_display(), "unknown");
+        assert_eq!(usage.cached_input_hit_ratio_basis_points(), None);
+        assert_eq!(usage.cached_input_hit_ratio_display(), "unknown");
     }
 
     /// Verifies Anthropic provider kinds default to the Anthropic Messages
