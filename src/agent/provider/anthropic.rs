@@ -876,13 +876,15 @@ fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUs
     let Some(value) = value else {
         return ModelTokenUsage::default();
     };
+    let cached_input_tokens = value
+        .get("cache_read_input_tokens")
+        .and_then(serde_json::Value::as_u64);
     ModelTokenUsage {
-        input_tokens: anthropic_usage_u64(value, "input_tokens"),
+        input_tokens: anthropic_usage_u64(value, "input_tokens")
+            .saturating_add(cached_input_tokens.unwrap_or(0)),
         output_tokens: anthropic_usage_u64(value, "output_tokens"),
         reasoning_tokens: 0,
-        cached_input_tokens: value
-            .get("cache_read_input_tokens")
-            .and_then(serde_json::Value::as_u64),
+        cached_input_tokens,
         cache_write_input_tokens: value
             .get("cache_creation_input_tokens")
             .and_then(serde_json::Value::as_u64),
@@ -1185,10 +1187,13 @@ mod tests {
             "cache_creation_input_tokens": 11
         })));
 
-        assert_eq!(usage.input_tokens, 42);
+        assert_eq!(usage.input_tokens, 49);
         assert_eq!(usage.output_tokens, 9);
         assert_eq!(usage.cached_input_tokens, Some(7));
         assert_eq!(usage.cache_write_input_tokens, Some(11));
+        assert_eq!(usage.billed_input_tokens(), 53);
+        assert_eq!(usage.total_tokens(), 69);
+        assert_eq!(usage.cached_input_hit_ratio_display(), "14.29%");
 
         let mut overlaid = ModelTokenUsage::default();
         anthropic_overlay_usage(
