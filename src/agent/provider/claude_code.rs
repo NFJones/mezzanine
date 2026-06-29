@@ -29,8 +29,33 @@ const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
 
 /// Captures one Claude Code subprocess completion for retry and validation.
 struct ClaudeCodeSubprocessOutput {
-    stdout: String,
+    assistant_text: String,
     stderr: String,
+    usage: ModelTokenUsage,
+}
+
+/// Stores the Claude Code request result after optional corrective retry.
+struct ClaudeCodeRequestOutput {
+    raw_text: String,
+    usage: ModelTokenUsage,
+    latest_request_usage: Option<ModelTokenUsage>,
+}
+
+/// Stores the Claude Code JSON usage counters relevant to provider accounting.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ClaudeCodeJsonUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+}
+
+/// Stores the Claude Code JSON envelope shape used by print-mode output.
+#[derive(Debug, serde::Deserialize)]
+struct ClaudeCodeJsonEnvelope {
+    result: Option<String>,
+    #[serde(default)]
+    usage: ClaudeCodeJsonUsage,
 }
 
 /// Stores the validated Claude Code auto-sizing router response shape.
@@ -112,27 +137,30 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     "Claude Code provider received a request for a different provider",
                 ));
             }
-            let raw_text = if request.interaction_kind == ModelInteractionKind::AutoSizing {
-                let output = run_claude_code_subprocess(
-                    &self.program,
-                    &request.model,
-                    &claude_code_prompt(request, None),
-                    self.timeout_ms,
-                )
-                .await?;
-                if output.stdout.is_empty() {
-                    return Err(claude_code_empty_output_error(&output.stderr));
-                }
-                validate_claude_code_auto_sizing_output(&output.stdout)?;
-                output.stdout
-            } else {
-                run_claude_code_request_with_corrective_retry(
-                    &self.program,
-                    request,
-                    self.timeout_ms,
-                )
-                .await?
-            };
+            let (raw_text, usage, latest_request_usage) =
+                if request.interaction_kind == ModelInteractionKind::AutoSizing {
+                    let output = run_claude_code_subprocess(
+                        &self.program,
+                        &request.model,
+                        &claude_code_prompt(request, None),
+                        self.timeout_ms,
+                        false,
+                    )
+                    .await?;
+                    if output.assistant_text.is_empty() {
+                        return Err(claude_code_empty_output_error(&output.stderr));
+                    }
+                    validate_claude_code_auto_sizing_output(&output.assistant_text)?;
+                    (output.assistant_text, ModelTokenUsage::default(), None)
+                } else {
+                    let output = run_claude_code_request_with_corrective_retry(
+                        &self.program,
+                        request,
+                        self.timeout_ms,
+                    )
+                    .await?;
+                    (output.raw_text, output.usage, output.latest_request_usage)
+                };
             let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
                 None
             } else {
@@ -156,8 +184,8 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                 provider: self.provider_id.clone(),
                 model: request.model.clone(),
                 raw_text,
-                usage: ModelTokenUsage::default(),
-                latest_request_usage: None,
+                usage,
+                latest_request_usage,
                 quota_usage: Vec::new(),
                 action_batch,
                 provider_transcript_events: Vec::new(),
@@ -294,6 +322,34 @@ fn claude_code_empty_output_error(stderr: &str) -> MezError {
         .with_provider_raw_text(stderr.to_string())
 }
 
+/// Parses assistant text and token usage from Claude Code JSON print output.
+fn parse_claude_code_json_output(stdout: &str) -> Result<(String, ModelTokenUsage)> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok((String::new(), ModelTokenUsage::default()));
+    }
+    let envelope = match serde_json::from_str::<ClaudeCodeJsonEnvelope>(trimmed) {
+        Ok(envelope) => envelope,
+        Err(_) => return Ok((trimmed.to_string(), ModelTokenUsage::default())),
+    };
+    let Some(result) = envelope.result else {
+        return Err(MezError::invalid_state(
+            "Claude Code JSON output did not contain a result string",
+        )
+        .with_provider_raw_text(trimmed.to_string()));
+    };
+    Ok((
+        result.trim().to_string(),
+        ModelTokenUsage {
+            input_tokens: envelope.usage.input_tokens.unwrap_or(0),
+            output_tokens: envelope.usage.output_tokens.unwrap_or(0),
+            reasoning_tokens: 0,
+            cached_input_tokens: envelope.usage.cache_read_input_tokens,
+            cache_write_input_tokens: envelope.usage.cache_creation_input_tokens,
+        },
+    ))
+}
+
 /// Validates that Claude Code auto-sizing output matches the router JSON
 /// contract expected by the runtime parser.
 fn validate_claude_code_auto_sizing_output(raw_text: &str) -> Result<()> {
@@ -347,18 +403,23 @@ async fn run_claude_code_request_with_corrective_retry(
     program: &str,
     request: &ModelRequest,
     timeout_ms: u64,
-) -> Result<String> {
+) -> Result<ClaudeCodeRequestOutput> {
     let first_output = run_claude_code_subprocess(
         program,
         &request.model,
         &claude_code_prompt(request, None),
         timeout_ms,
+        true,
     )
     .await?;
-    if !claude_code_output_needs_corrective_retry(request, &first_output.stdout) {
-        return Ok(first_output.stdout);
+    if !claude_code_output_needs_corrective_retry(request, &first_output.assistant_text) {
+        return Ok(ClaudeCodeRequestOutput {
+            raw_text: first_output.assistant_text,
+            usage: first_output.usage,
+            latest_request_usage: None,
+        });
     }
-    let retry_instruction = if first_output.stdout.is_empty() {
+    let retry_instruction = if first_output.assistant_text.is_empty() {
         CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION
     } else {
         CLAUDE_CODE_MAAP_RETRY_INSTRUCTION
@@ -368,12 +429,20 @@ async fn run_claude_code_request_with_corrective_retry(
         &request.model,
         &claude_code_prompt(request, Some(retry_instruction)),
         timeout_ms,
+        true,
     )
     .await?;
-    if retry_output.stdout.is_empty() {
+    if retry_output.assistant_text.is_empty() {
         return Err(claude_code_empty_output_error(&retry_output.stderr));
     }
-    Ok(retry_output.stdout)
+    let latest_request_usage = retry_output.usage;
+    let mut usage = first_output.usage;
+    usage.add_assign(latest_request_usage);
+    Ok(ClaudeCodeRequestOutput {
+        raw_text: retry_output.assistant_text,
+        usage,
+        latest_request_usage: Some(latest_request_usage),
+    })
 }
 
 /// Invokes Claude Code in print mode with direct tool use disabled.
@@ -382,15 +451,21 @@ async fn run_claude_code_subprocess(
     model: &str,
     prompt: &str,
     timeout_ms: u64,
+    json_output: bool,
 ) -> Result<ClaudeCodeSubprocessOutput> {
     let mut spawn_attempt = 0;
     let mut child = loop {
-        match Command::new(program)
+        let mut command = Command::new(program);
+        command
             .arg("--print")
             .arg("--model")
             .arg(model)
             .arg("--disallowedTools")
-            .arg("*")
+            .arg("*");
+        if json_output {
+            command.arg("--output-format").arg("json");
+        }
+        match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -456,7 +531,16 @@ async fn run_claude_code_subprocess(
         ))
         .with_provider_raw_text(stderr));
     }
-    Ok(ClaudeCodeSubprocessOutput { stdout, stderr })
+    let (assistant_text, usage) = if json_output {
+        parse_claude_code_json_output(&stdout)?
+    } else {
+        (stdout, ModelTokenUsage::default())
+    };
+    Ok(ClaudeCodeSubprocessOutput {
+        assistant_text,
+        stderr,
+        usage,
+    })
 }
 
 /// Reports whether a subprocess spawn failure is likely transient and worth
@@ -892,6 +976,8 @@ EOF
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
         assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("--output-format"), "{args}");
+        assert!(args.contains("json"), "{args}");
         assert!(args.contains('*'), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(stdin.contains("Developer instruction:"), "{stdin}");
@@ -949,6 +1035,34 @@ EOF
             .unwrap();
         assert_eq!(recorded_len, stdin.len());
         assert!(stdin.ends_with("directly.\n"), "{stdin}");
+    }
+
+    /// Verifies Claude Code JSON print envelopes populate provider token usage
+    /// counters while preserving assistant text for the existing MAAP parser.
+    #[tokio::test]
+    async fn claude_code_provider_parses_json_usage_accounting() {
+        let fixture = ClaudeCodeFixture::new("json-usage");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"```mezzanine-action-json\n{\n  \"protocol\": \"maap/1\",\n  \"turn_id\": \"turn-1\",\n  \"agent_id\": \"agent-1\",\n  \"rationale\": \"return final text\",\n  \"actions\": [\n    {\n      \"id\": \"say-1\",\n      \"type\": \"say\",\n      \"status\": \"final\",\n      \"rationale\": \"Reply\",\n      \"text\": \"hello\"\n    }\n  ],\n  \"final\": true\n}\n```","usage":{"input_tokens":2,"output_tokens":12,"cache_creation_input_tokens":6112,"cache_read_input_tokens":10496}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let response = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap();
+
+        assert!(response.action_batch.is_some());
+        assert_eq!(response.usage.input_tokens, 2);
+        assert_eq!(response.usage.output_tokens, 12);
+        assert_eq!(response.usage.cached_input_tokens, Some(10_496));
+        assert_eq!(response.usage.cache_write_input_tokens, Some(6_112));
+        assert_eq!(response.latest_request_usage, None);
     }
 
     /// Verifies missing Claude Code executables are classified as provider
