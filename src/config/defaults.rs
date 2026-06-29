@@ -352,6 +352,10 @@ reasoning_effort = "medium"
 # "in_memory"; gpt-5.5 and newer default to "24h" and do not support
 # explicit "in_memory".
 # prompt_cache_retention = "24h"
+# For OpenAI-compatible Chat Completions backends that support the modern
+# developer role, set developer_role = "developer". It defaults to
+# "system" for older compatible servers.
+# developer_role = "developer"
 
 [model_profiles.auto-size-router]
 provider = "openai"

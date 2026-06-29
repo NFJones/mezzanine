@@ -2624,6 +2624,10 @@ policy. Mezzanine MAY omit redundant provider-default retention fields while
 preserving behavior. Mezzanine MUST send `24h` only for OpenAI model families
 that support extended prompt-cache retention, and MUST NOT silently translate an
 unsupported explicit `in_memory` request into extended retention.
+For OpenAI-compatible Chat Completions profiles,
+`provider_options.developer_role` MAY be set to `developer` or `system` to
+control how Mezzanine developer messages are serialized. It MUST default to
+`system` for compatibility with older generic chat backends.
 For DeepSeek profiles, `provider_options.thinking` MAY be set to `enabled` or
 `disabled` to explicitly control native thinking mode independently of
 `provider_options.reasoning_effort`. When omitted, Mezzanine MAY infer DeepSeek

@@ -32,6 +32,7 @@ struct OpenAiChatCompletionsOptions {
     structured_output: OpenAiStructuredOutputMode,
     output_token_field: OpenAiOutputTokenField,
     maap_surface: OpenAiMaapSurfaceMode,
+    developer_role: OpenAiDeveloperRole,
 }
 
 impl Default for OpenAiChatCompletionsOptions {
@@ -44,6 +45,7 @@ impl Default for OpenAiChatCompletionsOptions {
             structured_output: OpenAiStructuredOutputMode::Auto,
             output_token_field: OpenAiOutputTokenField::MaxTokens,
             maap_surface: OpenAiMaapSurfaceMode::CanonicalBatch,
+            developer_role: OpenAiDeveloperRole::System,
         }
     }
 }
@@ -85,6 +87,9 @@ impl OpenAiChatCompletionsOptions {
         }
         if let Some(value) = openai_chat_provider_option(provider_options, &["maap_surface"]) {
             options.maap_surface = OpenAiMaapSurfaceMode::parse(&value)?;
+        }
+        if let Some(value) = openai_chat_provider_option(provider_options, &["developer_role"]) {
+            options.developer_role = OpenAiDeveloperRole::parse(&value)?;
         }
         Ok(options)
     }
@@ -136,6 +141,13 @@ enum OpenAiOutputTokenField {
 enum OpenAiMaapSurfaceMode {
     CanonicalBatch,
     ContentJson,
+}
+
+/// Chat Completions wire role used for Mezzanine developer messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiDeveloperRole {
+    System,
+    Developer,
 }
 
 impl OpenAiCompatibilitySwitch {
@@ -245,6 +257,27 @@ impl OpenAiMaapSurfaceMode {
             _ => Err(MezError::invalid_args(
                 "OpenAI-compatible provider option `maap_surface` must be canonical_batch or content_json",
             )),
+        }
+    }
+}
+
+impl OpenAiDeveloperRole {
+    /// Parses the wire role used for Mezzanine developer messages.
+    fn parse(value: &str) -> Result<Self> {
+        match openai_chat_normalized_option(value).as_str() {
+            "system" => Ok(Self::System),
+            "developer" => Ok(Self::Developer),
+            _ => Err(MezError::invalid_args(
+                "OpenAI-compatible provider option `developer_role` must be developer or system",
+            )),
+        }
+    }
+
+    /// Returns the Chat Completions role string for developer messages.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Developer => "developer",
         }
     }
 }
@@ -375,7 +408,7 @@ fn build_openai_chat_completions_http_request(
     let stream = false;
     let mut body = serde_json::json!({
         "model": request.model,
-        "messages": openai_chat_completions_messages(request),
+        "messages": openai_chat_completions_messages(request, options.developer_role),
         "stream": stream,
     });
     if let Some(max_output_tokens) = request.max_output_tokens.filter(|tokens| *tokens > 0) {
@@ -496,14 +529,17 @@ fn openai_chat_apply_response_format(
 }
 
 /// Renders Mezzanine model messages into Chat Completions message objects.
-fn openai_chat_completions_messages(request: &ModelRequest) -> Vec<serde_json::Value> {
+fn openai_chat_completions_messages(
+    request: &ModelRequest,
+    developer_role: OpenAiDeveloperRole,
+) -> Vec<serde_json::Value> {
     request
         .messages
         .iter()
         .map(|message| {
             let role = match message.role {
                 ModelMessageRole::System => "system",
-                ModelMessageRole::Developer => "system",
+                ModelMessageRole::Developer => developer_role.as_str(),
                 ModelMessageRole::User => "user",
                 ModelMessageRole::Assistant => "assistant",
                 ModelMessageRole::Tool => "tool",
@@ -788,5 +824,51 @@ fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
             .and_then(|details| details.get("cached_tokens"))
             .and_then(serde_json::Value::as_u64),
         cache_write_input_tokens: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::{ContextSourceKind, ModelMessage};
+
+    /// Verifies OpenAI-compatible Chat Completions can preserve Mezzanine's
+    /// developer role on modern APIs while retaining the default system-role
+    /// fallback for older compatible backends.
+    #[test]
+    fn openai_chat_completions_messages_support_configurable_developer_role() {
+        let request = ModelRequest {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::DeveloperInstruction,
+                content: "Follow developer authority.".to_string(),
+            }],
+        };
+
+        let default_messages =
+            openai_chat_completions_messages(&request, OpenAiDeveloperRole::System);
+        assert_eq!(default_messages[0]["role"], "system");
+
+        let developer_messages =
+            openai_chat_completions_messages(&request, OpenAiDeveloperRole::Developer);
+        assert_eq!(developer_messages[0]["role"], "developer");
     }
 }
