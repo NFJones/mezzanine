@@ -305,7 +305,9 @@ fn anthropic_messages_request_body(
     for message in &request.messages {
         let role = match message.role {
             super::ModelMessageRole::System | super::ModelMessageRole::Developer => {
-                system_parts.push(message.content.clone());
+                if !message.content.is_empty() {
+                    system_parts.push(message.content.clone());
+                }
                 continue;
             }
             super::ModelMessageRole::Assistant => "assistant",
@@ -1498,6 +1500,65 @@ mod tests {
             value["system"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
         );
+        assert_eq!(
+            value["messages"][0]["content"],
+            "summarize this conversation"
+        );
+    }
+
+    /// Verifies empty system and developer messages do not create cached
+    /// Anthropic system blocks.
+    ///
+    /// The Anthropic request builder skips empty user-facing messages before
+    /// serializing them. System and developer messages must follow the same
+    /// empty-content rule so prompt caching does not emit an empty text block
+    /// with cache-control metadata.
+    #[test]
+    fn anthropic_request_body_omits_empty_cached_system_blocks() {
+        let request = ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::System,
+                    source: crate::agent::ContextSourceKind::System,
+                    content: String::new(),
+                },
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::Developer,
+                    source: crate::agent::ContextSourceKind::DeveloperInstruction,
+                    content: String::new(),
+                },
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::User,
+                    source: crate::agent::ContextSourceKind::UserInstruction,
+                    content: "summarize this conversation".to_string(),
+                },
+            ],
+        };
+
+        let body =
+            anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert!(value.get("system").is_none(), "{value}");
         assert_eq!(
             value["messages"][0]["content"],
             "summarize this conversation"
