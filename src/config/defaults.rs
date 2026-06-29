@@ -316,6 +316,9 @@ residency = "global"
 approval_policy = "ask"
 fallback_profiles = []
 
+[model_profiles.anthropic-default.provider_options]
+prompt_caching = "enabled"
+
 [model_profiles.anthropic-fast]
 provider = "anthropic"
 model = "claude-haiku-4-5-20251001"
@@ -329,6 +332,9 @@ privacy_tier = "standard"
 residency = "global"
 approval_policy = "ask"
 fallback_profiles = []
+
+[model_profiles.anthropic-fast.provider_options]
+prompt_caching = "enabled"
 
 [model_profiles.default]
 provider = "openai"

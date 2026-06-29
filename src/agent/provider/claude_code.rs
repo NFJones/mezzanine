@@ -389,13 +389,15 @@ fn parse_claude_code_json_output(stdout: &str) -> Result<(String, ModelTokenUsag
         )
         .with_provider_raw_text(trimmed.to_string()));
     };
+    let input_tokens = envelope.usage.input_tokens.unwrap_or(0);
+    let cached_input_tokens = envelope.usage.cache_read_input_tokens;
     Ok((
         result.trim().to_string(),
         ModelTokenUsage {
-            input_tokens: envelope.usage.input_tokens.unwrap_or(0),
+            input_tokens: input_tokens.saturating_add(cached_input_tokens.unwrap_or(0)),
             output_tokens: envelope.usage.output_tokens.unwrap_or(0),
             reasoning_tokens: 0,
-            cached_input_tokens: envelope.usage.cache_read_input_tokens,
+            cached_input_tokens,
             cache_write_input_tokens: envelope.usage.cache_creation_input_tokens,
         },
     ))
@@ -1623,10 +1625,14 @@ EOF
             .unwrap();
 
         assert!(response.action_batch.is_some());
-        assert_eq!(response.usage.input_tokens, 2);
+        assert_eq!(response.usage.input_tokens, 10_498);
+        assert_eq!(response.usage.billed_input_tokens(), 2);
         assert_eq!(response.usage.output_tokens, 12);
+        assert_eq!(response.usage.reasoning_tokens, 0);
         assert_eq!(response.usage.cached_input_tokens, Some(10_496));
+        assert_eq!(response.usage.cached_input_hit_ratio_display(), "99.98%");
         assert_eq!(response.usage.cache_write_input_tokens, Some(6_112));
+        assert_eq!(response.usage.total_tokens(), 16_622);
         assert_eq!(response.latest_request_usage, None);
     }
 

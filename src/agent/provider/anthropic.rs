@@ -25,12 +25,17 @@ use std::collections::BTreeMap;
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Conservative fallback output cap required by Anthropic Messages requests.
 const DEFAULT_ANTHROPIC_MAX_TOKENS: usize = 4096;
+/// Anthropic prompt caching is enabled by default because cache-control markers
+/// only establish provider-side cache breakpoints for otherwise identical
+/// request content.
+const DEFAULT_ANTHROPIC_PROMPT_CACHING: bool = true;
 
 /// Provider-level options for Anthropic Messages requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AnthropicMessagesOptions {
     anthropic_version: String,
     default_max_tokens: usize,
+    prompt_caching: bool,
 }
 
 impl Default for AnthropicMessagesOptions {
@@ -38,6 +43,7 @@ impl Default for AnthropicMessagesOptions {
         Self {
             anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             default_max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
+            prompt_caching: DEFAULT_ANTHROPIC_PROMPT_CACHING,
         }
     }
 }
@@ -58,6 +64,10 @@ impl AnthropicMessagesOptions {
                         "Anthropic provider option `default_max_tokens`",
                         value,
                     )?;
+                }
+                "prompt_caching" | "prompt-caching" => {
+                    options.prompt_caching =
+                        parse_bool_option("Anthropic provider option `prompt_caching`", value)?;
                 }
                 "max_output_tokens"
                 | "context_window_tokens"
@@ -102,6 +112,17 @@ fn parse_positive_usize(label: &str, value: &str) -> Result<usize> {
         )));
     }
     Ok(parsed)
+}
+
+/// Parses a boolean-like provider option.
+fn parse_bool_option(label: &str, value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" | "enabled" => Ok(true),
+        "false" | "0" | "no" | "off" | "disabled" => Ok(false),
+        _ => Err(MezError::invalid_args(format!(
+            "{label} must be true or false"
+        ))),
+    }
 }
 
 /// Chat Completions transport dialect implementation for Anthropic Messages.
@@ -325,7 +346,16 @@ fn anthropic_messages_request_body(
         "stream": stream,
     });
     if !system_parts.is_empty() {
-        body["system"] = serde_json::json!(system_parts.join("\n\n"));
+        let system_text = system_parts.join("\n\n");
+        body["system"] = if options.prompt_caching {
+            serde_json::json!([{
+                "type": "text",
+                "text": system_text,
+                "cache_control": { "type": "ephemeral" },
+            }])
+        } else {
+            serde_json::json!(system_text)
+        };
     }
     if anthropic_request_requires_maap(request) {
         body["tools"] = serde_json::json!([anthropic_maap_tool(request)]);
@@ -1408,6 +1438,111 @@ mod tests {
         assert_eq!(error.provider_raw_text(), Some("partial"));
         let failure_json = error.provider_failure_json().unwrap();
         assert!(failure_json.contains("future_reason"), "{failure_json}");
+    }
+
+    /// Verifies Anthropic prompt caching marks the stable system prompt as an
+    /// ephemeral cache breakpoint by default.
+    ///
+    /// Anthropic only performs prompt caching when request content blocks carry
+    /// `cache_control`, so the default request shape must establish a cache
+    /// point on the long-lived system prompt while preserving ordinary user
+    /// message serialization.
+    #[test]
+    fn anthropic_request_body_marks_system_prompt_cache_control_by_default() {
+        let request = ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::System,
+                    source: crate::agent::ContextSourceKind::System,
+                    content: "stable system prompt".to_string(),
+                },
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::User,
+                    source: crate::agent::ContextSourceKind::UserInstruction,
+                    content: "summarize this conversation".to_string(),
+                },
+            ],
+        };
+
+        let body =
+            anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(value["system"][0]["type"], "text");
+        assert_eq!(value["system"][0]["text"], "stable system prompt");
+        assert_eq!(
+            value["system"][0]["cache_control"],
+            serde_json::json!({ "type": "ephemeral" })
+        );
+        assert_eq!(
+            value["messages"][0]["content"],
+            "summarize this conversation"
+        );
+    }
+
+    /// Verifies Anthropic prompt caching can be disabled through provider
+    /// options for callers that need the legacy plain-string system shape.
+    #[test]
+    fn anthropic_request_body_allows_prompt_caching_to_be_disabled() {
+        let mut provider_options = BTreeMap::new();
+        provider_options.insert("prompt_caching".to_string(), "false".to_string());
+        let options = AnthropicMessagesOptions::from_provider_options(&provider_options).unwrap();
+        let request = ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            stop: None,
+            messages: vec![
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::System,
+                    source: crate::agent::ContextSourceKind::System,
+                    content: "stable system prompt".to_string(),
+                },
+                crate::agent::ModelMessage {
+                    role: crate::agent::ModelMessageRole::User,
+                    source: crate::agent::ContextSourceKind::UserInstruction,
+                    content: "summarize this conversation".to_string(),
+                },
+            ],
+        };
+
+        let body = anthropic_messages_request_body(&request, false, &options).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(value["system"], "stable system prompt");
     }
 
     /// Verifies Anthropic action-execution requests advertise one provider-native

@@ -136,6 +136,8 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) provider_reasoning_tokens: u64,
     /// Accumulated provider cached input tokens when reported.
     pub(super) provider_cached_input_tokens: u64,
+    /// Accumulated provider cache-write input tokens when reported.
+    pub(super) provider_cache_write_input_tokens: u64,
     /// Accumulated provider input tokens not reported as cache hits.
     pub(super) provider_billed_input_tokens: u64,
     /// Accumulated provider token usage grouped by provider/model.
@@ -180,6 +182,9 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) provider_output_tokens_per_response: crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cached input tokens.
     pub(super) provider_cached_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    /// Histogram of latest response cache-write input tokens.
+    pub(super) provider_cache_write_input_tokens_per_response:
+        crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cache-hit ratios in basis points.
     pub(super) provider_cached_input_hit_ratio_basis_points: crate::async_runtime::RuntimeHistogram,
     /// Histogram of MAAP action counts per provider response.
@@ -216,6 +221,8 @@ pub(super) struct RuntimeMetricsSnapshot {
     pub(super) last_provider_input_tokens: Option<u64>,
     /// Most recent provider response cached input tokens, when reported.
     pub(super) last_provider_cached_input_tokens: Option<u64>,
+    /// Most recent provider response cache-write input tokens, when reported.
+    pub(super) last_provider_cache_write_input_tokens: Option<u64>,
     /// Most recent provider response cache-hit ratio in basis points.
     pub(super) last_provider_cached_input_hit_ratio_basis_points: Option<u32>,
 }
@@ -368,6 +375,9 @@ impl RuntimeMetricsSnapshot {
         self.provider_cached_input_tokens = self
             .provider_cached_input_tokens
             .saturating_add(usage.cached_input_tokens.unwrap_or(0));
+        self.provider_cache_write_input_tokens = self
+            .provider_cache_write_input_tokens
+            .saturating_add(usage.cache_write_input_tokens.unwrap_or(0));
         self.provider_billed_input_tokens = self
             .provider_billed_input_tokens
             .saturating_add(usage.billed_input_tokens());
@@ -383,8 +393,13 @@ impl RuntimeMetricsSnapshot {
             .record(latest_usage.output_tokens);
         self.last_provider_input_tokens = Some(latest_usage.input_tokens);
         self.last_provider_cached_input_tokens = latest_usage.cached_input_tokens;
+        self.last_provider_cache_write_input_tokens = latest_usage.cache_write_input_tokens;
         self.last_provider_cached_input_hit_ratio_basis_points =
             latest_usage.cached_input_hit_ratio_basis_points();
+        if let Some(cache_write) = latest_usage.cache_write_input_tokens {
+            self.provider_cache_write_input_tokens_per_response
+                .record(cache_write);
+        }
         if let Some(cached) = latest_usage.cached_input_tokens {
             self.provider_cached_input_reports =
                 self.provider_cached_input_reports.saturating_add(1);

@@ -597,6 +597,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     assert_eq!(execution.latest_response_usage.input_tokens, 251);
     assert_eq!(execution.latest_response_usage.output_tokens, 30);
     assert_eq!(execution.latest_response_usage.reasoning_tokens, 7);
+    assert_eq!(execution.latest_response_usage.cached_input_tokens, Some(80));
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(

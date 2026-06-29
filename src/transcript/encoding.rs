@@ -367,6 +367,10 @@ impl AgentSessionMetadata {
                 .cached_input_tokens
                 .map(|tokens| tokens.to_string())
                 .unwrap_or_default(),
+            self.token_usage
+                .cache_write_input_tokens
+                .map(|tokens| tokens.to_string())
+                .unwrap_or_default(),
             self.approval_policy.clone().unwrap_or_default(),
             self.context_usage.clone().unwrap_or_default(),
             token_usage_by_model,
@@ -390,7 +394,8 @@ impl AgentSessionMetadata {
             || fields.len() == 21
             || fields.len() == 22
             || fields.len() == 23
-            || fields.len() == 24)
+            || fields.len() == 24
+            || fields.len() == 25)
             || fields[0] != AGENT_SESSION_METADATA_VERSION
         {
             return Err(MezError::invalid_args(
@@ -399,6 +404,7 @@ impl AgentSessionMetadata {
         }
         let legacy_layout = fields.len() <= 22;
         let current_without_directive_layout = fields.len() == 23;
+        let current_with_cache_write_layout = fields.len() == 25;
         let prompt_cache_lineage_id = if legacy_layout {
             fields[3].clone()
         } else {
@@ -448,6 +454,8 @@ impl AgentSessionMetadata {
             18
         } else if current_without_directive_layout {
             19
+        } else if current_with_cache_write_layout {
+            21
         } else {
             20
         };
@@ -455,6 +463,8 @@ impl AgentSessionMetadata {
             19
         } else if current_without_directive_layout {
             20
+        } else if current_with_cache_write_layout {
+            22
         } else {
             21
         };
@@ -462,6 +472,8 @@ impl AgentSessionMetadata {
             20
         } else if current_without_directive_layout {
             21
+        } else if current_with_cache_write_layout {
+            23
         } else {
             22
         };
@@ -469,6 +481,8 @@ impl AgentSessionMetadata {
             21
         } else if current_without_directive_layout {
             22
+        } else if current_with_cache_write_layout {
+            24
         } else {
             23
         };
@@ -488,7 +502,15 @@ impl AgentSessionMetadata {
                     .filter(|value| !value.is_empty())
                     .map(|value| parse_u64(value, "agent session cached_input_tokens"))
                     .transpose()?,
-                cache_write_input_tokens: None,
+                cache_write_input_tokens: if current_with_cache_write_layout {
+                    fields
+                        .get(token_usage_start + 4)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| parse_u64(value, "agent session cache_write_input_tokens"))
+                        .transpose()?
+                } else {
+                    None
+                },
             }
         } else {
             ModelTokenUsage::default()
@@ -570,7 +592,8 @@ fn encode_token_usage_by_model(
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
                 "reasoning_tokens": usage.reasoning_tokens,
-                "cached_input_tokens": usage.cached_input_tokens
+                "cached_input_tokens": usage.cached_input_tokens,
+                "cache_write_input_tokens": usage.cache_write_input_tokens
             })
         })
         .collect::<Vec<_>>();
@@ -607,7 +630,7 @@ fn decode_token_usage_by_model(
             output_tokens: json_u64_field(object, "output_tokens")?,
             reasoning_tokens: json_u64_field(object, "reasoning_tokens")?,
             cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,
-            cache_write_input_tokens: None,
+            cache_write_input_tokens: json_optional_u64_field(object, "cache_write_input_tokens")?,
         };
         usage_by_model
             .entry(ModelTokenUsageKey::new(provider, model))
