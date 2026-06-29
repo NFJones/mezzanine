@@ -378,12 +378,14 @@ pub(super) fn openai_prompt_cache_retention_request_value(
         .as_deref()
         .filter(|retention| !retention.is_empty())
     else {
-        return Ok(None);
+        return Ok(
+            openai_model_supports_extended_prompt_cache_retention(&request.model).then_some("24h"),
+        );
     };
 
     match retention {
         "in_memory" => {
-            if openai_model_defaults_to_extended_prompt_cache_retention(&request.model) {
+            if openai_model_supports_extended_prompt_cache_retention(&request.model) {
                 return Err(MezError::invalid_args(format!(
                     "OpenAI prompt_cache_retention \"in_memory\" is not supported for model {}; omit the option or use 24h",
                     request.model

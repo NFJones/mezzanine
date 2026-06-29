@@ -2620,8 +2620,8 @@ model metadata for known default model families before falling back to a
 conservative local token budget for display and explicit compaction targets.
 For OpenAI profiles, `provider_options.prompt_cache_retention` MAY be set to
 `in_memory` or `24h` to request the corresponding provider cache-retention
-policy. Mezzanine MAY omit redundant provider-default retention fields while
-preserving behavior. Mezzanine MUST send `24h` only for OpenAI model families
+policy. When the option is omitted for an OpenAI model family that supports
+extended prompt-cache retention, Mezzanine MUST request `24h` by default. Mezzanine MUST send `24h` only for OpenAI model families
 that support extended prompt-cache retention, and MUST NOT silently translate an
 unsupported explicit `in_memory` request into extended retention.
 For OpenAI-compatible Chat Completions profiles,
@@ -2776,8 +2776,9 @@ only for model families where in-memory retention remains the provider default,
 and MUST reject explicit `in_memory` for model families whose provider default
 is extended retention and whose API no longer supports in-memory retention.
 Mezzanine MUST pass `24h` through as the OpenAI Responses
-`prompt_cache_retention` request field only when the selected OpenAI model
-family supports extended prompt-cache retention.
+`prompt_cache_retention` request field when the selected OpenAI model family
+supports extended prompt-cache retention and the profile either requests `24h`
+or omits the option.
 
 The built-in OpenAI provider default model MUST be `gpt-5.5` unless the user
 overrides it through provider or model-profile configuration. The built-in

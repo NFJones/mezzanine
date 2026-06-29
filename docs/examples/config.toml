@@ -336,9 +336,9 @@ fallback_profiles = []
 
 [model_profiles.default.provider_options]
 reasoning_effort = "medium"
-# Optional for OpenAI Responses models. Most supported models default to
-# "in_memory"; gpt-5.5 and newer default to "24h" and do not support
-# explicit "in_memory".
+# Optional for OpenAI Responses models. Omitted profiles default to "24h"
+# for supported OpenAI model families. Use explicit "in_memory" only for
+# models that do not support extended retention.
 # prompt_cache_retention = "24h"
 # For OpenAI-compatible Chat Completions backends that support the modern
 # developer role, set developer_role = "developer". It defaults to
