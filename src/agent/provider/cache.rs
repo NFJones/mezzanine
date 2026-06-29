@@ -4,6 +4,7 @@
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
+use super::openai_request::openai_responses_request_control_shape_with_stream;
 use super::schema::openai_maap_action_batch_tools;
 use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
 use crate::agent::{
@@ -524,19 +525,9 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
                 ))
             },
         )?;
-    let provider_request_shape = serde_json::to_string(&serde_json::json!({
-        "cache_family": "responses-request-shape-v1",
-        "model": request.model,
-        "reasoning_effort": request.reasoning_effort,
-        "service_tier": openai_service_tier_for_latency_preference(request.latency_preference.as_deref())?,
-        "prompt_cache_retention": openai_prompt_cache_retention_request_value(request)?,
-        "parallel_tool_calls": false,
-        "store": false,
-        "stream": stream,
-        "response_format": response_format,
-        "tools": tools,
-        "tool_choice": tool_choice,
-    }))
+    let provider_request_shape = serde_json::to_string(
+        &openai_responses_request_control_shape_with_stream(request, stream)?,
+    )
     .map_err(|error| {
         MezError::invalid_state(format!("OpenAI request-shape diagnostics failed: {error}"))
     })?;

@@ -4350,8 +4350,8 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
     assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_715);
     assert_eq!(diagnostics.stable_prompt_prefix_sha256, "cbc04cc7d90997b2c8c8c8a0d4e2f05d87e466ed0d47c4edefa68d3eb582b07f");
-    assert_eq!(diagnostics.provider_request_shape_bytes, 27_586);
-    assert_eq!(diagnostics.provider_request_shape_sha256, "ad806db01e4b81267302b1c2de1b7f9e2d6253a9d871b3232d4b63386b1d6d15");
+    assert_eq!(diagnostics.provider_request_shape_bytes, 27_523);
+    assert_eq!(diagnostics.provider_request_shape_sha256, "9801f39d122eedce400ef0740858f93cd151d61cb90e6a40253890fa622bc7c8");
 }
 
 /// Verifies OpenAI Responses request bodies carry the selected reasoning effort

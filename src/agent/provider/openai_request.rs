@@ -35,11 +35,24 @@ pub(super) fn openai_responses_request_body_with_stream(
 ) -> Result<String> {
     validate_non_empty("OpenAI model", &request.model)?;
     let rendered = openai_render_request_messages(request)?;
+    let mut body = openai_responses_request_control_shape_with_stream(request, stream)?;
+    body["instructions"] = serde_json::json!(rendered.instructions);
+    body["input"] = serde_json::json!(rendered.input);
+    body["prompt_cache_key"] = serde_json::json!(openai_prompt_cache_key(request));
+    serde_json::to_string(&body).map_err(|error| {
+        MezError::invalid_state(format!("OpenAI request encoding failed: {error}"))
+    })
+}
+
+/// Builds the canonical OpenAI request-control shape shared by request
+/// emission and prompt-cache diagnostics.
+pub(super) fn openai_responses_request_control_shape_with_stream(
+    request: &ModelRequest,
+    stream: bool,
+) -> Result<serde_json::Value> {
+    validate_non_empty("OpenAI model", &request.model)?;
     let mut body = serde_json::json!({
         "model": request.model,
-        "instructions": rendered.instructions,
-        "input": rendered.input,
-        "prompt_cache_key": openai_prompt_cache_key(request),
         "parallel_tool_calls": false,
         "store": false,
         "stream": stream
@@ -73,7 +86,5 @@ pub(super) fn openai_responses_request_body_with_stream(
             "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
         });
     }
-    serde_json::to_string(&body).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI request encoding failed: {error}"))
-    })
+    Ok(body)
 }
