@@ -630,7 +630,8 @@ fn anthropic_content_to_output(
                     })?);
                 }
             }
-            "thinking" | "redacted_thinking" | "server_tool_use" | "server_tool_result" => {
+            "thinking" | "redacted_thinking" => {}
+            "server_tool_use" | "server_tool_result" => {
                 return Err(anthropic_unsupported_content_block_error(block));
             }
             _ => return Err(anthropic_unsupported_content_block_error(block)),
@@ -1190,6 +1191,65 @@ mod tests {
         let batch = action_batch.unwrap();
         assert_eq!(batch.rationale, "Return the final answer now.");
         assert_eq!(batch.actions.len(), 1);
+    }
+
+    /// Verifies Anthropic thinking content blocks are ignored because they are
+    /// model-private reasoning artifacts and do not carry MAAP-relevant text or
+    /// tool input.
+    #[test]
+    fn anthropic_content_blocks_skip_thinking_blocks() {
+        let content = vec![
+            serde_json::json!({
+                "type": "thinking",
+                "thinking": "private chain of thought"
+            }),
+            serde_json::json!({
+                "type": "redacted_thinking",
+                "data": "opaque-redacted-payload"
+            }),
+            serde_json::json!({
+                "type": "tool_use",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "input": {
+                    "rationale": "Return the final answer now.",
+                    "actions": [{
+                        "type": "say",
+                        "status": "final",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "done"
+                    }]
+                }
+            }),
+        ];
+
+        let (raw_text, action_batch) =
+            anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap();
+
+        assert_eq!(raw_text, "executing");
+        let batch = action_batch.unwrap();
+        assert_eq!(batch.rationale, "Return the final answer now.");
+        assert_eq!(batch.actions.len(), 1);
+    }
+
+    /// Verifies Anthropic server-side tool blocks remain rejected because they
+    /// represent provider tool activity outside Mezzanine's MAAP action
+    /// contract.
+    #[test]
+    fn anthropic_content_blocks_reject_server_tool_blocks() {
+        let content = vec![serde_json::json!({
+            "type": "server_tool_use",
+            "name": "web_search"
+        })];
+
+        let error = anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap_err();
+
+        assert!(
+            error
+                .message()
+                .contains("unsupported content block type `server_tool_use`"),
+            "{}",
+            error.message()
+        );
     }
 
     /// Verifies Anthropic rejects multiple MAAP carrier `tool_use` blocks so
