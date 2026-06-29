@@ -474,7 +474,7 @@ impl ProviderCapabilities {
                 supports_reasoning_controls: true,
                 supports_thinking_toggle: false,
                 supports_service_tier: true,
-                supports_prompt_cache_retention: true,
+                supports_prompt_cache_retention: false,
                 supports_streaming: true,
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: true,
@@ -1635,6 +1635,24 @@ mod tests {
             effective_provider_api("anthropic", None).unwrap(),
             ProviderApiCompatibility::AnthropicMessages
         );
+    }
+
+    /// Verifies OpenAI Responses capability metadata only advertises accepted
+    /// provider request fields.
+    ///
+    /// OpenAI prompt caching is automatic for eligible input prefixes. The
+    /// adapter must keep cache-retention controls disabled so runtime code does
+    /// not treat `prompt_cache_retention` as a supported wire field.
+    #[test]
+    fn openai_responses_capabilities_omit_prompt_cache_retention() {
+        let capabilities = ProviderCapabilities::for_api(ProviderApiCompatibility::OpenAiResponses);
+
+        assert!(capabilities.supports_responses_api);
+        assert!(capabilities.supports_reasoning_controls);
+        assert!(capabilities.supports_service_tier);
+        assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(capabilities.supports_streaming);
+        assert!(capabilities.supports_tool_calls);
     }
 
     /// Verifies Anthropic advertises only the conservative capabilities needed

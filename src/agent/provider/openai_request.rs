@@ -6,8 +6,7 @@
 //! focused on transport orchestration.
 
 use super::cache::{
-    openai_prompt_cache_key, openai_prompt_cache_retention_request_value,
-    openai_render_request_messages, openai_response_format,
+    openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
     openai_service_tier_for_latency_preference,
 };
 use super::schema::openai_maap_action_batch_tools;
@@ -73,9 +72,6 @@ pub(super) fn openai_responses_request_control_shape_with_stream(
         openai_service_tier_for_latency_preference(request.latency_preference.as_deref())?
     {
         body["service_tier"] = serde_json::json!(service_tier);
-    }
-    if let Some(retention) = openai_prompt_cache_retention_request_value(request)? {
-        body["prompt_cache_retention"] = serde_json::json!(retention);
     }
     if request.interaction_kind == ModelInteractionKind::AutoSizing {
         body["tool_choice"] = serde_json::json!("none");

@@ -696,7 +696,6 @@ Provider options under a model profile:
 | --- | --- | --- | --- |
 | `model_profiles.<name>.provider_options.reasoning_effort` | string | profile-specific | Reasoning effort sent to the provider. |
 | `model_profiles.<name>.provider_options.thinking` | string | `"enabled"` for generated DeepSeek profiles | DeepSeek thinking mode override: `enabled` or `disabled`. |
-| `model_profiles.<name>.provider_options.prompt_cache_retention` | string | omitted | Optional OpenAI cache retention: `in_memory` or `24h`; omitted OpenAI profiles default to `24h` for supported model families. |
 
 ### `permissions`
 

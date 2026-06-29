@@ -4313,7 +4313,7 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
 
     assert_eq!(body["model"], "gpt-5.4");
-    assert_eq!(body["prompt_cache_retention"], "24h");
+    assert!(body.get("prompt_cache_retention").is_none());
     assert!(body.get("max_output_tokens").is_none());
     assert_eq!(body["reasoning"]["effort"], "medium");
     assert_eq!(body["service_tier"], "priority");
@@ -4350,8 +4350,11 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
     assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_715);
     assert_eq!(diagnostics.stable_prompt_prefix_sha256, "cbc04cc7d90997b2c8c8c8a0d4e2f05d87e466ed0d47c4edefa68d3eb582b07f");
-    assert_eq!(diagnostics.provider_request_shape_bytes, 27_523);
-    assert_eq!(diagnostics.provider_request_shape_sha256, "9801f39d122eedce400ef0740858f93cd151d61cb90e6a40253890fa622bc7c8");
+    assert_eq!(diagnostics.provider_request_shape_bytes, 27_492);
+    assert_eq!(
+        diagnostics.provider_request_shape_sha256,
+        "b7b6cffab119ac4151140790688e2a40f05926fcbfcb7ce824611f4e5d398b7f"
+    );
 }
 
 /// Verifies OpenAI Responses request bodies carry the selected reasoning effort
@@ -4386,7 +4389,7 @@ fn openai_responses_request_body_includes_reasoning_effort() {
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
 
     assert_eq!(value["reasoning"]["effort"], "high");
-    assert_eq!(value["prompt_cache_retention"], "24h");
+    assert!(value.get("prompt_cache_retention").is_none());
 }
 
 /// Verifies OpenAI Responses request bodies do not serialize the configured
@@ -4458,101 +4461,57 @@ fn openai_prompt_cache_retention_test_request(model: &str) -> ModelRequest {
     .unwrap()
 }
 
-/// Verifies supported OpenAI models default to extended prompt-cache retention.
+/// Verifies OpenAI Responses requests omit prompt-cache retention controls.
 ///
-/// Omitting the field should still request `24h` for model families where the
-/// provider supports extended prompt-cache retention so stable prefixes can be
-/// reused across turns and sessions without profile boilerplate.
+/// OpenAI input caching is automatic for eligible prefixes. The Responses API
+/// rejects a `prompt_cache_retention` request field, so stale profile options
+/// must not leak into the provider-visible JSON body.
 #[test]
-fn openai_responses_request_body_defaults_supported_models_to_extended_retention() {
-    let request = openai_prompt_cache_retention_test_request("gpt-5.4");
-
-    let body = openai_responses_request_body(&request).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-
-    assert_eq!(value["prompt_cache_retention"], "24h");
-}
-
-/// Verifies OpenAI prompt-cache diagnostics include implicit extended retention.
-///
-/// Diagnostics must fingerprint the emitted provider request shape, including
-/// the provider-visible `24h` default for supported model families.
-#[test]
-fn openai_prompt_cache_diagnostics_include_implicit_extended_retention() {
-    let implicit = openai_prompt_cache_retention_test_request("gpt-5.4");
-    let explicit_unsupported = {
-        let mut request = openai_prompt_cache_retention_test_request("gpt-5.4");
-        request.prompt_cache_retention = Some("in_memory".to_string());
-        request
-    };
-
-    let implicit_body: serde_json::Value =
-        serde_json::from_str(&openai_responses_request_body(&implicit).unwrap()).unwrap();
-    assert_eq!(implicit_body["prompt_cache_retention"], "24h");
-    assert!(openai_responses_request_body(&explicit_unsupported).is_err());
-
-    let diagnostics = openai_prompt_cache_diagnostics_for_request(&implicit).unwrap();
-    assert!(diagnostics.provider_request_shape_bytes > 2);
-}
-
-/// Verifies explicit in-memory prompt-cache retention is rejected for current
-/// and future model families whose provider default is extended retention.
-#[test]
-fn openai_responses_request_body_rejects_unsupported_in_memory_prompt_cache_retention() {
-    let mut request = openai_prompt_cache_retention_test_request("gpt-5.5");
-    request.prompt_cache_retention = Some("in_memory".to_string());
-
-    let error = openai_responses_request_body(&request).unwrap_err();
-
-    assert!(error.to_string().contains("in_memory"), "{error}");
-    assert!(error.to_string().contains("gpt-5.5"), "{error}");
-}
-
-/// Verifies extended prompt-cache retention is accepted for current documented
-/// OpenAI model families, including the built-in default model family.
-#[test]
-fn openai_responses_request_body_accepts_current_extended_prompt_cache_retention_models() {
-    for model in [
-        "gpt-5.5",
-        "gpt-5.5-pro",
-        "gpt-5.4",
-        "gpt-5.2",
-        "gpt-5.1-codex-max",
-    ] {
-        let mut request = openai_prompt_cache_retention_test_request(model);
-        request.prompt_cache_retention = Some("24h".to_string());
+fn openai_responses_request_body_omits_prompt_cache_retention_option() {
+    for retention in ["24h", "in_memory", "forever"] {
+        let mut request = openai_prompt_cache_retention_test_request("gpt-5.5");
+        request.prompt_cache_retention = Some(retention.to_string());
 
         let body = openai_responses_request_body(&request).unwrap();
         let value: serde_json::Value = serde_json::from_str(&body).unwrap();
 
-        assert_eq!(value["prompt_cache_retention"], "24h", "{model}");
+        assert!(value.get("prompt_cache_retention").is_none(), "{retention}");
+        assert!(
+            value["prompt_cache_key"]
+                .as_str()
+                .is_some_and(|key| key.starts_with("mez-")),
+            "{retention}"
+        );
     }
 }
 
-/// Verifies extended prompt-cache retention is rejected for model families
-/// without documented support.
+/// Verifies OpenAI prompt-cache diagnostics ignore retention profile options.
+///
+/// Diagnostics fingerprint the provider-visible request shape used for cache
+/// analysis. Because OpenAI does not accept `prompt_cache_retention`, changing a
+/// stale local option must not perturb the canonical request-shape digest.
 #[test]
-fn openai_responses_request_body_rejects_unsupported_extended_prompt_cache_retention() {
-    let mut request = openai_prompt_cache_retention_test_request("gpt-5.4-mini");
-    request.prompt_cache_retention = Some("24h".to_string());
+fn openai_prompt_cache_diagnostics_ignore_prompt_cache_retention_option() {
+    let implicit = openai_prompt_cache_retention_test_request("gpt-5.4");
+    let mut explicit = openai_prompt_cache_retention_test_request("gpt-5.4");
+    explicit.prompt_cache_retention = Some("24h".to_string());
 
-    let error = openai_responses_request_body(&request).unwrap_err();
+    let implicit_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&implicit).unwrap()).unwrap();
+    let explicit_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&explicit).unwrap()).unwrap();
+    assert!(implicit_body.get("prompt_cache_retention").is_none());
+    assert_eq!(implicit_body, explicit_body);
 
-    assert!(error.to_string().contains("24h"), "{error}");
-    assert!(error.to_string().contains("gpt-5.4-mini"), "{error}");
-}
-
-/// Verifies OpenAI prompt-cache retention is constrained to documented values.
-#[test]
-fn openai_responses_request_body_rejects_invalid_prompt_cache_retention() {
-    let mut request = openai_prompt_cache_retention_test_request("gpt-test");
-    request.prompt_cache_retention = Some("forever".to_string());
-
-    let error = openai_responses_request_body(&request).unwrap_err();
-
-    assert!(
-        error.to_string().contains("prompt_cache_retention"),
-        "{error}"
+    let implicit_diagnostics = openai_prompt_cache_diagnostics_for_request(&implicit).unwrap();
+    let explicit_diagnostics = openai_prompt_cache_diagnostics_for_request(&explicit).unwrap();
+    assert_eq!(
+        implicit_diagnostics.provider_request_shape_bytes,
+        explicit_diagnostics.provider_request_shape_bytes
+    );
+    assert_eq!(
+        implicit_diagnostics.provider_request_shape_sha256,
+        explicit_diagnostics.provider_request_shape_sha256
     );
 }
 

@@ -370,46 +370,6 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     format!("mez-{}", &sha256_hex(material.as_bytes())[..32])
 }
 
-/// Returns the OpenAI Responses `prompt_cache_retention` value that will be sent.
-pub(super) fn openai_prompt_cache_retention_request_value(
-    request: &ModelRequest,
-) -> Result<Option<&str>> {
-    let Some(retention) = request
-        .prompt_cache_retention
-        .as_deref()
-        .filter(|retention| !retention.is_empty())
-    else {
-        return Ok(
-            openai_model_supports_extended_prompt_cache_retention(&request.model).then_some("24h"),
-        );
-    };
-
-    match retention {
-        "in_memory" => {
-            if openai_model_supports_extended_prompt_cache_retention(&request.model) {
-                return Err(MezError::invalid_args(format!(
-                    "OpenAI prompt_cache_retention \"in_memory\" is not supported for model {}; omit the option or use 24h",
-                    request.model
-                )));
-            }
-            Ok(None)
-        }
-        "24h" => {
-            if openai_model_supports_extended_prompt_cache_retention(&request.model) {
-                Ok(Some(retention))
-            } else {
-                Err(MezError::invalid_args(format!(
-                    "OpenAI prompt_cache_retention \"24h\" is not supported for model {}; omit the option or use in_memory",
-                    request.model
-                )))
-            }
-        }
-        other => Err(MezError::invalid_args(format!(
-            "OpenAI prompt_cache_retention must be in_memory or 24h, got {other:?}"
-        ))),
-    }
-}
-
 /// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
 pub(super) fn openai_service_tier_for_latency_preference(
     preference: Option<&str>,
@@ -422,54 +382,6 @@ pub(super) fn openai_service_tier_for_latency_preference(
             "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
         ))),
     }
-}
-
-/// Reports whether one OpenAI model id is known to support extended prompt cache retention.
-fn openai_model_supports_extended_prompt_cache_retention(model: &str) -> bool {
-    let model = model.trim();
-    openai_model_defaults_to_extended_prompt_cache_retention(model)
-        || openai_model_matches_snapshot_family(model, "gpt-4.1")
-        || openai_model_matches_snapshot_family(model, "gpt-5")
-        || openai_model_matches_snapshot_family(model, "gpt-5-codex")
-        || openai_model_matches_snapshot_family(model, "gpt-5.1")
-        || openai_model_matches_snapshot_family(model, "gpt-5.1-codex")
-        || openai_model_matches_snapshot_family(model, "gpt-5.1-codex-max")
-        || openai_model_matches_snapshot_family(model, "gpt-5.1-codex-mini")
-        || openai_model_matches_snapshot_family(model, "gpt-5.1-chat-latest")
-        || openai_model_matches_snapshot_family(model, "gpt-5.2")
-        || openai_model_matches_snapshot_family(model, "gpt-5.4")
-}
-
-/// Returns true when OpenAI documents extended retention as the default policy.
-fn openai_model_defaults_to_extended_prompt_cache_retention(model: &str) -> bool {
-    openai_gpt_model_version_at_least(model.trim(), 5, 5)
-}
-
-/// Matches an OpenAI model family exactly or by dated snapshot suffix.
-fn openai_model_matches_snapshot_family(model: &str, family: &str) -> bool {
-    model == family
-        || model
-            .strip_prefix(family)
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            .and_then(|suffix| suffix.chars().next())
-            .is_some_and(|first| first.is_ascii_digit())
-}
-
-/// Parses GPT-family versions and compares them with a minimum version.
-fn openai_gpt_model_version_at_least(model: &str, min_major: u16, min_minor: u16) -> bool {
-    let Some(rest) = model.strip_prefix("gpt-") else {
-        return false;
-    };
-    let version = rest.split('-').next().unwrap_or_default();
-    let mut parts = version.split('.');
-    let Some(major) = parts.next().and_then(|part| part.parse::<u16>().ok()) else {
-        return false;
-    };
-    let minor = parts
-        .next()
-        .and_then(|part| part.parse::<u16>().ok())
-        .unwrap_or(0);
-    major > min_major || (major == min_major && minor >= min_minor)
 }
 
 /// Returns non-model-visible OpenAI prompt-cache diagnostics for one request.
