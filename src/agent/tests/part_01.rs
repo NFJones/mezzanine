@@ -4730,6 +4730,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("Terminal work MUST be an executable action"));
     assert!(prompt.contains("Always set status to progress, final, or blocked"));
     assert!(prompt.contains("text/plain, text/markdown, or text/x-diff"));
+    assert!(prompt.contains("required text field (not content)"));
     assert!(prompt.contains("Keep say actions and MAAP batch rationales terse but informative"));
     assert!(prompt.contains("Treat batch rationales as current-turn deltas"));
     assert!(prompt.contains("optional top-level thought field"));

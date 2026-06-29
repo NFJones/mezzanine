@@ -86,6 +86,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("say: user-facing text, progress/final/blocked status"));
     assert!(prompt.contains("Add the optional top-level thought field only"));
     assert!(prompt.contains("text/plain, text/markdown, or text/x-diff"));
+    assert!(prompt.contains("required text field (not content)"));
     assert!(prompt.contains("Do not put shell commands or Mezzanine patch blocks in say"));
     assert!(prompt.contains("Text inside say is display-only"));
     assert!(prompt.contains("nonterminal sequence-point updates"));
