@@ -687,11 +687,11 @@ reasoning_profile = "high"
         "{status}"
     );
     assert!(
-        status.contains("| runtime-batch | gpt-router | 60 | 30 | unknown | 10 | 3 | 33.33% |"),
+        status.contains("| runtime-batch | gpt-router | 60 | 30 | 10 | 3 | 33.33% |"),
         "{status}"
     );
     assert!(
-        status.contains("| runtime-batch | gpt-5.5 | 100 | 50 | unknown | 40 | 12 | 33.33% |"),
+        status.contains("| runtime-batch | gpt-5.5 | 100 | 50 | 40 | 12 | 33.33% |"),
         "{status}"
     );
     let normal_request_context = requests[1]
@@ -4378,12 +4378,12 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
 
     assert!(
         status.contains(
-            "| Pane agent tokens | gpt-saved via openai: input=450 cached_input=450 cache_write_input=unknown cache_hit=50.00% output=80 reasoning=33 total=980 |"
+            "| Pane agent tokens | gpt-saved via openai: input=450 cached_input=450 cache_hit=50.00% output=80 reasoning=33 total=980 |"
         ),
         "{status}"
     );
     assert!(
-        status.contains("| openai | gpt-saved | 450 | 450 | unknown | 80 | 33 | 50.00% |"),
+        status.contains("| openai | gpt-saved | 450 | 450 | 80 | 33 | 50.00% |"),
         "{status}"
     );
     let restored_metadata = transcript_store
@@ -4433,7 +4433,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         &primary,
     );
     assert!(
-        resumed_status.contains("| openai | gpt-saved | 525 | 475 | unknown | 100 | 38 | 47.50% |"),
+        resumed_status.contains("| openai | gpt-saved | 525 | 475 | 100 | 38 | 47.50% |"),
         "{resumed_status}"
     );
     let resumed_metadata = transcript_store

@@ -280,22 +280,16 @@ impl ModelTokenUsage {
             .saturating_add(self.output_tokens)
     }
 
-    /// Returns input tokens that were not reported as prompt-cache hits.
+    /// Returns input tokens billed outside provider prompt-cache hits.
     pub fn billed_input_tokens(self) -> u64 {
         self.input_tokens
             .saturating_sub(self.cached_input_tokens.unwrap_or(0))
+            .saturating_add(self.cache_write_input_tokens.unwrap_or(0))
     }
 
     /// Returns the best-effort display value for provider prompt-cache hits.
     pub fn cached_input_tokens_display(self) -> String {
         self.cached_input_tokens
-            .map(|tokens| tokens.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    /// Returns the best-effort display value for provider prompt-cache writes.
-    pub fn cache_write_input_tokens_display(self) -> String {
-        self.cache_write_input_tokens
             .map(|tokens| tokens.to_string())
             .unwrap_or_else(|| "unknown".to_string())
     }
@@ -1615,7 +1609,8 @@ mod tests {
             cached_input_tokens: Some(60),
             cache_write_input_tokens: Some(20),
         });
-        assert_eq!(usage.cache_write_input_tokens_display(), "20");
+        assert_eq!(usage.cache_write_input_tokens, Some(20));
+        assert_eq!(usage.billed_input_tokens(), 60);
         assert_eq!(usage.total_tokens(), 130);
         usage.add_assign(ModelTokenUsage {
             input_tokens: 50,

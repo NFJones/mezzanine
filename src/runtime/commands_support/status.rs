@@ -149,10 +149,9 @@ fn runtime_metrics_histogram_lines(
 /// Formats provider token usage for the runtime metrics command.
 fn runtime_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
     format!(
-        "input={} cached_input={} cache_write_input={} output={} reasoning={} cache_hit={} total={}",
+        "input={} cached_input={} output={} reasoning={} cache_hit={} total={}",
         usage.billed_input_tokens(),
         usage.cached_input_tokens_display(),
-        usage.cache_write_input_tokens_display(),
         usage.output_tokens,
         usage.reasoning_tokens,
         usage.cached_input_hit_ratio_display(),
@@ -277,10 +276,6 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             runtime_metrics.provider_cached_input_tokens
         ),
         format!(
-            "provider_cache_write_input_tokens = {}",
-            runtime_metrics.provider_cache_write_input_tokens
-        ),
-        format!(
             "provider_billed_input_tokens = {}",
             runtime_metrics.provider_billed_input_tokens
         ),
@@ -396,13 +391,6 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .unwrap_or_else(|| "none".to_string())
         ),
         format!(
-            "last_provider_cache_write_input_tokens = {}",
-            runtime_metrics
-                .last_provider_cache_write_input_tokens
-                .map(|tokens| tokens.to_string())
-                .unwrap_or_else(|| "none".to_string())
-        ),
-        format!(
             "last_provider_cached_input_hit_ratio = {}",
             runtime_metrics
                 .last_provider_cached_input_hit_ratio_basis_points
@@ -468,10 +456,6 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
         (
             "provider_cached_input_tokens_per_response",
             &runtime_metrics.provider_cached_input_tokens_per_response,
-        ),
-        (
-            "provider_cache_write_input_tokens_per_response",
-            &runtime_metrics.provider_cache_write_input_tokens_per_response,
         ),
         (
             "provider_cached_input_hit_ratio_basis_points",

@@ -285,7 +285,6 @@ impl RuntimeSessionService {
                     "Model",
                     "Billed input",
                     "Cached input",
-                    "Cache write input",
                     "Output",
                     "Reasoning",
                     "Cache Hit %",
@@ -303,7 +302,6 @@ impl RuntimeSessionService {
                     "Model",
                     "Billed input",
                     "Cached input",
-                    "Cache write input",
                     "Output",
                     "Reasoning",
                     "Cache Hit %",
@@ -385,7 +383,6 @@ impl RuntimeSessionService {
                     key.model.clone(),
                     usage.billed_input_tokens().to_string(),
                     usage.cached_input_tokens_display(),
-                    usage.cache_write_input_tokens_display(),
                     usage.output_tokens.to_string(),
                     usage.reasoning_tokens.to_string(),
                     usage.cached_input_hit_ratio_display(),
@@ -397,10 +394,9 @@ impl RuntimeSessionService {
     /// Formats one provider/model token usage value for compact displays.
     fn runtime_agent_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
         format!(
-            "input={} cached_input={} cache_write_input={} cache_hit={} output={} reasoning={} total={}",
+            "input={} cached_input={} cache_hit={} output={} reasoning={} total={}",
             usage.billed_input_tokens(),
             usage.cached_input_tokens_display(),
-            usage.cache_write_input_tokens_display(),
             usage.cached_input_hit_ratio_display(),
             usage.output_tokens,
             usage.reasoning_tokens,
