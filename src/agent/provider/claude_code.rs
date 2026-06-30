@@ -32,7 +32,15 @@ const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response
 const CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
 /// Claude Code native tools that must stay unavailable under Mezzanine-managed
 /// execution.
-const CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS: &str = "SendUserMessage,Bash,Edit,Read";
+const CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS: &str = concat!(
+    "SendUserMessage,Bash,Edit,Read,Agent,Artifact,AskUserQuestion,CronCreate,CronDelete,",
+    "CronList,EnterPlanMode,EnterWorktree,ExitPlanMode,ExitWorktree,Glob,Grep,",
+    "ListMcpResourceTool,LSP,Monitor,NotebookEdit,Powershell,PushNotification,",
+    "ReadMcpResourceTool,RemoteTrigger,ReportFindings,ScheduleWakeup,SendMessage,",
+    "SendUserFile,ShareOnboardingGuide,Skill,TaskCreate,TaskGet,TaskList,TaskOutput,",
+    "TaskStop,TaskUpdate,TodoWrite,ToolSearch,WaitForMcpServers,Workflow,Write,",
+    "WebFetch,WebSearch",
+);
 /// Maximum stderr bytes retained in provider diagnostics.
 const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
 /// Number of short retries after Claude reports a session lock is still active.
@@ -1570,6 +1578,8 @@ EOF
         assert!(args.contains("json"), "{args}");
         assert!(args.contains("--disallowedTools"), "{args}");
         assert!(args.contains("SendUserMessage,Bash,Edit,Read"), "{args}");
+        assert!(args.contains("Agent,Artifact,AskUserQuestion"), "{args}");
+        assert!(args.contains("WebFetch,WebSearch"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
         assert!(args.contains("StructuredOutput"), "{args}");
         assert!(
@@ -1870,6 +1880,8 @@ EOF
         assert!(args.contains("json"), "{args}");
         assert!(args.contains("--disallowedTools"), "{args}");
         assert!(args.contains("SendUserMessage,Bash,Edit,Read"), "{args}");
+        assert!(args.contains("Agent,Artifact,AskUserQuestion"), "{args}");
+        assert!(args.contains("WebFetch,WebSearch"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
         assert!(args.contains("StructuredOutput"), "{args}");
         assert!(
