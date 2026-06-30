@@ -307,6 +307,10 @@ fn claude_code_system_prompt(request: &ModelRequest, retry_instruction: Option<&
     prompt.push_str(
         "Perform all requested operations through Mezzanine MAAP actions only. Do not call Claude Code native tools for local files, commands, web, MCP, subagents, config, memory, issue operations, or task delegation. Use only the response channel Mezzanine requested for this turn. When a MAAP schema is present, the only Claude Code tool Mezzanine may allow is StructuredOutput, and it is only a carrier for returning the MAAP action batch.\n",
     );
+    prompt.push_str("MAAP action mapping:\n");
+    prompt.push_str(
+        "Translate Claude Code tool intents into Mezzanine actions: inspect files, search text, run commands, builds, tests, or git through shell_command; edit file contents through apply_patch; fetch explicit URLs through fetch_url when available; search the web through web_search when available; delegate work or message subagents through spawn_agent or send_message when available; request a missing capability with request_capability instead of calling a native Claude tool or asking the user for task-local facts you can safely discover.\n",
+    );
     if request.interaction_kind != ModelInteractionKind::AutoSizing {
         prompt.push_str("Output contract:\n");
         prompt.push_str(
@@ -908,6 +912,8 @@ async fn run_claude_code_subprocess_with_session_invocation(
         let mut command = Command::new(request.program);
         command.arg("--print").arg("--model").arg(request.model);
         command
+            .arg("--allowedTools")
+            .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL)
             .arg("--disallowedTools")
             .arg("*")
             .arg("--permission-mode")
@@ -1451,6 +1457,18 @@ mod tests {
             "{system_prompt}"
         );
         assert!(
+            system_prompt.contains("MAAP action mapping:"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("edit file contents through apply_patch"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("run commands, builds, tests, or git through shell_command"),
+            "{system_prompt}"
+        );
+        assert!(
             system_prompt.contains("Output contract:"),
             "{system_prompt}"
         );
@@ -1549,7 +1567,8 @@ EOF
         assert!(args.contains("high"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
-        assert!(!args.contains("--allowedTools"), "{args}");
+        assert!(args.contains("--allowedTools"), "{args}");
+        assert!(args.contains("StructuredOutput"), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(
             stdin.contains("Current user request:\nFollow the system prompt."),
@@ -1844,7 +1863,8 @@ EOF
         assert!(args.contains("*"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
-        assert!(!args.contains("--allowedTools"), "{args}");
+        assert!(args.contains("--allowedTools"), "{args}");
+        assert!(args.contains("StructuredOutput"), "{args}");
         assert!(args.contains("--json-schema"), "{args}");
         assert!(args.contains("\"actions\""), "{args}");
         assert_eq!(response.raw_text, "not fenced");
