@@ -137,6 +137,12 @@ struct ClaudeCodeJsonUsage {
     cache_read_input_tokens: Option<u64>,
 }
 
+/// Stores one Claude Code permission denial from a print-mode JSON envelope.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ClaudeCodePermissionDenial {
+    tool_name: Option<String>,
+}
+
 /// Stores the Claude Code JSON envelope shape used by print-mode output.
 #[derive(Debug, serde::Deserialize)]
 struct ClaudeCodeJsonEnvelope {
@@ -147,6 +153,8 @@ struct ClaudeCodeJsonEnvelope {
     is_error: bool,
     result: Option<String>,
     structured_output: Option<serde_json::Value>,
+    #[serde(default)]
+    permission_denials: Vec<ClaudeCodePermissionDenial>,
     #[serde(default)]
     usage: ClaudeCodeJsonUsage,
 }
@@ -506,6 +514,22 @@ fn parse_claude_code_json_output(
         };
         return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
     }
+    if envelope.structured_output.is_none()
+        && envelope
+            .permission_denials
+            .iter()
+            .any(|denial| denial.tool_name.as_deref() == Some(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL))
+    {
+        let detail = result.trim();
+        let message = if detail.is_empty() {
+            "Claude Code JSON output denied StructuredOutput permission required for schema-enforced responses".to_string()
+        } else {
+            format!(
+                "Claude Code JSON output denied StructuredOutput permission required for schema-enforced responses: {detail}"
+            )
+        };
+        return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
+    }
     let structured_output = envelope
         .structured_output
         .map(|value| serde_json::to_string(&value))
@@ -861,8 +885,9 @@ async fn run_claude_code_subprocess_with_session_invocation(
             .arg("--print")
             .arg("--model")
             .arg(request.model)
-            .arg("--disallowedTools")
-            .arg("*");
+            .arg("--bare")
+            .arg("--permission-mode")
+            .arg("dontAsk");
         match request.session {
             Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
                 command.arg("--session-id").arg(session_id);
@@ -1469,7 +1494,10 @@ EOF
         assert!(args.contains("--print"), "{args}");
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
-        assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("--bare"), "{args}");
+        assert!(args.contains("--permission-mode"), "{args}");
+        assert!(args.contains("dontAsk"), "{args}");
+        assert!(!args.contains("--disallowedTools"), "{args}");
         assert!(!args.contains("--session-id"), "{args}");
         assert!(!args.contains("--resume"), "{args}");
         assert!(args.contains("--system-prompt"), "{args}");
@@ -1483,7 +1511,6 @@ EOF
         assert!(args.contains("json"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
         assert!(args.contains("StructuredOutput"), "{args}");
-        assert!(args.contains('*'), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(
             stdin.contains("Current user request:\nFollow the system prompt."),
@@ -1771,6 +1798,9 @@ EOF
 
         assert!(response.action_batch.is_some());
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
+        assert!(args.contains("--bare"), "{args}");
+        assert!(args.contains("--permission-mode"), "{args}");
+        assert!(args.contains("dontAsk"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
@@ -1813,6 +1843,47 @@ EOF
             error.message()
         );
         assert_eq!(error.provider_raw_text(), Some("hello"));
+    }
+
+    /// Verifies StructuredOutput permission denials surface as explicit
+    /// provider errors instead of generic missing-`structured_output` failures.
+    ///
+    /// Live Claude CLI runs can report a success envelope while withholding the
+    /// schema-backed payload behind `permission_denials`. This regression keeps
+    /// that denial mode diagnosable at the provider boundary.
+    #[tokio::test]
+    async fn claude_code_provider_reports_structured_output_permission_denials() {
+        let fixture = ClaudeCodeFixture::new("structured-output-denied");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"Permission to use StructuredOutput has been denied.","permission_denials":[{"tool_name":"StructuredOutput"}],"usage":{"input_tokens":2,"output_tokens":12}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let error = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.message().contains(
+                "denied StructuredOutput permission required for schema-enforced responses"
+            ),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error
+                .provider_raw_text()
+                .unwrap_or_default()
+                .contains("\"permission_denials\""),
+            "{:?}",
+            error.provider_raw_text()
+        );
     }
 
     /// Verifies Claude Code JSON usage parsing preserves omitted cache counters

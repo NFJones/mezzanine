@@ -254,9 +254,12 @@ pub async fn run_with<W: Write, E: Write>(
 /// - `owner_uid`: The current effective user id.
 fn cleanup_startup_stale_socket_files(invocation: &CliInvocation, owner_uid: u32) -> Result<()> {
     match &invocation.socket_selection {
-        super::SocketSelection::Default(_) | super::SocketSelection::Named(_) => {
+        super::SocketSelection::Default(_)
+        | super::SocketSelection::Named(_)
+        | super::SocketSelection::InPane(_) => {
             let root = match &invocation.socket_selection {
-                super::SocketSelection::Default(socket_path) => {
+                super::SocketSelection::Default(socket_path)
+                | super::SocketSelection::InPane(socket_path) => {
                     socket_path.parent().map(PathBuf::from).ok_or_else(|| {
                         MezError::invalid_args(
                             "default control socket path must have a parent directory",
@@ -266,13 +269,13 @@ fn cleanup_startup_stale_socket_files(invocation: &CliInvocation, owner_uid: u32
                 super::SocketSelection::Named(_) => {
                     super::registry_root(&invocation.socket_selection)?
                 }
-                super::SocketSelection::Explicit(_) | super::SocketSelection::InPane(_) => {
-                    unreachable!("explicit and in-pane selections are handled by the outer match")
+                super::SocketSelection::Explicit(_) => {
+                    unreachable!("explicit selections are handled by the outer match")
                 }
             };
             let _ = prune_stale_socket_files_in_directory(&root, owner_uid)?;
             Ok(())
         }
-        super::SocketSelection::Explicit(_) | super::SocketSelection::InPane(_) => Ok(()),
+        super::SocketSelection::Explicit(_) => Ok(()),
     }
 }
