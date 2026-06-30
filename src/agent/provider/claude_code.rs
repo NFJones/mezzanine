@@ -906,12 +906,7 @@ async fn run_claude_code_subprocess_with_session_invocation(
     let mut spawn_attempt = 0;
     let mut child = loop {
         let mut command = Command::new(request.program);
-        command
-            .arg("--print")
-            .arg("--model")
-            .arg(request.model)
-            .arg("--permission-mode")
-            .arg("dontAsk");
+        command.arg("--print").arg("--model").arg(request.model);
         match request.session {
             Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
                 command.arg("--session-id").arg(session_id);
@@ -931,9 +926,6 @@ async fn run_claude_code_subprocess_with_session_invocation(
             command.arg("--output-format").arg("json");
         }
         if let Some(schema) = request.json_schema.filter(|schema| !schema.is_empty()) {
-            command
-                .arg("--allowedTools")
-                .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL);
             command.arg("--json-schema").arg(schema);
         }
         match command
@@ -1528,8 +1520,8 @@ EOF
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
         assert!(!args.contains("--bare"), "{args}");
-        assert!(args.contains("--permission-mode"), "{args}");
-        assert!(args.contains("dontAsk"), "{args}");
+        assert!(!args.contains("--permission-mode"), "{args}");
+        assert!(!args.contains("dontAsk"), "{args}");
         assert!(!args.contains("--disallowedTools"), "{args}");
         assert!(!args.contains("--session-id"), "{args}");
         assert!(!args.contains("--resume"), "{args}");
@@ -1542,8 +1534,7 @@ EOF
         assert!(args.contains("high"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
-        assert!(args.contains("--allowedTools"), "{args}");
-        assert!(args.contains("StructuredOutput"), "{args}");
+        assert!(!args.contains("--allowedTools"), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(
             stdin.contains("Current user request:\nFollow the system prompt."),
@@ -1832,12 +1823,11 @@ EOF
         assert!(response.action_batch.is_some());
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
         assert!(!args.contains("--bare"), "{args}");
-        assert!(args.contains("--permission-mode"), "{args}");
-        assert!(args.contains("dontAsk"), "{args}");
+        assert!(!args.contains("--permission-mode"), "{args}");
+        assert!(!args.contains("dontAsk"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
-        assert!(args.contains("--allowedTools"), "{args}");
-        assert!(args.contains("StructuredOutput"), "{args}");
+        assert!(!args.contains("--allowedTools"), "{args}");
         assert!(args.contains("--json-schema"), "{args}");
         assert!(args.contains("\"actions\""), "{args}");
         assert_eq!(response.raw_text, "not fenced");
