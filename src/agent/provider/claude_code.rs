@@ -907,6 +907,11 @@ async fn run_claude_code_subprocess_with_session_invocation(
     let mut child = loop {
         let mut command = Command::new(request.program);
         command.arg("--print").arg("--model").arg(request.model);
+        command
+            .arg("--disallowedTools")
+            .arg("*")
+            .arg("--permission-mode")
+            .arg("dontAsk");
         match request.session {
             Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
                 command.arg("--session-id").arg(session_id);
@@ -1520,9 +1525,10 @@ EOF
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
         assert!(!args.contains("--bare"), "{args}");
-        assert!(!args.contains("--permission-mode"), "{args}");
-        assert!(!args.contains("dontAsk"), "{args}");
-        assert!(!args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("--permission-mode"), "{args}");
+        assert!(args.contains("dontAsk"), "{args}");
+        assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("*"), "{args}");
         assert!(!args.contains("--session-id"), "{args}");
         assert!(!args.contains("--resume"), "{args}");
         assert!(args.contains("--system-prompt"), "{args}");
@@ -1823,8 +1829,10 @@ EOF
         assert!(response.action_batch.is_some());
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
         assert!(!args.contains("--bare"), "{args}");
-        assert!(!args.contains("--permission-mode"), "{args}");
-        assert!(!args.contains("dontAsk"), "{args}");
+        assert!(args.contains("--permission-mode"), "{args}");
+        assert!(args.contains("dontAsk"), "{args}");
+        assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("*"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
         assert!(!args.contains("--allowedTools"), "{args}");
