@@ -303,6 +303,10 @@ fn claude_code_system_prompt(request: &ModelRequest, retry_instruction: Option<&
     let mut prompt = String::new();
 
     append_claude_code_instruction_framing(&mut prompt, request, retry_instruction);
+    prompt.push_str("Claude Code direct-tool boundary:\n");
+    prompt.push_str(
+        "Do not call Claude Code native tools for local files, commands, web, MCP, subagents, config, memory, issue operations, or task delegation. Use only the response channel Mezzanine requested for this turn. When a MAAP schema is present, the only Claude Code tool Mezzanine may allow is StructuredOutput, and it is only a carrier for returning the MAAP action batch.\n",
+    );
     if request.interaction_kind != ModelInteractionKind::AutoSizing {
         prompt.push_str("Output contract:\n");
         prompt.push_str(
@@ -1433,6 +1437,15 @@ mod tests {
         );
         assert!(
             system_prompt.contains("Developer retry instruction:\nRetry with a valid MAAP batch."),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("Claude Code direct-tool boundary:"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt
+                .contains("the only Claude Code tool Mezzanine may allow is StructuredOutput"),
             "{system_prompt}"
         );
         assert!(
