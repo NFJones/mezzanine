@@ -311,7 +311,7 @@ impl ModelTokenUsage {
     /// Returns the best-effort provider prompt-cache hit ratio.
     pub fn cached_input_hit_ratio_basis_points(self) -> Option<u32> {
         let cached = self.cached_input_tokens?;
-        let input_tokens = self.prompt_cache_input_tokens();
+        let input_tokens = self.billed_input_tokens().saturating_add(cached);
         if input_tokens == 0 {
             return Some(0);
         }
@@ -1664,7 +1664,7 @@ mod tests {
         assert_eq!(usage.input_tokens, 2);
         assert_eq!(usage.billed_input_tokens(), 6_114);
         assert_eq!(usage.total_tokens(), 16_622);
-        assert_eq!(usage.cached_input_hit_ratio_display(), "99.98%");
+        assert_eq!(usage.cached_input_hit_ratio_display(), "63.19%");
     }
 
     /// Verifies Anthropic provider kinds default to the Anthropic Messages

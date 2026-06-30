@@ -409,10 +409,17 @@ impl RuntimeMetricsSnapshot {
             }
             self.provider_cached_input_tokens_per_response
                 .record(cached);
-            if let Some(ratio) = latest_usage.cached_input_hit_ratio_basis_points() {
-                self.provider_cached_input_hit_ratio_basis_points
-                    .record(u64::from(ratio));
-            }
+            let denominator = self
+                .provider_billed_input_tokens
+                .saturating_add(self.provider_cached_input_tokens);
+            let ratio = self
+                .provider_cached_input_tokens
+                .saturating_mul(10_000)
+                .saturating_add(denominator / 2)
+                .checked_div(denominator)
+                .unwrap_or(0);
+            self.provider_cached_input_hit_ratio_basis_points
+                .record(ratio.min(10_000));
         } else {
             self.provider_cached_input_unknown =
                 self.provider_cached_input_unknown.saturating_add(1);

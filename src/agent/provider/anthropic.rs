@@ -1202,7 +1202,7 @@ mod tests {
         assert_eq!(usage.cache_write_input_tokens, Some(11));
         assert_eq!(usage.billed_input_tokens(), 53);
         assert_eq!(usage.total_tokens(), 69);
-        assert_eq!(usage.cached_input_hit_ratio_display(), "14.29%");
+        assert_eq!(usage.cached_input_hit_ratio_display(), "11.67%");
 
         let mut overlaid = ModelTokenUsage::default();
         anthropic_overlay_usage(

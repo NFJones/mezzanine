@@ -35,8 +35,8 @@ const CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
 const CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS: &str = concat!(
     "SendUserMessage,Bash,Edit,Read,Agent,Artifact,AskUserQuestion,CronCreate,CronDelete,",
     "CronList,EnterPlanMode,EnterWorktree,ExitPlanMode,ExitWorktree,Glob,Grep,",
-    "ListMcpResourceTool,LSP,Monitor,NotebookEdit,Powershell,PushNotification,",
-    "ReadMcpResourceTool,RemoteTrigger,ReportFindings,ScheduleWakeup,SendMessage,",
+    "LSP,Monitor,NotebookEdit,PushNotification,",
+    "ReadMcpResourceTool,RemoteTrigger,ScheduleWakeup,SendMessage,",
     "SendUserFile,ShareOnboardingGuide,Skill,TaskCreate,TaskGet,TaskList,TaskOutput,",
     "TaskStop,TaskUpdate,TodoWrite,ToolSearch,WaitForMcpServers,Workflow,Write,",
     "WebFetch,WebSearch",
@@ -64,7 +64,7 @@ struct ClaudeCodeSubprocessOutput {
 /// Stores the Claude Code request result after optional corrective retry.
 struct ClaudeCodeRequestOutput {
     raw_text: String,
-    structured_output: Option<String>,
+    action_batch: MaapBatch,
     usage: ModelTokenUsage,
     latest_request_usage: Option<ModelTokenUsage>,
 }
@@ -249,7 +249,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     "Claude Code provider received a request for a different provider",
                 ));
             }
-            let (raw_text, structured_output, usage, latest_request_usage) =
+            let (raw_text, usage, latest_request_usage, action_batch) =
                 if request.interaction_kind == ModelInteractionKind::AutoSizing {
                     let prompt = claude_code_prompt(request, None);
                     let system_prompt = claude_code_system_prompt(request, None);
@@ -270,7 +270,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                         return Err(claude_code_empty_output_error(&output.stderr));
                     }
                     validate_claude_code_auto_sizing_output(&output.assistant_text)?;
-                    (output.assistant_text, None, output.usage, None)
+                    (output.assistant_text, output.usage, None, None)
                 } else {
                     let output = run_claude_code_request_with_corrective_retry(
                         &self.program,
@@ -280,21 +280,11 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     .await?;
                     (
                         output.raw_text,
-                        output.structured_output,
                         output.usage,
                         output.latest_request_usage,
+                        Some(output.action_batch),
                     )
                 };
-            let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
-                None
-            } else {
-                let batch = parse_claude_code_maap_output(
-                    request,
-                    &raw_text,
-                    structured_output.as_deref(),
-                )?;
-                Some(batch)
-            };
             Ok(ModelResponse {
                 provider: self.provider_id.clone(),
                 model: request.model.clone(),
@@ -332,7 +322,7 @@ fn claude_code_system_prompt(request: &ModelRequest, retry_instruction: Option<&
 }
 
 /// Builds the text prompt passed to the Claude Code CLI stdin channel.
-fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) -> String {
+fn claude_code_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
     let final_user_index = request
         .messages
         .iter()
@@ -341,6 +331,13 @@ fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) 
 
     append_claude_code_prior_context(&mut prompt, request, final_user_index);
     append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
+    if let Some(retry_instruction) = retry_instruction {
+        append_claude_code_section(
+            &mut prompt,
+            "Developer retry instruction",
+            retry_instruction,
+        );
+    }
     prompt
 }
 
@@ -350,8 +347,8 @@ fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) 
 /// Claude's resumed session history only contains prompts previously sent to
 /// the CLI, so Mezzanine must replay its own continuation context such as
 /// prior MAAP action results on every `--resume` request.
-fn claude_code_resume_prompt(request: &ModelRequest) -> String {
-    claude_code_prompt(request, None)
+fn claude_code_resume_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
+    claude_code_prompt(request, retry_instruction)
 }
 
 /// Appends system, developer, and retry instructions to Claude's dedicated
@@ -445,18 +442,6 @@ fn append_claude_code_section(prompt: &mut String, label: &str, content: &str) {
     prompt.push_str("\n\n");
 }
 
-/// Reports whether Claude Code output should receive one corrective retry.
-fn claude_code_output_needs_corrective_retry(
-    request: &ModelRequest,
-    raw_text: &str,
-    structured_output: Option<&str>,
-) -> bool {
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        return raw_text.is_empty();
-    }
-    parse_claude_code_maap_output(request, raw_text, structured_output).is_err()
-}
-
 /// Builds the Claude Code JSON schema argument for MAAP action-batch turns.
 fn claude_code_maap_json_schema(request: &ModelRequest) -> Result<String> {
     serde_json::to_string(&maap_action_batch_schema(
@@ -513,9 +498,21 @@ fn parse_claude_code_json_output(
     if trimmed.is_empty() {
         return Ok((String::new(), None, ModelTokenUsage::default()));
     }
+    let result_state = serde_json::from_str::<serde_json::Value>(trimmed)
+        .ok()
+        .map(|value| claude_code_json_result_state(&value))
+        .unwrap_or("unknown");
     let envelope = match serde_json::from_str::<ClaudeCodeJsonEnvelope>(trimmed) {
         Ok(envelope) => envelope,
-        Err(_) => return Ok((trimmed.to_string(), None, ModelTokenUsage::default())),
+        Err(error) => {
+            if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+                return Ok((trimmed.to_string(), None, ModelTokenUsage::default()));
+            }
+            return Err(MezError::invalid_state(format!(
+                "Claude Code JSON output could not be parsed: {error}"
+            ))
+            .with_provider_raw_text(trimmed.to_string()));
+        }
     };
     let result = envelope.result.unwrap_or_default();
     if envelope.is_error {
@@ -570,11 +567,23 @@ fn parse_claude_code_json_output(
             ))
             .with_provider_raw_text(trimmed.to_string())
         })?;
-    if result.is_empty() && structured_output.is_none() {
-        return Err(MezError::invalid_state(
-            "Claude Code JSON output did not contain result text or structured output",
-        )
-        .with_provider_raw_text(trimmed.to_string()));
+    if result.trim().is_empty() && structured_output.is_none() {
+        let message = match result_state {
+            "missing" => {
+                "Claude Code JSON output did not contain result text or structured output; result field was missing"
+            }
+            "null" => {
+                "Claude Code JSON output did not contain result text or structured output; result field was null"
+            }
+            "empty" => {
+                "Claude Code JSON output did not contain result text or structured output; result field was empty"
+            }
+            "blank" => {
+                "Claude Code JSON output did not contain result text or structured output; result field was blank"
+            }
+            _ => "Claude Code JSON output did not contain result text or structured output",
+        };
+        return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
     };
     let input_tokens = envelope.usage.input_tokens.unwrap_or(0);
     let cached_input_tokens = envelope.usage.cache_read_input_tokens;
@@ -589,6 +598,19 @@ fn parse_claude_code_json_output(
             cache_write_input_tokens: envelope.usage.cache_creation_input_tokens,
         },
     ))
+}
+
+/// Classifies the raw JSON `result` field before typed envelope parsing erases
+/// the distinction between absent, null, empty, and blank values.
+fn claude_code_json_result_state(value: &serde_json::Value) -> &'static str {
+    match value.get("result") {
+        None => "missing",
+        Some(serde_json::Value::Null) => "null",
+        Some(serde_json::Value::String(text)) if text.is_empty() => "empty",
+        Some(serde_json::Value::String(text)) if text.trim().is_empty() => "blank",
+        Some(serde_json::Value::String(_)) => "present",
+        Some(_) => "non_string",
+    }
 }
 
 /// Reports whether a Claude Code detail string indicates that the CLI needs
@@ -742,7 +764,7 @@ async fn run_claude_code_request_with_corrective_retry(
         .map(|session_id| ClaudeCodeSessionRef { session_id });
     let maap_json_schema = claude_code_maap_json_schema(request)?;
     let first_prompt = claude_code_prompt(request, None);
-    let first_resume_prompt = claude_code_resume_prompt(request);
+    let first_resume_prompt = claude_code_resume_prompt(request, None);
     let first_system_prompt = claude_code_system_prompt(request, None);
     let first_output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
         program,
@@ -757,14 +779,14 @@ async fn run_claude_code_request_with_corrective_retry(
         json_schema: Some(&maap_json_schema),
     })
     .await?;
-    if !claude_code_output_needs_corrective_retry(
+    if let Ok(action_batch) = parse_claude_code_maap_output(
         request,
         &first_output.assistant_text,
         first_output.structured_output.as_deref(),
     ) {
         return Ok(ClaudeCodeRequestOutput {
             raw_text: first_output.assistant_text,
-            structured_output: first_output.structured_output,
+            action_batch,
             usage: first_output.usage,
             latest_request_usage: None,
         });
@@ -775,7 +797,7 @@ async fn run_claude_code_request_with_corrective_retry(
         CLAUDE_CODE_MAAP_RETRY_INSTRUCTION
     };
     let retry_prompt = claude_code_prompt(request, Some(retry_instruction));
-    let retry_resume_prompt = claude_code_resume_prompt(request);
+    let retry_resume_prompt = claude_code_resume_prompt(request, Some(retry_instruction));
     let retry_system_prompt = claude_code_system_prompt(request, Some(retry_instruction));
     let retry_output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
         program,
@@ -793,12 +815,17 @@ async fn run_claude_code_request_with_corrective_retry(
     if retry_output.assistant_text.is_empty() && retry_output.structured_output.is_none() {
         return Err(claude_code_empty_output_error(&retry_output.stderr));
     }
+    let action_batch = parse_claude_code_maap_output(
+        request,
+        &retry_output.assistant_text,
+        retry_output.structured_output.as_deref(),
+    )?;
     let latest_request_usage = retry_output.usage;
     let mut usage = first_output.usage;
     usage.add_assign(latest_request_usage);
     Ok(ClaudeCodeRequestOutput {
         raw_text: retry_output.assistant_text,
-        structured_output: retry_output.structured_output,
+        action_batch,
         usage,
         latest_request_usage: Some(latest_request_usage),
     })
@@ -1316,6 +1343,20 @@ fn bound_claude_code_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the Claude Code disallowed tool list omits stale tool names
+    /// that are not part of the current Claude native tool surface.
+    #[test]
+    fn claude_code_disallowed_tools_omit_nonexistent_native_tools() {
+        for stale_tool in ["ListMcpResourceTool", "Powershell", "ReportFindings"] {
+            assert!(
+                !CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS
+                    .split(',')
+                    .any(|tool| tool == stale_tool),
+                "{stale_tool} should not be listed in disallowed Claude Code tools"
+            );
+        }
+    }
     use crate::agent::{
         AllowedActionSet, ContextSourceKind, ModelMessage, ModelRequest, ProviderErrorRetryClass,
         provider_error_retry_class,
@@ -1506,11 +1547,35 @@ mod tests {
         );
         assert!(!prompt.contains("System instruction:"), "{prompt}");
         assert!(!prompt.contains("Developer instruction:"), "{prompt}");
-        assert!(!prompt.contains("Developer retry instruction:"), "{prompt}");
+        assert!(
+            prompt.contains("Developer retry instruction:\nRetry with a valid MAAP batch."),
+            "{prompt}"
+        );
         assert!(!prompt.contains("<system>"), "{prompt}");
         assert!(!prompt.contains("<developer>"), "{prompt}");
         assert!(!prompt.contains("<assistant>"), "{prompt}");
         assert!(!prompt.contains("<tool>"), "{prompt}");
+    }
+
+    /// Verifies corrective retry guidance is replayed through both stdin prompt
+    /// paths so fresh and resumed Claude Code retry attempts do not depend only
+    /// on the dedicated system-prompt channel.
+    #[test]
+    fn claude_code_retry_instruction_reaches_stdin_prompts() {
+        let request = claude_request();
+        let prompt = claude_code_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
+        let resume_prompt =
+            claude_code_resume_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
+
+        assert!(
+            prompt.contains("Developer retry instruction:\nYour previous response was invalid"),
+            "{prompt}"
+        );
+        assert!(
+            resume_prompt
+                .contains("Developer retry instruction:\nYour previous response was invalid"),
+            "{resume_prompt}"
+        );
     }
 
     /// Verifies instruction-only Claude Code requests still produce a current
@@ -1935,7 +2000,7 @@ EOF
         assert_eq!(response.usage.output_tokens, 12);
         assert_eq!(response.usage.reasoning_tokens, 0);
         assert_eq!(response.usage.cached_input_tokens, Some(10_496));
-        assert_eq!(response.usage.cached_input_hit_ratio_display(), "99.98%");
+        assert_eq!(response.usage.cached_input_hit_ratio_display(), "63.19%");
         assert_eq!(response.usage.cache_write_input_tokens, Some(6_112));
         assert_eq!(response.usage.total_tokens(), 16_622);
         assert_eq!(response.latest_request_usage, None);
@@ -2132,6 +2197,53 @@ EOF
             "0.00%"
         );
         assert_eq!(explicit_zero_usage.cache_write_input_tokens, Some(0));
+    }
+
+    /// Verifies empty Claude Code JSON envelopes report which `result` state
+    /// was observed so diagnostics can distinguish missing, null, empty, and
+    /// blank provider output when no structured output is available.
+    #[test]
+    fn claude_code_json_output_distinguishes_absent_null_and_empty_result_states() {
+        for (raw, expected) in [
+            (
+                r#"{"usage":{"input_tokens":2,"output_tokens":12}}"#,
+                "result field was missing",
+            ),
+            (
+                r#"{"result":null,"usage":{"input_tokens":2,"output_tokens":12}}"#,
+                "result field was null",
+            ),
+            (
+                r#"{"result":"","usage":{"input_tokens":2,"output_tokens":12}}"#,
+                "result field was empty",
+            ),
+            (
+                r#"{"result":"   ","usage":{"input_tokens":2,"output_tokens":12}}"#,
+                "result field was blank",
+            ),
+        ] {
+            let error = parse_claude_code_json_output(raw).unwrap_err();
+
+            assert!(error.message().contains(expected), "{}", error.message());
+            assert_eq!(error.provider_raw_text(), Some(raw));
+        }
+    }
+
+    /// Verifies malformed Claude Code JSON output is reported at the JSON
+    /// parser boundary instead of being downgraded to assistant text with
+    /// default token usage.
+    #[test]
+    fn claude_code_json_output_rejects_malformed_json() {
+        let raw = r#"{"type":"result","result":"unterminated""#;
+
+        let error = parse_claude_code_json_output(raw).unwrap_err();
+
+        assert!(
+            error.message().contains("JSON output could not be parsed"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(error.provider_raw_text(), Some(raw));
     }
 
     /// Verifies Claude Code JSON error envelopes surface as provider errors

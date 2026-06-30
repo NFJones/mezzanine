@@ -4508,6 +4508,12 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         "{response}"
     );
     assert!(
+        response.contains(
+            "provider_cached_input_hit_ratio_basis_points: observations=2 min=5625 max=6667 average=6146.00"
+        ),
+        "{response}"
+    );
+    assert!(
         response.contains("[runtime provider tokens by model]"),
         "{response}"
     );
