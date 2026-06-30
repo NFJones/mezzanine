@@ -468,10 +468,17 @@ fn parse_claude_code_maap_output(
         )
         .map_err(|error| provider_maap_parse_error(error, structured_output));
     }
-    Err(MezError::invalid_state(
-        "Claude Code response did not include structured_output for a schema-enforced MAAP turn",
-    )
-    .with_provider_raw_text(raw_text.to_string()))
+    let detail = raw_text.trim();
+    let message = if claude_code_login_required_detail(detail) {
+        "Claude Code response did not include structured_output for a schema-enforced MAAP turn because Claude Code is not logged in; run `claude /login` in a non-bare Claude CLI session or configure headless auth for provider-style invocations".to_string()
+    } else if detail.is_empty() {
+        "Claude Code response did not include structured_output for a schema-enforced MAAP turn"
+            .to_string()
+    } else {
+        "Claude Code response did not include structured_output for a schema-enforced MAAP turn; check Claude Code login and StructuredOutput permissions"
+            .to_string()
+    };
+    Err(MezError::invalid_state(message).with_provider_raw_text(raw_text.to_string()))
 }
 
 /// Builds the provider error used when Claude Code exits successfully but
@@ -498,7 +505,7 @@ fn parse_claude_code_json_output(
     if envelope.is_error {
         let subtype = envelope.subtype.as_deref().unwrap_or("unknown");
         let detail = result.trim();
-        let message = match envelope.envelope_type.as_deref() {
+        let base_message = match envelope.envelope_type.as_deref() {
             Some(envelope_type) if !envelope_type.is_empty() && !detail.is_empty() => {
                 format!(
                     "Claude Code JSON output reported an error ({envelope_type}/{subtype}): {detail}"
@@ -511,6 +518,13 @@ fn parse_claude_code_json_output(
                 format!("Claude Code JSON output reported an error ({subtype}): {detail}")
             }
             _ => format!("Claude Code JSON output reported an error ({subtype})"),
+        };
+        let message = if claude_code_login_required_detail(detail) {
+            format!(
+                "{base_message}; run `claude /login` in a non-bare Claude CLI session or configure headless auth for provider-style invocations"
+            )
+        } else {
+            base_message
         };
         return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
     }
@@ -559,6 +573,13 @@ fn parse_claude_code_json_output(
             cache_write_input_tokens: envelope.usage.cache_creation_input_tokens,
         },
     ))
+}
+
+/// Reports whether a Claude Code detail string indicates that the CLI needs
+/// interactive login or alternate headless authentication.
+fn claude_code_login_required_detail(detail: &str) -> bool {
+    let lower = detail.trim().to_ascii_lowercase();
+    lower.contains("not logged in") || lower.contains("please run /login")
 }
 
 /// Validates that Claude Code auto-sizing output matches the router JSON
@@ -885,7 +906,6 @@ async fn run_claude_code_subprocess_with_session_invocation(
             .arg("--print")
             .arg("--model")
             .arg(request.model)
-            .arg("--bare")
             .arg("--permission-mode")
             .arg("dontAsk");
         match request.session {
@@ -1494,7 +1514,7 @@ EOF
         assert!(args.contains("--print"), "{args}");
         assert!(args.contains("--model"), "{args}");
         assert!(args.contains("claude-sonnet-test"), "{args}");
-        assert!(args.contains("--bare"), "{args}");
+        assert!(!args.contains("--bare"), "{args}");
         assert!(args.contains("--permission-mode"), "{args}");
         assert!(args.contains("dontAsk"), "{args}");
         assert!(!args.contains("--disallowedTools"), "{args}");
@@ -1798,7 +1818,7 @@ EOF
 
         assert!(response.action_batch.is_some());
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
-        assert!(args.contains("--bare"), "{args}");
+        assert!(!args.contains("--bare"), "{args}");
         assert!(args.contains("--permission-mode"), "{args}");
         assert!(args.contains("dontAsk"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
@@ -1843,6 +1863,45 @@ EOF
             error.message()
         );
         assert_eq!(error.provider_raw_text(), Some("hello"));
+    }
+
+    /// Verifies schema-enforced MAAP turns surface actionable login guidance
+    /// when Claude Code returns success text instead of structured output
+    /// because the CLI is not authenticated for the invocation path.
+    #[tokio::test]
+    async fn claude_code_provider_reports_login_guidance_for_missing_structured_output() {
+        let fixture = ClaudeCodeFixture::new("missing-structured-output-login");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"Not logged in · Please run /login","usage":{"input_tokens":2,"output_tokens":12}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let error = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.message().contains("run `claude /login`"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error
+                .message()
+                .contains("configure headless auth for provider-style invocations"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(
+            error.provider_raw_text(),
+            Some("Not logged in · Please run /login")
+        );
     }
 
     /// Verifies StructuredOutput permission denials surface as explicit
@@ -1932,6 +1991,29 @@ EOF
             error.message().contains(
                 "reported an error (result/error_max_structured_output_retries): schema failed"
             ),
+            "{}",
+            error.message()
+        );
+        assert_eq!(error.provider_raw_text(), Some(raw));
+    }
+
+    /// Verifies login-required Claude Code JSON error envelopes tell the user
+    /// how to satisfy authentication for interactive or provider-style runs.
+    #[test]
+    fn claude_code_json_output_reports_login_guidance() {
+        let raw = r#"{"type":"result","subtype":"error_auth","is_error":true,"result":"Not logged in · Please run /login","usage":{"input_tokens":2,"output_tokens":12}}"#;
+
+        let error = parse_claude_code_json_output(raw).unwrap_err();
+
+        assert!(
+            error.message().contains("run `claude /login`"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            error
+                .message()
+                .contains("configure headless auth for provider-style invocations"),
             "{}",
             error.message()
         );

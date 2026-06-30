@@ -262,22 +262,27 @@ pub fn remove_stale_socket_file_if_unserved(path: &Path, owner_uid: u32) -> Resu
     if metadata.uid() != owner_uid || !metadata.file_type().is_socket() {
         return Ok(false);
     }
-    match UnixStream::connect(path) {
-        Ok(stream) => match unix_peer_uid(stream.as_raw_fd()) {
-            Ok(peer_uid) if peer_uid == owner_uid => Ok(false),
-            Ok(_) => {
+    for attempt in 0..2 {
+        match UnixStream::connect(path) {
+            Ok(stream) => match unix_peer_uid(stream.as_raw_fd()) {
+                Ok(peer_uid) if peer_uid == owner_uid => return Ok(false),
+                Ok(_) => {
+                    remove_stale_socket_path(path)?;
+                    return Ok(true);
+                }
+                Err(_) if attempt == 0 => continue,
+                Err(_) => return Ok(false),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
                 remove_stale_socket_path(path)?;
-                Ok(true)
+                return Ok(true);
             }
-            Err(_) => Ok(false),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-            remove_stale_socket_path(path)?;
-            Ok(true)
+            Err(_) if attempt == 0 => continue,
+            Err(_) => return Ok(false),
         }
-        Err(_) => Ok(false),
     }
+    unreachable!("bounded stale-socket retry loop always returns")
 }
 
 /// Runs the apply registry update operation for this subsystem.
