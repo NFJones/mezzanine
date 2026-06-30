@@ -305,12 +305,12 @@ fn claude_code_system_prompt(request: &ModelRequest, retry_instruction: Option<&
     append_claude_code_instruction_framing(&mut prompt, request, retry_instruction);
     prompt.push_str("Claude Code direct-tool boundary:\n");
     prompt.push_str(
-        "Do not call Claude Code native tools for local files, commands, web, MCP, subagents, config, memory, issue operations, or task delegation. Use only the response channel Mezzanine requested for this turn. When a MAAP schema is present, the only Claude Code tool Mezzanine may allow is StructuredOutput, and it is only a carrier for returning the MAAP action batch.\n",
+        "Perform all requested operations through Mezzanine MAAP actions only. Do not call Claude Code native tools for local files, commands, web, MCP, subagents, config, memory, issue operations, or task delegation. Use only the response channel Mezzanine requested for this turn. When a MAAP schema is present, the only Claude Code tool Mezzanine may allow is StructuredOutput, and it is only a carrier for returning the MAAP action batch.\n",
     );
     if request.interaction_kind != ModelInteractionKind::AutoSizing {
         prompt.push_str("Output contract:\n");
         prompt.push_str(
-            "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly.\n",
+            "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly. Native Claude Code tools must not be used except as needed to emit the requested MAAP action batch.\n",
         );
     }
     prompt
@@ -1446,7 +1446,16 @@ mod tests {
             "{system_prompt}"
         );
         assert!(
+            system_prompt
+                .contains("Perform all requested operations through Mezzanine MAAP actions only."),
+            "{system_prompt}"
+        );
+        assert!(
             system_prompt.contains("Output contract:"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("Native Claude Code tools must not be used except as needed to emit the requested MAAP action batch."),
             "{system_prompt}"
         );
         assert!(
