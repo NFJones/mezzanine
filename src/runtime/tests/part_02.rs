@@ -587,6 +587,48 @@ fn runtime_frame_context_reports_visible_agent_shell_metadata() {
     assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
 }
 
+/// Verifies that pane-frame runtime context falls back to provider-option
+/// reasoning effort when the active profile omits the top-level reasoning
+/// field. This keeps Anthropic-style profiles aligned with the
+/// `agent.reasoning` status contract.
+#[test]
+fn runtime_frame_context_reports_provider_option_reasoning_effort() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"anthropic\"\ndefault_model_profile = \"work\"\n[providers.anthropic]\nkind = \"anthropic\"\napi = \"anthropic-messages\"\nmodels = [\"claude-fable-5\"]\ndefault_model = \"claude-fable-5\"\n[model_profiles.work]\nprovider = \"anthropic\"\nmodel = \"claude-fable-5\"\n[model_profiles.work.provider_options]\nreasoning_effort = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let pane_context = config.frame_context.panes.get(&pane_id).unwrap();
+
+    assert_eq!(pane_context.mode.as_deref(), Some("agent"));
+    assert_eq!(pane_context.agent_name.as_deref(), Some("manager"));
+    assert_eq!(pane_context.agent_status.as_deref(), Some("idle"));
+    assert_eq!(pane_context.agent_model.as_deref(), Some("claude-fable-5"));
+    assert_eq!(pane_context.agent_reasoning.as_deref(), Some("high"));
+}
+
 /// Verifies that pane-frame runtime context includes the best known current
 /// working directory in the compact home-relative form used by the status
 /// pill. This keeps the renderer independent from process probing while still

@@ -178,6 +178,18 @@ impl ModelProfile {
             })
     }
 
+    /// Returns the reasoning label UI surfaces should display for the profile.
+    ///
+    /// Pane status and selector displays prefer the explicit top-level
+    /// `reasoning_profile` value. Providers such as Anthropic and Claude Code
+    /// may carry the active effort only in `provider_options.reasoning_effort`,
+    /// so UI callers fall back to that value when the display field is unset.
+    pub fn reasoning_display_value(&self) -> Option<String> {
+        self.reasoning_profile
+            .clone()
+            .or_else(|| self.provider_options.get("reasoning_effort").cloned())
+    }
+
     /// Returns the configured sampling temperature, if present.
     pub fn temperature(&self) -> Option<f64> {
         self.provider_options

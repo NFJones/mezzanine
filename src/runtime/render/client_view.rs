@@ -1186,12 +1186,12 @@ impl RuntimeSessionService {
                     .and_then(|turn| {
                         self.agent_turn_model_profiles
                             .get(&turn.turn_id)
-                            .and_then(|profile| profile.reasoning_profile.clone())
+                            .and_then(|profile| profile.reasoning_display_value())
                     })
                     .or_else(|| {
                         active_agent_profile
                             .as_ref()
-                            .and_then(|(_name, profile)| profile.reasoning_profile.clone())
+                            .and_then(|(_name, profile)| profile.reasoning_display_value())
                     });
                 let agent_thinking_profile = latest_turn
                     .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())

@@ -952,7 +952,7 @@ impl RuntimeSessionService {
                     PaneAgentStatusField::Model => {
                         Some(format!("{}: {}", profile.provider, profile.model))
                     }
-                    PaneAgentStatusField::Reasoning => profile.reasoning_profile,
+                    PaneAgentStatusField::Reasoning => profile.reasoning_display_value(),
                     PaneAgentStatusField::Thinking => self
                         .model_profile_thinking_enabled(&profile)
                         .map(|enabled| if enabled { "on" } else { "off" }.to_string()),
