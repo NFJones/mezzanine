@@ -318,7 +318,6 @@ fallback_profiles = []
 
 [model_profiles.anthropic-default.provider_options]
 prompt_caching = "enabled"
-reasoning_effort = "high"
 
 [model_profiles.anthropic-fast]
 provider = "anthropic"
@@ -336,7 +335,6 @@ fallback_profiles = []
 
 [model_profiles.anthropic-fast.provider_options]
 prompt_caching = "enabled"
-reasoning_effort = "medium"
 
 [model_profiles.default]
 provider = "openai"
@@ -355,7 +353,6 @@ approval_policy = "ask"
 fallback_profiles = []
 
 [model_profiles.default.provider_options]
-reasoning_effort = "medium"
 # For OpenAI-compatible Chat Completions backends that support the modern
 # developer role, set developer_role = "developer". It defaults to
 # "system" for older compatible servers.
@@ -375,9 +372,6 @@ residency = "global"
 approval_policy = "ask"
 fallback_profiles = []
 
-[model_profiles.auto-size-router.provider_options]
-reasoning_effort = "low"
-
 [model_profiles.auto-size-small]
 provider = "openai"
 model = "gpt-5.3-codex"
@@ -391,9 +385,6 @@ privacy_tier = "standard"
 residency = "global"
 approval_policy = "ask"
 fallback_profiles = []
-
-[model_profiles.auto-size-small.provider_options]
-reasoning_effort = "medium"
 
 [model_profiles.auto-size-medium]
 provider = "openai"
@@ -409,9 +400,6 @@ residency = "global"
 approval_policy = "ask"
 fallback_profiles = []
 
-[model_profiles.auto-size-medium.provider_options]
-reasoning_effort = "medium"
-
 [model_profiles.auto-size-large]
 provider = "openai"
 model = "gpt-5.5"
@@ -425,9 +413,6 @@ privacy_tier = "standard"
 residency = "global"
 approval_policy = "ask"
 fallback_profiles = []
-
-[model_profiles.auto-size-large.provider_options]
-reasoning_effort = "high"
 
 [model_profiles.deepseek-default]
 provider = "deepseek"
@@ -445,7 +430,6 @@ fallback_profiles = []
 
 [model_profiles.deepseek-default.provider_options]
 thinking = "enabled"
-reasoning_effort = "high"
 
 [model_profiles.deepseek-fast]
 provider = "deepseek"
@@ -463,7 +447,6 @@ fallback_profiles = []
 
 [model_profiles.deepseek-fast.provider_options]
 thinking = "enabled"
-reasoning_effort = "high"
 
 [model_presets.openai]
 default_model_profile = "default"

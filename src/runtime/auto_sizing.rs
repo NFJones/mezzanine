@@ -146,16 +146,6 @@ pub(crate) fn runtime_apply_auto_sizing_execution_profile(
     current.provider = request.provider.clone();
     current.model = request.model.clone();
     current.reasoning_profile = request.reasoning_effort.clone();
-    match request.reasoning_effort.as_ref() {
-        Some(effort) => {
-            current
-                .provider_options
-                .insert("reasoning_effort".to_string(), effort.clone());
-        }
-        None => {
-            current.provider_options.remove("reasoning_effort");
-        }
-    }
     current
 }
 
@@ -235,10 +225,15 @@ fn runtime_auto_sizing_request(
         model: auto_sizing.router_profile.model.clone(),
         reasoning_effort: auto_sizing
             .router_profile
-            .provider_options
-            .get("reasoning_effort")
-            .cloned()
-            .or_else(|| auto_sizing.router_profile.reasoning_profile.clone()),
+            .reasoning_profile
+            .clone()
+            .or_else(|| {
+                auto_sizing
+                    .router_profile
+                    .provider_options
+                    .get("reasoning_effort")
+                    .cloned()
+            }),
         thinking_enabled: auto_sizing.router_profile.thinking_enabled(),
         latency_preference: auto_sizing.router_profile.latency_preference.clone(),
         prompt_cache_retention: auto_sizing
@@ -552,10 +547,6 @@ fn runtime_auto_sizing_profile_from_response(
     }
     let mut profile = target.profile.clone();
     profile.reasoning_profile = Some(decision.reasoning_effort.clone());
-    profile.provider_options.insert(
-        "reasoning_effort".to_string(),
-        decision.reasoning_effort.clone(),
-    );
     Ok((profile, Some(decision), None))
 }
 

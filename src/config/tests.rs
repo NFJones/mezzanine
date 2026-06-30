@@ -1501,7 +1501,7 @@ fn validates_custom_personality_profile_schema() {
 fn validates_named_model_profile_schema() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
-        "[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.2\"\nreasoning_profile = \"medium\"\nlatency_preference = \"default\"\nmultimodal_required = false\ncontext_window_tokens = 128000\nmax_output_tokens = 12000\nsafety_tier = \"high\"\nprivacy_tier = \"standard\"\nresidency = \"global\"\napproval_policy = \"ask\"\nfallback_profiles = [\"fast\"]\n[model_profiles.default.provider_options]\nreasoning_effort = \"medium\"\n",
+        "[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.2\"\nreasoning_profile = \"medium\"\nlatency_preference = \"default\"\nmultimodal_required = false\ncontext_window_tokens = 128000\nmax_output_tokens = 12000\nsafety_tier = \"high\"\nprivacy_tier = \"standard\"\nresidency = \"global\"\napproval_policy = \"ask\"\nfallback_profiles = [\"fast\"]\n",
         ConfigScope::Primary,
     );
 

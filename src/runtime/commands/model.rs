@@ -1035,9 +1035,6 @@ impl RuntimeSessionService {
         }
 
         let mut provider_options = std::collections::BTreeMap::new();
-        if let Some(reasoning) = reasoning_profile {
-            provider_options.insert("reasoning_effort".to_string(), reasoning.to_string());
-        }
         if let Some(context_window_tokens) = model.context_window_tokens {
             provider_options.insert(
                 "context_window_tokens".to_string(),

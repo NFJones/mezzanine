@@ -2601,7 +2601,10 @@ profile MUST define `provider` and `model`, and MAY define
 `multimodal_required`, `context_window_tokens`, `context_limit_tokens`,
 `max_output_tokens`, `provider_options`, `safety_tier`, `privacy_tier`,
 `residency`, `approval_policy`, and
-`fallback_profiles`. `context_window_tokens`, `context_limit_tokens`, and
+`fallback_profiles`. `reasoning_profile` is the canonical Mezzanine
+reasoning-level setting. `reasoning_effort` is accepted as a legacy alias and
+MUST be normalized as if `reasoning_profile` were set when the canonical field
+is absent. `context_window_tokens`, `context_limit_tokens`, and
 `max_output_tokens` MUST be positive token counts when present.
 `context_window_tokens` and `context_limit_tokens` MUST drive context-usage
 display percentages and explicit compaction budget targets for that profile.
@@ -2634,16 +2637,17 @@ system prompt is present, the Anthropic Messages adapter MUST serialize the
 system prompt as a text block with `cache_control: { type: "ephemeral" }` so
 Anthropic can establish a stable prompt-cache breakpoint. When disabled, the
 adapter MUST preserve the plain-string system prompt shape and omit the
-cache-control marker. Anthropic profiles MAY set `provider_options.reasoning_effort`
-to `low`, `medium`, `high`, `xhigh`, or `max`; the Anthropic Messages adapter
-MUST serialize non-empty values as `output_config.effort`.
+cache-control marker. Anthropic profiles MUST use `reasoning_profile` for
+Mezzanine-level reasoning selection; the Anthropic Messages adapter MUST map the
+normalized non-empty reasoning level to native `output_config.effort`. Legacy
+`provider_options.reasoning_effort` values MAY be read only when
+`reasoning_profile` is absent.
 For DeepSeek profiles, `provider_options.thinking` MAY be set to `enabled` or
 `disabled` to explicitly control native thinking mode independently of
-`provider_options.reasoning_effort`. When omitted, Mezzanine MAY infer DeepSeek
-thinking mode from a configured reasoning profile or reasoning effort. The
-DeepSeek adapter MUST keep this behavior scoped to DeepSeek request
-serialization and MUST NOT emit thinking controls for providers that do not
-support them.
+`reasoning_profile`. When omitted, Mezzanine MAY infer DeepSeek thinking mode
+from a configured reasoning profile or legacy reasoning effort. The DeepSeek
+adapter MUST keep this behavior scoped to DeepSeek request serialization and
+MUST NOT emit thinking controls for providers that do not support them.
 
 Generated default configuration MUST include the auto-sizing model profiles
 referenced by `agents.auto_sizing`: `auto-size-router` using `gpt-5.4-mini`,

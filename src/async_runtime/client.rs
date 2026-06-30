@@ -2959,12 +2959,9 @@ mod tests {
         assert_eq!(selected.provider, "deepseek");
         assert_eq!(selected.model, "deepseek-v4-pro");
         assert_eq!(selected.reasoning_profile.as_deref(), Some("xhigh"));
-        assert_eq!(
-            selected
-                .provider_options
-                .get("reasoning_effort")
-                .map(String::as_str),
-            Some("xhigh")
+        assert!(
+            !selected.provider_options.contains_key("reasoning_effort"),
+            "auto-sizing should store the selected level in reasoning_profile only"
         );
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);

@@ -253,11 +253,6 @@ fn runtime_model_profile_from_config(
     })?;
     let mut provider_options =
         runtime_json_string_map(object.get("provider_options"))?.unwrap_or_default();
-    if let Some(reasoning_effort) = runtime_json_string(object.get("reasoning_effort")) {
-        provider_options
-            .entry("reasoning_effort".to_string())
-            .or_insert_with(|| reasoning_effort.to_string());
-    }
     if let Some(privacy_tier) = runtime_json_string(object.get("privacy_tier")) {
         provider_options
             .entry("privacy_tier".to_string())
@@ -302,6 +297,7 @@ fn runtime_model_profile_from_config(
             model: model.to_string(),
             reasoning_profile: runtime_json_string(object.get("reasoning_profile"))
                 .or_else(|| runtime_json_string(object.get("reasoning_effort")))
+                .or_else(|| provider_options.get("reasoning_effort").map(String::as_str))
                 .map(str::to_string),
             latency_preference: Some(
                 runtime_validate_latency_preference(

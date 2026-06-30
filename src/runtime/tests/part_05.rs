@@ -256,13 +256,12 @@ fn runtime_agent_shell_model_command_accepts_model_name_with_reasoning() {
         pending[0].model_profile.reasoning_profile.as_deref(),
         Some("high")
     );
-    assert_eq!(
-        pending[0]
+    assert!(
+        !pending[0]
             .model_profile
             .provider_options
-            .get("reasoning_effort")
-            .map(String::as_str),
-        Some("high")
+            .contains_key("reasoning_effort"),
+        "/model reasoning selection should store only reasoning_profile"
     );
 }
 

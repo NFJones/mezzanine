@@ -111,10 +111,9 @@ pub fn assemble_model_request_with_retained_tail_percent(
         provider: profile.provider.clone(),
         model: profile.model.clone(),
         reasoning_effort: profile
-            .provider_options
-            .get("reasoning_effort")
-            .cloned()
-            .or_else(|| profile.reasoning_profile.clone()),
+            .reasoning_profile
+            .clone()
+            .or_else(|| profile.provider_options.get("reasoning_effort").cloned()),
         thinking_enabled: profile.thinking_enabled(),
         latency_preference: profile.latency_preference.clone(),
         prompt_cache_retention: profile
