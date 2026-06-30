@@ -344,17 +344,14 @@ fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) 
     prompt
 }
 
-/// Builds the current-turn-only stdin prompt used when resuming an existing
-/// Claude Code conversation.
-fn claude_code_current_turn_prompt(request: &ModelRequest) -> String {
-    let final_user_index = request
-        .messages
-        .iter()
-        .rposition(|message| message.role == ModelMessageRole::User);
-    let mut prompt = String::new();
-
-    append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
-    prompt
+/// Builds the stdin prompt used when resuming an existing Claude Code
+/// conversation.
+///
+/// Claude's resumed session history only contains prompts previously sent to
+/// the CLI, so Mezzanine must replay its own continuation context such as
+/// prior MAAP action results on every `--resume` request.
+fn claude_code_resume_prompt(request: &ModelRequest) -> String {
+    claude_code_prompt(request, None)
 }
 
 /// Appends system, developer, and retry instructions to Claude's dedicated
@@ -745,7 +742,7 @@ async fn run_claude_code_request_with_corrective_retry(
         .map(|session_id| ClaudeCodeSessionRef { session_id });
     let maap_json_schema = claude_code_maap_json_schema(request)?;
     let first_prompt = claude_code_prompt(request, None);
-    let first_resume_prompt = claude_code_current_turn_prompt(request);
+    let first_resume_prompt = claude_code_resume_prompt(request);
     let first_system_prompt = claude_code_system_prompt(request, None);
     let first_output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
         program,
@@ -778,7 +775,7 @@ async fn run_claude_code_request_with_corrective_retry(
         CLAUDE_CODE_MAAP_RETRY_INSTRUCTION
     };
     let retry_prompt = claude_code_prompt(request, Some(retry_instruction));
-    let retry_resume_prompt = claude_code_current_turn_prompt(request);
+    let retry_resume_prompt = claude_code_resume_prompt(request);
     let retry_system_prompt = claude_code_system_prompt(request, Some(retry_instruction));
     let retry_output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
         program,
@@ -1673,6 +1670,105 @@ EOF
         );
         assert!(
             !second_turn_stdin.contains("Prior conversation context"),
+            "{second_turn_stdin}"
+        );
+    }
+
+    /// Verifies resumed Claude Code turns replay Mezzanine-managed tool
+    /// results through stdin so `--resume` requests keep local execution
+    /// context that Claude's native session history does not know about.
+    #[tokio::test]
+    async fn claude_code_provider_resume_prompt_replays_prior_tool_results() {
+        let fixture = ClaudeCodeFixture::new("session-tool-context");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+count_file="$0.count"
+count=0
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+printf '%s\n' "$@" > "$0.args.$count"
+cat > "$0.stdin.$count"
+case " $* " in
+    *" --resume "*)
+        if [ "$count" -eq 1 ]; then
+            printf '%s\n' 'Error: No conversation found for session.' >&2
+            exit 1
+        fi
+        ;;
+esac
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.prompt_cache_session_id =
+            Some(format!("mez-tool-context-{}", current_test_nonce()));
+        request.messages = vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::UserInstruction,
+                content: "System authority.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Developer,
+                source: ContextSourceKind::UserInstruction,
+                content: "Developer authority.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "Earlier user turn.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                source: ContextSourceKind::RuntimeHint,
+                content: "Earlier assistant turn.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Tool,
+                source: ContextSourceKind::ActionResult,
+                content: "Prior tool result.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "Final user request.".to_string(),
+            },
+        ];
+
+        provider.send_request_async(&request).await.unwrap();
+        provider.send_request_async(&request).await.unwrap();
+
+        let second_turn_args =
+            fs::read_to_string(fixture.program.with_extension("args.3")).unwrap();
+        let second_turn_stdin =
+            fs::read_to_string(fixture.program.with_extension("stdin.3")).unwrap();
+
+        assert!(second_turn_args.contains("--resume"), "{second_turn_args}");
+        assert!(
+            second_turn_stdin
+                .contains("Prior conversation context (not the current user request):"),
+            "{second_turn_stdin}"
+        );
+        assert!(
+            second_turn_stdin.contains("Previous tool result:\nPrior tool result."),
+            "{second_turn_stdin}"
+        );
+        assert!(
+            second_turn_stdin.contains("Current user request:\nFinal user request."),
+            "{second_turn_stdin}"
+        );
+        assert!(
+            !second_turn_stdin.contains("System instruction:"),
+            "{second_turn_stdin}"
+        );
+        assert!(
+            !second_turn_stdin.contains("Developer instruction:"),
             "{second_turn_stdin}"
         );
     }
