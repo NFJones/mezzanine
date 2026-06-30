@@ -322,7 +322,6 @@ prompt_caching = "enabled"
 [model_profiles.anthropic-fast]
 provider = "anthropic"
 model = "claude-haiku-4-5-20251001"
-reasoning_profile = "medium"
 latency_preference = "fast"
 multimodal_required = false
 context_window_tokens = 200000
@@ -335,6 +334,34 @@ fallback_profiles = []
 
 [model_profiles.anthropic-fast.provider_options]
 prompt_caching = "enabled"
+
+[model_profiles.claude-code-default]
+provider = "claude-code"
+model = "claude-fable-5"
+reasoning_profile = "high"
+latency_preference = "default"
+multimodal_required = false
+context_window_tokens = 1000000
+max_output_tokens = 128000
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
+
+[model_profiles.claude-code-fast]
+provider = "claude-code"
+model = "claude-sonnet-4-6"
+reasoning_profile = "medium"
+latency_preference = "fast"
+multimodal_required = false
+context_window_tokens = 1000000
+max_output_tokens = 128000
+safety_tier = "high"
+privacy_tier = "standard"
+residency = "global"
+approval_policy = "ask"
+fallback_profiles = []
 
 [model_profiles.default]
 provider = "openai"
@@ -470,6 +497,14 @@ auto_sizing_router_model_profile = "anthropic-fast"
 auto_sizing_small_model_profile = "anthropic-fast"
 auto_sizing_medium_model_profile = "anthropic-default"
 auto_sizing_large_model_profile = "anthropic-default"
+allowed_reasoning_efforts = ["high"]
+
+[model_presets.claude-code]
+default_model_profile = "claude-code-fast"
+auto_sizing_router_model_profile = "claude-code-fast"
+auto_sizing_small_model_profile = "claude-code-fast"
+auto_sizing_medium_model_profile = "claude-code-default"
+auto_sizing_large_model_profile = "claude-code-default"
 allowed_reasoning_efforts = ["medium", "high"]
 
 [permissions]
