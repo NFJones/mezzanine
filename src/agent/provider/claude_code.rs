@@ -28,6 +28,8 @@ const CLAUDE_CODE_PROGRAM: &str = "claude";
 const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was invalid for Mezzanine because it did not satisfy the required structured output contract. Return only one validated Mezzanine MAAP action batch that matches the provided JSON schema, with no surrounding prose.";
 /// Corrective instruction used after Claude Code returns an empty response.
 const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response was empty. Return only one validated Mezzanine MAAP action batch that matches the provided JSON schema, with no surrounding prose.";
+/// Claude Code tool name required for schema-backed structured output.
+const CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
 /// Maximum stderr bytes retained in provider diagnostics.
 const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
 /// Number of short retries after Claude reports a session lock is still active.
@@ -880,6 +882,9 @@ async fn run_claude_code_subprocess_with_session_invocation(
             command.arg("--output-format").arg("json");
         }
         if let Some(schema) = request.json_schema.filter(|schema| !schema.is_empty()) {
+            command
+                .arg("--allowedTools")
+                .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL);
             command.arg("--json-schema").arg(schema);
         }
         match command
@@ -1476,6 +1481,8 @@ EOF
         assert!(args.contains("high"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
+        assert!(args.contains("--allowedTools"), "{args}");
+        assert!(args.contains("StructuredOutput"), "{args}");
         assert!(args.contains('*'), "{args}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(
@@ -1766,6 +1773,8 @@ EOF
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
+        assert!(args.contains("--allowedTools"), "{args}");
+        assert!(args.contains("StructuredOutput"), "{args}");
         assert!(args.contains("--json-schema"), "{args}");
         assert!(args.contains("\"actions\""), "{args}");
         assert_eq!(response.raw_text, "not fenced");
