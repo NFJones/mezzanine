@@ -275,16 +275,30 @@ impl ModelTokenUsage {
 
     /// Returns provider-visible total tokens when input and output are known.
     pub fn total_tokens(self) -> u64 {
-        self.input_tokens
+        self.prompt_cache_input_tokens()
             .saturating_add(self.cache_write_input_tokens.unwrap_or(0))
             .saturating_add(self.output_tokens)
     }
 
+    /// Returns input tokens plus any separately reported provider cache hits.
+    fn prompt_cache_input_tokens(self) -> u64 {
+        let cached = self.cached_input_tokens.unwrap_or(0);
+        if cached > self.input_tokens {
+            self.input_tokens.saturating_add(cached)
+        } else {
+            self.input_tokens
+        }
+    }
+
     /// Returns input tokens billed outside provider prompt-cache hits.
     pub fn billed_input_tokens(self) -> u64 {
-        self.input_tokens
-            .saturating_sub(self.cached_input_tokens.unwrap_or(0))
-            .saturating_add(self.cache_write_input_tokens.unwrap_or(0))
+        let input_tokens = if self.cached_input_tokens.unwrap_or(0) > self.input_tokens {
+            self.input_tokens
+        } else {
+            self.input_tokens
+                .saturating_sub(self.cached_input_tokens.unwrap_or(0))
+        };
+        input_tokens.saturating_add(self.cache_write_input_tokens.unwrap_or(0))
     }
 
     /// Returns the best-effort display value for provider prompt-cache hits.
@@ -297,13 +311,14 @@ impl ModelTokenUsage {
     /// Returns the best-effort provider prompt-cache hit ratio.
     pub fn cached_input_hit_ratio_basis_points(self) -> Option<u32> {
         let cached = self.cached_input_tokens?;
-        if self.input_tokens == 0 {
+        let input_tokens = self.prompt_cache_input_tokens();
+        if input_tokens == 0 {
             return Some(0);
         }
         let basis_points = cached
             .saturating_mul(10_000)
-            .saturating_add(self.input_tokens / 2)
-            / self.input_tokens;
+            .saturating_add(input_tokens / 2)
+            / input_tokens;
         Some(basis_points.min(10_000) as u32)
     }
 
@@ -1627,6 +1642,29 @@ mod tests {
         assert_eq!(usage.cached_input_tokens_display(), "unknown");
         assert_eq!(usage.cached_input_hit_ratio_basis_points(), None);
         assert_eq!(usage.cached_input_hit_ratio_display(), "unknown");
+    }
+
+    /// Verifies prompt-cache helpers handle providers that report cache hits
+    /// outside their ordinary input-token counter.
+    ///
+    /// Claude Code reports `cache_read_input_tokens` separately from
+    /// `input_tokens`, unlike providers whose input total already includes
+    /// cache hits. The shared usage helpers must preserve the raw input counter
+    /// while still deriving useful billed, total, and cache-hit values.
+    #[test]
+    fn token_usage_accounts_for_separately_reported_cache_hits() {
+        let usage = ModelTokenUsage {
+            input_tokens: 2,
+            output_tokens: 12,
+            reasoning_tokens: 0,
+            cached_input_tokens: Some(10_496),
+            cache_write_input_tokens: Some(6_112),
+        };
+
+        assert_eq!(usage.input_tokens, 2);
+        assert_eq!(usage.billed_input_tokens(), 6_114);
+        assert_eq!(usage.total_tokens(), 16_622);
+        assert_eq!(usage.cached_input_hit_ratio_display(), "99.98%");
     }
 
     /// Verifies Anthropic provider kinds default to the Anthropic Messages

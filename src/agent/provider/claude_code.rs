@@ -570,7 +570,7 @@ fn parse_claude_code_json_output(
         result.trim().to_string(),
         structured_output,
         ModelTokenUsage {
-            input_tokens: input_tokens.saturating_add(cached_input_tokens.unwrap_or(0)),
+            input_tokens,
             output_tokens: envelope.usage.output_tokens.unwrap_or(0),
             reasoning_tokens: 0,
             cached_input_tokens,
@@ -1783,7 +1783,7 @@ EOF
             .unwrap();
 
         assert!(response.action_batch.is_some());
-        assert_eq!(response.usage.input_tokens, 10_498);
+        assert_eq!(response.usage.input_tokens, 2);
         assert_eq!(response.usage.billed_input_tokens(), 6_114);
         assert_eq!(response.usage.output_tokens, 12);
         assert_eq!(response.usage.reasoning_tokens, 0);
@@ -2256,7 +2256,7 @@ EOF
             response.raw_text.trim(),
             "{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}"
         );
-        assert_eq!(response.usage.input_tokens, 24);
+        assert_eq!(response.usage.input_tokens, 7);
         assert_eq!(response.usage.output_tokens, 11);
         assert_eq!(response.usage.cached_input_tokens, Some(17));
         assert_eq!(response.usage.cache_write_input_tokens, Some(13));
