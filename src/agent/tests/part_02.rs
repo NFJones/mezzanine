@@ -359,6 +359,27 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(!prompt.contains("hidden host-side"));
 }
 
+
+/// Verifies Claude Code system prompts reinforce MAAP-only execution.
+///
+/// Claude Code normally expects native tools, so this regression keeps the
+/// provider-specific prompt branch explicit about emitting MAAP actions and
+/// using StructuredOutput only as the response carrier.
+#[test]
+fn system_prompt_adds_claude_code_provider_guidance() {
+    let prompt = build_agent_system_prompt(
+        &AgentPromptProfile::default_for("agent-1", "%1").with_provider("claude-code"),
+    )
+    .unwrap();
+
+    assert!(prompt.contains("15. Claude Code Provider"));
+    assert!(prompt.contains("Claude Code CLI print API"));
+    assert!(prompt.contains("does not have direct authority to inspect files"));
+    assert!(prompt.contains("emit the corresponding Mezzanine MAAP actions instead"));
+    assert!(prompt.contains("StructuredOutput is only the carrier for returning the action batch"));
+    assert!(prompt.contains("Do not end the turn until you return one validated Mezzanine MAAP action batch"));
+}
+
 /// Verifies slash command registry contains required baseline commands.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -153,6 +153,13 @@ pub fn build_agent_system_prompt_with_repository_instructions(
             anthropic_provider_guidance(),
         );
     }
+    if profile.provider.as_deref() == Some("claude-code") {
+        push_section(
+            &mut prompt,
+            "15. Claude Code Provider",
+            claude_code_provider_guidance(),
+        );
+    }
     Ok(prompt)
 }
 
@@ -176,6 +183,16 @@ fn deepseek_provider_guidance() -> &'static str {
 /// the turn without a `submit_maap_action_batch` tool_use.
 fn anthropic_provider_guidance() -> &'static str {
     "You are communicating through the Anthropic Messages API. Mezzanine exposes exactly one active function tool per turn as the transport envelope for the MAAP action batch; the task decision is the concrete action object inside that tool_use. Pack every intended action into that single tool_use call. Do not make multiple sequential tool_use calls, and do not create a placeholder tool_use merely to satisfy the function-call requirement. Do not put statements like \"complying with a required function call\" in rationale or thought fields; rationales must name why the selected action directly advances the user task. The entire system prompt above contains authoritative behavioural rules, not advisory suggestions: treat every numbered section, including the MCP and Anthropic provider sections, as a binding constraint on your behaviour. Anthropic's API will separate your internal reasoning into a dedicated field; keep your final response content and function-call arguments concise. Anthropic-facing function arguments are translated into internal MAAP/1 and validated by Mezzanine. Parallel action batching is supported on action-dispatch surfaces: you may include multiple shell_command, apply_patch, or other independent actions in the same batch. For apply_patch, the patch field must contain Direct Mezzanine patch text starting with *** Begin Patch and ending with *** End Patch. Accepted file directives are exactly *** Add File, *** Update File, and *** Delete File, plus optional *** Move to after *** Update File; there is no *** Replace File directive. Unified diff headers (---, +++, diff --git) are NOT the Mezzanine patch format; use *** Update File <path> instead. Every hunk old/context line must be copied verbatim from current file content; never infer or reconstruct likely code. Use distinctive @@ header anchors on every hunk to improve match reliability. Do not end the turn without producing a submit_maap_action_batch tool_use; a turn without a tool_use is a protocol error."
+}
+
+/// Provider-specific guidance appended for Claude Code to address its
+/// MAAP-only execution boundary and schema-carrier response path.
+///
+/// Claude Code normally expects to inspect files and run tools directly, but
+/// Mezzanine's Claude Code adapter strips that authority and requires the
+/// model to emit MAAP actions for all work instead.
+fn claude_code_provider_guidance() -> &'static str {
+    "You are communicating through the Claude Code CLI print API. Claude Code does not have direct authority to inspect files, search the repository, run shell commands, edit files, browse the web, call MCP tools, message subagents, change config, access memory, or manage issues in this environment. When evidence or execution is needed, emit the corresponding Mezzanine MAAP actions instead—typically shell_command for repository inspection, apply_patch for file edits, fetch_url or web_search for network work when available, and request_capability when the schema lacks the needed action family. Treat the entire system prompt above, including the Claude Code provider section, as binding behaviour rather than advice. When a MAAP schema is present, StructuredOutput is only the carrier for returning the action batch; it is not permission to use native Claude Code tools or to answer in plain prose without actions. Do not end the turn until you return one validated Mezzanine MAAP action batch that matches the active schema."
 }
 
 /// Builds the persona and scope section of the provider-facing system prompt.

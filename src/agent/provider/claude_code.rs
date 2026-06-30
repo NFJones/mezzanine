@@ -30,6 +30,9 @@ const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was inv
 const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response was empty. Return only one validated Mezzanine MAAP action batch that matches the provided JSON schema, with no surrounding prose.";
 /// Claude Code tool name required for schema-backed structured output.
 const CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
+/// Claude Code native tools that must stay unavailable under Mezzanine-managed
+/// execution.
+const CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS: &str = "SendUserMessage,Bash,Edit,Read";
 /// Maximum stderr bytes retained in provider diagnostics.
 const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
 /// Number of short retries after Claude reports a session lock is still active.
@@ -912,6 +915,8 @@ async fn run_claude_code_subprocess_with_session_invocation(
         let mut command = Command::new(request.program);
         command.arg("--print").arg("--model").arg(request.model);
         command
+            .arg("--disallowedTools")
+            .arg(CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS)
             .arg("--allowedTools")
             .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL)
             .arg("--permission-mode")
@@ -1563,8 +1568,14 @@ EOF
         assert!(args.contains("high"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
+        assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("SendUserMessage,Bash,Edit,Read"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
         assert!(args.contains("StructuredOutput"), "{args}");
+        assert!(
+            args.find("--disallowedTools") < args.find("--allowedTools"),
+            "{args}"
+        );
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(
             stdin.contains("Current user request:\nFollow the system prompt."),
@@ -1857,8 +1868,14 @@ EOF
         assert!(args.contains("dontAsk"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
+        assert!(args.contains("--disallowedTools"), "{args}");
+        assert!(args.contains("SendUserMessage,Bash,Edit,Read"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
         assert!(args.contains("StructuredOutput"), "{args}");
+        assert!(
+            args.find("--disallowedTools") < args.find("--allowedTools"),
+            "{args}"
+        );
         assert!(args.contains("--json-schema"), "{args}");
         assert!(args.contains("\"actions\""), "{args}");
         assert_eq!(response.raw_text, "not fenced");
