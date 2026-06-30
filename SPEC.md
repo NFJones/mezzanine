@@ -2746,11 +2746,14 @@ and DeepSeek-only options such as `maap_output`, `structured_output`,
 The `claude-code` adapter MUST bind normal prompt-cacheable conversation turns
 to a stable Claude Code session id, resume existing Claude Code conversations
 with `--resume`, create the session with `--session-id` only when Claude
-reports the resume target is missing, and pass selected reasoning efforts to
-the CLI with `--effort` using the local Claude Code levels `low`, `medium`,
-`high`, `xhigh`, and `max`. Auto-sizing and other requests without a Mezzanine
-prompt-cache session or lineage id MUST remain one-shot Claude Code print
-invocations.
+reports the resume target is missing, pass selected reasoning efforts to the
+CLI with `--effort` using the local Claude Code levels `low`, `medium`,
+`high`, `xhigh`, and `max`, request the active MAAP batch schema with
+`--json-schema` for MAAP turns, prefer Claude Code `structured_output` when
+present, and fall back to fenced `mezzanine-action-json` parsing when the CLI
+does not return structured data. Auto-sizing and other requests without a
+Mezzanine prompt-cache session or lineage id MUST remain one-shot Claude Code
+print invocations.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider

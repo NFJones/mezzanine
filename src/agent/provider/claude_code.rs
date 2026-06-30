@@ -6,10 +6,12 @@
 //! and returns assistant text for the normal Mezzanine MAAP parsing path without
 //! granting Claude Code direct tool execution or filesystem mutation authority.
 
+use super::schema::maap_action_batch_schema;
 use super::{
-    AsyncModelProvider, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
+    AsyncModelProvider, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
     ModelResponse, ModelTokenUsage, ProviderModelCatalog, Result,
-    parse_fenced_maap_action_batch_for_turn, provider_maap_parse_error, validate_non_empty,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    provider_maap_parse_error, validate_non_empty,
 };
 use sha2::Digest;
 use std::collections::BTreeMap;
@@ -42,6 +44,7 @@ static CLAUDE_CODE_SESSION_STATES: OnceLock<Mutex<BTreeMap<String, Arc<ClaudeCod
 /// Captures one Claude Code subprocess completion for retry and validation.
 struct ClaudeCodeSubprocessOutput {
     assistant_text: String,
+    structured_output: Option<String>,
     stderr: String,
     usage: ModelTokenUsage,
 }
@@ -49,6 +52,7 @@ struct ClaudeCodeSubprocessOutput {
 /// Stores the Claude Code request result after optional corrective retry.
 struct ClaudeCodeRequestOutput {
     raw_text: String,
+    structured_output: Option<String>,
     usage: ModelTokenUsage,
     latest_request_usage: Option<ModelTokenUsage>,
 }
@@ -64,6 +68,7 @@ struct ClaudeCodeSubprocessRequest<'a> {
     reasoning_effort: Option<&'a str>,
     timeout_ms: u64,
     json_output: bool,
+    json_schema: Option<&'a str>,
 }
 
 /// Carries the resume-specific prompt variants for one Claude Code invocation.
@@ -77,6 +82,7 @@ struct ClaudeCodeResumeSubprocessRequest<'a> {
     reasoning_effort: Option<&'a str>,
     timeout_ms: u64,
     json_output: bool,
+    json_schema: Option<&'a str>,
 }
 
 /// Carries the final Claude Code CLI invocation arguments for one subprocess.
@@ -89,6 +95,7 @@ struct ClaudeCodeSessionInvocationRequest<'a> {
     reasoning_effort: Option<&'a str>,
     timeout_ms: u64,
     json_output: bool,
+    json_schema: Option<&'a str>,
 }
 
 /// Tracks one Claude Code conversation id across short-lived print subprocesses.
@@ -133,6 +140,7 @@ struct ClaudeCodeJsonUsage {
 #[derive(Debug, serde::Deserialize)]
 struct ClaudeCodeJsonEnvelope {
     result: Option<String>,
+    structured_output: Option<serde_json::Value>,
     #[serde(default)]
     usage: ClaudeCodeJsonUsage,
 }
@@ -216,7 +224,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     "Claude Code provider received a request for a different provider",
                 ));
             }
-            let (raw_text, usage, latest_request_usage) =
+            let (raw_text, structured_output, usage, latest_request_usage) =
                 if request.interaction_kind == ModelInteractionKind::AutoSizing {
                     let prompt = claude_code_prompt(request, None);
                     let system_prompt = claude_code_system_prompt(request, None);
@@ -230,13 +238,14 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                         reasoning_effort: request.reasoning_effort.as_deref(),
                         timeout_ms: self.timeout_ms,
                         json_output: true,
+                        json_schema: None,
                     })
                     .await?;
                     if output.assistant_text.is_empty() {
                         return Err(claude_code_empty_output_error(&output.stderr));
                     }
                     validate_claude_code_auto_sizing_output(&output.assistant_text)?;
-                    (output.assistant_text, output.usage, None)
+                    (output.assistant_text, None, output.usage, None)
                 } else {
                     let output = run_claude_code_request_with_corrective_retry(
                         &self.program,
@@ -244,25 +253,21 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                         self.timeout_ms,
                     )
                     .await?;
-                    (output.raw_text, output.usage, output.latest_request_usage)
+                    (
+                        output.raw_text,
+                        output.structured_output,
+                        output.usage,
+                        output.latest_request_usage,
+                    )
                 };
             let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
                 None
             } else {
-                let Some(batch) = parse_fenced_maap_action_batch_for_turn(
+                let batch = parse_claude_code_maap_output(
+                    request,
                     &raw_text,
-                    &request.turn_id,
-                    &request.agent_id,
-                )
-                .map_err(|error| provider_maap_parse_error(error, &raw_text))?
-                else {
-                    return Err(provider_maap_parse_error(
-                        MezError::invalid_args(
-                            "Claude Code response must contain a mezzanine-action-json block",
-                        ),
-                        &raw_text,
-                    ));
-                };
+                    structured_output.as_deref(),
+                )?;
                 Some(batch)
             };
             Ok(ModelResponse {
@@ -411,14 +416,57 @@ fn append_claude_code_section(prompt: &mut String, label: &str, content: &str) {
 }
 
 /// Reports whether Claude Code output should receive one corrective retry.
-fn claude_code_output_needs_corrective_retry(request: &ModelRequest, raw_text: &str) -> bool {
-    if raw_text.is_empty() || request.interaction_kind == ModelInteractionKind::AutoSizing {
+fn claude_code_output_needs_corrective_retry(
+    request: &ModelRequest,
+    raw_text: &str,
+    structured_output: Option<&str>,
+) -> bool {
+    if request.interaction_kind == ModelInteractionKind::AutoSizing {
         return raw_text.is_empty();
     }
-    match parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id) {
-        Ok(Some(_)) => false,
-        Ok(None) | Err(_) => true,
+    parse_claude_code_maap_output(request, raw_text, structured_output).is_err()
+}
+
+/// Builds the Claude Code JSON schema argument for MAAP action-batch turns.
+fn claude_code_maap_json_schema(request: &ModelRequest) -> Result<String> {
+    serde_json::to_string(&maap_action_batch_schema(
+        &request.allowed_actions,
+        &request.available_mcp_tools,
+    ))
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "Claude Code MAAP JSON schema could not be serialized: {error}"
+        ))
+    })
+}
+
+/// Parses Claude Code MAAP output, preferring structured JSON when present and
+/// preserving fenced-text fallback for older CLI versions.
+fn parse_claude_code_maap_output(
+    request: &ModelRequest,
+    raw_text: &str,
+    structured_output: Option<&str>,
+) -> Result<MaapBatch> {
+    if let Some(structured_output) = structured_output {
+        return parse_maap_action_batch_json_for_turn(
+            structured_output,
+            &request.turn_id,
+            &request.agent_id,
+        )
+        .map_err(|error| provider_maap_parse_error(error, structured_output));
     }
+    let Some(batch) =
+        parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
+            .map_err(|error| provider_maap_parse_error(error, raw_text))?
+    else {
+        return Err(provider_maap_parse_error(
+            MezError::invalid_args(
+                "Claude Code response must contain structured output or a mezzanine-action-json block",
+            ),
+            raw_text,
+        ));
+    };
+    Ok(batch)
 }
 
 /// Builds the provider error used when Claude Code exits successfully but
@@ -428,19 +476,33 @@ fn claude_code_empty_output_error(stderr: &str) -> MezError {
         .with_provider_raw_text(stderr.to_string())
 }
 
-/// Parses assistant text and token usage from Claude Code JSON print output.
-fn parse_claude_code_json_output(stdout: &str) -> Result<(String, ModelTokenUsage)> {
+/// Parses assistant text, structured output, and token usage from Claude Code
+/// JSON print output.
+fn parse_claude_code_json_output(
+    stdout: &str,
+) -> Result<(String, Option<String>, ModelTokenUsage)> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
-        return Ok((String::new(), ModelTokenUsage::default()));
+        return Ok((String::new(), None, ModelTokenUsage::default()));
     }
     let envelope = match serde_json::from_str::<ClaudeCodeJsonEnvelope>(trimmed) {
         Ok(envelope) => envelope,
-        Err(_) => return Ok((trimmed.to_string(), ModelTokenUsage::default())),
+        Err(_) => return Ok((trimmed.to_string(), None, ModelTokenUsage::default())),
     };
-    let Some(result) = envelope.result else {
+    let result = envelope.result.unwrap_or_default();
+    let structured_output = envelope
+        .structured_output
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "Claude Code JSON structured output could not be serialized: {error}"
+            ))
+            .with_provider_raw_text(trimmed.to_string())
+        })?;
+    if result.is_empty() && structured_output.is_none() {
         return Err(MezError::invalid_state(
-            "Claude Code JSON output did not contain a result string",
+            "Claude Code JSON output did not contain result text or structured output",
         )
         .with_provider_raw_text(trimmed.to_string()));
     };
@@ -448,6 +510,7 @@ fn parse_claude_code_json_output(stdout: &str) -> Result<(String, ModelTokenUsag
     let cached_input_tokens = envelope.usage.cache_read_input_tokens;
     Ok((
         result.trim().to_string(),
+        structured_output,
         ModelTokenUsage {
             input_tokens: input_tokens.saturating_add(cached_input_tokens.unwrap_or(0)),
             output_tokens: envelope.usage.output_tokens.unwrap_or(0),
@@ -600,6 +663,7 @@ async fn run_claude_code_request_with_corrective_retry(
     let session = session_id
         .as_deref()
         .map(|session_id| ClaudeCodeSessionRef { session_id });
+    let maap_json_schema = claude_code_maap_json_schema(request)?;
     let first_prompt = claude_code_prompt(request, None);
     let first_resume_prompt = claude_code_current_turn_prompt(request);
     let first_system_prompt = claude_code_system_prompt(request, None);
@@ -613,11 +677,17 @@ async fn run_claude_code_request_with_corrective_retry(
         reasoning_effort: request.reasoning_effort.as_deref(),
         timeout_ms,
         json_output: true,
+        json_schema: Some(&maap_json_schema),
     })
     .await?;
-    if !claude_code_output_needs_corrective_retry(request, &first_output.assistant_text) {
+    if !claude_code_output_needs_corrective_retry(
+        request,
+        &first_output.assistant_text,
+        first_output.structured_output.as_deref(),
+    ) {
         return Ok(ClaudeCodeRequestOutput {
             raw_text: first_output.assistant_text,
+            structured_output: first_output.structured_output,
             usage: first_output.usage,
             latest_request_usage: None,
         });
@@ -640,9 +710,10 @@ async fn run_claude_code_request_with_corrective_retry(
         reasoning_effort: request.reasoning_effort.as_deref(),
         timeout_ms,
         json_output: true,
+        json_schema: Some(&maap_json_schema),
     })
     .await?;
-    if retry_output.assistant_text.is_empty() {
+    if retry_output.assistant_text.is_empty() && retry_output.structured_output.is_none() {
         return Err(claude_code_empty_output_error(&retry_output.stderr));
     }
     let latest_request_usage = retry_output.usage;
@@ -650,6 +721,7 @@ async fn run_claude_code_request_with_corrective_retry(
     usage.add_assign(latest_request_usage);
     Ok(ClaudeCodeRequestOutput {
         raw_text: retry_output.assistant_text,
+        structured_output: retry_output.structured_output,
         usage,
         latest_request_usage: Some(latest_request_usage),
     })
@@ -670,6 +742,7 @@ async fn run_claude_code_subprocess(
                 reasoning_effort: request.reasoning_effort,
                 timeout_ms: request.timeout_ms,
                 json_output: request.json_output,
+                json_schema: request.json_schema,
             },
         )
         .await;
@@ -686,6 +759,7 @@ async fn run_claude_code_subprocess(
         reasoning_effort: request.reasoning_effort,
         timeout_ms: request.timeout_ms,
         json_output: request.json_output,
+        json_schema: request.json_schema,
     })
     .await
 }
@@ -707,6 +781,7 @@ async fn run_claude_code_resume_subprocess(
                 reasoning_effort: request.reasoning_effort,
                 timeout_ms: request.timeout_ms,
                 json_output: request.json_output,
+                json_schema: request.json_schema,
             },
         )
         .await;
@@ -734,6 +809,7 @@ async fn run_claude_code_resume_subprocess(
                         reasoning_effort: request.reasoning_effort,
                         timeout_ms: request.timeout_ms,
                         json_output: request.json_output,
+                        json_schema: request.json_schema,
                     },
                 )
                 .await;
@@ -788,6 +864,9 @@ async fn run_claude_code_subprocess_with_session_invocation(
         }
         if request.json_output {
             command.arg("--output-format").arg("json");
+        }
+        if let Some(schema) = request.json_schema.filter(|schema| !schema.is_empty()) {
+            command.arg("--json-schema").arg(schema);
         }
         match command
             .stdin(Stdio::piped())
@@ -862,13 +941,14 @@ async fn run_claude_code_subprocess_with_session_invocation(
         ))
         .with_provider_raw_text(stderr));
     }
-    let (assistant_text, usage) = if request.json_output {
+    let (assistant_text, structured_output, usage) = if request.json_output {
         parse_claude_code_json_output(&stdout)?
     } else {
-        (stdout, ModelTokenUsage::default())
+        (stdout, None, ModelTokenUsage::default())
     };
     Ok(ClaudeCodeSubprocessOutput {
         assistant_text,
+        structured_output,
         stderr,
         usage,
     })
@@ -1727,6 +1807,42 @@ EOF
         assert_eq!(response.latest_request_usage, None);
     }
 
+    /// Verifies Claude Code structured output is requested with the active MAAP
+    /// schema and parsed before falling back to fenced assistant text.
+    ///
+    /// Claude Code can return schema-constrained data in `structured_output`;
+    /// this regression protects the subprocess adapter from ignoring that
+    /// channel and requiring a markdown-fenced MAAP block when structured JSON
+    /// is already available.
+    #[tokio::test]
+    async fn claude_code_provider_parses_structured_output_action_batch() {
+        let fixture = ClaudeCodeFixture::new("structured-output");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+printf '%s\n' "$@" > "$0.args"
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"not fenced","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let response = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap();
+
+        assert!(response.action_batch.is_some());
+        let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
+        assert!(args.contains("--output-format"), "{args}");
+        assert!(args.contains("json"), "{args}");
+        assert!(args.contains("--json-schema"), "{args}");
+        assert!(args.contains("\"actions\""), "{args}");
+        assert_eq!(response.raw_text, "not fenced");
+        assert_eq!(response.latest_request_usage, None);
+    }
+
     /// Verifies Claude Code JSON usage parsing preserves omitted cache counters
     /// separately from explicit zero cache counters.
     ///
@@ -1739,8 +1855,8 @@ EOF
         let omitted = r#"{"result":"hello","usage":{"input_tokens":2,"output_tokens":12}}"#;
         let explicit_zero = r#"{"result":"hello","usage":{"input_tokens":2,"output_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#;
 
-        let (_, omitted_usage) = parse_claude_code_json_output(omitted).unwrap();
-        let (_, explicit_zero_usage) = parse_claude_code_json_output(explicit_zero).unwrap();
+        let (_, _, omitted_usage) = parse_claude_code_json_output(omitted).unwrap();
+        let (_, _, explicit_zero_usage) = parse_claude_code_json_output(explicit_zero).unwrap();
 
         assert_eq!(omitted_usage.input_tokens, 2);
         assert_eq!(omitted_usage.cached_input_tokens, None);
