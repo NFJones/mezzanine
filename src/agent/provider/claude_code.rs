@@ -10,8 +10,7 @@ use super::schema::maap_action_batch_schema;
 use super::{
     AsyncModelProvider, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
     ModelResponse, ModelTokenUsage, ProviderModelCatalog, Result,
-    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
-    provider_maap_parse_error, validate_non_empty,
+    parse_maap_action_batch_json_for_turn, provider_maap_parse_error, validate_non_empty,
 };
 use sha2::Digest;
 use std::collections::BTreeMap;
@@ -26,9 +25,9 @@ use tokio::process::Command;
 /// Executable name used for Claude Code subprocess requests.
 const CLAUDE_CODE_PROGRAM: &str = "claude";
 /// Corrective instruction used after Claude Code returns malformed MAAP output.
-const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was invalid for Mezzanine because it did not contain one valid mezzanine-action-json action batch. Return only one validated Mezzanine MAAP action batch fenced in ```mezzanine-action-json``` with no surrounding prose.";
+const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was invalid for Mezzanine because it did not satisfy the required structured output contract. Return only one validated Mezzanine MAAP action batch that matches the provided JSON schema, with no surrounding prose.";
 /// Corrective instruction used after Claude Code returns an empty response.
-const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response was empty. Return only one validated Mezzanine MAAP action batch fenced in ```mezzanine-action-json``` with no surrounding prose.";
+const CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION: &str = "Your previous response was empty. Return only one validated Mezzanine MAAP action batch that matches the provided JSON schema, with no surrounding prose.";
 /// Maximum stderr bytes retained in provider diagnostics.
 const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
 /// Number of short retries after Claude reports a session lock is still active.
@@ -139,6 +138,11 @@ struct ClaudeCodeJsonUsage {
 /// Stores the Claude Code JSON envelope shape used by print-mode output.
 #[derive(Debug, serde::Deserialize)]
 struct ClaudeCodeJsonEnvelope {
+    #[serde(rename = "type")]
+    envelope_type: Option<String>,
+    subtype: Option<String>,
+    #[serde(default)]
+    is_error: bool,
     result: Option<String>,
     structured_output: Option<serde_json::Value>,
     #[serde(default)]
@@ -440,8 +444,7 @@ fn claude_code_maap_json_schema(request: &ModelRequest) -> Result<String> {
     })
 }
 
-/// Parses Claude Code MAAP output, preferring structured JSON when present and
-/// preserving fenced-text fallback for older CLI versions.
+/// Parses Claude Code MAAP output from schema-enforced Claude Code responses.
 fn parse_claude_code_maap_output(
     request: &ModelRequest,
     raw_text: &str,
@@ -455,18 +458,10 @@ fn parse_claude_code_maap_output(
         )
         .map_err(|error| provider_maap_parse_error(error, structured_output));
     }
-    let Some(batch) =
-        parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
-            .map_err(|error| provider_maap_parse_error(error, raw_text))?
-    else {
-        return Err(provider_maap_parse_error(
-            MezError::invalid_args(
-                "Claude Code response must contain structured output or a mezzanine-action-json block",
-            ),
-            raw_text,
-        ));
-    };
-    Ok(batch)
+    Err(MezError::invalid_state(
+        "Claude Code response did not include structured_output for a schema-enforced MAAP turn",
+    )
+    .with_provider_raw_text(raw_text.to_string()))
 }
 
 /// Builds the provider error used when Claude Code exits successfully but
@@ -490,6 +485,25 @@ fn parse_claude_code_json_output(
         Err(_) => return Ok((trimmed.to_string(), None, ModelTokenUsage::default())),
     };
     let result = envelope.result.unwrap_or_default();
+    if envelope.is_error {
+        let subtype = envelope.subtype.as_deref().unwrap_or("unknown");
+        let detail = result.trim();
+        let message = match envelope.envelope_type.as_deref() {
+            Some(envelope_type) if !envelope_type.is_empty() && !detail.is_empty() => {
+                format!(
+                    "Claude Code JSON output reported an error ({envelope_type}/{subtype}): {detail}"
+                )
+            }
+            Some(envelope_type) if !envelope_type.is_empty() => {
+                format!("Claude Code JSON output reported an error ({envelope_type}/{subtype})")
+            }
+            _ if !detail.is_empty() => {
+                format!("Claude Code JSON output reported an error ({subtype}): {detail}")
+            }
+            _ => format!("Claude Code JSON output reported an error ({subtype})"),
+        };
+        return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
+    }
     let structured_output = envelope
         .structured_output
         .map(|value| serde_json::to_string(&value))
@@ -1433,24 +1447,7 @@ mod tests {
 printf '%s\n' "$@" > "$0.args"
 cat > "$0.stdin"
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
@@ -1517,24 +1514,7 @@ case " $* " in
         ;;
 esac
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
@@ -1616,24 +1596,7 @@ if [ "$count" -eq 2 ]; then
     exit 0
 fi
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
@@ -1689,24 +1652,7 @@ case " $* " in
         ;;
 esac
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
@@ -1736,24 +1682,7 @@ EOF
 cat > "$0.stdin"
 wc -c < "$0.stdin" > "$0.stdin-bytes"
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
@@ -1784,7 +1713,7 @@ EOF
             r#"#!/bin/sh
 cat >/dev/null
 cat <<'EOF'
-{"type":"result","subtype":"success","is_error":false,"result":"```mezzanine-action-json\n{\n  \"protocol\": \"maap/1\",\n  \"turn_id\": \"turn-1\",\n  \"agent_id\": \"agent-1\",\n  \"rationale\": \"return final text\",\n  \"actions\": [\n    {\n      \"id\": \"say-1\",\n      \"type\": \"say\",\n      \"status\": \"final\",\n      \"rationale\": \"Reply\",\n      \"text\": \"hello\"\n    }\n  ],\n  \"final\": true\n}\n```","usage":{"input_tokens":2,"output_tokens":12,"cache_creation_input_tokens":6112,"cache_read_input_tokens":10496}}
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12,"cache_creation_input_tokens":6112,"cache_read_input_tokens":10496}}
 EOF
 "#,
         );
@@ -1808,12 +1737,12 @@ EOF
     }
 
     /// Verifies Claude Code structured output is requested with the active MAAP
-    /// schema and parsed before falling back to fenced assistant text.
+    /// schema and parsed as the authoritative response payload.
     ///
     /// Claude Code can return schema-constrained data in `structured_output`;
     /// this regression protects the subprocess adapter from ignoring that
-    /// channel and requiring a markdown-fenced MAAP block when structured JSON
-    /// is already available.
+    /// channel or treating plain assistant text as the authoritative MAAP batch
+    /// when structured JSON is already available.
     #[tokio::test]
     async fn claude_code_provider_parses_structured_output_action_batch() {
         let fixture = ClaudeCodeFixture::new("structured-output");
@@ -1841,6 +1770,40 @@ EOF
         assert!(args.contains("\"actions\""), "{args}");
         assert_eq!(response.raw_text, "not fenced");
         assert_eq!(response.latest_request_usage, None);
+    }
+
+    /// Verifies schema-enforced MAAP turns reject Claude Code JSON envelopes
+    /// that omit `structured_output` even when the CLI reports success.
+    ///
+    /// Claude Code MAAP turns launch with `--json-schema`, so the provider must
+    /// fail closed when the validated payload is missing instead of treating
+    /// plain `result` text as a successful assistant response.
+    #[tokio::test]
+    async fn claude_code_provider_requires_structured_output_for_maap_turns() {
+        let fixture = ClaudeCodeFixture::new("missing-structured-output");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"hello","usage":{"input_tokens":2,"output_tokens":12}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+
+        let error = provider
+            .send_request_async(&claude_request())
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .message()
+                .contains("did not include structured_output"),
+            "{}",
+            error.message()
+        );
+        assert_eq!(error.provider_raw_text(), Some("hello"));
     }
 
     /// Verifies Claude Code JSON usage parsing preserves omitted cache counters
@@ -1871,6 +1834,28 @@ EOF
             "0.00%"
         );
         assert_eq!(explicit_zero_usage.cache_write_input_tokens, Some(0));
+    }
+
+    /// Verifies Claude Code JSON error envelopes surface as provider errors
+    /// instead of falling through to MAAP parsing as assistant content.
+    ///
+    /// Claude Code can report structured-output failures in its JSON envelope.
+    /// The provider must stop at that boundary so upstream retry or handoff
+    /// logic receives the provider error instead of a misleading MAAP failure.
+    #[test]
+    fn claude_code_json_output_rejects_error_envelopes() {
+        let raw = r#"{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"result":"schema failed","usage":{"input_tokens":2,"output_tokens":12}}"#;
+
+        let error = parse_claude_code_json_output(raw).unwrap_err();
+
+        assert!(
+            error.message().contains(
+                "reported an error (result/error_max_structured_output_retries): schema failed"
+            ),
+            "{}",
+            error.message()
+        );
+        assert_eq!(error.provider_raw_text(), Some(raw));
     }
 
     /// Verifies missing Claude Code executables are classified as provider
@@ -1970,24 +1955,7 @@ if [ "$count" -eq 1 ]; then
     exit 0
 fi
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"not fenced","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
@@ -2048,24 +2016,7 @@ if [ "$count" -eq 1 ]; then
     exit 0
 fi
 cat <<'EOF'
-```mezzanine-action-json
-{
-  "protocol": "maap/1",
-  "turn_id": "turn-1",
-  "agent_id": "agent-1",
-  "rationale": "return final text",
-  "actions": [
-    {
-      "id": "say-1",
-      "type": "say",
-      "status": "final",
-      "rationale": "Reply",
-      "text": "hello"
-    }
-  ],
-  "final": true
-}
-```
+{"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
 "#,
         );
