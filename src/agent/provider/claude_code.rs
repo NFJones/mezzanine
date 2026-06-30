@@ -914,8 +914,6 @@ async fn run_claude_code_subprocess_with_session_invocation(
         command
             .arg("--allowedTools")
             .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL)
-            .arg("--disallowedTools")
-            .arg("*")
             .arg("--permission-mode")
             .arg("dontAsk");
         match request.session {
@@ -1554,8 +1552,6 @@ EOF
         assert!(!args.contains("--bare"), "{args}");
         assert!(args.contains("--permission-mode"), "{args}");
         assert!(args.contains("dontAsk"), "{args}");
-        assert!(args.contains("--disallowedTools"), "{args}");
-        assert!(args.contains("*"), "{args}");
         assert!(!args.contains("--session-id"), "{args}");
         assert!(!args.contains("--resume"), "{args}");
         assert!(args.contains("--system-prompt"), "{args}");
@@ -1859,8 +1855,6 @@ EOF
         assert!(!args.contains("--bare"), "{args}");
         assert!(args.contains("--permission-mode"), "{args}");
         assert!(args.contains("dontAsk"), "{args}");
-        assert!(args.contains("--disallowedTools"), "{args}");
-        assert!(args.contains("*"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
         assert!(args.contains("--allowedTools"), "{args}");
