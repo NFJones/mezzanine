@@ -3386,6 +3386,63 @@ fn runtime_service_ignores_stale_process_exit_with_mismatched_primary_pid() {
         .unwrap();
 }
 
+/// Verifies late pane output after a pane exit event is ignored.
+///
+/// Full-screen and alternate-screen applications commonly emit shutdown bytes
+/// while the PTY is exiting. Once runtime teardown removes the pane from the
+/// session, those late bytes must be treated as a normal shutdown race instead
+/// of a fatal missing-pane error.
+#[test]
+fn runtime_service_ignores_late_pane_output_after_exit_event() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let started = service
+        .start_initial_pane_process(Some("sleep 30"))
+        .unwrap();
+    let second_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    let update = service
+        .apply_pane_process_exit_event(
+            &started.pane_id,
+            started.primary_pid,
+            crate::process::PaneExitStatus {
+                code: Some(0),
+                signal: None,
+                success: true,
+            },
+        )
+        .unwrap();
+
+    assert!(update.is_some());
+    assert!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .all(|pane| pane.id.as_str() != started.pane_id.as_str())
+    );
+    assert!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .any(|pane| pane.id.as_str() == second_pane.as_str())
+    );
+
+    let late_output = service
+        .apply_pane_output_bytes(started.pane_id.clone(), b"\x1b[?1004l\x1b[?1049l".to_vec())
+        .unwrap();
+
+    assert_eq!(late_output, None);
+}
+
 /// Verifies runtime service restarts restored panes with fresh primary pids.
 ///
 /// This regression scenario documents the behavior being protected so a

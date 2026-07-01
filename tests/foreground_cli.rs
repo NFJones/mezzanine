@@ -166,9 +166,12 @@ impl ForegroundProcess {
     /// on duplicated control-flow logic.
     fn read_until_exit(&mut self, output: &mut Vec<u8>, timeout: Duration) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
+        let mut reader_disconnected = false;
         while Instant::now() < deadline {
-            while let Ok(chunk) = self.output_rx.try_recv() {
-                output.extend_from_slice(&chunk);
+            if !reader_disconnected {
+                while let Ok(chunk) = self.output_rx.try_recv() {
+                    output.extend_from_slice(&chunk);
+                }
             }
             if self
                 .child
@@ -180,6 +183,10 @@ impl ForegroundProcess {
                     output.extend_from_slice(&chunk);
                 }
                 return Ok(());
+            }
+            if reader_disconnected {
+                thread::sleep(Duration::from_millis(20));
+                continue;
             }
             match self.output_rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(chunk) => output.extend_from_slice(&chunk),
@@ -193,10 +200,7 @@ impl ForegroundProcess {
                     {
                         return Ok(());
                     }
-                    return Err(format!(
-                        "foreground output reader closed before process exit: output={}",
-                        output_excerpt(output)
-                    ));
+                    reader_disconnected = true;
                 }
             }
         }

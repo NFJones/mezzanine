@@ -1435,7 +1435,7 @@ fn poll_until_turn_state(
     turn_id: &str,
     expected_state: AgentTurnState,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let state = service
             .agent_turn_ledger

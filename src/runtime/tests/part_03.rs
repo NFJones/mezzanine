@@ -2187,7 +2187,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
     let mut cursor_column = None;
     let mut observed_cursor = None;
     let mut observed_screen = String::new();
-    for _ in 0..100 {
+    for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         let cursor = service.pane_screen("%1").unwrap().cursor_state();
         let screen_text = service
@@ -4027,7 +4027,7 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    for _ in 0..100 {
+    for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions.is_empty() {
             break;

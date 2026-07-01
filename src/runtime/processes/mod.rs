@@ -404,6 +404,9 @@ impl RuntimeSessionService {
         let mut terminal_title_panes = BTreeSet::new();
 
         for output in outputs {
+            if self.find_pane_descriptor(&output.pane_id).is_none() {
+                continue;
+            }
             updates.push(self.apply_pane_process_output(output, &mut terminal_title_panes)?);
         }
 
@@ -431,6 +434,9 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         let pane_id = pane_id.into();
+        if self.find_pane_descriptor(&pane_id).is_none() {
+            return Ok(None);
+        }
         let primary_pid = self
             .primary_pid_for_live_pane_process(&pane_id)
             .unwrap_or(0);

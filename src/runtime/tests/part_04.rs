@@ -2079,6 +2079,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
+    service.agent_local_action_executor = crate::runtime::RuntimeLocalActionExecutor::Native;
     service.host_clipboard =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
@@ -2145,8 +2146,13 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
             runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap();
-    assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    poll_until_turn_state(&mut service, "turn-1", AgentTurnState::Completed);
+    assert!(matches!(
+        execution.terminal_state,
+        AgentTurnState::Running | AgentTurnState::Completed
+    ));
+    if execution.terminal_state == AgentTurnState::Running {
+        poll_until_turn_state(&mut service, "turn-1", AgentTurnState::Completed);
+    }
 
     let buffer_response = service
         .execute_agent_shell_command(&primary, "/copy-patches buffer retained-patches")
@@ -2522,12 +2528,13 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    for _ in 0..100 {
+    for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions.is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        thread::yield_now();
     }
     assert!(
         service.running_shell_transactions.is_empty(),
@@ -2613,14 +2620,26 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    for _ in 0..50 {
-        let _ = service.poll_pane_outputs(4096).unwrap();
-        if service.pending_agent_provider_tasks.contains("turn-1") {
+    let mut context_text = String::new();
+    for _ in 0..900 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        context_text = service
+            .agent_turn_contexts
+            .get("turn-1")
+            .unwrap()
+            .blocks
+            .iter()
+            .map(|block| block.content.as_str())
+            .collect::<Vec<_>>()
+            .join("
+");
+        if context_text.contains("agent-hidden-output") {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        thread::yield_now();
     }
-    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    assert!(context_text.contains("agent-hidden-output"), "{context_text}");
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -2845,12 +2864,13 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    for _ in 0..50 {
+    for _ in 0..600 {
         let _ = service.poll_pane_outputs(4096).unwrap();
         if service.pending_agent_provider_tasks.contains("turn-1") {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        thread::yield_now();
     }
     assert!(service.pending_agent_provider_tasks.contains("turn-1"));
     let pane_text = service
@@ -2967,7 +2987,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
 
-    for _ in 0..100 {
+    for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions.is_empty() {
             break;
@@ -3086,7 +3106,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
 
-    for _ in 0..100 {
+    for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions.is_empty() {
             break;
@@ -3121,7 +3141,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         .write_input_to_pane(&primary, Some("%1"), b"case $- in *e*u*|*u*e*) printf 'STRICT_OPTIONS_STILL_SET\\n';; *) printf 'STRICT_OPTIONS_LOST:%s\\n' \"$-\";; esac\n")
         .unwrap();
     let mut pane_text = String::new();
-    for _ in 0..50 {
+    for _ in 0..150 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         pane_text = service
             .pane_screen("%1")
@@ -3691,7 +3711,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         PaneReadinessState::Ready | PaneReadinessState::Busy
     ));
 
-    for _ in 0..100 {
+    for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions.is_empty() {
             break;

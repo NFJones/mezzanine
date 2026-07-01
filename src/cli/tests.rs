@@ -3505,16 +3505,16 @@ async fn control_socket_primary_attach_loop_ignores_nonvisible_runtime_events() 
             parsed.get("id").and_then(serde_json::Value::as_str),
             Some("cli-terminal-view-0")
         );
+        event_server_stream
+            .write_all(&event_notification_frame("diagnostic"))
+            .unwrap();
+        event_server_stream.flush().unwrap();
         server_stream
             .write_all(&encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["initial"],"line_style_spans":[[]],"cursor":{"row":0,"column":7,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
             ))
             .unwrap();
         server_stream.flush().unwrap();
-        event_server_stream
-            .write_all(&event_notification_frame("diagnostic"))
-            .unwrap();
-        event_server_stream.flush().unwrap();
         drop(event_server_stream);
     });
     let mut io = AsyncFakeAttachedTerminalIo::default();
