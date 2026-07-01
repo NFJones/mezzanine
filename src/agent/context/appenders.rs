@@ -147,8 +147,10 @@ fn append_filtered_mcp_context(
     }
     for server in &unavailable_servers {
         lines.push(format!(
-            "unavailable_server={} retryable={} reason={}",
+            "unavailable_server={} purpose={} usage_instructions={} retryable={} reason={}",
             server.server_id,
+            mcp_context_quoted_value(&server.purpose),
+            mcp_context_quoted_value(&server.usage_instructions),
             server.retryable,
             mcp_context_quoted_value(&server.reason)
         ));
@@ -332,7 +334,7 @@ fn mcp_context_selected_tool_details(
         selected.dedup_by(|left, right| {
             left.server_id == right.server_id && left.tool_name == right.tool_name
         });
-        return selected.into_iter().take(limit).collect();
+        return selected;
     }
     let task_text = mcp_context_normalized_user_text(context);
     if task_text.is_empty() {

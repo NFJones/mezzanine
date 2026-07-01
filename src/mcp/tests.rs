@@ -194,8 +194,11 @@ fn configured_server_is_prompt_visible_as_pending_discovery() {
     assert_eq!(summary.unavailable_servers.len(), 1);
     let server = &summary.unavailable_servers[0];
     assert_eq!(server.server_id, "fs");
-    assert!(server.purpose.is_empty());
-    assert!(server.usage_instructions.is_empty());
+    assert_eq!(server.purpose, "Filesystem read operations");
+    assert_eq!(
+        server.usage_instructions,
+        "Use when the task needs MCP-backed file reads."
+    );
     assert_eq!(server.reason, "runtime discovery pending");
     assert!(server.retryable);
 }

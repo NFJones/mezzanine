@@ -3214,6 +3214,56 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     );
 }
 
+/// Verifies explicit MCP context includes all requested server tools.
+///
+/// Explicit MCP server invocations are the point where the model receives the
+/// concrete server manifest. A large server must not hide tools that fall after
+/// the compact ordinary-context detail limit, because the requested server is
+/// already known to be relevant for the turn.
+#[test]
+fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use @fs to choose the right tool".to_string(),
+    }])
+    .unwrap();
+    let tools = (0..10)
+        .map(|index| crate::mcp::McpPromptTool {
+            server_id: "fs".to_string(),
+            tool_name: format!("tool_{index:02}"),
+            description: format!("Tool {index} description"),
+            approval_required: false,
+            input_schema_json: r#"{"type":"object"}"#.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let context = append_mcp_context(
+        context,
+        &crate::mcp::McpPromptSummary {
+            available_servers: vec![crate::mcp::McpPromptServer {
+                server_id: "fs".to_string(),
+                display_name: "Filesystem".to_string(),
+                purpose: "Read project files through MCP".to_string(),
+                usage_instructions: "Use when MCP-backed file access is requested.".to_string(),
+                tool_count: tools.len(),
+                approval_required_tool_count: 0,
+            }],
+            available_tools: tools,
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+    let content = &context.blocks[0].content;
+
+    for index in 0..10 {
+        assert!(
+            content.contains(&format!("available_tool=fs/tool_{index:02}")),
+            "{content}"
+        );
+    }
+    assert!(!content.contains("available_tool_inventory="), "{content}");
+}
+
 /// Verifies that refreshing MCP prompt context replaces the previous
 /// integration block instead of appending another copy. Provider continuations
 /// rebuild the runtime context repeatedly, so duplicated MCP summaries would

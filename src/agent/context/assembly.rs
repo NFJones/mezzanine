@@ -378,6 +378,7 @@ mod tests {
                 "available_servers=1 available_tools=1\n",
                 "server=test status=available route=mcp_call name=\"Test\" purpose=\"purpose\" usage_instructions=\"usage\" tools=1\n",
                 "available_tool=test/run route=mcp_call callable=true description=\"Run tool\"\n",
+                "unavailable_server=offline purpose=\"offline purpose\" usage_instructions=\"offline usage\" retryable=true reason=\"auth failed\"\n",
             )
             .to_string(),
         }]);
@@ -386,7 +387,15 @@ mod tests {
         assert_eq!(summary.available_servers[0].server_id, "test");
         assert_eq!(summary.available_tools.len(), 1);
         assert_eq!(summary.available_tools[0].tool_name, "run");
-        assert!(summary.unavailable_servers.is_empty());
+        assert_eq!(summary.unavailable_servers.len(), 1);
+        assert_eq!(summary.unavailable_servers[0].server_id, "offline");
+        assert_eq!(summary.unavailable_servers[0].purpose, "offline purpose");
+        assert_eq!(
+            summary.unavailable_servers[0].usage_instructions,
+            "offline usage"
+        );
+        assert_eq!(summary.unavailable_servers[0].reason, "auth failed");
+        assert!(summary.unavailable_servers[0].retryable);
     }
 
     /// Verifies that unrelated context blocks do not fabricate MCP summary data.

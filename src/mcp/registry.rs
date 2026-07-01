@@ -421,8 +421,12 @@ impl McpRegistry {
             })
             .map(|server| McpPromptUnavailableServer {
                 server_id: server.configured.id.clone(),
-                purpose: String::new(),
-                usage_instructions: String::new(),
+                purpose: server.configured.external_capability.purpose.clone(),
+                usage_instructions: server
+                    .configured
+                    .external_capability
+                    .usage_instructions
+                    .clone(),
                 reason: mcp_prompt_unavailable_reason(server),
                 retryable: server.configured.enabled
                     && matches!(
