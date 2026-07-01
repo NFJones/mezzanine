@@ -6128,6 +6128,54 @@ fn terminal_screen_excludes_alternate_screen_redraws_from_history() {
     assert!(!screen.alternate_screen_active());
 }
 
+/// Verifies DEC 47 and 1047 alternate-screen entry points isolate normal
+/// history just like DEC 1049.
+///
+/// Some applications use the older 47/1047 private modes rather than 1049.
+/// They still switch into the pane-local alternate buffer, so their visible
+/// content and scroll-off rows must not leak into normal scrollback history.
+#[test]
+fn terminal_screen_dec47_and_dec1047_alternate_screen_do_not_record_history() {
+    for mode in [47, 1047] {
+        let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+        let enter = format!("\x1b[?{mode}h");
+        let leave = format!("\x1b[?{mode}l");
+
+        screen.feed(b"normal");
+        screen.feed(enter.as_bytes());
+        screen.feed(b"alt\ninside\nmore");
+        assert!(screen.alternate_screen_active());
+
+        screen.feed(leave.as_bytes());
+        screen.feed(b"back");
+
+        assert!(screen.history().is_empty(), "mode {mode}");
+        assert_eq!(screen.visible_lines()[0], "normalback", "mode {mode}");
+        assert!(!screen.alternate_screen_active(), "mode {mode}");
+    }
+}
+
+/// Verifies alternate-screen scrolling inside DECSTBM margins and DECOM origin
+/// mode remains isolated from normal history.
+///
+/// Full-screen TUIs commonly combine alternate screen, scroll regions, origin
+/// mode, and line movement while repainting panes. Even when rows move within
+/// the alternate buffer, those rows are alternate-screen content and must not
+/// become normal scrollback history after exit.
+#[test]
+fn terminal_screen_alternate_scroll_region_origin_mode_excludes_history() {
+    let mut screen = TerminalScreen::new(Size::new(10, 4).unwrap(), 10).unwrap();
+
+    screen.feed(b"shell");
+    screen.feed(b"\x1b[?1049h\x1b[2;4r\x1b[?6h\x1b[1;1Htop");
+    screen.feed(b"\x1b[3;1Hone\n two\n three");
+    screen.feed(b"\x1b[?6l\x1b[r\x1b[?1049l!");
+
+    assert!(screen.history().is_empty());
+    assert_eq!(screen.visible_lines()[0], "shell!");
+    assert!(!screen.alternate_screen_active());
+}
+
 /// Verifies terminal screen restores normal-screen content and cursor after
 /// alternate-screen exit.
 ///

@@ -1218,10 +1218,11 @@ are ignored.
 
 Alternate screen contents MUST be represented separately from the normal screen
 and live alternate-screen buffer. Alternate-screen redraws, cursor-addressed
-updates, and visible cells MUST NOT be appended to the normal bounded history
-buffer. Rows that actually scroll off the top of the full alternate-screen
-region MAY be appended to the normal bounded history buffer so line-oriented
-fullscreen programs remain scrollable through pane-local history.
+updates, visible cells, and rows that scroll inside or off the top of the
+alternate-screen buffer MUST NOT be appended to the normal bounded history
+buffer. Fullscreen programs remain inspectable through explicit visible-screen
+capture while alternate screen is active, not by leaking alternate-screen rows
+into normal history.
 
 Default agent context assembly MUST NOT include passive terminal contents from
 the visible screen, normal history, or alternate screen. When a pane is

@@ -45,9 +45,10 @@ The current suite covers core parser/model behavior and one foreground PTY
 full-screen path. The next compatibility improvements should add deterministic
 fixtures before broadening user-facing reliability claims:
 
-1. A foreground PTY script that enters alternate screen, sets DECSTBM margins,
-   uses DECOM, scrolls inside the region, and exits while proving no alternate
-   rows entered normal history.
+1. Additional foreground PTY scripts for alternate screen edge cases beyond
+   deterministic unit coverage, including resize and real application repaint
+   behavior. Unit coverage now exercises DEC 47/1047 entry, DECSTBM/DECOM
+   region scrolling, and no-history leakage for alternate screen buffers.
 2. A resize-during-full-screen fixture that changes the attached PTY size while
    a pane-local full-screen script is active and verifies repaint/reflow output.
 3. A burst repaint fixture larger than one ordinary read/render quantum to
