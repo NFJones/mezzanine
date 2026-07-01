@@ -857,7 +857,9 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
     fn invalidate_output_frame<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, ()> {
         Box::pin(async move {
             if self.pending_output_frame.is_some() {
-                self.pending_output_invalidates_next_frame = true;
+                self.pending_output_frame = None;
+                self.pending_output_invalidates_next_frame = false;
+                self.previous_output_frame = None;
             } else {
                 self.previous_output_frame = None;
             }

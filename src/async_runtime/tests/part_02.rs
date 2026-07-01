@@ -683,6 +683,53 @@ async fn async_fd_attached_terminal_io_unbounded_write_completes_large_frame() {
     assert!(output.contains("tail-marker"), "{output:?}");
 }
 
+/// Verifies that invalidating a partially written differential output frame
+/// discards the stale remainder before any pending-output flush can emit it.
+///
+/// A full redraw request can arrive while a bounded foreground-terminal write
+/// still has retained bytes from an older differential frame. Those retained
+/// bytes are no longer a valid basis for the next frame and must be dropped
+/// instead of being flushed before the full-redraw state reset.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_invalidation_discards_pending_output() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    let lines = vec![format!("{}stale-tail-marker", "x".repeat(4096))];
+    let first = io
+        .write_styled_output_with_modes_bounded(
+            &lines,
+            &[],
+            AttachedTerminalOutputModes::default(),
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert!(first.is_partial());
+    assert!(io.pending_output_bytes() > 0);
+
+    io.invalidate_output_frame().await.unwrap();
+    assert_eq!(io.pending_output_bytes(), 0);
+
+    let flush = io.flush_pending_output(1024).await.unwrap();
+    assert!(flush.completed);
+    assert_eq!(flush.bytes_written, 0);
+
+    drop(io);
+    drop(driver_output);
+    drop(driver);
+    let mut output = Vec::new();
+    peer.read_to_end(&mut output).unwrap();
+    let output = String::from_utf8_lossy(&output);
+    assert!(!output.contains("stale-tail-marker"), "{output:?}");
+}
+
 /// Verifies that the native async terminal endpoint reports pending input
 /// before the always-writable output side of an interactive PTY-like fd pair.
 /// This protects foreground attach loops from starving user keystrokes while
