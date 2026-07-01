@@ -945,14 +945,18 @@ async fn run_claude_code_subprocess_with_session_invocation(
     let mut spawn_attempt = 0;
     let mut child = loop {
         let mut command = Command::new(request.program);
+        let json_schema = request.json_schema.filter(|schema| !schema.is_empty());
         command.arg("--print").arg("--model").arg(request.model);
         command
             .arg("--disallowedTools")
             .arg(CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS)
-            .arg("--allowedTools")
-            .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL)
             .arg("--permission-mode")
             .arg("dontAsk");
+        if json_schema.is_some() {
+            command
+                .arg("--allowedTools")
+                .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL);
+        }
         match request.session {
             Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
                 command.arg("--session-id").arg(session_id);
@@ -971,7 +975,7 @@ async fn run_claude_code_subprocess_with_session_invocation(
         if request.json_output {
             command.arg("--output-format").arg("json");
         }
-        if let Some(schema) = request.json_schema.filter(|schema| !schema.is_empty()) {
+        if let Some(schema) = json_schema {
             command.arg("--json-schema").arg(schema);
         }
         match command
@@ -2506,6 +2510,7 @@ exit 0
         let fixture = ClaudeCodeFixture::new("auto-sizing-valid");
         fixture.write_claude_script(
             r#"#!/bin/sh
+printf '%s\n' "$@" > "$0.args"
 cat >/dev/null
 cat <<'EOF'
 {"type":"result","subtype":"success","is_error":false,"result":"{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}","usage":{"input_tokens":7,"output_tokens":11,"cache_creation_input_tokens":13,"cache_read_input_tokens":17}}
@@ -2518,8 +2523,15 @@ EOF
         request.allowed_actions = AllowedActionSet::from_actions([]);
 
         let response = provider.send_request_async(&request).await.unwrap();
+        let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
+        let arg_lines: Vec<&str> = args.lines().collect();
 
         assert_eq!(response.action_batch, None);
+        assert!(arg_lines.contains(&"--output-format"), "{args}");
+        assert!(arg_lines.contains(&"json"), "{args}");
+        assert!(!arg_lines.contains(&"--allowedTools"), "{args}");
+        assert!(!arg_lines.contains(&"StructuredOutput"), "{args}");
+        assert!(!arg_lines.contains(&"--json-schema"), "{args}");
         assert_eq!(
             response.raw_text.trim(),
             "{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}"
