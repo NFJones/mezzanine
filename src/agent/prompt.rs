@@ -323,36 +323,8 @@ pub(super) fn subagent_prompt(profile: &AgentPromptProfile) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn mcp_prompt(profile: &AgentPromptProfile) -> String {
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "MCP integrations exist through Mezzanine's external-integration path. Prefer MCP when the user task matches a listed MCP server purpose, usage instructions, an exposed MCP tool description, or when the user explicitly asks for MCP-backed integration work. Prefer local shell/files for local repository work that does not match external integration metadata. Current availability: servers={} tools={}.",
-        profile.mcp_summary.available_servers.len(),
-        mcp_available_tool_count(&profile.mcp_summary)
-    ));
-    lines.push(
-        "When the user names an MCP server and a matching exposed tool exists, treat that server as a direct execution path and do not start with memory_search, memory_store, shell_command, request_capability for shell/network, or another indirect discovery action merely to set up the MCP call. If an MCP tool needs arguments like identifiers, URLs, paths, repository owner/name, branch, commit, issue/PR number, or CI target, derive those arguments from current context, current action results, or safe bounded inspection; request the needed capability if it is absent. Use memory_search or memory_store first only when the user explicitly asks to recall or save persistent memory, or when memory is the smallest direct action for a concrete durable-context gap. Do not use placeholder memory actions to satisfy an action wrapper before a real action. If server purpose metadata is empty, match the request against the exposed tool descriptions; if no suitable tool exists, say so and use the best non-MCP path. Do not infer an MCP server's use case from its name alone; use the runtime MCP integrations manifest and active mcp_call schema as selection evidence. If the relevant server purpose, tool, or required argument is unclear and cannot be safely resolved from current context, action results, or bounded inspection, ask for clarification or continue without MCP. After an MCP timeout, protocol error, or hang-like failure, do not loop on the same call without new evidence; fall back or report the blocker.".to_string(),
-    );
-    for server in &profile.mcp_summary.unavailable_servers {
-        lines.push(format!(
-            "MCP server {} is configured but not currently callable; do not use memory_search as a substitute for it. Purpose: {}; reason: {}. Use mcp_call only if a later runtime MCP context lists this server with available tools.",
-            server.server_id, server.purpose, server.reason
-        ));
-    }
-    lines.join(" ")
-}
-
-/// Returns the best available count of callable MCP tools for prompt summaries.
-fn mcp_available_tool_count(summary: &McpPromptSummary) -> usize {
-    let server_tool_count = summary
-        .available_servers
-        .iter()
-        .map(|server| server.tool_count)
-        .sum();
-    if server_tool_count > 0 {
-        server_tool_count
-    } else {
-        summary.available_tools.len()
-    }
+    let _ = profile;
+    "MCP integrations exist through Mezzanine's external-integration path. Concrete MCP server and tool metadata is not globally exposed in ordinary prompts. Use `@<mcp-server-name>` in a submitted prompt or loaded skill to request turn-local MCP server injection; injected MCP context is ephemeral and must not be treated as available in later turns unless it is injected again. When turn-local MCP context lists callable tools, treat those tools as direct execution paths and do not start with memory_search, memory_store, shell_command, request_capability for shell/network, or another indirect discovery action merely to set up the MCP call. If `mcp_call` is absent but an injected MCP server is needed, request_capability(capability=\"mcp\") instead of hallucinating a call. If an MCP tool needs arguments like identifiers, URLs, paths, repository owner/name, branch, commit, issue/PR number, or CI target, derive those arguments from current context, current action results, or safe bounded inspection; request the needed capability if it is absent. Use memory_search or memory_store first only when the user explicitly asks to recall or save persistent memory, or when memory is the smallest direct action for a concrete durable-context gap. Do not use placeholder memory actions to satisfy an action wrapper before a real action. Do not infer an MCP server's use case from its name alone; use injected runtime MCP context and active mcp_call schema as selection evidence. If the relevant server purpose, tool, or required argument is unclear and cannot be safely resolved from current context, action results, or bounded inspection, ask for clarification or continue without MCP. After an MCP timeout, protocol error, or hang-like failure, do not loop on the same call without new evidence; fall back or report the blocker.".to_string()
 }
 
 /// Runs the list or none operation for this subsystem.

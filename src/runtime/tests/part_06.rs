@@ -60,7 +60,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
         .session_id
         .clone();
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-maap-validation-fail","input":"call unavailable tool"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-maap-validation-fail","input":"call @state unavailable tool"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
@@ -192,7 +192,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
         .enter_or_resume("%1")
         .unwrap();
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-turn","input":"call echo tool"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-turn","input":"call @fixture echo tool"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
@@ -243,13 +243,6 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    assert!(execution.request.messages.iter().any(|message| {
-            message.source == ContextSourceKind::Configuration
-                && message.content.contains("[mcp integrations]")
-                && message
-                    .content
-                    .contains("available_tool=fixture/echo route=mcp_call callable=true description=")
-    }));
     assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
     assert!(
         execution.action_results[0]
@@ -708,7 +701,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
         .enter_or_resume("%1")
         .unwrap();
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-full-access","input":"call echo tool"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-full-access","input":"call @fixture echo tool"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
@@ -1030,7 +1023,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
         .enter_or_resume("%1")
         .unwrap();
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-nonfinal","input":"call echo and continue"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-mcp-nonfinal","input":"call @fixture echo and continue"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");

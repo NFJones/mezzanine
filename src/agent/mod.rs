@@ -110,8 +110,9 @@ pub use context::{
     append_scheduler_context, assemble_model_request,
     assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
     compact_model_context_for_budget_with_retained_tail_percent,
-    constrain_skill_actions_for_loaded_context, known_model_context_window_tokens,
-    model_context_text_word_count, select_model_profile, set_project_guidance_context,
+    constrain_skill_actions_for_loaded_context, invoked_mcp_tools_for_context,
+    known_model_context_window_tokens, model_context_text_word_count, select_model_profile,
+    set_project_guidance_context,
 };
 pub use maap::{
     AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,

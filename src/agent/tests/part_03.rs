@@ -3548,14 +3548,13 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
     );
 }
 
-/// Verifies MCP integration context remains in the OpenAI stable prefix.
+/// Verifies injected MCP integration context stays out of the OpenAI stable prefix.
 ///
-/// MCP integration summaries are configuration guidance for the model rather
-/// than late controller state. Keeping them stable-prefix eligible prevents the
-/// block from prematurely closing reusable input before later durable transcript
-/// content is rendered.
+/// Explicit `@server` MCP metadata is turn-volatile prompt context. Keeping it
+/// outside provider cache-prefix material prevents one injected server catalog
+/// from influencing later turns that did not invoke that server.
 #[test]
-fn openai_stable_prefix_keeps_mcp_integration_context() {
+fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -3572,9 +3571,10 @@ fn openai_stable_prefix_keeps_mcp_integration_context() {
             content: "use stable project style".to_string(),
         },
         ContextBlock {
-            source: ContextSourceKind::Configuration,
+            source: ContextSourceKind::RuntimeHint,
             label: "mcp integrations".to_string(),
-            content: "available_servers=1 available_tools=0 unavailable_servers=0".to_string(),
+            content: "available_servers=1 available_tools=1 unavailable_servers=0"
+                .to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
@@ -3595,18 +3595,14 @@ fn openai_stable_prefix_keeps_mcp_integration_context() {
     let stable_input_text = serde_json::to_string(&stable_input).unwrap();
 
     assert!(
-        stable_input_text.contains("[mcp integrations]"),
+        !stable_input_text.contains("[mcp integrations]"),
         "{stable_input_text}"
     );
     assert!(
-        stable_input_text.contains("durable assistant context after mcp"),
-        "{stable_input_text}"
+        stable_input.is_empty(),
+        "injected MCP context should close the stable prefix: {stable_input_text}"
     );
-    assert!(
-        stable_input.len() >= 2,
-        "expected MCP context and following transcript in stable input: {stable_input:?}"
-    );
-    assert!(diagnostics.stable_input_bytes > 2);
+    assert_eq!(diagnostics.stable_input_bytes, 2);
     assert!(diagnostics.volatile_input_bytes > 2);
 }
 
@@ -4347,17 +4343,18 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     }));
     assert_eq!(body["prompt_cache_key"], diagnostics.prompt_cache_key);
 
+    eprintln!("DIAGNOSTICS {diagnostics:#?}");
     assert_eq!(diagnostics.prompt_cache_key, "mez-fcc0c3076055b2040cb8727ead0dbe7c");
-    assert_eq!(diagnostics.instructions_bytes, 44_636);
-    assert_eq!(diagnostics.instructions_sha256, "40bbc16feef70acf82c3c82281440e946627fc5565f52288815e75a1f8b7f334");
+    assert_eq!(diagnostics.instructions_bytes, 44_554);
+    assert_eq!(diagnostics.instructions_sha256, "015ee75ff649298075e152b47449bda2c5c15b20aa9da0bf3b73cd4e521a27ad");
     assert_eq!(diagnostics.response_format_bytes, 4);
     assert_eq!(diagnostics.response_format_sha256, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b");
     assert_eq!(diagnostics.tools_bytes, 27_281);
     assert_eq!(diagnostics.tools_sha256, "3fe8c23aa136005b8114ec893aa89f1f9cff6cf39689dc0a7654096fa4dbfff0");
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
-    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_797);
-    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "34bac171dece4769a5d5d1e3bb6537bf904ce7dd77576923df91040889f34823");
+    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_717);
+    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "da19b776c6a7bccd3c3e9738fa99c6d487f84b3ea6c33d35fb0ec693e9886945");
     assert_eq!(diagnostics.provider_request_shape_bytes, 27_492);
     assert_eq!(
         diagnostics.provider_request_shape_sha256,

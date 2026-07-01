@@ -172,14 +172,12 @@ mod tests {
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
         readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
         render_command_markdown_body_lines, rendered_line_rendition_at,
-        runtime_agent_shell_markdown_overlay_content,
-        runtime_command_display_overlay_content,
+        runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
         runtime_display_overlay_rendered_line_style_spans,
         runtime_display_overlay_rendered_selection_start,
-        runtime_display_overlay_selection_prefix_columns,
-        runtime_human_readable_display_lines, runtime_pane_agent_selector_rendition,
-        wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
-        wrapped_prefixed_agent_terminal_lines,
+        runtime_display_overlay_selection_prefix_columns, runtime_human_readable_display_lines,
+        runtime_pane_agent_selector_rendition, wrap_agent_rendered_line_to_width,
+        wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
     use crate::layout::Size;

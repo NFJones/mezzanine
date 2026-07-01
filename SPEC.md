@@ -6501,14 +6501,18 @@ that config changes follow the active approval policy like other privileged
 actions. It MUST explain that approved or policy-allowed config changes persist
 to the user config target and take effect immediately in the live session. It
 MUST explain that `mcp_call` is only for MCP tools listed as available in the
-current runtime context. When runtime MCP context is present, all model-visible
-MCP availability surfaces, including the system prompt and structured action
-schema, MUST agree on whether MCP servers and tools are available and MUST NOT
-report zero available MCP tools while concrete `mcp_call` variants are exposed.
-Provider action descriptions for a surface that can emit `mcp_call` MUST include
-a bounded, secret-safe manifest of the callable `server/tool` identities and
-tool descriptions, so the model does not need to infer MCP routes only from
-nested JSON Schema variants.
+current turn-local runtime context. The stable system prompt MUST NOT enumerate
+configured MCP servers, unavailable MCP servers, MCP tools, or MCP availability
+counts. A submitted user prompt or loaded skill MAY request MCP metadata for the
+current turn with `@<mcp-server-name>`. When runtime MCP context is injected for
+such an explicit invocation, all model-visible MCP availability surfaces,
+including the turn-local context block and structured action schema, MUST agree
+on whether invoked MCP servers and tools are available and MUST NOT report zero
+available MCP tools while concrete `mcp_call` variants are exposed. Provider
+action descriptions for a surface that can emit `mcp_call` MUST include a
+bounded, secret-safe manifest of the callable `server/tool` identities and tool
+descriptions for the invoked servers, so the model does not need to infer MCP
+routes only from nested JSON Schema variants.
 The default selected-model action surface MAY expose `mcp_call`,
 `memory_search`, and `memory_store` together when those capabilities are
 enabled. The presence of configured MCP integrations MUST NOT by itself suppress
@@ -6627,19 +6631,21 @@ through the local message passing protocol.
 The prompt MUST include the active agent's cooperation mode, read scopes, and
 write scopes when the agent is a subagent.
 
-The prompt MUST include a secret-safe MCP integration manifest for the current
-session. Available MCP servers MUST be presented with configured server id,
-status, model-visible external-capability purpose, the `mcp_call` route, and
-available-tool count.
-Available MCP tools MAY be summarized lazily, but when tool details are included
-they MUST identify `mcp_call` as the callable route, MUST be bounded, and MUST
-NOT expose approval requirements, secret-bearing transport, environment, header,
-credential, or raw schema data. MCP servers that are configured but still
-pending runtime discovery MUST be presented as non-callable/pending rather than
-omitted from the MCP manifest. MCP servers that are disabled, blacklisted for
-the session, or unavailable because of environmental failure MUST NOT be
-presented as available tools, and the prompt MUST prohibit attempts to use them
-while preserving their model-visible purpose and non-secret blocker reason.
+The stable prompt MUST keep MCP awareness abstract and MUST NOT include a
+session-wide MCP integration manifest. When a user prompt or loaded skill names
+`@<mcp-server-name>`, the runtime MUST add a bounded, turn-volatile,
+secret-safe MCP context block for that invoked server only. Available invoked
+MCP servers MUST be presented with configured server id, status, model-visible
+external-capability purpose, the `mcp_call` route, and available-tool count.
+Available invoked MCP tools MUST identify `mcp_call` as the callable route, MUST
+be bounded, and MUST NOT expose approval requirements, secret-bearing transport,
+environment, header, credential, or raw schema data. MCP servers that are not
+named by `@<mcp-server-name>` MUST NOT be exposed to the model for that turn.
+Injected MCP context MUST be ephemeral: it MUST NOT be persisted to durable
+transcript summaries, memory, provider cache-prefix material, or later turns
+unless a later prompt or loaded skill invokes the server again. MCP servers that
+are disabled, blacklisted for the session, or unavailable because of
+environmental failure MUST NOT be presented as available tools.
 
 The prompt MUST instruct the agent to report blockers and uncertainty rather
 than inventing unavailable state.

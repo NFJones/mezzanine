@@ -66,6 +66,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mcp_summary = self.mcp_registry.prompt_summary();
         let context = append_mcp_context(context, &mcp_summary)?;
+        let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
         self.agent_turn_contexts
             .insert(turn_id.to_string(), context.clone());
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
@@ -150,7 +151,7 @@ impl RuntimeSessionService {
             &model_profile,
             &turn,
             &context,
-            &mcp_summary.available_tools,
+            &available_mcp_tools,
             self.runtime_persistent_memory_enabled(),
             super::issues::runtime_issues_enabled(self),
         );
@@ -164,7 +165,7 @@ impl RuntimeSessionService {
                 Ok(mut request) => {
                     crate::agent::apply_default_action_gates(
                         &mut request,
-                        &mcp_summary.available_tools,
+                        &available_mcp_tools,
                         self.runtime_persistent_memory_enabled(),
                         super::issues::runtime_issues_enabled(self),
                     );
@@ -212,7 +213,7 @@ impl RuntimeSessionService {
                 path_scopes: path_scopes.as_ref(),
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers: available_mcp_servers.clone(),
-                available_mcp_tools: &mcp_summary.available_tools,
+                available_mcp_tools: &available_mcp_tools,
                 memory_actions_enabled: self.runtime_persistent_memory_enabled(),
                 issue_actions_enabled: super::issues::runtime_issues_enabled(self),
             };
@@ -369,6 +370,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mcp_summary = self.mcp_registry.prompt_summary();
         let context = append_mcp_context(context, &mcp_summary)?;
+        let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
         self.agent_turn_contexts
             .insert(turn_id.to_string(), context.clone());
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
@@ -426,8 +428,7 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let available_mcp_servers = mcp_summary
-            .available_tools
+        let available_mcp_servers = available_mcp_tools
             .iter()
             .map(|tool| tool.server_id.clone())
             .collect::<std::collections::BTreeSet<_>>()
@@ -453,7 +454,7 @@ impl RuntimeSessionService {
             &model_profile,
             &turn,
             &context,
-            &mcp_summary.available_tools,
+            &available_mcp_tools,
             self.runtime_persistent_memory_enabled(),
             super::issues::runtime_issues_enabled(self),
         );
@@ -478,7 +479,7 @@ impl RuntimeSessionService {
                 path_scopes: path_scopes.as_ref(),
                 subagent_scope: subagent_scope.as_ref(),
                 available_mcp_servers: available_mcp_servers.clone(),
-                available_mcp_tools: &mcp_summary.available_tools,
+                available_mcp_tools: &available_mcp_tools,
                 memory_actions_enabled: self.runtime_persistent_memory_enabled(),
                 issue_actions_enabled: super::issues::runtime_issues_enabled(self),
             };

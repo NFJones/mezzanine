@@ -2997,15 +2997,13 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
     assert_eq!(context.blocks[1].content, "api_key = sk-secret");
 }
 
-/// Verifies that MCP prompt context exposes compact integration summaries
-/// before the user prompt while deferring unrelated tool descriptions.
+/// Verifies configured MCP servers are not globally injected without `@server`.
 ///
-/// Broad MCP tool catalogs should not pressure normal action selection for
-/// ordinary tasks. The context still reports server/tool counts and server
-/// metadata, but detailed `available_tool` lines stay omitted until the user
-/// explicitly asks about MCP, a server, or a tool.
+/// Ordinary turns should not receive a server/tool catalog merely because MCP
+/// servers are configured. Prompt-visible MCP details are injected only when the
+/// current user prompt or loaded skill text names a server with `@<server-id>`.
 #[test]
-fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt() {
+fn mcp_context_omits_integrations_without_explicit_server_invocation() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
@@ -3028,7 +3026,7 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
                 tool_name: "read_file".to_string(),
                 description: "Read files".to_string(),
                 approval_required: true,
-                input_schema_json: r#"{"type":"object"}"#.to_string(),
+                input_schema_json: r#"{\"type\":\"object\"}"#.to_string(),
             }],
             unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
@@ -3041,74 +3039,9 @@ fn mcp_context_lists_available_and_unavailable_integrations_before_user_prompt()
     )
     .unwrap();
 
-    assert_eq!(context.blocks[0].source, ContextSourceKind::Configuration);
-    assert_eq!(context.blocks[0].label, "mcp integrations");
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("available_servers=1 available_tools=1 unavailable_servers=1")
-    );
-    assert!(!context.blocks[0].content.contains("available_tool=fs/read_file"));
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("server=fs status=available route=mcp_call"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(!context.blocks[0].content.contains("description=\"Read files\""));
-    assert!(
-        !context.blocks[0].content.contains("approval_required"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        !context.blocks[0].content.contains("approval_required_tools"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        !context.blocks[0].content.contains("input_schema"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        context.blocks[0].content.contains("omitted=1 detail_limit=8"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("usage_instructions=\"Use read_file only when the task needs file contents.\"")
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("unavailable_server=gitlab")
-    );
-    assert!(
-        !context.blocks[0]
-            .content
-            .contains("GitLab issue and merge request operations"),
-        "{}",
-        context.blocks[0].content
-    );
-    assert!(
-        !context.blocks[0]
-            .content
-            .contains("Use for GitLab issue and merge request tasks."),
-        "{}",
-        context.blocks[0].content
-    );
-    assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
+    assert_eq!(context.blocks.len(), 1);
+    assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
+    assert_eq!(context.blocks[0].content, "call a tool");
 }
 
 /// Verifies MCP context does not add routing hints even when the current user
@@ -3122,7 +3055,7 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
-        content: "GitLab issue and merge request operations".to_string(),
+        content: "@gitlab GitLab issue and merge request operations".to_string(),
     }])
     .unwrap();
     let context = append_mcp_context(
@@ -3174,7 +3107,7 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
-        content: "use the GitLab MCP server to inspect an issue".to_string(),
+        content: "use @gitlab to inspect an issue".to_string(),
     }])
     .unwrap();
     let context = append_mcp_context(
@@ -3223,15 +3156,15 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
     let system_prompt = &request.messages[0].content;
 
     assert!(
-        system_prompt.contains("Current availability: servers=1 tools=1."),
+        system_prompt.contains("Concrete MCP server and tool metadata is not globally exposed"),
         "{system_prompt}"
     );
     assert!(
-        system_prompt.contains("MCP server jira is configured but not currently callable"),
+        system_prompt.contains("Use `@<mcp-server-name>` in a submitted prompt or loaded skill"),
         "{system_prompt}"
     );
     assert!(
-        !system_prompt.contains("Current availability: servers=0 tools=0."),
+        !system_prompt.contains("Current availability:"),
         "{system_prompt}"
     );
 }
@@ -3243,7 +3176,7 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
-        content: "use the fs/read_file MCP tool".to_string(),
+        content: "use @fs for the fs/read_file MCP tool".to_string(),
     }])
     .unwrap();
     let context = append_mcp_context(
@@ -3290,7 +3223,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         label: "user".to_string(),
-        content: "call a tool".to_string(),
+        content: "call @fs and then @git".to_string(),
     }])
     .unwrap();
     let first = crate::mcp::McpPromptSummary {
@@ -3350,9 +3283,9 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
             .contains("available_tool=fs/read_file")
     );
     assert!(
-        mcp_blocks[0]
-            .content
-            .contains("available_tool_inventory=deferred_until_explicit_mcp_relevance omitted=1")
+        mcp_blocks[0].content.contains("available_tool=git/status"),
+        "{}",
+        mcp_blocks[0].content
     );
 }
 
@@ -4615,10 +4548,10 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(format_index < mcp_index);
     assert!(!prompt.contains("Mezzanine pane agent agent-1"));
     assert!(prompt.contains("MCP integrations exist through Mezzanine's external-integration path"));
-    assert!(prompt.contains("Current availability: servers=1 tools=1."));
-    assert!(prompt.contains("Prefer MCP when the user task matches a listed MCP server purpose"));
-    assert!(prompt.contains("usage instructions, an exposed MCP tool description"));
-    assert!(prompt.contains("treat that server as a direct execution path"));
+    assert!(!prompt.contains("Current availability:"));
+    assert!(prompt.contains("Concrete MCP server and tool metadata is not globally exposed"));
+    assert!(prompt.contains("Use `@<mcp-server-name>` in a submitted prompt or loaded skill"));
+    assert!(prompt.contains("treat those tools as direct execution paths"));
     assert!(prompt.contains("do not start with memory_search, memory_store, shell_command"));
     assert!(prompt.contains("request_capability for shell/network"));
     assert!(!prompt.contains("routing_match=available_mcp"));
@@ -4626,8 +4559,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("After an MCP timeout, protocol error, or hang-like failure"));
     assert!(!prompt.contains("Available MCP tool: fs/read_file"));
     assert!(!prompt.contains(r#""path""#), "{prompt}");
-    assert!(prompt.contains("MCP server gitlab is configured but not currently callable"));
-    assert!(prompt.contains("do not use memory_search as a substitute for it"));
+    assert!(!prompt.contains("MCP server gitlab is configured but not currently callable"));
+    assert!(!prompt.contains("authentication failed"));
     assert!(prompt.contains("Write scopes: src/agent.rs"));
     assert!(prompt.contains("external-integration path"));
     assert!(prompt.contains("The existence of MCP integrations or skills is not evidence that they are relevant"));
@@ -4709,7 +4642,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(
         prompt.contains("For MCP-backed workflows, do not use memory_search or memory_store")
     );
-    assert!(prompt.contains("When the user names an MCP server and a matching exposed tool exists"));
+    assert!(prompt.contains("When turn-local MCP context lists callable tools"));
     assert!(prompt.contains("merely to set up, justify, or avoid a directly useful MCP call"));
     assert!(prompt.contains("placeholder memory actions to satisfy an action wrapper"));
     assert!(prompt.contains("choose the next direct route yourself"));

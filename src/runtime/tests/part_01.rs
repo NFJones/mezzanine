@@ -1359,15 +1359,15 @@ fn runtime_mcp_fixture_script(tool_error: bool) -> String {
     format!(
         r#"while IFS= read -r line; do
 case "$line" in
-  *initialize*)
+  *'"method":"initialize"'*)
 printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-11-25","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"fixture","version":"1.0.0"}}}}}}'
 ;;
-  *notifications/initialized*)
+  *'"method":"notifications/initialized"'*)
 ;;
-  *tools/list*)
+  *'"method":"tools/list"'*)
 printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{{"name":"echo","description":"Echo a message","inputSchema":{{"type":"object","properties":{{"message":{{"type":"string"}}}}}}}}]}}}}'
 ;;
-  *tools/call*)
+  *'"method":"tools/call"'*)
 printf '%s\n' '{}'
 ;;
 esac

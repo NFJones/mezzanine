@@ -55,19 +55,43 @@ pub fn append_memory_context(
     AgentContext::new(context.blocks)
 }
 
-/// Replaces MCP availability context with the current prompt summary.
+/// Replaces MCP availability context with turn-local explicitly invoked servers.
 ///
-/// Tool details remain compact unless the current user/local text explicitly
-/// asks about MCP or a specific available server/tool.
+/// MCP server metadata is injected only when the submitted prompt or an already
+/// loaded skill names a server with `@<server-id>`. The injected block is
+/// model-visible turn context, not a durable prompt catalog.
 const MCP_CONTEXT_MAX_TOOL_DETAIL_LINES: usize = 8;
+
+const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
 
 pub fn append_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
 ) -> Result<AgentContext> {
-    context.blocks.retain(|block| {
-        block.source != ContextSourceKind::Configuration || block.label != "mcp integrations"
-    });
+    context.blocks.retain(|block| !is_mcp_context_block(block));
+    let invocation = explicit_mcp_invocation_summary(&context, summary);
+    if invocation.available_servers.is_empty()
+        && invocation.available_tools.is_empty()
+        && invocation.unavailable_servers.is_empty()
+    {
+        return AgentContext::new(context.blocks);
+    }
+    append_filtered_mcp_context(context, &invocation)
+}
+
+/// Returns the MCP tools that should be callable for this turn.
+pub fn invoked_mcp_tools_for_context(
+    context: &AgentContext,
+    summary: &McpPromptSummary,
+) -> Vec<McpPromptTool> {
+    explicit_mcp_invocation_summary(context, summary).available_tools
+}
+
+/// Builds one prompt-context block from a pre-filtered MCP summary.
+fn append_filtered_mcp_context(
+    mut context: AgentContext,
+    summary: &McpPromptSummary,
+) -> Result<AgentContext> {
     if summary.available_servers.is_empty()
         && summary.available_tools.is_empty()
         && summary.unavailable_servers.is_empty()
@@ -137,12 +161,141 @@ pub fn append_mcp_context(
     context.blocks.insert(
         insert_at,
         ContextBlock {
-            source: ContextSourceKind::Configuration,
-            label: "mcp integrations".to_string(),
+            source: ContextSourceKind::RuntimeHint,
+            label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
             content: lines.join("\n"),
         },
     );
     AgentContext::new(context.blocks)
+}
+
+/// Returns true when a context block is runtime-injected MCP prompt context.
+fn is_mcp_context_block(block: &ContextBlock) -> bool {
+    matches!(
+        block.source,
+        ContextSourceKind::Configuration | ContextSourceKind::RuntimeHint
+    ) && block.label == MCP_INTEGRATIONS_CONTEXT_LABEL
+}
+
+/// Filters the live MCP prompt summary down to servers explicitly named by the
+/// current user prompt or loaded skill text.
+fn explicit_mcp_invocation_summary(
+    context: &AgentContext,
+    summary: &McpPromptSummary,
+) -> McpPromptSummary {
+    let requested = explicit_mcp_invocations_from_context(context);
+    if requested.is_empty() {
+        return McpPromptSummary {
+            available_servers: Vec::new(),
+            available_tools: Vec::new(),
+            unavailable_servers: Vec::new(),
+        };
+    }
+
+    let mut available_servers = summary
+        .available_servers
+        .iter()
+        .filter(|server| requested.iter().any(|name| name == &server.server_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut available_tools = summary
+        .available_tools
+        .iter()
+        .filter(|tool| requested.iter().any(|name| name == &tool.server_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut unavailable_servers = summary
+        .unavailable_servers
+        .iter()
+        .filter(|server| requested.iter().any(|name| name == &server.server_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    available_tools.sort_by(|left, right| {
+        left.server_id
+            .cmp(&right.server_id)
+            .then_with(|| left.tool_name.cmp(&right.tool_name))
+    });
+    unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    McpPromptSummary {
+        available_servers,
+        available_tools,
+        unavailable_servers,
+    }
+}
+
+/// Extracts ordered unique `@<server-id>` MCP invocations from turn-local text.
+fn explicit_mcp_invocations_from_context(context: &AgentContext) -> Vec<String> {
+    let mut names = Vec::new();
+    for block in &context.blocks {
+        if !matches!(
+            block.source,
+            ContextSourceKind::UserInstruction | ContextSourceKind::SkillInstruction
+        ) {
+            continue;
+        }
+        for name in explicit_mcp_invocations_from_text(&block.content) {
+            if !names.iter().any(|existing| existing == &name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Extracts conservative `@<server-id>` tokens from one model-visible text.
+fn explicit_mcp_invocations_from_text(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut start = None;
+    for (index, character) in text.char_indices() {
+        if let Some(name_start) = start {
+            if is_mcp_invocation_character(character) {
+                continue;
+            }
+            push_mcp_invocation_candidate(text, name_start, index, &mut names);
+            start = None;
+        }
+        if character == '@' && invocation_prefix_allows_at(text, index) {
+            start = Some(index + character.len_utf8());
+        }
+    }
+    if let Some(name_start) = start {
+        push_mcp_invocation_candidate(text, name_start, text.len(), &mut names);
+    }
+    names
+}
+
+/// Adds one candidate MCP invocation when it matches the server-id shape.
+fn push_mcp_invocation_candidate(text: &str, start: usize, end: usize, names: &mut Vec<String>) {
+    let Some(candidate) = text.get(start..end) else {
+        return;
+    };
+    if candidate.is_empty()
+        || !candidate.chars().all(is_mcp_invocation_character)
+        || !candidate
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+    {
+        return;
+    }
+    if !names.iter().any(|existing| existing == candidate) {
+        names.push(candidate.to_string());
+    }
+}
+
+/// Returns whether one character can appear in an MCP invocation token.
+fn is_mcp_invocation_character(character: char) -> bool {
+    character.is_ascii_lowercase()
+        || character.is_ascii_digit()
+        || matches!(character, '-' | '_' | '.')
+}
+
+/// Returns whether an `@` starts a standalone invocation instead of an email or handle.
+fn invocation_prefix_allows_at(text: &str, at_index: usize) -> bool {
+    text[..at_index]
+        .chars()
+        .next_back()
+        .is_none_or(|character| !character.is_ascii_alphanumeric() && character != '_')
 }
 
 /// Returns the bounded subset of MCP tool details that should be rendered.
@@ -160,6 +313,26 @@ fn mcp_context_selected_tool_details(
 ) -> Vec<McpPromptTool> {
     if limit == 0 || available_tools.is_empty() {
         return Vec::new();
+    }
+    if !available_servers.is_empty() {
+        let mut selected = available_tools
+            .iter()
+            .filter(|tool| {
+                available_servers
+                    .iter()
+                    .any(|server| server.server_id == tool.server_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        selected.sort_by(|left, right| {
+            left.server_id
+                .cmp(&right.server_id)
+                .then_with(|| left.tool_name.cmp(&right.tool_name))
+        });
+        selected.dedup_by(|left, right| {
+            left.server_id == right.server_id && left.tool_name == right.tool_name
+        });
+        return selected.into_iter().take(limit).collect();
     }
     let task_text = mcp_context_normalized_user_text(context);
     if task_text.is_empty() {
