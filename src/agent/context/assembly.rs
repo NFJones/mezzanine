@@ -161,9 +161,10 @@ pub fn assemble_model_request_with_retained_tail_percent(
 /// it does not contradict the integration manifest with a stale zero-tool
 /// default.
 fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptSummary {
-    let Some(block) = blocks.iter().find(|block| {
-        block.source == ContextSourceKind::Configuration && block.label == "mcp integrations"
-    }) else {
+    let Some(block) = blocks
+        .iter()
+        .find(|block| is_mcp_integrations_context_block(block))
+    else {
         return empty_mcp_prompt_summary();
     };
     let mut unavailable_servers = Vec::new();
@@ -190,6 +191,14 @@ fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptS
         available_tools,
         unavailable_servers,
     }
+}
+
+/// Returns whether one context block carries the injected MCP integration summary.
+fn is_mcp_integrations_context_block(block: &ContextBlock) -> bool {
+    matches!(
+        block.source,
+        ContextSourceKind::Configuration | ContextSourceKind::RuntimeHint
+    ) && block.label == "mcp integrations"
 }
 
 /// Returns an empty MCP prompt summary.
@@ -352,4 +361,45 @@ fn prepend_repository_instructions_to_first_user_message(
     new_content.push_str("---\n\n");
     new_content.push_str(&first_user.content);
     first_user.content = new_content;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that runtime-injected MCP integration context still rebuilds the
+    /// prompt summary used by request assembly.
+    #[test]
+    fn mcp_prompt_summary_accepts_runtime_hint_blocks() {
+        let summary = mcp_prompt_summary_from_context_blocks(&[ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            label: "mcp integrations".to_string(),
+            content: concat!(
+                "available_servers=1 available_tools=1\n",
+                "server=test status=available route=mcp_call name=\"Test\" purpose=\"purpose\" usage_instructions=\"usage\" tools=1\n",
+                "available_tool=test/run route=mcp_call callable=true description=\"Run tool\"\n",
+            )
+            .to_string(),
+        }]);
+
+        assert_eq!(summary.available_servers.len(), 1);
+        assert_eq!(summary.available_servers[0].server_id, "test");
+        assert_eq!(summary.available_tools.len(), 1);
+        assert_eq!(summary.available_tools[0].tool_name, "run");
+        assert!(summary.unavailable_servers.is_empty());
+    }
+
+    /// Verifies that unrelated context blocks do not fabricate MCP summary data.
+    #[test]
+    fn mcp_prompt_summary_ignores_non_mcp_blocks() {
+        let summary = mcp_prompt_summary_from_context_blocks(&[ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: "session identity".to_string(),
+            content: "session_id=test-session".to_string(),
+        }]);
+
+        assert!(summary.available_servers.is_empty());
+        assert!(summary.available_tools.is_empty());
+        assert!(summary.unavailable_servers.is_empty());
+    }
 }
