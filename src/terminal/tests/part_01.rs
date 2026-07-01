@@ -5699,6 +5699,65 @@ fn prompt_region_presentation_styles_agent_skill_shadow_hint() {
     );
 }
 
+/// Verifies pane-local `@server` completion hints reuse the same readable muted
+/// style as `$skill` hints instead of inheriting the editable prompt foreground.
+#[test]
+fn prompt_region_presentation_styles_agent_mcp_shadow_hint() {
+    let mut prompt =
+        crate::readline::ReadlinePrompt::new(crate::readline::ReadlinePromptKind::Agent);
+    prompt.buffer.insert_text("ask @fi");
+    prompt.set_selector_extra_candidates([crate::selector::SelectorExtraCandidate::new(
+        crate::selector::SelectorSurface::AgentCommand,
+        "@",
+        crate::selector::SelectorCandidate::new(
+            "@fixture",
+            crate::selector::SelectorCandidateKind::Value,
+            true,
+        )
+        .with_detail("available"),
+    )]);
+    let theme = UiTheme::default();
+    let presentation = compose_prompt_region_presentation_with_styles(
+        &[
+            "top line            ".to_string(),
+            "left pane           ".to_string(),
+            "old prompt          ".to_string(),
+            "footer              ".to_string(),
+        ],
+        &[Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        &prompt,
+        Size::new(20, 4).unwrap(),
+        ReadlinePromptRegion {
+            row: 1,
+            column: 1,
+            columns: 18,
+            rows: 2,
+        },
+        &theme,
+    );
+
+    assert!(
+        presentation.lines[2].contains("@fixture"),
+        "{}",
+        presentation.lines[2]
+    );
+    let prompt_span = presentation.line_style_spans[2]
+        .iter()
+        .find(|span| span.start == 1 && span.length == 18)
+        .unwrap();
+    assert!(
+        presentation.line_style_spans[2]
+            .iter()
+            .any(|span| span.rendition.dim
+                && span.rendition.foreground.is_some_and(|foreground| {
+                    test_color_is_grayscale(foreground)
+                        && foreground != prompt_span.rendition.foreground.unwrap()
+                        && test_contrast_ratio(foreground, theme.colors.agent_prompt.background)
+                            >= 4.5
+                }))
+    );
+}
+
 /// Verifies attached pane rendering preserves agent prompt shadow hint styling.
 ///
 /// The standalone prompt-region renderer already styles completion shadows, but

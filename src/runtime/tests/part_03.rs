@@ -3029,6 +3029,59 @@ fn runtime_agent_prompt_list_mcp_autocompletes_configured_server_id() {
     );
 }
 
+/// Verifies `@server` completion includes configured MCP server ids supplied
+/// by the live runtime registry. Prompt-local MCP server names use the same
+/// dynamic candidate source as `/list-mcp` without requiring a slash command.
+#[test]
+fn runtime_agent_prompt_at_mcp_autocompletes_configured_server_id() {
+    let mut service = test_runtime_service();
+    service
+        .mcp_registry_mut()
+        .add_server(crate::mcp::McpServerConfig::stdio(
+            "fixture",
+            "Fixture MCP",
+            "mcp-fixture",
+            Vec::new(),
+        ))
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![
+                    TerminalClientLoopAction::ForwardToPane(b"ask @fi".to_vec()),
+                    TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
+                ],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert_eq!(
+        service
+            .agent_prompt_inputs
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        "ask @fixture "
+    );
+}
+
 /// Verifies `/resume <session>` replays saved transcript context into the pane
 /// buffer after rebinding the pane-local agent shell. A resumed task should
 /// show enough prior conversation content for the user to continue without

@@ -568,21 +568,41 @@ impl RuntimeSessionService {
                 )
             })
             .collect::<Vec<_>>();
-        candidates.extend(self.mcp_registry.list_servers().into_iter().map(|server| {
-            SelectorExtraCandidate::new(
-                SelectorSurface::AgentCommand,
-                "list-mcp",
-                SelectorCandidate::new(
-                    server.configured.id.clone(),
-                    SelectorCandidateKind::Value,
-                    true,
-                )
-                .with_detail(agent_shell_mcp_display_state_name(
-                    server.configured.enabled,
-                    server.status,
-                )),
-            )
-        }));
+        candidates.extend(
+            self.mcp_registry
+                .list_servers()
+                .into_iter()
+                .flat_map(|server| {
+                    let detail = agent_shell_mcp_display_state_name(
+                        server.configured.enabled,
+                        server.status,
+                    );
+                    let list_candidate = SelectorCandidate::new(
+                        server.configured.id.clone(),
+                        SelectorCandidateKind::Value,
+                        true,
+                    )
+                    .with_detail(detail);
+                    let prompt_candidate = SelectorCandidate::new(
+                        format!("@{}", server.configured.id),
+                        SelectorCandidateKind::Value,
+                        true,
+                    )
+                    .with_detail(detail);
+                    [
+                        SelectorExtraCandidate::new(
+                            SelectorSurface::AgentCommand,
+                            "list-mcp",
+                            list_candidate,
+                        ),
+                        SelectorExtraCandidate::new(
+                            SelectorSurface::AgentCommand,
+                            "@",
+                            prompt_candidate,
+                        ),
+                    ]
+                }),
+        );
         if let Ok(pane_id) = self.active_pane_id() {
             let catalog = self.effective_skill_catalog_for_pane(&pane_id);
             candidates.extend(catalog.skills.into_iter().map(|skill| {

@@ -718,6 +718,14 @@ fn selector_candidates(
                 .map(|extra| extra.candidate.clone()),
         );
     }
+    if surface == SelectorSurface::AgentCommand && context.query.starts_with('@') {
+        candidates.extend(
+            extra_candidates
+                .iter()
+                .filter(|extra| extra.surface == surface && extra.command == "@")
+                .map(|extra| extra.candidate.clone()),
+        );
+    }
     let Some(command) = selector_context_command(surface, context) else {
         return candidates;
     };
@@ -1903,6 +1911,63 @@ mod tests {
         assert_eq!(cursor, line.len());
     }
 
+    /// Verifies explicit MCP server syntax can use runtime-provided `@server`
+    /// candidates without entering the slash-command or skill completion domains.
+    ///
+    /// This keeps prompt-local MCP discovery aligned with submitted `@server`
+    /// invocation syntax while preserving `$skill` completion as a separate
+    /// selector namespace.
+    #[test]
+    fn selector_plans_dynamic_agent_mcp_server_candidates() {
+        let extra = vec![
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "@",
+                SelectorCandidate::new("@github", SelectorCandidateKind::Value, true),
+            ),
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "$",
+                SelectorCandidate::new("$github", SelectorCandidateKind::Value, true),
+            ),
+        ];
+
+        let plan = plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "please ask @git",
+            "please ask @git".len(),
+            &extra,
+        )
+        .unwrap();
+        let skill_plan = plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "please ask $git",
+            "please ask $git".len(),
+            &extra,
+        )
+        .unwrap();
+
+        assert_eq!(plan.candidates[0].value, "@github");
+        assert!(
+            !plan
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == "$github")
+        );
+        assert_eq!(skill_plan.candidates[0].value, "$github");
+        assert!(
+            !skill_plan
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == "@github")
+        );
+
+        let (line, cursor) =
+            apply_selector_candidate("please ask @git", &plan, &plan.candidates[0]);
+        assert_eq!(line, "please ask @github ");
+        assert_eq!(cursor, line.len());
+    }
+
     /// Verifies selector applies candidate to current segment only.
     ///
     /// This regression scenario documents the behavior being protected so a
@@ -2240,5 +2305,39 @@ mod tests {
             shadow_hint_with_extra(SelectorSurface::AgentCommand, line, "$rev".len(), &extra);
 
         assert!(hint.is_none());
+    }
+
+    /// Verifies MCP server-name shadow hints use the same dynamic selector path
+    /// as skill-name hints while remaining scoped to `@server` tokens.
+    ///
+    /// The hint must be transient prompt text only: it completes the visible
+    /// suffix for the current token without mutating the editable buffer or
+    /// mixing with `$skill` candidates.
+    #[test]
+    fn selector_shadow_hint_completes_dynamic_mcp_server_suffix() {
+        let extra = vec![
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "@",
+                SelectorCandidate::new("@github", SelectorCandidateKind::Value, true),
+            ),
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "$",
+                SelectorCandidate::new("$github", SelectorCandidateKind::Value, true),
+            ),
+        ];
+
+        let hint = shadow_hint_with_extra(
+            SelectorSurface::AgentCommand,
+            "ask @git",
+            "ask @git".len(),
+            &extra,
+        )
+        .unwrap();
+
+        assert_eq!(hint.insert_at, "ask @git".len());
+        assert_eq!(hint.text, "hub");
+        assert_eq!(hint.kind, SelectorCandidateKind::Value);
     }
 }

@@ -172,6 +172,8 @@ that pane.
 - Use **explicit skills** when you want a reusable workflow prompt scaffold at
   the start of an agent turn.
 - Use `@<mcp-server-name>` in an agent prompt, or inside an explicit skill, to
-  inject that MCP server callable metadata for the current turn only. MCP server
-  catalogs are not globally included in ordinary prompts, and injected MCP
-  details are ephemeral rather than durable transcript or later-turn context.
+  inject that MCP server callable metadata for the current turn only. In the
+  agent prompt, tab completion and shaded shadow text work for `@` MCP server
+  names in the same prompt-local manner as `$` skill names. MCP server catalogs
+  are not globally included in ordinary prompts, and injected MCP details are
+  ephemeral rather than durable transcript or later-turn context.

@@ -4934,19 +4934,21 @@ user skill files change.
 The agent shell MUST provide slash commands.
 
 The agent shell prompt MUST use the same selector behavior as the Mezzanine
-command prompt for slash-command names and slash-command arguments with
-enumerable values. Slash-command selection MUST preserve the leading `/` and
-MUST NOT affect ordinary non-slash prompt text.
+command prompt for slash-command names, slash-command arguments with
+enumerable values, explicit `$<skill-name>` tokens, and explicit
+`@<mcp-server-name>` tokens. Slash-command selection MUST preserve the leading
+`/` and MUST NOT affect ordinary non-slash prompt text. Skill completion MUST
+preserve the leading `$`; MCP server completion MUST preserve the leading `@`.
 
 The agent shell prompt MUST render prefix-based shadow hints for slash-command
-names and enumerable slash-command arguments. Slash commands that accept
-parameters SHOULD render a parameter placeholder until the user starts typing
-that parameter. Pane-local agent prompt input MUST render with a black or white
-foreground chosen from the active prompt background for readability, and
-shadow-hint completion text MUST use a shaded foreground derived from the same
-contrast decision. Invalid slash commands or invalid slash-command arguments
-MUST produce a readable pane-local error message and MUST NOT terminate
-Mezzanine or tear down the agent prompt.
+names, enumerable slash-command arguments, explicit skill names, and explicit
+MCP server names. Slash commands that accept parameters SHOULD render a
+parameter placeholder until the user starts typing that parameter. Pane-local
+agent prompt input MUST render with a black or white foreground chosen from the
+active prompt background for readability, and shadow-hint completion text MUST
+use a shaded foreground derived from the same contrast decision. Invalid slash
+commands or invalid slash-command arguments MUST produce a readable pane-local
+error message and MUST NOT terminate Mezzanine or tear down the agent prompt.
 
 Command names MAY add aliases, but the slash command names listed below MUST be
 accepted unless the command is explicitly unsupported by this specification.
