@@ -6155,6 +6155,37 @@ fn terminal_screen_dec47_and_dec1047_alternate_screen_do_not_record_history() {
     }
 }
 
+/// Verifies repeated alternate-screen DECSET preserves the active alternate
+/// buffer and cursor.
+///
+/// Applications can redundantly emit DEC 47, 1047, or 1049 while already in
+/// alternate screen. Re-entering the mode should be idempotent instead of
+/// clearing the live full-screen application contents or resetting its cursor.
+#[test]
+fn terminal_screen_repeated_alternate_screen_decset_is_idempotent() {
+    for mode in [47, 1047, 1049] {
+        let mut screen = TerminalScreen::new(Size::new(12, 3).unwrap(), 10).unwrap();
+        let enter = format!("\x1b[?{mode}h");
+        let leave = format!("\x1b[?{mode}l");
+
+        screen.feed(b"normal");
+        screen.feed(enter.as_bytes());
+        screen.feed(b"\x1b[2;3Halt");
+        let before_lines = screen.visible_lines();
+        let before_cursor = screen.cursor_state();
+
+        screen.feed(enter.as_bytes());
+
+        assert!(screen.alternate_screen_active(), "mode {mode}");
+        assert_eq!(screen.visible_lines(), before_lines, "mode {mode}");
+        assert_eq!(screen.cursor_state(), before_cursor, "mode {mode}");
+
+        screen.feed(leave.as_bytes());
+        assert_eq!(screen.visible_lines()[0], "normal", "mode {mode}");
+        assert!(!screen.alternate_screen_active(), "mode {mode}");
+    }
+}
+
 /// Verifies alternate-screen scrolling inside DECSTBM margins and DECOM origin
 /// mode remains isolated from normal history.
 ///

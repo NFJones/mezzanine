@@ -2592,6 +2592,9 @@ impl TerminalScreen {
         match mode {
             47 | 1047 | 1049 => {
                 if enabled {
+                    if self.alternate.active() {
+                        return;
+                    }
                     if mode == 1049 {
                         self.save_cursor();
                     }
