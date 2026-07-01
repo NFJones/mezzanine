@@ -1410,7 +1410,13 @@ impl RuntimeMcpTransportSet {
                     Err(error)
                         if error.kind() == MezErrorKind::Forbidden
                             && oauth_token.is_some()
-                            && auth_store.is_some() =>
+                            && auth_store.is_some_and(|store| {
+                                store
+                                    .mcp_refresh_token(&plan.server_id)
+                                    .ok()
+                                    .flatten()
+                                    .is_some()
+                            }) =>
                     {
                         let auth_store = auth_store.ok_or_else(|| {
                             MezError::invalid_state("MCP OAuth refresh requires an auth store")

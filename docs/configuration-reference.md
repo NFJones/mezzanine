@@ -837,12 +837,15 @@ paths are also supported by the live `config_change` mutation surface.
 
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser
-authorization-code PKCE. When authorization-server metadata advertises an RFC
-7591 dynamic client registration endpoint and no `--client-id` is provided,
-Mezzanine registers a public native client for the localhost callback and keeps
-only the returned non-secret client id in MCP auth metadata for refresh. A
-configured `bearer_token_env` remains the highest-precedence bearer credential
-source for that server.
+authorization-code PKCE. `mez mcp login <name> --token <TOKEN>` stores a static
+bearer token in the same auth credential store without OAuth refresh metadata.
+When authorization-server metadata advertises an RFC 7591 dynamic client
+registration endpoint and no `--client-id` is provided, Mezzanine registers a
+public native client for the localhost callback and keeps only the returned
+non-secret client id in MCP auth metadata for refresh. A configured
+`bearer_token_env` remains the highest-precedence bearer credential source for
+that server and takes precedence over stored OAuth or static bearer
+credentials.
 
 ### `auth`
 

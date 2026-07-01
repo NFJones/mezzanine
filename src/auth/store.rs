@@ -28,9 +28,9 @@ use super::types::{
     AuthCredentialKind, AuthCredentialState, AuthFlowPlan, AuthInteractivePromptPlan, AuthMetadata,
     AuthMethod, AuthPaths, AuthPromptAction, AuthStatus, CredentialStore,
     CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
-    ProviderBrowserFlowPlan, ProviderEntitlementPersistence, ProviderEntitlementPlan,
-    ProviderEntitlementValidation,
+    FileCredentialFallbackReason, McpAuthMetadata, McpAuthStatus, McpCredentialKind,
+    McpOAuthCredential, ProviderBrowserFlowPlan, ProviderEntitlementPersistence,
+    ProviderEntitlementPlan, ProviderEntitlementValidation,
 };
 
 /// Defines the OPENAI PROVIDER const used by this subsystem.
@@ -451,6 +451,7 @@ impl AuthStore {
             metadata.refresh_credential_store_ref =
                 Some(credential_store.store_secret(&refresh_name, &refresh_secret)?);
         }
+        metadata.credential_kind = McpCredentialKind::OAuthBearer;
         metadata.token_expires_at = credential.token_expires_at;
         metadata.scopes = credential.scopes;
         metadata.client_id = credential.client_id;
@@ -507,7 +508,84 @@ impl AuthStore {
         }
     }
 
-    /// Loads the MCP OAuth access token for a configured server.
+    /// Stores a static MCP bearer token through the chosen credential store.
+    pub fn login_mcp_static_bearer_credential(
+        &self,
+        mut metadata: McpAuthMetadata,
+        token: String,
+        credential_store: &dyn CredentialStore,
+    ) -> Result<McpAuthMetadata> {
+        validate_safe_name(
+            &metadata.server_id,
+            "MCP server id is not credential-store safe",
+        )?;
+        if token.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "MCP static bearer token must not be empty",
+            ));
+        }
+        let secret = SecretString::from(token);
+        let access_name = mcp_access_credential_name(&metadata.server_id);
+        metadata.credential_store_ref = Some(credential_store.store_secret(&access_name, &secret)?);
+        metadata.credential_kind = McpCredentialKind::StaticBearer;
+        metadata.refresh_credential_store_ref = None;
+        metadata.token_expires_at = None;
+        metadata.scopes.clear();
+        metadata.client_id = None;
+        metadata.resource = None;
+        metadata.authorization_endpoint = None;
+        metadata.token_endpoint = None;
+        self.write_mcp_metadata(&metadata)?;
+        Ok(metadata)
+    }
+
+    /// Stores a static MCP bearer token through the default OS credential store.
+    pub fn login_mcp_static_bearer_credential_with_default_os_store(
+        &self,
+        metadata: McpAuthMetadata,
+        token: String,
+    ) -> Result<McpAuthMetadata> {
+        let native_store = NativeSecretServiceCredentialStore::new();
+        if matches!(
+            native_store.availability(),
+            CredentialStoreAvailability::Available
+        ) {
+            return self.login_mcp_static_bearer_credential(metadata, token, &native_store);
+        }
+
+        let command_store = CommandBackedCredentialStore::secret_tool();
+        self.login_mcp_static_bearer_credential(metadata, token, &command_store)
+    }
+
+    /// Stores a static MCP bearer token through a selected or preferred store.
+    pub fn login_mcp_static_bearer_credential_with_selected_store(
+        &self,
+        metadata: McpAuthMetadata,
+        token: String,
+        credential_store: Option<&str>,
+    ) -> Result<McpAuthMetadata> {
+        let server_id = metadata.server_id.clone();
+        match Self::selected_credential_store_kind(credential_store)? {
+            Some(CredentialStoreKind::PrivateFileFallback) => {
+                let file_store = self.file_credential_store(&server_id)?;
+                self.login_mcp_static_bearer_credential(metadata, token, &file_store)
+            }
+            Some(CredentialStoreKind::OperatingSystem) => {
+                self.login_mcp_static_bearer_credential_with_default_os_store(metadata, token)
+            }
+            None => match self.credential_store_plan(&server_id) {
+                CredentialStorePlan::OperatingSystem { .. } => {
+                    self.login_mcp_static_bearer_credential_with_default_os_store(metadata, token)
+                }
+                CredentialStorePlan::PrivateFileFallback { .. } => {
+                    let file_store = self.file_credential_store(&server_id)?;
+                    self.login_mcp_static_bearer_credential(metadata, token, &file_store)
+                }
+            },
+        }
+    }
+
+    /// Loads the stored MCP bearer access token for a configured server.
     pub fn mcp_access_token(&self, server_id: &str) -> Result<SecretString> {
         validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
         let metadata = self
@@ -520,7 +598,7 @@ impl AuthStore {
         })?;
         self.load_secret(reference)?
             .filter(|secret| !secret.expose_secret().trim().is_empty())
-            .ok_or_else(|| MezError::invalid_state("MCP OAuth credential is unavailable"))
+            .ok_or_else(|| MezError::invalid_state("MCP bearer credential is unavailable"))
     }
 
     /// Loads the MCP OAuth refresh token for a configured server when available.
@@ -529,6 +607,9 @@ impl AuthStore {
         let Some(metadata) = self.read_mcp_metadata_for_server(server_id)? else {
             return Ok(None);
         };
+        if metadata.credential_kind != McpCredentialKind::OAuthBearer {
+            return Ok(None);
+        }
         let Some(reference) = metadata.refresh_credential_store_ref.as_deref() else {
             return Ok(None);
         };
@@ -544,6 +625,9 @@ impl AuthStore {
         let Some(mut metadata) = self.read_mcp_metadata_for_server(server_id)? else {
             return Ok(false);
         };
+        if metadata.credential_kind != McpCredentialKind::OAuthBearer {
+            return Ok(false);
+        }
         let Some(refresh_reference) = metadata.refresh_credential_store_ref.as_deref() else {
             return Ok(false);
         };

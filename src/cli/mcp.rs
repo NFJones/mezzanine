@@ -12,7 +12,7 @@ use super::{
     discover_project_root, fs, migrate_config_file, serialize_json, write_json_or_plain,
 };
 use crate::auth::{
-    AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpOAuthCredential,
+    AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpCredentialKind, McpOAuthCredential,
     run_mcp_oauth_login_async,
 };
 use crate::mcp::{
@@ -57,6 +57,7 @@ pub(super) async fn run_mcp<W: Write>(
         }
         McpCliCommand::Login {
             id,
+            token,
             scopes,
             client_id,
             resource,
@@ -79,7 +80,13 @@ pub(super) async fn run_mcp<W: Write>(
                     "mcp login --credential-store must be `file` or `os`",
                 ));
             }
-            if !interactive {
+            if token.is_some() && (!scopes.is_empty() || client_id.is_some() || resource.is_some())
+            {
+                return Err(MezError::invalid_args(
+                    "mcp login --token cannot be combined with OAuth login options",
+                ));
+            }
+            if token.is_none() && !interactive {
                 return Err(MezError::invalid_args(
                     "mcp login requires an interactive terminal for browser OAuth callback handling",
                 ));
@@ -87,13 +94,19 @@ pub(super) async fn run_mcp<W: Write>(
             let server_url = binding.url.as_deref().ok_or_else(|| {
                 MezError::invalid_state("mcp login HTTP binding has no configured URL")
             })?;
-            let credential = run_mcp_oauth_login_async(
-                server_url,
-                &scopes,
-                client_id.as_deref(),
-                resource.as_deref(),
-            )
-            .await?;
+            let login_credential = if let Some(token) = token {
+                McpLoginCredential::StaticBearer(token)
+            } else {
+                McpLoginCredential::OAuth(
+                    run_mcp_oauth_login_async(
+                        server_url,
+                        &scopes,
+                        client_id.as_deref(),
+                        resource.as_deref(),
+                    )
+                    .await?,
+                )
+            };
             let metadata = McpAuthMetadata::new(
                 id.clone(),
                 binding
@@ -109,13 +122,21 @@ pub(super) async fn run_mcp<W: Write>(
             let metadata = run_mcp_auth_store_operation({
                 let store = store.clone();
                 let credential_store = credential_store.clone();
-                move || {
-                    login_mcp_oauth_credential_for_cli(
+                move || match login_credential {
+                    McpLoginCredential::StaticBearer(token) => {
+                        login_mcp_static_bearer_credential_for_cli(
+                            &store,
+                            metadata,
+                            credential_store.as_deref(),
+                            token,
+                        )
+                    }
+                    McpLoginCredential::OAuth(credential) => login_mcp_oauth_credential_for_cli(
                         &store,
                         metadata,
                         credential_store.as_deref(),
                         credential,
-                    )
+                    ),
                 }
             })
             .await?;
@@ -302,6 +323,9 @@ enum McpCliCommand {
     Login {
         /// MCP server id.
         id: String,
+        /// Static bearer token stored without OAuth login.
+        #[arg(long)]
+        token: Option<String>,
         /// Comma-separated or repeated OAuth scopes.
         #[arg(long, value_delimiter = ',')]
         scopes: Vec<String>,
@@ -685,6 +709,8 @@ struct McpAuthBinding {
 struct McpLoginJson {
     /// Stable configured server identifier.
     server_id: String,
+    /// Secret-safe auth mode name.
+    auth_mode: String,
     /// Whether a usable credential is now available.
     authenticated: bool,
     /// Whether metadata exists for the configured server.
@@ -728,6 +754,14 @@ struct McpStatusJson {
     token_expires_at: Option<String>,
     /// Optional non-secret OAuth scopes attached to the credential.
     scopes: Vec<String>,
+}
+
+/// Credential material selected by `mez mcp login` before persistence.
+enum McpLoginCredential {
+    /// OAuth credential minted by browser authorization-code login.
+    OAuth(McpOAuthCredential),
+    /// Static bearer token supplied directly by the user.
+    StaticBearer(String),
 }
 
 /// Typed JSON output for MCP logout flows.
@@ -880,6 +914,16 @@ fn login_mcp_oauth_credential_for_cli(
     store.login_mcp_oauth_credential_with_selected_store(metadata, credential, credential_store)
 }
 
+/// Stores an MCP static bearer credential with the CLI-selected credential backend.
+fn login_mcp_static_bearer_credential_for_cli(
+    store: &AuthStore,
+    metadata: McpAuthMetadata,
+    credential_store: Option<&str>,
+    token: String,
+) -> Result<McpAuthMetadata> {
+    store.login_mcp_static_bearer_credential_with_selected_store(metadata, token, credential_store)
+}
+
 /// Renders successful MCP login output through typed JSON serialization.
 fn mcp_login_json(
     id: &str,
@@ -888,6 +932,7 @@ fn mcp_login_json(
 ) -> Result<String> {
     serialize_json(&McpLoginJson {
         server_id: id.to_string(),
+        auth_mode: mcp_stored_auth_mode(metadata).to_string(),
         authenticated: true,
         metadata_present: true,
         credential_store: credential_store_name.to_string(),
@@ -902,8 +947,8 @@ fn mcp_login_json(
 fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> Result<String> {
     let auth_mode = if binding.bearer_token_env.is_some() {
         "env-bearer"
-    } else if status.metadata_present {
-        "oauth"
+    } else if let Some(metadata) = status.metadata.as_ref() {
+        mcp_stored_auth_mode(metadata)
     } else {
         "none"
     };
@@ -930,6 +975,14 @@ fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> Result<S
         token_expires_at,
         scopes,
     })
+}
+
+/// Returns the secret-safe auth mode label for stored MCP credentials.
+fn mcp_stored_auth_mode(metadata: &McpAuthMetadata) -> &'static str {
+    match metadata.credential_kind {
+        McpCredentialKind::OAuthBearer => "oauth",
+        McpCredentialKind::StaticBearer => "stored-bearer",
+    }
 }
 
 /// Renders MCP logout output through typed JSON serialization.
@@ -1145,8 +1198,104 @@ mod tests {
 
         assert_eq!(
             output,
-            r#"{"server_id":"demo","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:def","token_expires_at":null,"scopes":["scope:read"]}"#
+            r#"{"server_id":"demo","auth_mode":"oauth","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:def","token_expires_at":null,"scopes":["scope:read"]}"#
         );
+    }
+
+    /// Verifies MCP login/status JSON distinguishes stored static bearer tokens
+    /// from OAuth credentials without exposing raw bearer material.
+    #[test]
+    fn mcp_static_bearer_auth_json_reports_stored_bearer_mode() {
+        let binding = McpAuthBinding {
+            id: "demo".to_string(),
+            transport: "streamable_http",
+            url: Some("https://example.invalid/mcp".to_string()),
+            url_origin: Some("https://example.invalid".to_string()),
+            url_fingerprint: Some("sha256:static".to_string()),
+            bearer_token_env: None,
+        };
+        let metadata = McpAuthMetadata {
+            server_id: "demo".to_string(),
+            credential_kind: McpCredentialKind::StaticBearer,
+            url_origin: "https://example.invalid".to_string(),
+            url_fingerprint: "sha256:static".to_string(),
+            scopes: Vec::new(),
+            client_id: None,
+            resource: None,
+            authorization_endpoint: None,
+            token_endpoint: None,
+            credential_store_ref: Some("file:demo".to_string()),
+            refresh_credential_store_ref: None,
+            token_expires_at: None,
+        };
+        let status = McpAuthStatus {
+            server_id: "demo".to_string(),
+            authenticated: true,
+            metadata_present: true,
+            credential_state: AuthCredentialState::Available {
+                store: CredentialStoreKind::PrivateFileFallback,
+                reference: "file:demo".to_string(),
+            },
+            metadata: Some(metadata.clone()),
+            stale_url: false,
+        };
+
+        let login = mcp_login_json("demo", "file", &metadata).unwrap();
+        let status = mcp_status_json(&binding, &status).unwrap();
+
+        assert_eq!(
+            login,
+            r#"{"server_id":"demo","auth_mode":"stored-bearer","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:static","token_expires_at":null,"scopes":[]}"#
+        );
+        assert_eq!(
+            status,
+            r#"{"server_id":"demo","transport":"streamable_http","auth_mode":"stored-bearer","authenticated":true,"metadata_present":true,"stale_url":false,"credential_state":"available","bearer_token_env":null,"url_origin":"https://example.invalid","url_fingerprint":"sha256:static","token_expires_at":null,"scopes":[]}"#
+        );
+        assert!(!login.contains("static-token"));
+        assert!(!status.contains("static-token"));
+    }
+
+    /// Verifies configured bearer-token environment auth remains the reported
+    /// high-precedence mode even when stored static bearer metadata exists.
+    #[test]
+    fn mcp_status_json_reports_env_bearer_before_stored_bearer() {
+        let binding = McpAuthBinding {
+            id: "demo".to_string(),
+            transport: "streamable_http",
+            url: Some("https://example.invalid/mcp".to_string()),
+            url_origin: Some("https://example.invalid".to_string()),
+            url_fingerprint: Some("sha256:static".to_string()),
+            bearer_token_env: Some("MCP_TOKEN".to_string()),
+        };
+        let status = McpAuthStatus {
+            server_id: "demo".to_string(),
+            authenticated: true,
+            metadata_present: true,
+            credential_state: AuthCredentialState::Available {
+                store: CredentialStoreKind::PrivateFileFallback,
+                reference: "file:demo".to_string(),
+            },
+            metadata: Some(McpAuthMetadata {
+                server_id: "demo".to_string(),
+                credential_kind: McpCredentialKind::StaticBearer,
+                url_origin: "https://example.invalid".to_string(),
+                url_fingerprint: "sha256:static".to_string(),
+                scopes: Vec::new(),
+                client_id: None,
+                resource: None,
+                authorization_endpoint: None,
+                token_endpoint: None,
+                credential_store_ref: Some("file:demo".to_string()),
+                refresh_credential_store_ref: None,
+                token_expires_at: None,
+            }),
+            stale_url: false,
+        };
+
+        let output = mcp_status_json(&binding, &status).unwrap();
+
+        assert!(output.contains(r#""auth_mode":"env-bearer""#));
+        assert!(output.contains(r#""bearer_token_env":"MCP_TOKEN""#));
     }
 
     /// Verifies typed MCP list and inspect JSON preserve existing field order

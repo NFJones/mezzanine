@@ -8,9 +8,10 @@ use super::{
     build_mcp_tools_call_request, build_mcp_tools_list_request, call_stdio_mcp_tool_with_audit,
     call_streamable_http_mcp_tool, call_streamable_http_mcp_tool_with_audit,
     discover_stdio_mcp_server, discover_stdio_mcp_server_into_registry,
-    discover_streamable_http_mcp_server_into_registry, initialize_streamable_http_mcp_server,
-    parse_mcp_initialize_response, parse_mcp_tools_call_response, parse_mcp_tools_list_response,
-    read_bounded_protocol_line, spawn_stdio_mcp_connection,
+    discover_streamable_http_mcp_server_into_registry, execute_streamable_http_exchange,
+    initialize_streamable_http_mcp_server, parse_mcp_initialize_response,
+    parse_mcp_tools_call_response, parse_mcp_tools_list_response, read_bounded_protocol_line,
+    spawn_stdio_mcp_connection,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -1083,6 +1084,78 @@ async fn streamable_http_tool_call_posts_name_bearer_and_session_headers() {
         "MCP-Session-Id",
         "session-1"
     ));
+}
+
+/// Verifies stored bearer token fallback is used only when env bearer auth is
+/// absent.
+///
+/// Runtime passes stored MCP auth-store bearer tokens into the streamable HTTP
+/// transport only when `bearer_token_env` is not configured. This regression
+/// keeps the transport precedence explicit: env bearer auth wins over the
+/// stored-token argument, while the stored token is still sent for servers that
+/// rely on auth-store credentials.
+#[tokio::test]
+async fn streamable_http_exchange_prefers_env_bearer_over_stored_token() {
+    let body = r#"{"jsonrpc":"2.0","id":9,"result":{"content":[{"type":"text","text":"ok"}],"isError":false}}"#;
+    let (url, stored_request) = spawn_http_fixture("application/json", body, None);
+    let mut registry = McpRegistry::default();
+    registry
+        .add_server(McpServerConfig::streamable_http(
+            "http",
+            "http-fixture",
+            url,
+        ))
+        .unwrap();
+    let environment = BTreeMap::new();
+    let plan = registry.startup_plan("http", &environment).unwrap();
+
+    execute_streamable_http_exchange(
+        &plan,
+        &environment,
+        r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#,
+        Some(9),
+        1000,
+        None,
+        Some("stored-secret"),
+    )
+    .await
+    .unwrap();
+    let stored_request = stored_request.join().unwrap();
+
+    assert!(fixture_request_has_header(
+        &stored_request,
+        "Authorization",
+        "Bearer stored-secret"
+    ));
+
+    let (url, env_request) = spawn_http_fixture("application/json", body, None);
+    let mut registry = McpRegistry::default();
+    let mut config = McpServerConfig::streamable_http("http", "http-fixture", url);
+    config.bearer_token_env = Some("MCP_TOKEN".to_string());
+    registry.add_server(config).unwrap();
+    let mut environment = BTreeMap::new();
+    environment.insert("MCP_TOKEN".to_string(), "env-secret".to_string());
+    let plan = registry.startup_plan("http", &environment).unwrap();
+
+    execute_streamable_http_exchange(
+        &plan,
+        &environment,
+        r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#,
+        Some(9),
+        1000,
+        None,
+        Some("stored-secret"),
+    )
+    .await
+    .unwrap();
+    let env_request = env_request.join().unwrap();
+
+    assert!(fixture_request_has_header(
+        &env_request,
+        "Authorization",
+        "Bearer env-secret"
+    ));
+    assert!(!env_request.contains("stored-secret"));
 }
 
 /// Verifies streamable http discovery into registry blacklists failed server.

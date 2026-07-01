@@ -112,6 +112,8 @@ pub struct McpAuthMetadata {
 pub enum McpCredentialKind {
     /// OAuth access token used as a bearer token for streamable HTTP MCP.
     OAuthBearer,
+    /// Static bearer token stored without OAuth refresh semantics.
+    StaticBearer,
 }
 
 impl McpCredentialKind {
@@ -119,6 +121,7 @@ impl McpCredentialKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OAuthBearer => "oauth-bearer",
+            Self::StaticBearer => "static-bearer",
         }
     }
 
@@ -126,6 +129,7 @@ impl McpCredentialKind {
     pub fn from_metadata_value(value: &str) -> Option<Self> {
         match value {
             "oauth-bearer" => Some(Self::OAuthBearer),
+            "static-bearer" => Some(Self::StaticBearer),
             _ => None,
         }
     }

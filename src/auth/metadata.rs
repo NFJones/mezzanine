@@ -62,7 +62,7 @@ impl AuthMetadata {
 }
 
 impl McpAuthMetadata {
-    /// Creates non-secret metadata for one MCP OAuth credential.
+    /// Creates non-secret metadata for one MCP credential.
     pub fn new(
         server_id: impl Into<String>,
         url_origin: impl Into<String>,
@@ -377,7 +377,7 @@ fn parse_credential_kind(value: &str) -> Result<AuthCredentialKind> {
 fn parse_mcp_credential_kind(value: &str) -> Result<McpCredentialKind> {
     McpCredentialKind::from_metadata_value(value).ok_or_else(|| {
         MezError::config(format!(
-            "unsupported MCP credential kind `{value}`; expected `oauth-bearer`"
+            "unsupported MCP credential kind `{value}`; expected `oauth-bearer` or `static-bearer`"
         ))
     })
 }

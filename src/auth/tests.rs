@@ -4,8 +4,8 @@ use super::{
     AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthMethod, AuthPaths, AuthStore,
     CommandBackedCredentialStore, CredentialCommandOutput, CredentialCommandRunner,
     CredentialStore, CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, McpOAuthCredential, OpenAiProviderCredential,
-    PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
+    FileCredentialFallbackReason, McpAuthMetadata, McpCredentialKind, McpOAuthCredential,
+    OpenAiProviderCredential, PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
 };
 use crate::error::Result;
 use secrecy::{ExposeSecret, SecretString};
@@ -807,6 +807,58 @@ fn api_key_login_stores_secret_and_persists_only_metadata_reference() {
         ),
         Some("sk-test-secret".to_string())
     );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies static MCP bearer login stores the token as a secret while MCP
+/// auth metadata remains secret-safe and refresh-ineligible.
+///
+/// Static bearer credentials are user-supplied long-lived bearer tokens, not
+/// OAuth access tokens. This regression ensures the auth store persists the raw
+/// token outside metadata, reports a usable stored credential, and does not
+/// expose an OAuth refresh token path for runtime retry handling.
+#[test]
+fn mcp_static_bearer_login_stores_secret_and_skips_refresh() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-static-bearer-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let credential_store = store.file_credential_store("demo").unwrap();
+    let metadata = McpAuthMetadata::new("demo", "https://example.invalid", "sha256:static-bearer");
+
+    let metadata = store
+        .login_mcp_static_bearer_credential(
+            metadata,
+            "static-token-secret".to_string(),
+            &credential_store,
+        )
+        .unwrap();
+    let status = store
+        .mcp_status(
+            "demo",
+            Some("https://example.invalid"),
+            Some("sha256:static-bearer"),
+        )
+        .unwrap();
+    let auth_file = fs::read_to_string(store.paths().mcp_auth_file()).unwrap();
+
+    assert_eq!(metadata.credential_kind, McpCredentialKind::StaticBearer);
+    assert!(metadata.refresh_credential_store_ref.is_none());
+    assert!(metadata.scopes.is_empty());
+    assert!(status.authenticated);
+    assert_eq!(
+        status.metadata.as_ref().unwrap().credential_kind,
+        McpCredentialKind::StaticBearer
+    );
+    assert!(store.mcp_refresh_token("demo").unwrap().is_none());
+    assert_eq!(
+        store.mcp_access_token("demo").unwrap().expose_secret(),
+        "static-token-secret"
+    );
+    assert!(!auth_file.contains("static-token-secret"));
 
     let _ = fs::remove_dir_all(root);
 }
