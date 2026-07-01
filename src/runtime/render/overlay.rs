@@ -2331,9 +2331,13 @@ pub(super) fn runtime_pane_agent_selector_rendition(
     } else {
         ui_theme.colors.display_overlay
     };
-    let mut rendition = pair.rendition();
-    rendition.bold = active;
-    rendition
+    let pair_rendition = pair.rendition();
+    crate::terminal::GraphicRendition {
+        foreground: pair_rendition.foreground,
+        background: pair_rendition.background,
+        bold: active,
+        ..crate::terminal::GraphicRendition::default()
+    }
 }
 
 impl RuntimeSessionService {

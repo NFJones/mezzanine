@@ -167,20 +167,25 @@ mod tests {
         RuntimeDisplayOverlaySelectionKind,
     };
     use super::{
-        AgentRenderedLine, AgentRenderedLineKind, agent_action_execution_display_header,
-        agent_action_result_uses_diff_preview, agent_thinking_display_lines_for_width,
-        command_preview_terminal_rendered_lines, readable_agent_diff_display_lines,
-        readable_agent_diff_display_lines_for_width, render_command_markdown_body_lines,
-        rendered_line_rendition_at, runtime_agent_shell_markdown_overlay_content,
-        runtime_command_display_overlay_content, runtime_display_overlay_rendered_line_style_spans,
+        AgentRenderedLine, AgentRenderedLineKind, RuntimeSessionService,
+        agent_action_execution_display_header, agent_action_result_uses_diff_preview,
+        agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
+        readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
+        render_command_markdown_body_lines, rendered_line_rendition_at,
+        runtime_agent_shell_markdown_overlay_content,
+        runtime_command_display_overlay_content,
+        runtime_display_overlay_rendered_line_style_spans,
         runtime_display_overlay_rendered_selection_start,
-        runtime_display_overlay_selection_prefix_columns, runtime_human_readable_display_lines,
+        runtime_display_overlay_selection_prefix_columns,
+        runtime_human_readable_display_lines, runtime_pane_agent_selector_rendition,
         wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
         wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
     use crate::layout::Size;
-    use crate::terminal::{GraphicRendition, TerminalStyleSpan, default_ui_theme};
+    use crate::terminal::{
+        GraphicRendition, PaneAgentStatusField, TerminalStyleSpan, default_ui_theme,
+    };
 
     /// Verifies normal-mode mutation result rendering treats patches as the
     /// only diff-producing file mutation operation.
@@ -1278,6 +1283,67 @@ mod tests {
         assert_eq!(
             following_rendition.background, None,
             "active selection background leaked past selected link: {spans:?}"
+        );
+    }
+
+    /// Verifies pane-agent selector rows fully replace overlapping pane text styling.
+    ///
+    /// Selector dropdown rows render over live pane content whose cells may
+    /// already carry bold, underline, or inverse attributes. The overlay must
+    /// clip any overlapping pane spans and provide a clean selector rendition
+    /// so per-cell span merging cannot leak those underlying attributes into
+    /// the dropdown text.
+    #[test]
+    fn pane_agent_selector_overlay_clips_underlying_pane_styling() {
+        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let overlay_column = 4;
+        let overlay_width = 8;
+        let pane_rendition = GraphicRendition {
+            bold: true,
+            underline: true,
+            inverse: true,
+            ..GraphicRendition::default()
+        };
+        let selector_rendition =
+            runtime_pane_agent_selector_rendition(PaneAgentStatusField::Model, false, &ui_theme);
+        let mut spans = vec![TerminalStyleSpan {
+            start: 0,
+            length: 16,
+            rendition: pane_rendition,
+        }];
+
+        RuntimeSessionService::clip_line_style_spans_for_overlay(
+            &mut spans,
+            overlay_column,
+            overlay_width,
+        );
+        spans.push(TerminalStyleSpan {
+            start: overlay_column,
+            length: overlay_width,
+            rendition: selector_rendition,
+        });
+
+        let before_overlay = rendered_line_rendition_at(&spans, overlay_column - 1);
+        let first_overlay_cell = rendered_line_rendition_at(&spans, overlay_column);
+        let final_overlay_cell =
+            rendered_line_rendition_at(&spans, overlay_column + overlay_width - 1);
+        let after_overlay = rendered_line_rendition_at(&spans, overlay_column + overlay_width);
+
+        assert_eq!(
+            before_overlay, pane_rendition,
+            "left pane styling was clipped too broadly: {spans:?}"
+        );
+        assert_eq!(
+            first_overlay_cell, selector_rendition,
+            "selector row inherited pane styling on its first cell: {spans:?}"
+        );
+        assert_eq!(
+            final_overlay_cell, selector_rendition,
+            "selector row inherited pane styling on its trailing cell: {spans:?}"
+        );
+        assert_eq!(
+            after_overlay, pane_rendition,
+            "right pane styling was clipped too broadly: {spans:?}"
         );
     }
 

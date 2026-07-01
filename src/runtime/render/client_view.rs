@@ -201,6 +201,41 @@ impl RuntimeSessionService {
         view.primary_prompt_active = true;
     }
 
+    /// Clips existing style spans so an overlay fully owns one column range.
+    pub(super) fn clip_line_style_spans_for_overlay(
+        spans: &mut Vec<TerminalStyleSpan>,
+        start: usize,
+        length: usize,
+    ) {
+        if length == 0 {
+            return;
+        }
+        let end = start.saturating_add(length);
+        let mut clipped = Vec::with_capacity(spans.len().saturating_add(1));
+        for span in spans.drain(..) {
+            let span_end = span.start.saturating_add(span.length);
+            if span_end <= start || span.start >= end {
+                clipped.push(span);
+                continue;
+            }
+            if span.start < start {
+                clipped.push(TerminalStyleSpan {
+                    start: span.start,
+                    length: start.saturating_sub(span.start),
+                    rendition: span.rendition,
+                });
+            }
+            if span_end > end {
+                clipped.push(TerminalStyleSpan {
+                    start: end,
+                    length: span_end.saturating_sub(end),
+                    rendition: span.rendition,
+                });
+            }
+        }
+        *spans = clipped;
+    }
+
     /// Draws a pane agent model/reasoning selector over the rendered view.
     fn overlay_pane_agent_status_selector(
         &self,
@@ -208,6 +243,8 @@ impl RuntimeSessionService {
         selector: &RuntimePaneAgentStatusSelector,
     ) {
         let layout = runtime_pane_agent_status_selector_layout(selector, view.authoritative_size);
+        let column = usize::from(layout.column);
+        let width = usize::from(layout.width);
         for item in layout.visible_items {
             let Some(value) = selector.items.get(item.item_index) else {
                 continue;
@@ -218,17 +255,13 @@ impl RuntimeSessionService {
             }
             let active = item.item_index == selector.active_index;
             let marker = if active { "›" } else { " " };
-            let text = runtime_selector_line(marker, value, usize::from(layout.width));
-            runtime_overlay_text_at(
-                &mut view.lines[row],
-                usize::from(layout.column),
-                usize::from(layout.width),
-                &text,
-            );
+            let text = runtime_selector_line(marker, value, width);
+            runtime_overlay_text_at(&mut view.lines[row], column, width, &text);
             if let Some(spans) = view.line_style_spans.get_mut(row) {
+                Self::clip_line_style_spans_for_overlay(spans, column, width);
                 spans.push(TerminalStyleSpan {
-                    start: usize::from(layout.column),
-                    length: usize::from(layout.width),
+                    start: column,
+                    length: width,
                     rendition: runtime_pane_agent_selector_rendition(
                         selector.field,
                         active,
