@@ -613,6 +613,19 @@ where
         if refresh_requirement.full_redraw_required {
             terminal_io.invalidate_output_frame().await?;
         }
+        if let Some(event_stream) = event_stream.as_mut() {
+            match event_stream.try_read_ready_render_action()? {
+                AttachRenderAction::None => {}
+                AttachRenderAction::View => {
+                    render_requested = true;
+                }
+                AttachRenderAction::InvalidateAndView => {
+                    terminal_io.invalidate_output_frame().await?;
+                    render_requested = true;
+                }
+                AttachRenderAction::Disconnect => break Ok(()),
+            }
+        }
         if render_requested || refresh_requirement.view_refresh_required {
             let outcome = request_and_render_primary_view_async(
                 stream,
@@ -843,7 +856,11 @@ async fn read_attached_client_input_or_deadline<I: AsyncAttachedTerminalIo>(
     animation_deadline: Option<tokio::time::Instant>,
     wake_deadline: tokio::time::Instant,
 ) -> Result<AttachedClientInputPoll> {
-    match tokio::time::timeout_at(wake_deadline, terminal_io.read_input(max_bytes)).await {
+    let input = async {
+        let _ = terminal_io.poll_input_readiness().await?;
+        terminal_io.read_input(max_bytes).await
+    };
+    match tokio::time::timeout_at(wake_deadline, input).await {
         Ok(Ok(bytes)) if bytes.is_empty() => Ok(AttachedClientInputPoll {
             bytes,
             eof: true,
@@ -900,17 +917,23 @@ async fn read_attached_client_input_or_runtime_event<I: AsyncAttachedTerminalIo>
             result = &mut input => result,
         };
     };
-    tokio::select! {
+    let mut input = tokio::select! {
+        biased;
         input = &mut input => input,
         render_action = read_runtime_event_stream_action(event_stream) => {
-            let render_action = render_action?;
-            Ok(AttachedClientInputPoll {
+            return Ok(AttachedClientInputPoll {
                 bytes: Vec::new(),
                 eof: false,
-                render_action,
-            })
+                render_action: render_action?,
+            });
         }
+    }?;
+    if !input.eof && !input.bytes.is_empty() {
+        input.render_action = input
+            .render_action
+            .combine(event_stream.try_read_ready_render_action()?);
     }
+    Ok(input)
 }
 
 /// Builds the synthetic input poll produced by a local animation refresh tick.
@@ -965,6 +988,34 @@ impl AttachedRuntimeEventStream {
                 RuntimeEventStreamRead::Pending => return Ok(action),
                 RuntimeEventStreamRead::Disconnected => {
                     return Ok(action.combine(AttachRenderAction::Disconnect));
+                }
+            }
+        }
+    }
+
+    /// Drains any already-ready redraw events without waiting for new bytes.
+    ///
+    /// The foreground input loop uses this after local input wins the readiness
+    /// race so a simultaneous runtime redraw wakeup can be satisfied by the same
+    /// post-input render instead of lingering for a later redundant view request.
+    fn try_read_ready_render_action(&mut self) -> Result<AttachRenderAction> {
+        let mut action = AttachRenderAction::None;
+        if !self.pending_contains_complete_frame() {
+            match self.try_read_event_stream_chunk()? {
+                RuntimeEventStreamRead::Read => {}
+                RuntimeEventStreamRead::Pending | RuntimeEventStreamRead::Disconnected => {
+                    return Ok(AttachRenderAction::None);
+                }
+            }
+        }
+        action = action.combine(self.drain_complete_event_frames()?);
+        loop {
+            match self.try_read_event_stream_chunk()? {
+                RuntimeEventStreamRead::Read => {
+                    action = action.combine(self.drain_complete_event_frames()?);
+                }
+                RuntimeEventStreamRead::Pending | RuntimeEventStreamRead::Disconnected => {
+                    return Ok(action);
                 }
             }
         }

@@ -33,8 +33,10 @@ use crate::session::Session;
 use crate::shell::resolve_shell;
 use crate::snapshot::{SnapshotKind, SnapshotRepository};
 use crate::snapshot::{SnapshotManifest, SnapshotPaneCapture, SnapshotState};
+use crate::terminal::{AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest};
 use std::fs;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 use std::thread;
@@ -75,6 +77,19 @@ fn event_notification_frame(event_type: &str) -> Vec<u8> {
     encode_control_body(&format!(
         r#"{{"jsonrpc":"2.0","method":"event/{event_type}","params":{{"event_id":1,"time":"2026-05-21T00:00:00Z","event_type":"{event_type}","session_id":null,"object":{{}}}}}}"#
     ))
+}
+
+/// Builds one readable input readiness record for async attached-terminal tests.
+fn readable_input_readiness() -> AttachedTerminalFdReadiness {
+    AttachedTerminalFdReadiness {
+        role: AttachedTerminalFdRole::Input,
+        fd: std::io::stdin().as_raw_fd(),
+        interest: TerminalFdInterest::read(),
+        readable: true,
+        writable: false,
+        hangup: false,
+        error: false,
+    }
 }
 
 /// Runs the run with operation for this subsystem.
@@ -143,16 +158,7 @@ fn spawn_noninteractive_attach_stub_server(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let (mut stream, _addr) = listener.accept().unwrap();
-        let request = read_control_response_frames(
-            &mut stream,
-            4096,
-            if expected_follow_up_method.is_some() {
-                2
-            } else {
-                1
-            },
-        )
-        .unwrap();
+        let request = read_control_response_frames(&mut stream, 4096, 1).unwrap();
         let (initialize, consumed) = decode_control_frame(&request, 4096).unwrap();
         assert!(
             initialize.contains(r#""method":"control/initialize""#),
@@ -162,7 +168,12 @@ fn spawn_noninteractive_attach_stub_server(
             .write_all(&encode_control_body(initialize_result))
             .unwrap();
         if let Some(expected_follow_up_method) = expected_follow_up_method {
-            let (follow_up, _) = decode_control_frame(&request[consumed..], 4096).unwrap();
+            let request = if consumed < request.len() {
+                request[consumed..].to_vec()
+            } else {
+                read_control_response_frames(&mut stream, 4096, 1).unwrap()
+            };
+            let (follow_up, _) = decode_control_frame(&request, 4096).unwrap();
             assert!(follow_up.contains(expected_follow_up_method), "{follow_up}");
             stream
                 .write_all(&encode_control_body(
@@ -3546,6 +3557,113 @@ async fn control_socket_primary_attach_loop_ignores_nonvisible_runtime_events() 
 /// Layout-changing event notifications can make the previous output frame an
 /// unsafe basis for incremental rendering, so the attach loop should invalidate
 /// only for that stronger event class.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+/// Verifies ready terminal input wins over simultaneous runtime redraw events.
+///
+/// Frequent runtime notifications should not postpone already-ready keyboard
+/// input, because the attached primary loop is responsible for forwarding user
+/// bytes with low latency even while agent panes are producing redraw traffic.
+async fn control_socket_primary_attach_loop_prefers_ready_input_over_runtime_event() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let (event_client_stream, mut event_server_stream) = UnixStream::pair().unwrap();
+    event_client_stream.set_nonblocking(true).unwrap();
+    let event_client_stream = tokio::net::UnixStream::from_std(event_client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        assert_eq!(
+            parsed.get("id").and_then(serde_json::Value::as_str),
+            Some("cli-terminal-view-0")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-0","result":{"view":{"lines":["initial"],"line_style_spans":[[]],"cursor":{"row":0,"column":7,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+
+        event_server_stream
+            .write_all(&event_notification_frame("pane_changed"))
+            .unwrap();
+        event_server_stream.flush().unwrap();
+
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/step")
+        );
+        assert_eq!(
+            parsed.get("id").and_then(serde_json::Value::as_str),
+            Some("cli-terminal-step-1")
+        );
+        assert_eq!(
+            parsed
+                .get("params")
+                .and_then(|params| params.get("input_bytes"))
+                .and_then(serde_json::Value::as_array),
+            Some(&vec![serde_json::Value::from(b'x')])
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-1","result":{"input_bytes":1,"application":{"forwarded_bytes":1,"mux_actions_applied":0,"mouse_actions_reported":0,"agent_prompt_inputs_applied":0,"view_refresh_required":false,"full_redraw_required":false,"unsupported_actions":[]},"view":null,"ui_theme":null}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/view")
+        );
+        assert_eq!(
+            parsed.get("id").and_then(serde_json::Value::as_str),
+            Some("cli-terminal-view-1")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-view-1","result":{"view":{"lines":["after input"],"line_style_spans":[[]],"cursor":{"row":0,"column":11,"visible":true,"style":"bar","blink":false},"output_modes":{"application_keypad":false}}}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        drop(event_server_stream);
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_readiness(vec![readable_input_readiness()]);
+    io.push_input(b"x".to_vec());
+    io.push_pending_input_read();
+    io.push_readiness(vec![readable_input_readiness()]);
+    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    {
+        let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
+            &mut client_stream,
+            &mut io,
+            primary_client_id,
+            Size::new(80, 24).unwrap(),
+            Some(event_client_stream),
+        );
+        tokio::pin!(run);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        run.await.unwrap();
+    }
+    server.join().unwrap();
+    assert_eq!(io.presentation_entries, 1);
+    assert_eq!(io.invalidated_output_frames, 0);
+    assert_eq!(io.written_frames.len(), 2);
+    assert_eq!(io.written_frames[0].lines, vec!["initial"]);
+    assert_eq!(io.written_frames[1].lines, vec!["after input"]);
+}
+
 #[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn control_socket_primary_attach_loop_structural_runtime_event_invalidates_once() {
     let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
