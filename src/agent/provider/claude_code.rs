@@ -15,8 +15,10 @@ use super::{
 use sha2::Digest;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -52,6 +54,62 @@ const CLAUDE_CODE_SESSION_LOCK_RETRY_DELAY_MS: u64 = 50;
 /// stable Claude session id.
 static CLAUDE_CODE_SESSION_STATES: OnceLock<Mutex<BTreeMap<String, Arc<ClaudeCodeSessionState>>>> =
     OnceLock::new();
+/// Monotonic suffix used to create per-invocation Claude settings files.
+static CLAUDE_CODE_SETTINGS_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Owns a per-invocation Claude Code settings file and removes it when the
+/// subprocess invocation completes or fails before spawn.
+struct ClaudeCodeSettingsFile {
+    path: PathBuf,
+}
+
+impl ClaudeCodeSettingsFile {
+    /// Writes the Claude settings backed fields for one subprocess invocation.
+    fn write(model: &str, structured_output_allowed: bool) -> Result<Self> {
+        let suffix = CLAUDE_CODE_SETTINGS_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "mez-claude-code-settings-{}-{suffix}.json",
+            std::process::id()
+        ));
+        let mut allowed_tools = Vec::new();
+        if structured_output_allowed {
+            allowed_tools.push(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL);
+        }
+        let settings = serde_json::json!({
+            "model": model,
+            "permissions": {
+                "allow": allowed_tools,
+                "deny": CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS
+                    .split(',')
+                    .collect::<Vec<_>>(),
+            },
+        });
+        let bytes = serde_json::to_vec_pretty(&settings).map_err(|error| {
+            MezError::invalid_state(format!(
+                "Claude Code settings serialization failed: {}",
+                redact_claude_code_text(&error.to_string())
+            ))
+        })?;
+        std::fs::write(&path, bytes).map_err(|error| {
+            MezError::invalid_state(format!(
+                "Claude Code settings file write failed: {}",
+                redact_claude_code_text(&error.to_string())
+            ))
+        })?;
+        Ok(Self { path })
+    }
+
+    /// Returns the filesystem path passed to Claude Code with `--settings`.
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl Drop for ClaudeCodeSettingsFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
 /// Captures one Claude Code subprocess completion for retry and validation.
 struct ClaudeCodeSubprocessOutput {
@@ -943,20 +1001,16 @@ async fn run_claude_code_subprocess_with_session_invocation(
     request: ClaudeCodeSessionInvocationRequest<'_>,
 ) -> Result<ClaudeCodeSubprocessOutput> {
     let mut spawn_attempt = 0;
+    let json_schema = request.json_schema.filter(|schema| !schema.is_empty());
+    let settings_file = ClaudeCodeSettingsFile::write(request.model, json_schema.is_some())?;
     let mut child = loop {
         let mut command = Command::new(request.program);
-        let json_schema = request.json_schema.filter(|schema| !schema.is_empty());
-        command.arg("--print").arg("--model").arg(request.model);
+        command.arg("--print");
         command
-            .arg("--disallowedTools")
-            .arg(CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS)
+            .arg("--settings")
+            .arg(settings_file.path())
             .arg("--permission-mode")
             .arg("dontAsk");
-        if json_schema.is_some() {
-            command
-                .arg("--allowedTools")
-                .arg(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL);
-        }
         match request.session {
             Some(ClaudeCodeSessionInvocation::Create { session_id }) => {
                 command.arg("--session-id").arg(session_id);
@@ -1040,7 +1094,6 @@ async fn run_claude_code_subprocess_with_session_invocation(
             redact_claude_code_text(&error.to_string())
         ))
     })?;
-
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = redact_claude_code_text(&String::from_utf8_lossy(&output.stderr));
     if !output.status.success() {
@@ -1609,6 +1662,14 @@ mod tests {
         fixture.write_claude_script(
             r#"#!/bin/sh
 printf '%s\n' "$@" > "$0.args"
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--settings" ]; then
+        shift
+        cat "$1" > "$0.settings"
+        break
+    fi
+    shift
+done
 cat > "$0.stdin"
 cat <<'EOF'
 {"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
@@ -1626,9 +1687,9 @@ EOF
         assert!(response.action_batch.is_some());
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
         assert!(args.contains("--print"), "{args}");
-        assert!(args.contains("--model"), "{args}");
-        assert!(args.contains("claude-sonnet-test"), "{args}");
+        assert!(!args.contains("--model"), "{args}");
         assert!(!args.contains("--bare"), "{args}");
+        assert!(args.contains("--settings"), "{args}");
         assert!(args.contains("--permission-mode"), "{args}");
         assert!(args.contains("dontAsk"), "{args}");
         assert!(!args.contains("--session-id"), "{args}");
@@ -1642,16 +1703,19 @@ EOF
         assert!(args.contains("high"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
-        assert!(args.contains("--disallowedTools"), "{args}");
-        assert!(args.contains("SendUserMessage,Bash,Edit,Read"), "{args}");
-        assert!(args.contains("Agent,Artifact,AskUserQuestion"), "{args}");
-        assert!(args.contains("WebFetch,WebSearch"), "{args}");
-        assert!(args.contains("--allowedTools"), "{args}");
-        assert!(args.contains("StructuredOutput"), "{args}");
+        assert!(!args.contains("--disallowedTools"), "{args}");
+        assert!(!args.contains("--allowedTools"), "{args}");
+        let settings = fs::read_to_string(fixture.program.with_extension("settings")).unwrap();
         assert!(
-            args.find("--disallowedTools") < args.find("--allowedTools"),
-            "{args}"
+            settings.contains("\"model\": \"claude-sonnet-test\""),
+            "{settings}"
         );
+        assert!(settings.contains("\"allow\""), "{settings}");
+        assert!(settings.contains("\"StructuredOutput\""), "{settings}");
+        assert!(settings.contains("\"deny\""), "{settings}");
+        assert!(settings.contains("\"SendUserMessage\""), "{settings}");
+        assert!(settings.contains("\"Bash\""), "{settings}");
+        assert!(settings.contains("\"WebSearch\""), "{settings}");
         let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
         assert!(
             stdin.contains("Current user request:\nFollow the system prompt."),
@@ -2023,6 +2087,14 @@ EOF
         fixture.write_claude_script(
             r#"#!/bin/sh
 printf '%s\n' "$@" > "$0.args"
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--settings" ]; then
+        shift
+        cat "$1" > "$0.settings"
+        break
+    fi
+    shift
+done
 cat >/dev/null
 cat <<'EOF'
 {"type":"result","subtype":"success","is_error":false,"result":"not fenced","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
@@ -2039,20 +2111,20 @@ EOF
         assert!(response.action_batch.is_some());
         let args = fs::read_to_string(fixture.program.with_extension("args")).unwrap();
         assert!(!args.contains("--bare"), "{args}");
+        assert!(args.contains("--settings"), "{args}");
         assert!(args.contains("--permission-mode"), "{args}");
         assert!(args.contains("dontAsk"), "{args}");
         assert!(args.contains("--output-format"), "{args}");
         assert!(args.contains("json"), "{args}");
-        assert!(args.contains("--disallowedTools"), "{args}");
-        assert!(args.contains("SendUserMessage,Bash,Edit,Read"), "{args}");
-        assert!(args.contains("Agent,Artifact,AskUserQuestion"), "{args}");
-        assert!(args.contains("WebFetch,WebSearch"), "{args}");
-        assert!(args.contains("--allowedTools"), "{args}");
-        assert!(args.contains("StructuredOutput"), "{args}");
+        assert!(!args.contains("--disallowedTools"), "{args}");
+        assert!(!args.contains("--allowedTools"), "{args}");
+        let settings = fs::read_to_string(fixture.program.with_extension("settings")).unwrap();
         assert!(
-            args.find("--disallowedTools") < args.find("--allowedTools"),
-            "{args}"
+            settings.contains("\"model\": \"claude-sonnet-test\""),
+            "{settings}"
         );
+        assert!(settings.contains("\"StructuredOutput\""), "{settings}");
+        assert!(settings.contains("\"SendUserMessage\""), "{settings}");
         assert!(args.contains("--json-schema"), "{args}");
         assert!(args.contains("\"actions\""), "{args}");
         assert_eq!(response.raw_text, "not fenced");
