@@ -4641,6 +4641,15 @@ allowed_reasoning_efforts = ["high", "xhigh"]
     assert_eq!(initial_pane_context.agent_preset.as_deref(), Some("openai"));
     assert_eq!(initial_pane_context.agent_model.as_deref(), Some("gpt-5.5"));
 
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"model-selector-turn","method":"agent/shell/command","params":{"idempotency_key":"model-selector-turn","input":"check model"}}"#,
+        &primary,
+    );
+    assert!(response.contains(r#""state":"running""#), "{response}");
+    service
+        .finish_agent_turn("%1", "turn-1", AgentTurnState::Completed)
+        .unwrap();
+
     service
         .apply_attached_terminal_step_plan(
             &primary,
@@ -4723,6 +4732,11 @@ allowed_reasoning_efforts = ["high", "xhigh"]
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
     let updated_pane_context = updated_config.frame_context.panes.get("%1").unwrap();
+    assert_eq!(
+        updated_pane_context.agent_status.as_deref(),
+        Some("completed"),
+        "the completed turn remains the latest turn while the pill follows the selected profile"
+    );
     assert_eq!(
         updated_pane_context.agent_model.as_deref(),
         Some("deepseek-v4-flash")

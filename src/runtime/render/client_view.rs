@@ -1200,7 +1200,13 @@ impl RuntimeSessionService {
                         latest_turn.map(|turn| self.runtime_agent_frame_status(turn).to_string())
                     })
                     .or_else(|| agent_session.map(|_| "idle".to_string()));
-                let agent_model = latest_turn
+                let active_turn_profile = latest_turn.filter(|turn| {
+                    matches!(
+                        turn.state,
+                        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                    )
+                });
+                let agent_model = active_turn_profile
                     .and_then(|turn| {
                         self.agent_turn_model_profiles
                             .get(&turn.turn_id)
@@ -1217,7 +1223,7 @@ impl RuntimeSessionService {
                             .as_ref()
                             .map(|(_name, profile)| profile.model.clone())
                     });
-                let agent_reasoning = latest_turn
+                let agent_reasoning = active_turn_profile
                     .and_then(|turn| {
                         self.agent_turn_model_profiles
                             .get(&turn.turn_id)
@@ -1228,7 +1234,7 @@ impl RuntimeSessionService {
                             .as_ref()
                             .and_then(|(_name, profile)| profile.reasoning_display_value())
                     });
-                let agent_thinking_profile = latest_turn
+                let agent_thinking_profile = active_turn_profile
                     .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())
                     .or_else(|| {
                         active_agent_profile
@@ -1251,7 +1257,7 @@ impl RuntimeSessionService {
                         "auto:off".to_string()
                     }
                 });
-                let agent_latency_profile = latest_turn
+                let agent_latency_profile = active_turn_profile
                     .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())
                     .or_else(|| {
                         active_agent_profile
