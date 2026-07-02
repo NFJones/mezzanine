@@ -1425,6 +1425,41 @@ fn runtime_control_config_live_persist_target_mutates_live_override() {
     let _ = fs::remove_dir_all(audit_root);
 }
 
+/// Verifies repeated runtime `terminal/step` requests with the same
+/// idempotency key replay the completed response without reapplying pane input.
+///
+/// Foreground attach clients may retry a completed step request after a local
+/// transport interruption. The runtime must return the cached JSON-RPC result
+/// and avoid queueing the same pane input bytes a second time.
+#[test]
+fn runtime_control_terminal_step_replays_completed_response_without_reapplying_input() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat >/dev/null")).unwrap();
+    let handed_off = service.take_running_pane_processes_for_async_owner(1).unwrap();
+    assert_eq!(handed_off.len(), 1);
+    assert!(service.drain_deferred_pane_inputs().is_empty());
+
+    let first = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"terminal-step-first","method":"terminal/step","params":{"idempotency_key":"terminal-step-replay","input_bytes":[97],"render":false}}"#,
+        &primary,
+    );
+    let first_inputs = service.drain_deferred_pane_inputs();
+    assert_eq!(first_inputs.len(), 1);
+    assert_eq!(first_inputs[0].pane_id, "%1");
+    assert_eq!(first_inputs[0].bytes, b"a");
+
+    let second = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"terminal-step-second","method":"terminal/step","params":{"idempotency_key":"terminal-step-replay","input_bytes":[97],"render":false}}"#,
+        &primary,
+    );
+    assert_eq!(second, first);
+    assert!(service.drain_deferred_pane_inputs().is_empty());
+    assert_eq!(service.control_idempotency().len(), 1);
+}
+
 /// Verifies that runtime user config persistence is confined to the configured
 /// private config root or the active primary layer. This prevents control
 /// clients from using `scope = user` as a general-purpose file write primitive.

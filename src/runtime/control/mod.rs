@@ -1192,8 +1192,8 @@ fn runtime_mcp_retry_result_json(report: &super::RuntimeMcpRetryReport) -> Strin
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_mutating_response_is_cacheable(method: &str) -> bool {
-    method != "terminal/step"
+fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
+    true
 }
 
 #[cfg(test)]
