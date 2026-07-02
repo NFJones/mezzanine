@@ -238,6 +238,7 @@ fn runtime_remember_kind(kind: &str) -> Result<MemoryKind> {
         "preference" => Ok(MemoryKind::Preference),
         "fact" => Ok(MemoryKind::Fact),
         "procedure" => Ok(MemoryKind::Procedure),
+        "documentation" => Ok(MemoryKind::Documentation),
         "episode" => Ok(MemoryKind::Episode),
         "warning" => Ok(MemoryKind::Warning),
         "scratch" => Ok(MemoryKind::Scratch),

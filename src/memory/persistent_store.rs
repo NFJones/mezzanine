@@ -14,7 +14,7 @@ use super::{
     source_name, state_name,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const LEGACY_TSV_FILE_NAME: &str = "memory.tsv";
 
 impl PersistentMemoryStore {
@@ -364,7 +364,7 @@ fn initialize_schema(connection: &mut Connection, fts_enabled: bool) -> Result<(
              content TEXT NOT NULL,
              scope_text TEXT NOT NULL,
              CHECK (priority >= 0 AND priority <= 255),
-             CHECK (kind IN ('preference', 'fact', 'procedure', 'episode', 'warning', 'scratch')),
+             CHECK (kind IN ('preference', 'fact', 'procedure', 'documentation', 'episode', 'warning', 'scratch')),
              CHECK (state IN ('active', 'stale', 'superseded', 'archived', 'expired'))
          );
          CREATE INDEX IF NOT EXISTS memory_records_scope_idx ON memory_records(scope);
@@ -429,6 +429,79 @@ fn ensure_memory_schema_migrations(connection: &Connection) -> Result<()> {
             [],
         )?;
     }
+    migrate_memory_schema_v3_documentation_kind(connection)?;
+    Ok(())
+}
+
+/// Copies memory records through a replacement table whose CHECK constraint accepts documentation.
+fn rebuild_memory_records_with_documentation_kind(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        "DROP TABLE IF EXISTS memory_records_v3;
+         CREATE TABLE memory_records_v3 (
+             id TEXT PRIMARY KEY NOT NULL,
+             scope TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             source TEXT NOT NULL,
+             priority INTEGER NOT NULL,
+             kind TEXT NOT NULL DEFAULT \"fact\",
+             state TEXT NOT NULL DEFAULT \"active\",
+             last_used_at INTEGER,
+             use_count INTEGER NOT NULL DEFAULT 0,
+             confirmed_count INTEGER NOT NULL DEFAULT 0,
+             last_confirmed_at INTEGER,
+             supersedes_id TEXT,
+             expires_at INTEGER,
+             expiration_duration_seconds INTEGER,
+             content TEXT NOT NULL,
+             scope_text TEXT NOT NULL,
+             CHECK (priority >= 0 AND priority <= 255),
+             CHECK (kind IN (\"preference\", \"fact\", \"procedure\", \"documentation\", \"episode\", \"warning\", \"scratch\")),
+             CHECK (state IN (\"active\", \"stale\", \"superseded\", \"archived\", \"expired\"))
+         );
+         INSERT INTO memory_records_v3 (
+             id, scope, created_at, updated_at, source, priority, kind, state,
+             last_used_at, use_count, confirmed_count, last_confirmed_at,
+             supersedes_id, expires_at, expiration_duration_seconds, content,
+             scope_text
+         )
+         SELECT
+             id, scope, created_at, updated_at, source, priority, kind, state,
+             last_used_at, use_count, confirmed_count, last_confirmed_at,
+             supersedes_id, expires_at, expiration_duration_seconds, content,
+             scope_text
+         FROM memory_records;
+         DROP TABLE memory_records;
+         ALTER TABLE memory_records_v3 RENAME TO memory_records;",
+    )?;
+    Ok(())
+}
+
+/// Rebuilds the memory table with the v3 kind constraint when needed.
+fn migrate_memory_schema_v3_documentation_kind(connection: &Connection) -> Result<()> {
+    let version_exists = connection
+        .query_row(
+            "SELECT 1 FROM memory_schema_migrations WHERE version = 3",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if version_exists {
+        return Ok(());
+    }
+    let create_sql = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = \"table\" AND name = \"memory_records\"",
+        [],
+        |row| row.get::<_, String>(0),
+    )?;
+    if !create_sql.contains("'documentation'") {
+        rebuild_memory_records_with_documentation_kind(connection)?;
+    }
+    connection.execute(
+        "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description) VALUES (3, strftime(\"%s\", \"now\"), \"allow documentation memory kind\")",
+        [],
+    )?;
     Ok(())
 }
 
