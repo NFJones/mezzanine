@@ -908,6 +908,8 @@ pub(super) struct RunningShellTransactionRef {
 /// phase from the accumulated snapshot outputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RuntimeApplyPatchBatchState {
+    /// Local action executor selected when the apply_patch action started.
+    pub(super) local_action_executor: RuntimeLocalActionExecutor,
     /// Paths that still need read-phase snapshots.
     pub(super) remaining_paths: Vec<String>,
     /// Full transport text captured for the currently running read-phase batch.

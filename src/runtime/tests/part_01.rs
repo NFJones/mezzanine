@@ -2882,6 +2882,130 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies a pane-shell `apply_patch` action does not switch execution mode after dispatch.
+///
+/// Shell-backed `apply_patch` runs as a read transaction followed by a verified
+/// write transaction. If `/shell-mode` or config changes the pane to native
+/// while the read phase is still settling, the already-started action must
+/// abort rather than continuing the write phase under a different executor.
+#[test]
+fn runtime_apply_patch_aborts_when_shell_mode_changes_after_read_dispatch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(160, 60).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-apply-patch-mode-change","input":"create a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "maap semantic response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "patch-1".to_string(),
+                    rationale: "create a file".to_string(),
+                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                        patch: "*** Begin Patch
+*** Add File: target/mode-change-note.txt
++alpha
+*** End Patch"
+                            .to_string(),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.pending_agent_provider_tasks.remove("turn-1");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    let marker = service
+        .running_shell_transactions
+        .keys()
+        .next()
+        .cloned()
+        .expect("apply_patch read transaction should be running");
+    let snapshot = concat!(
+        "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n",
+        "X19NRVpfQVBQTFlfUEFUQ0hfUkVBRF9CRUdJTl9fCl9fTUVaX0FQUExZX1BBVENIX0ZJTEVfQkVHSU5fXwpQQVRIX0I2\n",
+        "NCBkR0Z5WjJWMEwyMXZaR1V0WTJoaGJtZGxMVzV2ZEdVdWRIaDBDbEJFU1ZKZlFqWTBMmg5b1pHWlZpqWldGdVpT\n",
+        "QkJiV3hwYm1Wa1pBOVlDbE5VUVZSVlV5QnRhWE56YVc1bkpueGZUVVZhWDBGUVVFeFpfMUJCVkVOSVNGOUdTVXhGWDBWT1JGOWZDbA==\n",
+        "__MEZ_SHELL_OUTPUT_BASE64_END__\n",
+    );
+    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    transaction.observed_output_preview = snapshot.to_string();
+    transaction.observed_output_bytes = snapshot.len();
+    transaction.observed_output_truncated = false;
+    service.agent_local_action_executor_overrides.insert(
+        "%1".to_string(),
+        RuntimeLocalActionExecutor::Native,
+    );
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
+
+    let abort_transaction = service
+        .running_shell_transactions
+        .values()
+        .find(|transaction| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "patch-1"
+            )
+        })
+        .expect("mode change should dispatch an apply_patch abort write phase");
+    assert!(
+        abort_transaction
+            .command
+            .contains("apply_patch execution mode changed after dispatch"),
+        "{}",
+        abort_transaction.command
+    );
+    assert!(
+        !abort_transaction.command.contains("__MEZ_APPLY_PATCH_WRITE_BEGIN__"),
+        "{}",
+        abort_transaction.command
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies full internal `apply_patch` read transport survives preview truncation.
 ///
 /// The shell-backed read phase feeds a bounded pane preview for display and a

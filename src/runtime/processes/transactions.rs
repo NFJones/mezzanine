@@ -62,6 +62,12 @@ fn shell_action_failure_diagnostic(
                 "apply_patch read phase transport was truncated or incomplete".to_string(),
             );
         }
+        if diagnostic_text.contains("execution mode changed") {
+            return (
+                "apply_patch_execution_mode_changed",
+                "apply_patch execution mode changed mid-action".to_string(),
+            );
+        }
         if diagnostic_text.contains("transport-incomplete") {
             return (
                 "apply_patch_transport_incomplete",

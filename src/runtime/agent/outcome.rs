@@ -1142,6 +1142,15 @@ pub(super) fn runtime_failure_feedback_specific_guidance(
         }
         if runtime_execution_has_apply_patch_error_code(
             execution,
+            "apply_patch_execution_mode_changed",
+        ) {
+            return Some(
+                "Apply-patch recovery: the apply_patch action was aborted because the selected local-action execution mode changed after dispatch. Next step: retry the patch as a fresh action after the desired shell mode is stable; do not mix native and pane-shell phases within one apply_patch action."
+                    .to_string(),
+            );
+        }
+        if runtime_execution_has_apply_patch_error_code(
+            execution,
             "apply_patch_read_transport_incomplete",
         ) || runtime_execution_has_apply_patch_error_code(
             execution,

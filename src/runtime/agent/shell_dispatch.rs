@@ -65,6 +65,7 @@ impl RuntimeSessionService {
             self.apply_patch_batch_states.insert(
                 key.clone(),
                 RuntimeApplyPatchBatchState {
+                    local_action_executor: self.agent_local_action_executor_for_pane(&turn.pane_id),
                     remaining_paths: apply_patch_touched_paths(patch)?,
                     current_read_transport: String::new(),
                     read_outputs: Vec::new(),
@@ -1094,6 +1095,35 @@ impl RuntimeSessionService {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
+        let selected_executor = self
+            .apply_patch_batch_states
+            .get(&state_key)
+            .map(|state| state.local_action_executor);
+        if selected_executor.is_some_and(|executor| {
+            executor != self.agent_local_action_executor_for_pane(&turn.pane_id)
+        }) {
+            self.apply_patch_batch_states.remove(&state_key);
+            let write_plan = apply_patch_error_plan(
+                "apply_patch execution mode changed after dispatch; aborting instead of switching execution modes mid-action",
+            );
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "action {} apply_patch_phase=abort reason=local_action_executor_changed",
+                    action.id
+                ),
+            )?;
+            self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
+            self.dispatch_shell_action_to_pane(
+                turn,
+                &action,
+                &write_plan.command,
+                write_plan.stateful,
+                write_plan.timeout_ms,
+            )?;
+            return Ok(true);
+        }
         let write_plan = if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
             let retained_transport = if state.current_read_transport.is_empty() {
                 &transaction.observed_output_preview
