@@ -1346,6 +1346,13 @@ fn local_output_to_action_result_with_transport(
     } else {
         None
     };
+    let mut combined_output = String::new();
+    if !output.stdout.is_empty() {
+        combined_output.push_str(&output.stdout);
+    }
+    if !output.stderr.is_empty() {
+        combined_output.push_str(&output.stderr);
+    }
     let structured = shell_command_structured_content_json(
         action,
         Some(transport.as_str()),
@@ -1361,6 +1368,7 @@ fn local_output_to_action_result_with_transport(
             "timed_out": output.timed_out,
             "interrupted": output.interrupted,
             "combined_output_bytes": combined_output_bytes,
+            "combined_output_preview": combined_output,
             "output_truncated": output_truncated,
             "transport_incomplete": transport_incomplete,
             "transport_diagnostics": output.transport_diagnostics.to_json()
@@ -1387,13 +1395,6 @@ fn local_output_to_action_result_with_transport(
         )?;
         result.structured_content_json = Some(structured);
         return Ok(result);
-    }
-    let mut combined_output = String::new();
-    if !output.stdout.is_empty() {
-        combined_output.push_str(&output.stdout);
-    }
-    if !output.stderr.is_empty() {
-        combined_output.push_str(&output.stderr);
     }
     let mut content = Vec::new();
     if !combined_output.is_empty() {

@@ -1705,6 +1705,12 @@ fn native_shell_command_executor_captures_output_without_pane_dispatch() {
     assert!(structured.contains(r#""execution_transport":"native""#), "{structured}");
     assert!(structured.contains(r#""sent_to_pane":false"#), "{structured}");
     assert!(structured.contains(r#""stream":"native_stdio""#), "{structured}");
+    let structured_json: serde_json::Value = serde_json::from_str(structured).unwrap();
+    let expected_preview = format!("{}\n", cwd.display());
+    assert_eq!(
+        structured_json["terminal_observation"]["combined_output_preview"].as_str(),
+        Some(expected_preview.as_str())
+    );
 }
 
 /// Verifies native shell_command model-facing output follows observed pipe
