@@ -6277,28 +6277,44 @@ fn terminal_screen_restores_normal_screen_after_alternate_screen_exit() {
     assert!(!screen.alternate_screen_active());
 }
 
-/// Verifies terminal size is saved and restored across alternate screen
-/// enter/exit when the terminal is resized while alternate mode is active.
+/// Verifies alternate-screen resize keeps the current pane geometry after exit.
 ///
-/// Without this, a pane expanded while vim/less is running would see a
-/// stale size after the program exits.
+/// Full-screen TUIs redraw against the resized pane. Leaving alternate screen
+/// must keep that live geometry instead of restoring the size captured when the
+/// alternate buffer was entered.
 #[test]
-fn terminal_screen_saves_and_restores_size_across_alternate_screen_with_intervening_resize() {
-    let mut screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap();
+fn terminal_screen_keeps_resized_geometry_after_alternate_screen_exit() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
 
-    // Enter alternate screen and verify
-    screen.feed(b"[?1049h");
-    assert!(screen.alternate_screen_active());
-    assert_eq!(screen.size(), Size::new(80, 24).unwrap());
+    screen.feed(b"keep");
+    screen.feed(b"\x1b[?1049hsecret");
+    screen.resize(Size::new(12, 3).unwrap());
 
-    // Resize while alternate screen is active
-    screen.resize(Size::new(120, 40).unwrap());
-    assert_eq!(screen.size(), Size::new(120, 40).unwrap());
+    screen.feed(b"\x1b[?1049l!");
 
-    // Exit alternate screen — size should restore to original
-    screen.feed(b"[?1049l");
     assert!(!screen.alternate_screen_active());
-    assert_eq!(screen.size(), Size::new(80, 24).unwrap());
+    assert_eq!(screen.size(), Size::new(12, 3).unwrap());
+    assert_eq!(screen.visible_lines()[0], "keep!");
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 5);
+}
+
+/// Verifies alternate-screen resize keeps the live grid top-left anchored.
+///
+/// Normal-screen row shrink can preserve the bottom of overflowing content, but
+/// alternate-screen applications own absolute viewport rows. Shrinking an
+/// active alternate buffer must keep row zero visible and clip the bottom.
+#[test]
+fn terminal_screen_alternate_resize_keeps_top_left_anchor() {
+    let mut screen = TerminalScreen::new(Size::new(6, 4).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[?1049hrow0\r\nrow1\r\nrow2\r\nrow3");
+    screen.resize(Size::new(6, 2).unwrap());
+
+    assert!(screen.alternate_screen_active());
+    assert_eq!(screen.size(), Size::new(6, 2).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["row0".to_string(), "row1".to_string()]);
+    assert!(screen.history().is_empty());
 }
 
 /// Verifies DEC autowrap mode is saved and restored across alternate screen

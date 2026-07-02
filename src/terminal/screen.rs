@@ -1144,6 +1144,11 @@ impl TerminalScreen {
             return;
         }
 
+        if self.alternate.active() {
+            self.resize_alternate_screen(size);
+            return;
+        }
+
         if !self.alternate.active() && self.scroll_region.is_none() {
             if self.normal_viewport_detached_from_history {
                 self.resize_detached_normal_screen(size);
@@ -1162,6 +1167,50 @@ impl TerminalScreen {
         }
 
         self.resize_grid_preserving_cells(size);
+    }
+
+    /// Resizes the live alternate screen while preserving its top-left grid.
+    ///
+    /// Full-screen alternate-buffer applications own their viewport and redraw
+    /// against pane coordinates. Resizes therefore keep row zero and column zero
+    /// anchored instead of applying normal-screen bottom-preservation or history
+    /// reflow heuristics.
+    fn resize_alternate_screen(&mut self, size: Size) {
+        let old_rows = self.cells.len();
+        let new_rows = usize::from(size.rows);
+        let mut cells = blank_cells(size);
+        let mut renditions = blank_renditions(size, GraphicRendition::default());
+        let mut line_wraps = vec![false; new_rows];
+        let mut line_copy_texts = vec![None; new_rows];
+        let rows = old_rows.min(cells.len());
+        let columns = self
+            .cells
+            .first()
+            .map(Vec::len)
+            .unwrap_or_default()
+            .min(cells.first().map(Vec::len).unwrap_or_default());
+        for (row_index, row) in cells.iter_mut().enumerate().take(rows) {
+            row[..columns].clone_from_slice(&self.cells[row_index][..columns]);
+            renditions[row_index][..columns]
+                .copy_from_slice(&self.renditions[row_index][..columns]);
+            line_wraps[row_index] = self.line_wraps.get(row_index).copied().unwrap_or(false);
+            line_copy_texts[row_index] = self.line_copy_texts.get(row_index).cloned().flatten();
+        }
+
+        self.size = size;
+        self.cells = cells;
+        self.renditions = renditions;
+        self.line_wraps = line_wraps;
+        self.line_copy_texts = line_copy_texts;
+        let max_row = self.max_row();
+        let max_column = self.max_column();
+        self.cursor.row = self.cursor.row.min(max_row);
+        self.cursor.column = self.cursor.column.min(max_column);
+        self.wrap_pending = false;
+        if let Some(cursor) = self.saved_cursor.as_mut() {
+            cursor.row = cursor.row.min(max_row);
+            cursor.column = cursor.column.min(max_column);
+        }
     }
     /// Returns whether the live normal-screen viewport is intentionally blank.
     ///
@@ -2538,17 +2587,51 @@ impl TerminalScreen {
 
     /// Restores saved normal-screen state after alternate mode exits.
     fn restore_saved_normal_screen_state(&mut self, state: SavedNormalScreenState) {
-        self.cells = state.cells;
-        self.renditions = state.renditions;
-        self.line_wraps = state.line_wraps;
-        self.line_copy_texts = state.line_copy_texts;
-        self.cursor = state.cursor;
+        let target_size = self.size;
+        if state.size == target_size {
+            self.cells = state.cells;
+            self.renditions = state.renditions;
+            self.line_wraps = state.line_wraps;
+            self.line_copy_texts = state.line_copy_texts;
+        } else {
+            let new_rows = usize::from(target_size.rows);
+            self.cells = blank_cells(target_size);
+            self.renditions = blank_renditions(target_size, GraphicRendition::default());
+            self.line_wraps = vec![false; new_rows];
+            self.line_copy_texts = vec![None; new_rows];
+            let rows = state.cells.len().min(self.cells.len());
+            let columns = state
+                .cells
+                .first()
+                .map(Vec::len)
+                .unwrap_or_default()
+                .min(self.cells.first().map(Vec::len).unwrap_or_default());
+            for row_index in 0..rows {
+                self.cells[row_index][..columns]
+                    .clone_from_slice(&state.cells[row_index][..columns]);
+                self.renditions[row_index][..columns]
+                    .copy_from_slice(&state.renditions[row_index][..columns]);
+                self.line_wraps[row_index] =
+                    state.line_wraps.get(row_index).copied().unwrap_or(false);
+                self.line_copy_texts[row_index] =
+                    state.line_copy_texts.get(row_index).cloned().flatten();
+            }
+        }
+        let max_row = self.max_row();
+        let max_column = self.max_column();
+        self.cursor = Cursor {
+            row: state.cursor.row.min(max_row),
+            column: state.cursor.column.min(max_column),
+        };
         self.cursor_visible = state.cursor_visible;
         self.wrap_pending = state.wrap_pending;
-        self.saved_cursor = state.saved_cursor;
+        self.saved_cursor = state.saved_cursor.map(|cursor| Cursor {
+            row: cursor.row.min(max_row),
+            column: cursor.column.min(max_column),
+        });
         self.graphic_rendition = state.graphic_rendition;
         self.normal_viewport_detached_from_history = state.normal_viewport_detached_from_history;
-        self.size = state.size;
+        self.size = target_size;
         self.autowrap_enabled = state.autowrap_enabled;
     }
 
