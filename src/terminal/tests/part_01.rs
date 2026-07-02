@@ -2807,6 +2807,52 @@ fn attached_terminal_client_step_keeps_selection_active_across_borders() {
     );
 }
 
+/// Verifies malformed SGR mouse prefixes do not strand later pane input in the
+/// immediate forwarding router.
+/// Batched attached-terminal reads can contain an unterminated `ESC[<` fragment
+/// followed by ordinary pane bytes like `q`, and the router must recover by
+/// dropping only the malformed mouse prefix instead of stopping the whole read.
+#[test]
+fn client_loop_skips_malformed_sgr_mouse_prefix_before_later_pane_input() {
+    let config = TerminalClientLoopConfig::default();
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[<0;12;5q", &config).unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleMouse(MouseAction::Ignore),
+            TerminalClientLoopAction::ForwardToPane(b"q".to_vec()),
+        ]
+    );
+}
+
+/// Verifies malformed SGR mouse prefixes do not strand later pane input in the
+/// buffered paste router.
+/// The production attached-terminal path shares the same batched mouse split
+/// logic while carrying paste state, so it must recover the same way and leave
+/// the paste buffer untouched when a malformed mouse prefix precedes pane text.
+#[test]
+fn client_loop_buffered_paste_router_skips_malformed_sgr_mouse_prefix_before_later_pane_input() {
+    let config = TerminalClientLoopConfig::default();
+    let mut paste_active = false;
+    let mut paste_buffer = Vec::new();
+
+    assert_eq!(
+        route_client_input_actions_with_host_paste_buffer(
+            b"\x1b[<0;12;5q",
+            &config,
+            &mut paste_active,
+            &mut paste_buffer,
+        )
+        .unwrap(),
+        vec![
+            TerminalClientLoopAction::HandleMouse(MouseAction::Ignore),
+            TerminalClientLoopAction::ForwardToPane(b"q".to_vec()),
+        ]
+    );
+    assert!(!paste_active);
+    assert!(paste_buffer.is_empty());
+}
+
 /// Verifies that holding a drag selection beyond a pane edge keeps producing
 /// selection-update actions even when the host terminal has no new mouse packet.
 /// Runtime uses this synthetic update to keep pane history autoscrolling until

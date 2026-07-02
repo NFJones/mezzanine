@@ -2564,6 +2564,11 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
         }
 
         let Some(mouse_len) = sgr_mouse_sequence_len(remaining) else {
+            if let Some(malformed_mouse_prefix_len) = malformed_sgr_mouse_prefix_len(remaining) {
+                actions.push(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
+                remaining = &remaining[malformed_mouse_prefix_len..];
+                continue;
+            }
             actions.push(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
             break;
         };
@@ -2745,6 +2750,11 @@ fn route_client_input_actions_with_host_paste_buffer_state(
         }
 
         let Some(mouse_len) = sgr_mouse_sequence_len(remaining) else {
+            if let Some(malformed_mouse_prefix_len) = malformed_sgr_mouse_prefix_len(remaining) {
+                actions.push(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
+                remaining = &remaining[malformed_mouse_prefix_len..];
+                continue;
+            }
             actions.push(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
             break;
         };
@@ -3056,6 +3066,26 @@ fn sgr_mouse_sequence_len(input: &[u8]) -> Option<usize> {
         .iter()
         .position(|byte| matches!(byte, b'M' | b'm'))
         .map(|index| index.saturating_add(1))
+}
+
+/// Runs the malformed sgr mouse prefix len operation for this subsystem.
+///
+/// The function identifies a leading `ESC[<` fragment whose numeric body is
+/// interrupted by unrelated pane input before a terminating `M` or `m`. That
+/// lets batched routing drop only the malformed mouse prefix while continuing
+/// to route later bytes from the same terminal read.
+fn malformed_sgr_mouse_prefix_len(input: &[u8]) -> Option<usize> {
+    if !input.starts_with(b"\x1b[<") {
+        return None;
+    }
+    for (index, byte) in input.iter().enumerate().skip(3) {
+        match byte {
+            b'0'..=b'9' | b';' => continue,
+            b'M' | b'm' => return None,
+            _ => return Some(index),
+        }
+    }
+    None
 }
 
 /// Runs the classify copy mode key action operation for this subsystem.
