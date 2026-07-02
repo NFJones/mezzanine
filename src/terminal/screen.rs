@@ -2704,6 +2704,14 @@ impl TerminalScreen {
         self.clear_line_copy_text(self.cursor.row);
         let row = self.cursor.row;
         let column = self.cursor.column;
+        if !self.autowrap_enabled && column.saturating_add(width) > self.cells[row].len() {
+            for target_column in column..self.cells[row].len() {
+                self.clear_cell_footprint(row, target_column, self.graphic_rendition);
+            }
+            self.cursor.column = self.max_column();
+            self.wrap_pending = false;
+            return;
+        }
         for target_column in column..column.saturating_add(width).min(self.cells[row].len()) {
             self.clear_cell_footprint(row, target_column, self.graphic_rendition);
         }

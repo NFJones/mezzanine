@@ -2084,6 +2084,22 @@ fn startup_removes_unserved_default_runtime_socket_files() {
     let stale_socket = directory.path.join("orphan.sock");
     let stale_listener = std::os::unix::net::UnixListener::bind(&stale_socket).unwrap();
     drop(stale_listener);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match UnixStream::connect(&stale_socket) {
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => break,
+            Err(error) if Instant::now() >= deadline => {
+                panic!("stale socket did not become refused: {error}");
+            }
+            Ok(stream) if Instant::now() >= deadline => {
+                drop(stream);
+                panic!("stale socket unexpectedly remained connectable");
+            }
+            Ok(stream) => drop(stream),
+            Err(_) => {}
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();

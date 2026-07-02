@@ -329,6 +329,27 @@ fn terminal_screen_decawm_disabled_keeps_printing_at_right_margin() {
     assert_eq!(screen.history().len(), 0);
 }
 
+/// Verifies double-width glyphs that cannot fit at the right edge are clipped
+/// when DEC autowrap is disabled.
+///
+/// A leading cell containing a wide glyph without its continuation would make
+/// the row wider than the pane and can bleed into dividers or neighboring
+/// panes. DECAWM-off printing should still leave a valid cell footprint.
+#[test]
+fn terminal_screen_decawm_disabled_clips_right_edge_wide_glyph() {
+    let size = Size::new(5, 2).unwrap();
+    let mut screen = TerminalScreen::new(size, 100).unwrap();
+
+    screen.feed(b"\x1b[?7l");
+    screen.feed("abcd✅".as_bytes());
+
+    assert_eq!(screen.visible_lines()[0], "abcd");
+    assert_eq!(screen.visible_lines()[1], "");
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 4);
+    assert_eq!(screen.history().len(), 0);
+}
+
 /// Verifies DEC autowrap mode can be re-enabled with `CSI ?7h`. TUIs may
 /// toggle DECAWM around status-line and lower-right-corner updates, so the
 /// deferred wrap behavior must resume after the mode is restored.
