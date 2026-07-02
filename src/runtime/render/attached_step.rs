@@ -306,6 +306,9 @@ impl RuntimeSessionService {
                                     .saturating_add(dispatch.bytes_written);
                             }
                         }
+                        if !input.is_empty() {
+                            report.view_refresh_required = true;
+                        }
                     }
                 }
                 TerminalClientLoopAction::ForwardMouseToPane { pane_id, input } => {

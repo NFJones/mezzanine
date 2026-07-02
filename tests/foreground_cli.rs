@@ -7,7 +7,7 @@
 //! makes failures easier to map back to the user-visible contract.
 
 use mezzanine::control::{decode_control_frame, encode_control_body};
-use portable_pty::{Child as PtyChild, CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{Child as PtyChild, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -28,6 +28,11 @@ struct ForegroundProcess {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     child: Box<dyn PtyChild + Send + Sync>,
+    /// Stores the master pty value for this data structure.
+    ///
+    /// The field remains owned by the fixture so tests can resize the
+    /// interactive terminal while retaining the cloned reader and writer.
+    master: Box<dyn MasterPty + Send>,
     /// Stores the writer value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -136,6 +141,17 @@ impl ForegroundProcess {
         writer
             .flush()
             .map_err(|error| format!("failed to flush foreground input: {error}"))
+    }
+
+    /// Runs the resize pty operation for this subsystem.
+    ///
+    /// The function keeps terminal geometry changes in the foreground fixture
+    /// so end-to-end attach regressions can verify resize-sensitive full-screen
+    /// behavior without depending on host terminal state.
+    fn resize_pty(&mut self, size: PtySize) -> Result<(), String> {
+        self.master
+            .resize(size)
+            .map_err(|error| format!("failed to resize foreground pty: {error}"))
     }
 
     /// Runs the wait for exit operation for this subsystem.
@@ -340,15 +356,14 @@ fn foreground_attach_exits_cleanly_without_broken_pipe_error() {
     assert!(!text.contains("mez: Io"), "{text}");
 }
 
-/// Launches a detached foreground service and runs a deterministic full-screen
-/// shell script through a real `mez attach` PTY.
+/// Launches a deterministic less-like full-screen pager through the foreground
+/// attach path and drives it with real key input.
 ///
-/// This regression exercises the end-to-end foreground attach path with a
-/// minimal TUI-style script that explicitly enters pane-local alternate screen,
-/// enables focus events, clears the viewport, draws sentinel text, and restores
-/// the normal screen. The attach client must surface the rendered full-screen
-/// contents without switching the containing terminal into host alternate
-/// screen, and return to the shell prompt after the script exits.
+/// The fixture protects redraw and exit behavior that a one-shot printf script
+/// cannot cover: the pager enters pane-local alternate screen, redraws on `G`
+/// and `g`, observes a foreground PTY resize, exits on `q`, and returns control
+/// to the shell without switching the containing terminal into host alternate
+/// screen.
 #[test]
 fn foreground_attach_runs_minimal_full_screen_script() {
     let root = test_root("fg-attach-tui");
@@ -358,37 +373,100 @@ fn foreground_attach_runs_minimal_full_screen_script() {
     fs::create_dir_all(&runtime).unwrap();
     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
     let socket = runtime.join("tui.sock");
+    let event_socket = runtime.join("tui.event.sock");
+    let pager = root.join("less-like-pager.sh");
+    fs::write(
+        &pager,
+        r#"#!/bin/sh
+draw_count=0
+cleanup() {
+    printf '\033[?1004l\033[?1049l\033[?25h'
+}
+trap cleanup EXIT INT TERM
+draw() {
+    state=$1
+    set -- $(stty size)
+    draw_count=$((draw_count + 1))
+    marker=${state}-${draw_count}
+    printf '\033[?1049h\033[?1004h\033[?25l\033[H\033[2JLESS-LIKE marker=%s\r\nstate=%s draw=%s\r\nsize=%sx%s\r\npress G g r q' "$marker" "$state" "$draw_count" "$1" "$2"
+}
+draw TOP
+while :; do
+    IFS= read -r key
+    case "$key" in
+        G) draw BOTTOM ;;
+        g) draw TOP ;;
+        r) draw RESIZED ;;
+        q) break ;;
+    esac
+done
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&pager, fs::Permissions::from_mode(0o700)).unwrap();
 
-    let mut process = spawn_foreground_serve(&root, &home, &runtime, &socket);
+    let mut daemon = spawn_detached_serve(&home, &runtime, &socket);
+    wait_for_path(&socket, Duration::from_secs(10)).unwrap();
+    wait_for_path(&event_socket, Duration::from_secs(10)).unwrap();
+    let mut process = spawn_foreground_attach(&root, &home, &runtime, &socket);
     let mut output = Vec::new();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("serving: true")
-                && text.contains("0 shell")
-                && text.contains("\r\n\x1b[0m$")
-                && text.contains("\x1b[?25h")
+            text.contains("0 shell") && text.contains("$")
         })
         .unwrap();
 
     process
-        .write_input(
-            b"printf '\\033[?1049h\\033[?1004h\\033[H\\033[2Jmini-tui'; printf '\\nready'; sleep 1\n",
-        )
+        .write_input(format!("{}; echo shell-resumed; exit\n", pager.display()).as_bytes())
         .unwrap();
-    thread::sleep(Duration::from_secs(2));
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("LESS-LIKE marker=TOP-1")
+        })
+        .unwrap();
+
+    process.write_input(b"G\n").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("BOTTOM-2")
+        })
+        .unwrap();
+
+    process.write_input(b"g\n").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("TOP-3")
+        })
+        .unwrap();
 
     process
-        .write_input(b"printf '\\033[?1004l\\033[?1049l'; echo shell-resumed; exit\n")
+        .resize_pty(PtySize {
+            rows: 12,
+            cols: 40,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .unwrap();
+    thread::sleep(Duration::from_millis(250));
+    process.write_input(b"r\n").unwrap();
+    process
+        .read_until(&mut output, Duration::from_secs(10), |text| {
+            text.contains("RESIZED-4")
+        })
+        .unwrap();
+
+    process.write_input(b"q\n").unwrap();
     process
         .read_until_exit(&mut output, Duration::from_secs(10))
         .unwrap();
+    wait_for_process_exit(&mut daemon, Duration::from_secs(10)).unwrap();
 
     let text = String::from_utf8_lossy(&output);
     assert!(!text.contains("\x1b[?1049h"), "{text}");
-    assert!(text.contains("\x1b[?1004h"), "{text}");
-    assert!(text.contains("mini-tui"), "{text}");
-    assert!(text.contains("ready"), "{text}");
+    assert!(text.contains("LESS-LIKE marker=TOP-1"), "{text}");
+    assert!(text.contains("BOTTOM-2"), "{text}");
+    assert!(text.contains("TOP-3"), "{text}");
+    assert!(text.contains("RESIZED-4"), "{text}");
     assert!(text.contains("\x1b[?1004l"), "{text}");
     assert!(text.contains("\x1b[?1049l"), "{text}");
 }
@@ -516,6 +594,7 @@ fn spawn_foreground_serve(
 
     ForegroundProcess {
         child,
+        master: pair.master,
         writer: Some(writer),
         output_rx,
         reader_thread: Some(reader_thread),
@@ -599,6 +678,7 @@ fn spawn_foreground_attach_with_terminal_size(
 
     ForegroundProcess {
         child,
+        master: pair.master,
         writer: Some(writer),
         output_rx,
         reader_thread: Some(reader_thread),
@@ -623,7 +703,6 @@ fn spawn_detached_serve(home: &Path, runtime: &Path, socket: &Path) -> ProcessCh
         .arg("-S")
         .arg(socket.as_os_str())
         .arg("serve")
-        .arg("--no-aux-sockets")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
