@@ -111,6 +111,45 @@ impl Drop for ClaudeCodeSettingsFile {
     }
 }
 
+/// Owns a per-invocation Claude Code system prompt file and removes it when
+/// the subprocess invocation completes or fails before spawn.
+struct ClaudeCodeSystemPromptFile {
+    path: PathBuf,
+}
+
+impl ClaudeCodeSystemPromptFile {
+    /// Writes the generated system prompt for one subprocess invocation.
+    fn write(system_prompt: &str) -> Result<Option<Self>> {
+        if system_prompt.is_empty() {
+            return Ok(None);
+        }
+        let suffix = CLAUDE_CODE_SETTINGS_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "mez-claude-code-system-prompt-{}-{suffix}.md",
+            std::process::id()
+        ));
+        std::fs::write(&path, system_prompt).map_err(|error| {
+            MezError::invalid_state(format!(
+                "Claude Code system prompt file write failed: {}",
+                redact_claude_code_text(&error.to_string())
+            ))
+        })?;
+        Ok(Some(Self { path }))
+    }
+
+    /// Returns the filesystem path passed to Claude Code with
+    /// `--append-system-prompt-file`.
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl Drop for ClaudeCodeSystemPromptFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Captures one Claude Code subprocess completion for retry and validation.
 struct ClaudeCodeSubprocessOutput {
     assistant_text: String,
@@ -1003,6 +1042,7 @@ async fn run_claude_code_subprocess_with_session_invocation(
     let mut spawn_attempt = 0;
     let json_schema = request.json_schema.filter(|schema| !schema.is_empty());
     let settings_file = ClaudeCodeSettingsFile::write(request.model, json_schema.is_some())?;
+    let system_prompt_file = ClaudeCodeSystemPromptFile::write(request.system_prompt)?;
     let mut child = loop {
         let mut command = Command::new(request.program);
         command.arg("--print");
@@ -1020,8 +1060,10 @@ async fn run_claude_code_subprocess_with_session_invocation(
             }
             None => {}
         }
-        if !request.system_prompt.is_empty() {
-            command.arg("--system-prompt").arg(request.system_prompt);
+        if let Some(system_prompt_file) = &system_prompt_file {
+            command
+                .arg("--append-system-prompt-file")
+                .arg(system_prompt_file.path());
         }
         if let Some(effort) = request.reasoning_effort.filter(|effort| !effort.is_empty()) {
             command.arg("--effort").arg(effort);
@@ -1666,7 +1708,9 @@ while [ "$#" -gt 0 ]; do
     if [ "$1" = "--settings" ]; then
         shift
         cat "$1" > "$0.settings"
-        break
+    elif [ "$1" = "--append-system-prompt-file" ]; then
+        shift
+        cat "$1" > "$0.system-prompt"
     fi
     shift
 done
@@ -1694,10 +1738,13 @@ EOF
         assert!(args.contains("dontAsk"), "{args}");
         assert!(!args.contains("--session-id"), "{args}");
         assert!(!args.contains("--resume"), "{args}");
-        assert!(args.contains("--system-prompt"), "{args}");
+        assert!(!args.contains("--system-prompt"), "{args}");
+        assert!(args.contains("--append-system-prompt-file"), "{args}");
+        let system_prompt =
+            fs::read_to_string(fixture.program.with_extension("system-prompt")).unwrap();
         assert!(
-            args.contains("Developer instruction:\nReturn a final say action."),
-            "{args}"
+            system_prompt.contains("Developer instruction:\nReturn a final say action."),
+            "{system_prompt}"
         );
         assert!(args.contains("--effort"), "{args}");
         assert!(args.contains("high"), "{args}");
