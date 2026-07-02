@@ -213,6 +213,10 @@ pub(super) struct SavedNormalScreenState {
     pub(super) size: Size,
     /// Stored DEC autowrap mode for the normal screen.
     pub(super) autowrap_enabled: bool,
+    /// Stored DEC origin mode for the normal screen.
+    pub(super) origin_mode_enabled: bool,
+    /// Stored active scroll region for the normal screen.
+    pub(super) scroll_region: Option<(usize, usize)>,
 }
 
 impl AlternateScreenState {
@@ -2582,6 +2586,8 @@ impl TerminalScreen {
             normal_viewport_detached_from_history: self.normal_viewport_detached_from_history,
             size: self.size,
             autowrap_enabled: self.autowrap_enabled,
+            origin_mode_enabled: self.origin_mode_enabled,
+            scroll_region: self.scroll_region,
         }
     }
 
@@ -2600,6 +2606,8 @@ impl TerminalScreen {
         self.normal_viewport_detached_from_history = state.normal_viewport_detached_from_history;
         self.size = state.size;
         self.autowrap_enabled = state.autowrap_enabled;
+        self.origin_mode_enabled = state.origin_mode_enabled;
+        self.scroll_region = state.scroll_region;
 
         if self.size != target_size {
             self.resize(target_size);

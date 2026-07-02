@@ -6255,6 +6255,36 @@ fn terminal_screen_alternate_scroll_region_origin_mode_excludes_history() {
     assert!(!screen.alternate_screen_active());
 }
 
+/// Verifies alternate-screen exit restores normal DEC origin and scroll-region state.
+///
+/// Full-screen programs commonly rewrite DECSTBM and DECOM while they own the
+/// alternate buffer. Leaving alternate screen must restore the normal screen
+/// mode state as well as its cells; otherwise subsequent shell cursor-addressed
+/// output can land on the wrong row and visually mix with stale fullscreen rows.
+#[test]
+fn terminal_screen_restores_origin_mode_and_scroll_region_after_alternate_screen_exit() {
+    let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
+
+    screen.feed(b"[2;4r[?6hN");
+    screen.feed(b"[?1049h[r[?6lalt[?1049l");
+
+    assert!(!screen.alternate_screen_active());
+    assert!(screen.mode_state().origin_mode_enabled);
+
+    screen.feed(b"[1;1HX");
+
+    assert_eq!(
+        screen.visible_lines(),
+        vec![
+            "".to_string(),
+            "X".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ]
+    );
+}
+
 /// Verifies terminal screen restores normal-screen content and cursor after
 /// alternate-screen exit.
 ///
