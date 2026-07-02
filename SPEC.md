@@ -1843,7 +1843,7 @@ silent. These agent-authored lines, their gutter prefix characters, and their
 speaker labels MUST be visually distinct through named theme colors while
 preserving their plain-text content for copy mode, history export, and terminal
 observation. Agent-mode log rows and rendered transcript presentation rows MUST
-wrap at the smaller of the pane terminal width or 120 display cells before they
+wrap at the smaller of the pane terminal width or the configured `terminal.agent_wrap_column_cap` display-cell limit (120 by default) before they
 are persisted or replayed, and hard splits MUST occur only at terminal grapheme
 boundaries when an unbroken token exceeds that limit. When agent-authored
 transcript text soft-wraps in the pane, Mezzanine MUST repeat the display-only
@@ -1856,13 +1856,12 @@ presentation limit; if no whitespace boundary exists in the overflowing
 segment, Mezzanine SHOULD leave the segment intact and rely on normal terminal
 soft wrapping instead of inserting a hard split.
 Markdown table rows MUST preserve their table layout until they exceed the
-pane terminal width; the 120-cell cap MUST NOT force table rows to wrap on
+pane terminal width; that configured cap MUST NOT force table rows to wrap on
 wider terminals.
 When the agent runs a shell command, Mezzanine MUST render the MAAP shell
 action's concise summary and exact command preview before dispatch. The exact
 command preview MUST be visible in normal mode, MUST account for the pane's
-terminal width capped at 120 display cells, MUST show at most ten terminal
-display lines, and when the command would occupy more than ten display lines,
+terminal width capped at the configured `terminal.agent_wrap_column_cap` display-cell limit, MUST show at most ten terminal display lines, and when the command would occupy more than ten display lines,
 MUST indent continuation rows under the `$ ` prompt and prefix the final
 preview line with the total display-line count in square brackets. Command
 preview rows MUST wrap at the nearest whitespace boundary before the
@@ -3966,7 +3965,7 @@ operations. Every rendered markdown
 block SHOULD be visually framed above by one synthetic markdown thematic-break
 row: the copy representation of the frame row SHOULD be `***`, and the
 presentation SHOULD use Unicode box-drawing divider characters across the
-smaller of the pane content width or 120 display cells. Markdown presentation
+smaller of the pane content width or the configured `terminal.agent_wrap_column_cap` display-cell limit. Markdown presentation
 rows SHOULD wrap at that same width, and continuation rows SHOULD preserve
 speaker, quote, list, and code indentation. Non-table markdown rows SHOULD wrap
 at the nearest whitespace boundary before that width; when no whitespace

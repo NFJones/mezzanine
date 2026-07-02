@@ -54,8 +54,8 @@ use super::{
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
     runtime_status_pill_definitions_from_config, runtime_subagent_profiles_from_config,
-    runtime_subagent_wait_policy_from_config, runtime_terminal_clipboard_from_config,
-    runtime_terminal_cursor_blink_from_config,
+    runtime_subagent_wait_policy_from_config, runtime_terminal_agent_wrap_column_cap_from_config,
+    runtime_terminal_clipboard_from_config, runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_reduced_motion_from_config,
@@ -197,6 +197,7 @@ impl RuntimeSessionService {
             .collect::<BTreeMap<_, _>>();
         let terminal_emoji_width = crate::terminal::TerminalEmojiWidth::Wide;
         crate::terminal::set_terminal_emoji_width(terminal_emoji_width);
+        crate::terminal::set_agent_wrap_column_cap(crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP);
         Ok(Self {
             session,
             window_created_at_unix_seconds,
@@ -275,6 +276,7 @@ impl RuntimeSessionService {
             terminal_resize_debounce_ms: 200,
             terminal_render_rate_limit_fps: 5,
             terminal_shell_output_preview_lines: 5,
+            terminal_agent_wrap_column_cap: crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
             terminal_clipboard: "external".to_string(),
             ui_theme: crate::terminal::UiTheme::default(),
@@ -756,6 +758,8 @@ impl RuntimeSessionService {
             runtime_terminal_resize_debounce_ms_from_config(&structured)?;
         let terminal_render_rate_limit_fps =
             runtime_terminal_render_rate_limit_fps_from_config(&structured)?;
+        let terminal_agent_wrap_column_cap =
+            runtime_terminal_agent_wrap_column_cap_from_config(&structured)?;
         let terminal_reduced_motion = runtime_terminal_reduced_motion_from_config(&structured)?;
         let terminal_clipboard = runtime_terminal_clipboard_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
@@ -797,6 +801,8 @@ impl RuntimeSessionService {
         self.terminal_render_rate_limit_fps = terminal_render_rate_limit_fps;
         self.terminal_shell_output_preview_lines =
             runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
+        self.terminal_agent_wrap_column_cap = terminal_agent_wrap_column_cap;
+        crate::terminal::set_agent_wrap_column_cap(terminal_agent_wrap_column_cap);
         self.terminal_reduced_motion = terminal_reduced_motion;
         self.terminal_clipboard = terminal_clipboard;
         self.host_clipboard = host_clipboard;

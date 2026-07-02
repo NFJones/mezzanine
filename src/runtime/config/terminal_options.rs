@@ -7,6 +7,7 @@
 //! config domains.
 
 use super::*;
+use crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
 
 /// Runs the runtime history limit from config operation for this subsystem.
 ///
@@ -257,6 +258,31 @@ pub(in crate::runtime) fn runtime_terminal_shell_output_preview_lines_from_confi
     }
     usize::try_from(lines).map_err(|_| {
         MezError::config("terminal.shell_output_preview_lines is too large for this platform")
+    })
+}
+
+/// Returns the configured maximum display width for Mezzanine-owned agent rows.
+pub(in crate::runtime) fn runtime_terminal_agent_wrap_column_cap_from_config(
+    root: &Value,
+) -> Result<usize> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(DEFAULT_AGENT_WRAP_COLUMN_CAP);
+    };
+    let Some(value) = terminal.get("agent_wrap_column_cap") else {
+        return Ok(DEFAULT_AGENT_WRAP_COLUMN_CAP);
+    };
+    let Some(columns) = value.as_u64() else {
+        return Err(MezError::config(
+            "terminal.agent_wrap_column_cap must be a positive integer",
+        ));
+    };
+    if columns == 0 {
+        return Err(MezError::config(
+            "terminal.agent_wrap_column_cap must be greater than zero",
+        ));
+    }
+    usize::try_from(columns).map_err(|_| {
+        MezError::config("terminal.agent_wrap_column_cap is too large for this platform")
     })
 }
 

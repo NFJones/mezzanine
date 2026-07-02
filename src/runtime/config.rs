@@ -95,7 +95,8 @@ pub(super) use providers::{
 pub(super) use terminal_options::{
     runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
     runtime_host_clipboard_from_config, runtime_saved_agent_session_limit_from_config,
-    runtime_terminal_clipboard_from_config, runtime_terminal_cursor_blink_from_config,
+    runtime_terminal_agent_wrap_column_cap_from_config, runtime_terminal_clipboard_from_config,
+    runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_reduced_motion_from_config,
@@ -356,9 +357,12 @@ pub(super) fn optional_i32_json(value: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::{TerminalEmojiWidth, terminal_text_width};
+    use crate::terminal::{DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, terminal_text_width};
 
-    use super::{runtime_fit_status_line, runtime_terminal_emoji_width_from_config};
+    use super::{
+        runtime_fit_status_line, runtime_terminal_agent_wrap_column_cap_from_config,
+        runtime_terminal_emoji_width_from_config,
+    };
 
     /// Verifies that fitting ASCII text truncates to the requested display width.
     #[test]
@@ -417,6 +421,36 @@ mod tests {
             runtime_terminal_emoji_width_from_config(&serde_json::json!({
                 "terminal": {
                     "emoji_width": "auto"
+                }
+            }))
+            .is_err()
+        );
+    }
+
+    /// Verifies runtime configuration parses the agent transcript row width cap.
+    ///
+    /// The cap is applied process-wide before agent log and markdown transcript
+    /// rows are rendered, so invalid or missing values must not silently alter the
+    /// default bounded-row behavior.
+    #[test]
+    fn parses_terminal_agent_wrap_column_cap_from_config() {
+        assert_eq!(
+            runtime_terminal_agent_wrap_column_cap_from_config(&serde_json::json!({
+                "terminal": {
+                    "agent_wrap_column_cap": 96
+                }
+            }))
+            .unwrap(),
+            96
+        );
+        assert_eq!(
+            runtime_terminal_agent_wrap_column_cap_from_config(&serde_json::json!({})).unwrap(),
+            DEFAULT_AGENT_WRAP_COLUMN_CAP
+        );
+        assert!(
+            runtime_terminal_agent_wrap_column_cap_from_config(&serde_json::json!({
+                "terminal": {
+                    "agent_wrap_column_cap": 0
                 }
             }))
             .is_err()

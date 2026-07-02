@@ -7,18 +7,19 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use crate::error::{MezError, Result};
 use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
 
-/// Maximum display-cell width for Mezzanine-owned agent log rows.
-pub(crate) const AGENT_LOG_WRAP_COLUMN_CAP: usize = 120;
+/// Default maximum display-cell width for Mezzanine-owned agent log rows.
+pub(crate) const DEFAULT_AGENT_WRAP_COLUMN_CAP: usize = 120;
 
 const TERMINAL_EMOJI_WIDTH_WIDE: u8 = 0;
 const TERMINAL_EMOJI_WIDTH_NARROW: u8 = 1;
 
 static TERMINAL_EMOJI_WIDTH: AtomicU8 = AtomicU8::new(TERMINAL_EMOJI_WIDTH_WIDE);
+static AGENT_WRAP_COLUMN_CAP: AtomicUsize = AtomicUsize::new(DEFAULT_AGENT_WRAP_COLUMN_CAP);
 
 /// Selects how explicit emoji-presentation status symbols are measured in
 /// terminal display cells.
@@ -66,6 +67,19 @@ pub(crate) fn set_terminal_emoji_width(width: TerminalEmojiWidth) {
 /// Returns the active process-wide terminal emoji width policy.
 pub(crate) fn terminal_emoji_width() -> TerminalEmojiWidth {
     TerminalEmojiWidth::from_u8(TERMINAL_EMOJI_WIDTH.load(Ordering::Relaxed))
+}
+
+/// Applies the process-wide maximum display width for Mezzanine-owned agent rows.
+///
+/// # Parameters
+/// - `columns`: The positive display-cell cap to use for agent transcript rows.
+pub(crate) fn set_agent_wrap_column_cap(columns: usize) {
+    AGENT_WRAP_COLUMN_CAP.store(columns.max(1), Ordering::Relaxed);
+}
+
+/// Returns the process-wide maximum display width for Mezzanine-owned agent rows.
+pub(crate) fn agent_wrap_column_cap() -> usize {
+    AGENT_WRAP_COLUMN_CAP.load(Ordering::Relaxed).max(1)
 }
 
 /// One display-cell slot in a Mezzanine-owned render canvas.
@@ -222,7 +236,7 @@ pub(super) fn fitted_text_width(value: &str, max_width: usize) -> usize {
 
 /// Returns the bounded display width used for Mezzanine-owned agent log rows.
 pub(crate) fn agent_log_wrap_width(terminal_width: u16) -> usize {
-    usize::from(terminal_width).clamp(1, AGENT_LOG_WRAP_COLUMN_CAP)
+    usize::from(terminal_width).clamp(1, agent_wrap_column_cap())
 }
 
 /// Word-wraps one Mezzanine-owned agent log text block for terminal display.
@@ -692,18 +706,34 @@ fn narrow_text_fallback_grapheme_width(grapheme: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalEmojiWidth, agent_log_wrap_width, fit_styled_width,
-        terminal_grapheme_width_for_emoji_width, terminal_text_width, wrap_agent_log_text,
+        DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, fit_styled_width,
+        set_agent_wrap_column_cap, terminal_grapheme_width_for_emoji_width, terminal_text_width,
+        wrap_agent_log_text,
     };
     use crate::terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
-    /// Verifies agent log wrapping uses the pane width until the global cap
+    /// Verifies agent log wrapping uses the pane width until the default cap
     /// applies, so very wide terminals do not create unbounded transcript rows.
     #[test]
-    fn agent_log_wrap_width_caps_terminal_width_at_120_columns() {
+    fn agent_log_wrap_width_caps_terminal_width_at_default_columns() {
+        set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
+
         assert_eq!(agent_log_wrap_width(0), 1);
         assert_eq!(agent_log_wrap_width(80), 80);
-        assert_eq!(agent_log_wrap_width(200), 120);
+        assert_eq!(agent_log_wrap_width(200), DEFAULT_AGENT_WRAP_COLUMN_CAP);
+    }
+
+    /// Verifies the process-wide agent row cap controls the maximum wrap width.
+    ///
+    /// Runtime config applies this shared cap before transcript rows are rendered
+    /// or persisted, so the low-level wrapper must stop using a fixed constant.
+    #[test]
+    fn agent_log_wrap_width_uses_configured_column_cap() {
+        set_agent_wrap_column_cap(96);
+
+        assert_eq!(agent_log_wrap_width(200), 96);
+
+        set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
     }
 
     /// Verifies ordinary agent prose wraps at whitespace and preserves explicit

@@ -1838,6 +1838,11 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) terminal_shell_output_preview_lines: usize,
+    /// Stores the maximum display width for Mezzanine-owned agent rows.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub(super) terminal_agent_wrap_column_cap: usize,
     /// Stores whether optional terminal animations should be disabled.
     ///
     /// The field is part of structured state exchanged across this module

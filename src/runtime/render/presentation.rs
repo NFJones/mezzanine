@@ -16,8 +16,8 @@ use std::{str::FromStr, sync::LazyLock};
 use crate::agent::{AgentAction, AgentActionPayload, apply_patch_touched_paths};
 use crate::terminal::{
     AGENT_COPY_SKIP_LINE, AGENT_COPY_WRAP_CONTINUATION, GraphicRendition, TerminalColor,
-    TerminalStyleSpan, TerminalStyledLine, UiColorPair, UiTheme, encode_agent_copy_source_line,
-    overlay_fixed_column_style_spans, terminal_grapheme_width,
+    TerminalStyleSpan, TerminalStyledLine, UiColorPair, UiTheme, agent_wrap_column_cap,
+    encode_agent_copy_source_line, overlay_fixed_column_style_spans, terminal_grapheme_width,
 };
 use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 use syntect::easy::HighlightLines;
@@ -83,8 +83,6 @@ impl AgentRenderedLineKind {
     }
 }
 
-/// Maximum display width used for agent-rendered transcript presentation.
-pub(super) const AGENT_TERMINAL_PRESENTATION_MAX_COLUMNS: usize = 120;
 /// Divider glyph used for markdown thematic breaks and framing.
 pub(super) const MARKDOWN_BLOCK_DIVIDER_GLYPH: char = '─';
 /// Light foreground-only color used for inline markdown on dark surfaces.
@@ -2307,7 +2305,7 @@ pub(super) fn fit_agent_terminal_text_width(text: &str, columns: usize) -> Strin
 /// # Parameters
 /// - `columns`: The current pane width in terminal display cells.
 pub(super) fn bounded_agent_terminal_presentation_columns(columns: usize) -> usize {
-    columns.clamp(1, AGENT_TERMINAL_PRESENTATION_MAX_COLUMNS)
+    columns.clamp(1, agent_wrap_column_cap())
 }
 
 /// Returns the display width of agent transcript text.

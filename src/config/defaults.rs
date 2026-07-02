@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 17
+version = 18
 
 [terminal]
 profile = "xterm-compatible"
@@ -33,6 +33,7 @@ reduced_motion = false
 resize_debounce_ms = 200
 render_rate_limit_fps = 5
 shell_output_preview_lines = 5
+agent_wrap_column_cap = 120
 cursor_style = "block"
 cursor_blink = false
 cursor_blink_interval_ms = 500

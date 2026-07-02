@@ -976,8 +976,9 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 17"));
+    assert!(plan.text.contains("version = 18"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
+    assert!(plan.text.contains("agent_wrap_column_cap = 120"));
     assert!(!plan.text.contains("detach_behavior"));
     assert!(!plan.text.contains("integration_mode"));
     assert!(!plan.text.contains("search_mode"));
@@ -1054,7 +1055,7 @@ approval = "legacy-fast-approval"
     assert_eq!(plan.from_version, 13);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert_eq!(values.get("version"), Some(&"17".to_string()));
+    assert_eq!(values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"3600".to_string())
@@ -1173,7 +1174,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"17".to_string()));
+    assert_eq!(values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1251,7 +1252,7 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"17".to_string()));
+    assert_eq!(values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1299,7 +1300,7 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"17".to_string()));
+    assert_eq!(values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1330,7 +1331,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"17".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         missing_values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -1346,7 +1347,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"17".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         explicit_values.get("terminal.emoji_width"),
         Some(&"narrow".to_string())
@@ -1368,7 +1369,7 @@ fn migrates_local_action_executor_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"17".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         missing_values.get("agents.local_action_executor"),
         Some(&"pane_shell".to_string())
@@ -1380,10 +1381,43 @@ fn migrates_local_action_executor_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"17".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"18".to_string()));
     assert_eq!(
         explicit_values.get("agents.local_action_executor"),
         Some(&"native".to_string())
+    );
+}
+
+/// Verifies the v18 agent wrap-column cap migration backfills the default
+/// display-width cap without overriding an explicit user value.
+///
+/// The cap controls persisted agent log and transcript presentation row widths,
+/// so legacy configs must receive the previous 120-column behavior while users
+/// who already configured the new setting keep their chosen width.
+#[test]
+fn migrates_agent_wrap_column_cap_default_to_current_schema() {
+    let missing = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 17\n[terminal]\nrender_rate_limit_fps = 5\n",
+    )
+    .unwrap();
+    let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
+    assert_eq!(missing_values.get("version"), Some(&"18".to_string()));
+    assert_eq!(
+        missing_values.get("terminal.agent_wrap_column_cap"),
+        Some(&"120".to_string())
+    );
+
+    let explicit = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 17\n[terminal]\nagent_wrap_column_cap = 96\n",
+    )
+    .unwrap();
+    let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
+    assert_eq!(explicit_values.get("version"), Some(&"18".to_string()));
+    assert_eq!(
+        explicit_values.get("terminal.agent_wrap_column_cap"),
+        Some(&"96".to_string())
     );
 }
 

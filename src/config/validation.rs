@@ -510,7 +510,8 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
         }
         "terminal.cursor_blink_interval_ms"
         | "terminal.resize_debounce_ms"
-        | "terminal.shell_output_preview_lines" => match value.parse::<u64>() {
+        | "terminal.shell_output_preview_lines"
+        | "terminal.agent_wrap_column_cap" => match value.parse::<u64>() {
             Ok(interval) if interval > 0 => None,
             _ => Some(format!("{path} must be a positive integer")),
         },
