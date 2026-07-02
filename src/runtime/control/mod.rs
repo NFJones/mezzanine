@@ -107,6 +107,7 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args("agent prompt must not be empty"));
         }
         self.refresh_project_config_layers_for_pane(pane_id)?;
+        self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let mut blocks = vec![];
 
         blocks.push(ContextBlock {
@@ -1099,6 +1100,41 @@ impl RuntimeSessionService {
         if let Some(hook_event) = runtime_hook_event_for_lifecycle(kind, &payload) {
             self.run_configured_completed_hooks(hook_event, &payload)?;
         }
+        Ok(())
+    }
+}
+
+impl RuntimeSessionService {
+    /// Settles stale passive readiness before constructing a model request.
+    ///
+    /// Prompt context is durable guidance for the next provider turn, so it
+    /// should not expose a transient post-transaction state once host process
+    /// metadata already proves the pane is back at the primary shell prompt.
+    /// Explicit foreground-interactive and genuinely unknown states remain
+    /// non-ready so the model-visible warning continues to protect pane-shell
+    /// input.
+    fn settle_recoverable_pane_readiness_for_agent_prompt(&mut self, pane_id: &str) -> Result<()> {
+        let previous = self.pane_readiness_state(pane_id);
+        if previous == PaneReadinessState::Ready {
+            return Ok(());
+        }
+        let foreground_primary_shell = self.pane_foreground_primary_shell_state(pane_id);
+        let recoverable_passive_state = matches!(
+            previous,
+            PaneReadinessState::PromptCandidate | PaneReadinessState::Busy
+        );
+        if !recoverable_passive_state || foreground_primary_shell != Some(true) {
+            return Ok(());
+        }
+        self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","readiness_event":"prompt_context_settled","previous_state":"{}","state":"ready"}}"#,
+                json_escape(pane_id),
+                runtime_pane_readiness_state_name(previous)
+            ),
+        )?;
         Ok(())
     }
 }

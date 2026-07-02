@@ -2571,6 +2571,65 @@ fn runtime_agent_context_reports_nonready_pane_readiness() {
     }));
 }
 
+/// Verifies prompt construction settles recoverable passive readiness before it
+/// becomes durable model guidance for the next provider turn.
+///
+/// Post-shell recovery can briefly leave the pane at `prompt-candidate` even
+/// though host process metadata already shows the primary shell back in the
+/// foreground. Prompt construction should promote that stale passive state to
+/// `ready` and omit the shell-not-ready hint.
+#[test]
+fn runtime_agent_context_settles_recoverable_prompt_candidate_readiness() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "inspect the repo status", 0)
+        .unwrap();
+
+    assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Ready);
+    assert!(context.blocks.iter().any(|block| {
+        block.label == "pane identity" && block.content.contains("readiness_state=ready")
+    }));
+    assert!(!context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"
+    }));
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies prompt construction keeps the readiness warning when no shell-state
+/// evidence can reconcile a passive non-ready pane.
+///
+/// A stale `busy` state should only settle away when host process metadata
+/// proves the primary shell owns the foreground again. Without that evidence,
+/// prompt context must continue warning that shell-backed actions may wait.
+#[test]
+fn runtime_agent_context_keeps_unconfirmed_busy_readiness_warning() {
+    let mut service = test_runtime_service();
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "inspect the repo status", 0)
+        .unwrap();
+
+    assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
+    assert!(context.blocks.iter().any(|block| {
+        block.label == "pane identity" && block.content.contains("readiness_state=busy")
+    }));
+    let block = context
+        .blocks
+        .iter()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"
+        })
+        .unwrap();
+    assert!(block
+        .content
+        .contains("may be delayed or rejected until Mezzanine confirms"));
+}
+
 /// Verifies native local execution keeps shell actions usable in prompt context
 /// even when the pane foreground is blocked.
 ///
