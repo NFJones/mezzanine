@@ -117,13 +117,6 @@ impl RuntimeSessionService {
         if starts.is_empty() {
             return Ok(());
         }
-        if !self
-            .poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?
-            .is_empty()
-        {
-            return Ok(());
-        }
-        let deadline = std::time::Instant::now() + RESTORED_PANE_INITIAL_OUTPUT_WAIT;
         let mut pending = starts
             .iter()
             .filter_map(|start| {
@@ -132,6 +125,20 @@ impl RuntimeSessionService {
                     .map(|sequence| (start.pane_id.clone(), sequence))
             })
             .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
+        pending.retain(|(pane_id, sequence)| {
+            matches!(
+                self.pane_processes.output_activity_sequence(pane_id.as_str()),
+                Some(current) if current <= *sequence
+            )
+        });
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let deadline = std::time::Instant::now() + RESTORED_PANE_INITIAL_OUTPUT_WAIT;
         let wait_slice = std::time::Duration::from_millis(10);
         while !pending.is_empty() {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -148,8 +155,14 @@ impl RuntimeSessionService {
                     .wait_for_output_activity_after(pane_id.as_str(), sequence, slice)
                     .unwrap_or(false)
                 {
-                    pending.swap_remove(index);
                     self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
+                    pending.retain(|(pending_pane_id, pending_sequence)| {
+                        matches!(
+                            self.pane_processes
+                                .output_activity_sequence(pending_pane_id.as_str()),
+                            Some(current) if current <= *pending_sequence
+                        )
+                    });
                 } else {
                     index = index.saturating_add(1);
                 }

@@ -3627,6 +3627,64 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies layout-loaded prompt draining waits for each restored pane.
+///
+/// A split `load-layout` restore can receive prompt bytes from one restarted
+/// pane before another. The initial drain must keep waiting on the slower
+/// restored pane instead of treating any tracked PTY output as sufficient for
+/// the immediate redraw.
+#[test]
+fn runtime_service_restarts_restored_panes_drain_initial_prompt_output_for_each_restored_pane() {
+    let root = temp_root("runtime-restored-prompt-drain-multi");
+    let fast_cwd = root.join("fast");
+    let slow_cwd = root.join("slow");
+    std::fs::create_dir_all(&fast_cwd).unwrap();
+    std::fs::create_dir_all(&slow_cwd).unwrap();
+    std::fs::write(slow_cwd.join(".slow-pane"), b"slow").unwrap();
+
+    let mut original = test_session();
+    let primary = original.attach_primary("primary", true).unwrap();
+    original
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let mut payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
+    payload.windows[0].panes[0].current_working_directory =
+        Some(fast_cwd.to_string_lossy().into_owned());
+    payload.windows[0].panes[1].current_working_directory =
+        Some(slow_cwd.to_string_lossy().into_owned());
+    let restored = Session::from_snapshot_payload(
+        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
+        &payload,
+    )
+    .unwrap();
+    let pane_ids = restored
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
+        .collect::<Vec<_>>();
+    let mut service = RuntimeSessionService::with_event_log(
+        restored,
+        PathBuf::from("/tmp/mez-1000/restored-prompt-drain-multi.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+
+    let command =
+        "sh -c 'if [ -f .slow-pane ]; then sleep 0.05; fi; printf '\''restored-ps1$ '\''; sleep 30'";
+    let starts = service
+        .restart_restored_pane_processes(Some(command))
+        .unwrap();
+
+    assert_eq!(starts.len(), pane_ids.len());
+    for pane_id in &pane_ids {
+        let visible = service.pane_screen(pane_id).unwrap().visible_lines().join("\n");
+        assert!(visible.contains("restored-ps1$"), "{pane_id}: {visible:?}");
+    }
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies runtime snapshot resume treats saved pane working directories as
 /// best-effort metadata when fresh pane process startup cannot use them.
 ///
