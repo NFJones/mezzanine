@@ -2722,6 +2722,14 @@ fn runtime_native_local_action_runs_when_pane_is_not_ready() {
 #[test]
 fn runtime_native_shell_command_logs_styled_execution_line() {
     let mut service = test_runtime_service();
+    let audit_root = temp_root("native-shell-command-audit");
+    let audit_path = audit_root.join("audit.jsonl");
+    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+        enabled: true,
+        required: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+    }));
     service
         .attach_primary("primary", true, Size::new(120, 32).unwrap(), 120)
         .unwrap();
@@ -2815,6 +2823,11 @@ fn runtime_native_shell_command_logs_styled_execution_line() {
     let pane_text = pane.normal_content_lines().join("\n");
     assert!(pane_text.contains("▐ $ printf 'native output\\n'"), "{pane_text}");
     assert!(pane_text.contains("native output"), "{pane_text}");
+    let audit = std::fs::read_to_string(&audit_path).unwrap();
+    assert!(audit.contains(r#""event_type":"shell_command""#), "{audit}");
+    assert!(audit.contains(r#""action":"send_to_pane""#), "{audit}");
+    assert!(audit.contains(r#""action_id":"native-shell-log""#), "{audit}");
+    assert!(audit.contains(r#""outcome":"succeeded""#), "{audit}");
 }
 
 /// Verifies native `apply_patch` execution logs the same compact execution line

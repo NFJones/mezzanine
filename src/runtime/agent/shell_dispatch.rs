@@ -681,6 +681,13 @@ impl RuntimeSessionService {
                     )?,
                 };
                 execution.action_results[index] = result;
+                let audit_outcome =
+                    if execution.action_results[index].status == ActionStatus::Succeeded {
+                        "succeeded"
+                    } else {
+                        "failed"
+                    };
+                self.append_agent_shell_command_audit(turn, action, command, audit_outcome)?;
                 if self.agent_action_result_renders_in_normal_mode(action) {
                     let result_text = execution.action_results[index].content_text();
                     if !result_text.trim().is_empty() {
