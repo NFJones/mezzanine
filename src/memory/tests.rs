@@ -233,7 +233,7 @@ fn memory_record_tsv_round_trip_preserves_extended_metadata() {
         },
         "remember the full metadata contract",
     );
-    original.kind = MemoryKind::Documentation;
+    original.kind = MemoryKind::Research;
     original.state = MemoryState::Stale;
     original.last_used_at_unix_seconds = Some(20);
     original.use_count = 3;

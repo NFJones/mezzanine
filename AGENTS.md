@@ -25,6 +25,7 @@ subsystem modules rather than expanding `src/main.rs`.
 
 ## Build, Test, and Development Commands
 - Wrap or replace shell commands with `rtk` or `rtk run` if it is available (reference its `--help` text to discover the possibilities).
+- Always wrap tests in a 60 second `timeout` or greater to check for hangs.
 - `just`: build all targets and features in release mode.
 - `just build`: build all targets and features in debug mode.
 - `just build-release`: build all targets and features in release mode.

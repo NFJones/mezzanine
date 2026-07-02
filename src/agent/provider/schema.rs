@@ -761,8 +761,8 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
                 "kind",
                 serde_json::json!({
                     "type": "string",
-                    "enum": ["preference", "fact", "procedure", "documentation", "warning"],
-                    "description": "Durable memory kind. Use documentation for reusable reference material or docs content that should inform future tasks; use memory_store only for stable reusable information that is almost certain to help future sessions. Do not store prompt-specific, current-turn, action-result, tool-output, repo-state, issue-state, CI-state, plan, progress, MCP-output, episodic transcript, scratch, or other transient notes."
+                    "enum": ["preference", "fact", "procedure", "documentation", "research", "warning"],
+                    "description": "Durable memory kind. Use documentation for reusable reference material or docs content that should inform future tasks; use research for durable research findings that should inform future planning; use memory_store only for stable reusable information that is almost certain to help future sessions. Do not store prompt-specific, current-turn, action-result, tool-output, repo-state, issue-state, CI-state, plan, progress, MCP-output, episodic transcript, scratch, or other transient notes."
                 }),
             ),
             (

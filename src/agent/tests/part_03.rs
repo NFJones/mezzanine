@@ -1095,7 +1095,7 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
 
     assert_eq!(
         memory_store_schema["properties"]["kind"]["enum"],
-        serde_json::json!(["preference", "fact", "procedure", "documentation", "warning"] )
+        serde_json::json!(["preference", "fact", "procedure", "documentation", "research", "warning"])
     );
     let kind_description = memory_store_schema["properties"]["kind"]["description"]
         .as_str()
@@ -1108,6 +1108,7 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
     assert!(kind_description.contains("scratch"));
     assert!(kind_description.contains("almost certain to help future sessions"));
     assert!(kind_description.contains("reusable reference material"));
+    assert!(kind_description.contains("research findings"));
     let content_description = memory_store_schema["properties"]["content"]["description"]
         .as_str()
         .unwrap();
@@ -4350,16 +4351,16 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     assert_eq!(diagnostics.instructions_sha256, "015ee75ff649298075e152b47449bda2c5c15b20aa9da0bf3b73cd4e521a27ad");
     assert_eq!(diagnostics.response_format_bytes, 4);
     assert_eq!(diagnostics.response_format_sha256, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b");
-    assert_eq!(diagnostics.tools_bytes, 27_396);
-    assert_eq!(diagnostics.tools_sha256, "5f5abc04a47d90e9be9e6040efb17f9bbd81fc3ba592d11855d25beeb9e4c528");
+    assert_eq!(diagnostics.tools_bytes, 27_486);
+    assert_eq!(diagnostics.tools_sha256, "78261e22a7daaecf3f523077b92f31f20ae411ae79c1f74d83604b2f3fd4ff54");
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
     assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_717);
     assert_eq!(diagnostics.stable_prompt_prefix_sha256, "da19b776c6a7bccd3c3e9738fa99c6d487f84b3ea6c33d35fb0ec693e9886945");
-    assert_eq!(diagnostics.provider_request_shape_bytes, 27_607);
+    assert_eq!(diagnostics.provider_request_shape_bytes, 27_697);
     assert_eq!(
         diagnostics.provider_request_shape_sha256,
-        "2a547040c83f6cd2fa9fa9ef42cc2a064044eb7571353a6307fd900596b3afc4"
+        "2e5f981d5d82edf5ea6691c31dd4bc5d28ca47cda1674213f6cc5b7a4a8face7"
     );
 }
 

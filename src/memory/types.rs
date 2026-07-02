@@ -123,7 +123,7 @@ pub enum MemorySource {
 /// Classifies the durable role a memory record plays during retrieval.
 ///
 /// Retrieval and retention use this type to avoid
-/// applying one policy to preferences, facts, procedures, documentation,
+/// applying one policy to preferences, facts, procedures, documentation, research,
 /// episodes, warnings, and scratch notes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MemoryKind {
@@ -136,6 +136,8 @@ pub enum MemoryKind {
     Procedure,
     /// Durable reusable documentation or reference material.
     Documentation,
+    /// Durable reusable research findings for future planning.
+    Research,
     /// Summarized interaction or task outcome.
     Episode,
     /// Known caveat, risk, or failure mode.

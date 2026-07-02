@@ -319,12 +319,13 @@ fn memory_action_kind(kind: &str) -> Result<crate::memory::MemoryKind> {
         "fact" => Ok(crate::memory::MemoryKind::Fact),
         "procedure" => Ok(crate::memory::MemoryKind::Procedure),
         "documentation" => Ok(crate::memory::MemoryKind::Documentation),
+        "research" => Ok(crate::memory::MemoryKind::Research),
         "warning" => Ok(crate::memory::MemoryKind::Warning),
         "episode" | "scratch" => Err(MezError::invalid_args(
-            "memory_store kind must be preference, fact, procedure, documentation, or warning",
+            "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
         )),
         _ => Err(MezError::invalid_args(
-            "memory_store kind must be preference, fact, procedure, documentation, or warning",
+            "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
         )),
     }
 }

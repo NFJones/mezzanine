@@ -7539,9 +7539,11 @@ gated `memory` capability whose concrete action subset contains
 `memory_search` and `memory_store`. These on-demand actions MUST execute
 through the runtime-owned persistent store and MUST return bounded action
 results for provider continuation. The model-facing `memory_store` action MUST
-accept only durable `preference`, `fact`, `procedure`, `documentation`, and
-`warning` kinds. `documentation` stores reusable reference material or docs
-content that should inform future tasks. It MUST NOT expose `episode` or `scratch` kinds because they encourage transcript
+accept only durable `preference`, `fact`, `procedure`, `documentation`,
+`research`, and `warning` kinds. `documentation` stores reusable reference
+material or docs content that should inform future tasks. `research` stores
+durable reusable research findings that should inform future planning. It MUST
+NOT expose `episode` or `scratch` kinds because they encourage transcript
 summaries, scratch notes, and other current-turn-only persistence. Agents MUST
 NOT use `memory_search` by default or as a startup ritual merely because a
 task is non-trivial. Agents MAY use at most one focused `memory_search` only

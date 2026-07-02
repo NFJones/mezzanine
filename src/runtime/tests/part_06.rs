@@ -335,11 +335,11 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         id: "mem-store".to_string(),
         rationale: "store memory".to_string(),
         payload: crate::agent::AgentActionPayload::MemoryStore {
-            kind: "documentation".to_string(),
+            kind: "research".to_string(),
             priority: Some(80),
             scope: Some("project".to_string()),
-            keywords: vec!["prompt".to_string(), "docs".to_string()],
-            content: "remember prompt cache reference docs".to_string(),
+            keywords: vec!["prompt".to_string(), "research".to_string()],
+            content: "remember prompt cache research findings".to_string(),
             expires_in_days: Some(7),
         },
     };
@@ -425,11 +425,11 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         .find(|record| record["metadata"]["action_id"] == "mem-store")
         .unwrap();
     assert_eq!(store_record["metadata"]["action_type"], "memory_store");
-    assert_eq!(store_record["metadata"]["kind"], "documentation");
+    assert_eq!(store_record["metadata"]["kind"], "research");
     assert_eq!(store_record["metadata"]["priority"], "80");
     assert_eq!(store_record["metadata"]["scope"], "project");
     assert_eq!(store_record["metadata"]["keyword_count"], "2");
-    assert_eq!(store_record["metadata"]["content_bytes"], "36");
+    assert_eq!(store_record["metadata"]["content_bytes"], "39");
     assert_eq!(store_record["metadata"]["expires_in_days"], "7");
     assert!(store_record["metadata"].get("content_sha256").is_some());
     let _ = fs::remove_dir_all(audit_root);
@@ -536,7 +536,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         assert!(
             error
                 .message
-                .contains("memory_store kind must be preference, fact, procedure, documentation, or warning"),
+                .contains("memory_store kind must be preference, fact, procedure, documentation, research, or warning"),
             "{result:?}"
         );
     }

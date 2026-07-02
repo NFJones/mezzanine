@@ -221,7 +221,7 @@ enum MemoryCliCommand {
         /// Memory priority from 0 to 255.
         #[arg(long, default_value_t = 10)]
         priority: u8,
-        /// Memory kind: preference, fact, procedure, documentation, episode, warning, or scratch.
+        /// Memory kind: preference, fact, procedure, documentation, research, episode, warning, or scratch.
         #[arg(long, default_value = "fact")]
         kind: String,
     },
@@ -551,6 +551,7 @@ pub(super) fn memory_kind_name(kind: MemoryKind) -> &'static str {
         MemoryKind::Fact => "fact",
         MemoryKind::Procedure => "procedure",
         MemoryKind::Documentation => "documentation",
+        MemoryKind::Research => "research",
         MemoryKind::Episode => "episode",
         MemoryKind::Warning => "warning",
         MemoryKind::Scratch => "scratch",
@@ -564,11 +565,12 @@ pub(super) fn parse_memory_kind(value: &str) -> Result<MemoryKind> {
         "fact" => Ok(MemoryKind::Fact),
         "procedure" => Ok(MemoryKind::Procedure),
         "documentation" => Ok(MemoryKind::Documentation),
+        "research" => Ok(MemoryKind::Research),
         "episode" => Ok(MemoryKind::Episode),
         "warning" => Ok(MemoryKind::Warning),
         "scratch" => Ok(MemoryKind::Scratch),
         _ => Err(MezError::invalid_args(
-            "memory kind must be preference, fact, procedure, documentation, episode, warning, or scratch",
+            "memory kind must be preference, fact, procedure, documentation, research, episode, warning, or scratch",
         )),
     }
 }

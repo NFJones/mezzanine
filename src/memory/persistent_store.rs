@@ -14,7 +14,7 @@ use super::{
     source_name, state_name,
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const LEGACY_TSV_FILE_NAME: &str = "memory.tsv";
 
 impl PersistentMemoryStore {
@@ -364,7 +364,7 @@ fn initialize_schema(connection: &mut Connection, fts_enabled: bool) -> Result<(
              content TEXT NOT NULL,
              scope_text TEXT NOT NULL,
              CHECK (priority >= 0 AND priority <= 255),
-             CHECK (kind IN ('preference', 'fact', 'procedure', 'documentation', 'episode', 'warning', 'scratch')),
+             CHECK (kind IN ('preference', 'fact', 'procedure', 'documentation', 'research', 'episode', 'warning', 'scratch')),
              CHECK (state IN ('active', 'stale', 'superseded', 'archived', 'expired'))
          );
          CREATE INDEX IF NOT EXISTS memory_records_scope_idx ON memory_records(scope);
@@ -430,11 +430,12 @@ fn ensure_memory_schema_migrations(connection: &Connection) -> Result<()> {
         )?;
     }
     migrate_memory_schema_v3_documentation_kind(connection)?;
+    migrate_memory_schema_v4_research_kind(connection)?;
     Ok(())
 }
 
-/// Copies memory records through a replacement table whose CHECK constraint accepts documentation.
-fn rebuild_memory_records_with_documentation_kind(connection: &Connection) -> Result<()> {
+/// Copies memory records through a replacement table with the current kind constraint.
+fn rebuild_memory_records_with_current_kind_constraint(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         "DROP TABLE IF EXISTS memory_records_v3;
          CREATE TABLE memory_records_v3 (
@@ -456,7 +457,7 @@ fn rebuild_memory_records_with_documentation_kind(connection: &Connection) -> Re
              content TEXT NOT NULL,
              scope_text TEXT NOT NULL,
              CHECK (priority >= 0 AND priority <= 255),
-             CHECK (kind IN (\"preference\", \"fact\", \"procedure\", \"documentation\", \"episode\", \"warning\", \"scratch\")),
+             CHECK (kind IN (\"preference\", \"fact\", \"procedure\", \"documentation\", \"research\", \"episode\", \"warning\", \"scratch\")),
              CHECK (state IN (\"active\", \"stale\", \"superseded\", \"archived\", \"expired\"))
          );
          INSERT INTO memory_records_v3 (
@@ -495,11 +496,39 @@ fn migrate_memory_schema_v3_documentation_kind(connection: &Connection) -> Resul
         [],
         |row| row.get::<_, String>(0),
     )?;
-    if !create_sql.contains("'documentation'") {
-        rebuild_memory_records_with_documentation_kind(connection)?;
+    if !create_sql.contains("documentation") {
+        rebuild_memory_records_with_current_kind_constraint(connection)?;
     }
     connection.execute(
         "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description) VALUES (3, strftime(\"%s\", \"now\"), \"allow documentation memory kind\")",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Rebuilds the memory table with the v4 kind constraint when needed.
+fn migrate_memory_schema_v4_research_kind(connection: &Connection) -> Result<()> {
+    let version_exists = connection
+        .query_row(
+            "SELECT 1 FROM memory_schema_migrations WHERE version = 4",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if version_exists {
+        return Ok(());
+    }
+    let create_sql = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = \"table\" AND name = \"memory_records\"",
+        [],
+        |row| row.get::<_, String>(0),
+    )?;
+    if !create_sql.contains("research") {
+        rebuild_memory_records_with_current_kind_constraint(connection)?;
+    }
+    connection.execute(
+        "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description) VALUES (4, strftime(\"%s\", \"now\"), \"allow research memory kind\")",
         [],
     )?;
     Ok(())
