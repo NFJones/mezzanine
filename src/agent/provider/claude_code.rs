@@ -350,6 +350,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                 if request.interaction_kind == ModelInteractionKind::AutoSizing {
                     let prompt = claude_code_prompt(request, None);
                     let system_prompt = claude_code_system_prompt(request, None);
+                    let auto_sizing_json_schema = claude_code_auto_sizing_json_schema()?;
                     let output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
                         program: &self.program,
                         model: &request.model,
@@ -360,14 +361,17 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                         reasoning_effort: request.reasoning_effort.as_deref(),
                         timeout_ms: self.timeout_ms,
                         json_output: true,
-                        json_schema: None,
+                        json_schema: Some(&auto_sizing_json_schema),
                     })
                     .await?;
-                    if output.assistant_text.is_empty() {
+                    if output.assistant_text.is_empty() && output.structured_output.is_none() {
                         return Err(claude_code_empty_output_error(&output.stderr));
                     }
-                    validate_claude_code_auto_sizing_output(&output.assistant_text)?;
-                    (output.assistant_text, output.usage, None, None)
+                    let raw_text = validate_claude_code_auto_sizing_output(
+                        &output.assistant_text,
+                        output.structured_output.as_deref(),
+                    )?;
+                    (raw_text, output.usage, None, None)
                 } else {
                     let output = run_claude_code_request_with_corrective_retry(
                         &self.program,
@@ -401,15 +405,24 @@ fn claude_code_system_prompt(request: &ModelRequest, retry_instruction: Option<&
     let mut prompt = String::new();
 
     append_claude_code_instruction_framing(&mut prompt, request, retry_instruction);
-    prompt.push_str("Claude Code direct-tool boundary:\n");
-    prompt.push_str(
-        "Perform all requested operations through Mezzanine MAAP actions only. Do not call Claude Code native tools for local files, commands, web, MCP, subagents, config, memory, issue operations, or task delegation. Use only the response channel Mezzanine requested for this turn. When a MAAP schema is present, the only Claude Code tool Mezzanine may allow is StructuredOutput, and it is only a carrier for returning the MAAP action batch.\n",
-    );
-    prompt.push_str("MAAP action mapping:\n");
-    prompt.push_str(
-        "Translate Claude Code tool intents into Mezzanine actions: inspect files, search text, run commands, builds, tests, or git through shell_command; edit file contents through apply_patch; fetch explicit URLs through fetch_url when available; search the web through web_search when available; delegate work or message subagents through spawn_agent or send_message when available; request a missing capability with request_capability instead of calling a native Claude tool or asking the user for task-local facts you can safely discover.\n",
-    );
-    if request.interaction_kind != ModelInteractionKind::AutoSizing {
+    if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        prompt.push_str("Claude Code internal router boundary:\n");
+        prompt.push_str(
+            "This turn is a hidden preflight classification step for Mezzanine's internal auto-sizing router, not a user-visible assistant response. Do not answer the user's task, continue the conversation, call native tools, or emit MAAP actions. When Mezzanine provides a JSON schema, use StructuredOutput only as a carrier for the router decision object.\n",
+        );
+        prompt.push_str("Output contract:\n");
+        prompt.push_str(
+            "Return exactly one JSON object matching the requested schema with version, size, reasoning_effort, confidence, and rationale. Do not include prose, markdown, code fences, or task-completion text before or after that JSON object.\n",
+        );
+    } else {
+        prompt.push_str("Claude Code direct-tool boundary:\n");
+        prompt.push_str(
+            "Perform all requested operations through Mezzanine MAAP actions only. Do not call Claude Code native tools for local files, commands, web, MCP, subagents, config, memory, issue operations, or task delegation. Use only the response channel Mezzanine requested for this turn. When a MAAP schema is present, the only Claude Code tool Mezzanine may allow is StructuredOutput, and it is only a carrier for returning the MAAP action batch.\n",
+        );
+        prompt.push_str("MAAP action mapping:\n");
+        prompt.push_str(
+            "Translate Claude Code tool intents into Mezzanine actions: inspect files, search text, run commands, builds, tests, or git through shell_command; edit file contents through apply_patch; fetch explicit URLs through fetch_url when available; search the web through web_search when available; delegate work or message subagents through spawn_agent or send_message when available; request a missing capability with request_capability instead of calling a native Claude tool or asking the user for task-local facts you can safely discover.\n",
+        );
         prompt.push_str("Output contract:\n");
         prompt.push_str(
             "Respond with the validated Mezzanine MAAP action batch text only. Do not run tools or mutate files directly. Native Claude Code tools must not be used except as needed to emit the requested MAAP action batch.\n",
@@ -522,9 +535,18 @@ fn append_claude_code_current_user_prompt(
     request: &ModelRequest,
     final_user_index: Option<usize>,
 ) {
-    prompt.push_str("Current user request:\n");
+    if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        prompt
+            .push_str("Latest user message to classify for internal routing (do not answer it):\n");
+    } else {
+        prompt.push_str("Current user request:\n");
+    }
     if let Some(index) = final_user_index {
         prompt.push_str(&request.messages[index].content);
+    } else if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        prompt.push_str(
+            "No explicit user message was provided. Classify from the remaining instruction and context only.",
+        );
     } else {
         prompt.push_str("Follow the system prompt.");
     }
@@ -548,6 +570,44 @@ fn claude_code_maap_json_schema(request: &ModelRequest) -> Result<String> {
     .map_err(|error| {
         MezError::invalid_state(format!(
             "Claude Code MAAP JSON schema could not be serialized: {error}"
+        ))
+    })
+}
+
+/// Builds the Claude Code JSON schema argument for internal auto-sizing
+/// router turns.
+fn claude_code_auto_sizing_json_schema() -> Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "size", "reasoning_effort", "confidence", "rationale"],
+        "properties": {
+            "version": {
+                "type": "integer",
+                "enum": [1]
+            },
+            "size": {
+                "type": "string",
+                "enum": ["small", "medium", "large"]
+            },
+            "reasoning_effort": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "xhigh"]
+            },
+            "confidence": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0
+            },
+            "rationale": {
+                "type": "string",
+                "minLength": 1
+            }
+        }
+    }))
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "Claude Code auto-sizing JSON schema could not be serialized: {error}"
         ))
     })
 }
@@ -717,27 +777,87 @@ fn claude_code_login_required_detail(detail: &str) -> bool {
     lower.contains("not logged in") || lower.contains("please run /login")
 }
 
-/// Validates that Claude Code auto-sizing output matches the router JSON
-/// contract expected by the runtime parser.
-fn validate_claude_code_auto_sizing_output(raw_text: &str) -> Result<()> {
+/// Returns the first valid top-level JSON object embedded in Claude Code
+/// assistant text.
+fn claude_code_extract_top_level_json_object(text: &str) -> Option<String> {
+    for (start, ch) in text.char_indices() {
+        if ch != '{' {
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        for (offset, ch) in text[start..].char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else {
+                    match ch {
+                        '\\' => escaped = true,
+                        '"' => in_string = false,
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_string = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        let end = start + offset + ch.len_utf8();
+                        let candidate = text[start..end].trim();
+                        if matches!(
+                            serde_json::from_str::<serde_json::Value>(candidate),
+                            Ok(serde_json::Value::Object(_))
+                        ) {
+                            return Some(candidate.to_string());
+                        }
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Validates Claude Code auto-sizing output and returns the normalized router
+/// JSON text consumed by the runtime parser.
+fn validate_claude_code_auto_sizing_output(
+    raw_text: &str,
+    structured_output: Option<&str>,
+) -> Result<String> {
+    let validation_input = structured_output.unwrap_or(raw_text);
+    let candidate = structured_output
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| claude_code_extract_top_level_json_object(raw_text))
+        .ok_or_else(|| {
+            MezError::invalid_state("Claude Code auto-sizing response must be valid router JSON")
+                .with_provider_raw_text(raw_text.to_string())
+        })?;
     let value =
-        serde_json::from_str::<ClaudeCodeAutoSizingDecision>(raw_text.trim()).map_err(|error| {
+        serde_json::from_str::<ClaudeCodeAutoSizingDecision>(&candidate).map_err(|error| {
             MezError::invalid_state(format!(
                 "Claude Code auto-sizing response must be valid router JSON: {error}"
             ))
-            .with_provider_raw_text(raw_text.to_string())
+            .with_provider_raw_text(validation_input.to_string())
         })?;
     if value.version != 1 {
         return Err(MezError::invalid_state(
             "Claude Code auto-sizing response returned unsupported version",
         )
-        .with_provider_raw_text(raw_text.to_string()));
+        .with_provider_raw_text(validation_input.to_string()));
     }
     if !matches!(value.size.as_str(), "small" | "medium" | "large") {
         return Err(MezError::invalid_state(
             "Claude Code auto-sizing response returned unknown size bucket",
         )
-        .with_provider_raw_text(raw_text.to_string()));
+        .with_provider_raw_text(validation_input.to_string()));
     }
     if !matches!(
         value.reasoning_effort.as_str(),
@@ -746,22 +866,22 @@ fn validate_claude_code_auto_sizing_output(raw_text: &str) -> Result<()> {
         return Err(MezError::invalid_state(
             "Claude Code auto-sizing response returned unsupported reasoning effort",
         )
-        .with_provider_raw_text(raw_text.to_string()));
+        .with_provider_raw_text(validation_input.to_string()));
     }
     if !(0.0..=1.0).contains(&value.confidence) {
         return Err(MezError::invalid_state(
             "Claude Code auto-sizing response returned confidence outside 0..=1",
         )
-        .with_provider_raw_text(raw_text.to_string()));
+        .with_provider_raw_text(validation_input.to_string()));
     }
     let rationale = value.rationale.trim();
     if rationale.is_empty() || rationale.chars().any(char::is_control) {
         return Err(MezError::invalid_state(
             "Claude Code auto-sizing response returned invalid rationale",
         )
-        .with_provider_raw_text(raw_text.to_string()));
+        .with_provider_raw_text(validation_input.to_string()));
     }
-    Ok(())
+    Ok(candidate)
 }
 
 /// Returns the Claude Code session id used to resume one Mez conversation.
@@ -1654,6 +1774,63 @@ mod tests {
         assert!(!prompt.contains("<developer>"), "{prompt}");
         assert!(!prompt.contains("<assistant>"), "{prompt}");
         assert!(!prompt.contains("<tool>"), "{prompt}");
+    }
+
+    /// Verifies Claude Code auto-sizing prompt construction frames the latest
+    /// user text as router input rather than a task to execute.
+    #[test]
+    fn claude_code_auto_sizing_prompt_frames_hidden_router_preflight() {
+        let mut request = claude_request();
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+        request.messages = vec![
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "Earlier user turn.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Assistant,
+                source: ContextSourceKind::RuntimeHint,
+                content: "Earlier assistant turn.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::UserInstruction,
+                content: "Implement the runtime change.".to_string(),
+            },
+        ];
+
+        let system_prompt = claude_code_system_prompt(&request, None);
+        let prompt = claude_code_prompt(&request, None);
+
+        assert!(
+            system_prompt.contains("Claude Code internal router boundary:"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("hidden preflight classification step"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("Do not answer the user's task"),
+            "{system_prompt}"
+        );
+        assert!(
+            system_prompt.contains("Return exactly one JSON object matching the requested schema"),
+            "{system_prompt}"
+        );
+        assert!(
+            !system_prompt.contains("MAAP action mapping:"),
+            "{system_prompt}"
+        );
+        assert!(
+            prompt.contains(
+                "Latest user message to classify for internal routing (do not answer it):\nImplement the runtime change."
+            ),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("Current user request:"), "{prompt}");
     }
 
     /// Verifies corrective retry guidance is replayed through both stdin prompt
@@ -2649,8 +2826,9 @@ EOF
         assert!(arg_lines.contains(&"--output-format"), "{args}");
         assert!(arg_lines.contains(&"json"), "{args}");
         assert!(!arg_lines.contains(&"--allowedTools"), "{args}");
-        assert!(!arg_lines.contains(&"StructuredOutput"), "{args}");
-        assert!(!arg_lines.contains(&"--json-schema"), "{args}");
+        assert!(arg_lines.contains(&"--json-schema"), "{args}");
+        assert!(args.contains("\"reasoning_effort\""), "{args}");
+        assert!(args.contains("\"small\""), "{args}");
         assert_eq!(
             response.raw_text.trim(),
             "{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}"
@@ -2659,6 +2837,76 @@ EOF
         assert_eq!(response.usage.output_tokens, 11);
         assert_eq!(response.usage.cached_input_tokens, Some(17));
         assert_eq!(response.usage.cache_write_input_tokens, Some(13));
+    }
+
+    /// Verifies Claude Code auto-sizing prefers `structured_output` when the
+    /// CLI answers the task in prose while also returning a validated router
+    /// payload.
+    ///
+    /// Claude Code can surface parsed JSON separately from the human-readable
+    /// `result` field. The provider must treat that structured channel as the
+    /// authoritative router decision instead of letting task-answering prose
+    /// become the router result.
+    #[tokio::test]
+    async fn claude_code_provider_prefers_structured_output_for_auto_sizing() {
+        let fixture = ClaudeCodeFixture::new("auto-sizing-structured-output");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"I can implement this by editing the provider and adding tests.","structured_output":{"version":1,"size":"large","reasoning_effort":"high","confidence":0.91,"rationale":"structured output should win"},"usage":{"input_tokens":5,"output_tokens":7}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+
+        let response = provider.send_request_async(&request).await.unwrap();
+
+        assert_eq!(response.action_batch, None);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(response.raw_text.trim()).unwrap(),
+            serde_json::json!({
+                "version": 1,
+                "size": "large",
+                "reasoning_effort": "high",
+                "confidence": 0.91,
+                "rationale": "structured output should win"
+            })
+        );
+    }
+
+    /// Verifies Claude Code auto-sizing tolerates mixed assistant prose when
+    /// exactly one valid router object is embedded in the response text.
+    ///
+    /// Some routing failures come from Claude Code answering the task before
+    /// emitting the router decision. The provider should recover the first
+    /// valid top-level JSON object instead of rejecting the whole response.
+    #[tokio::test]
+    async fn claude_code_provider_accepts_mixed_prose_auto_sizing_output() {
+        let fixture = ClaudeCodeFixture::new("auto-sizing-mixed-prose");
+        fixture.write_claude_script(
+            r#"#!/bin/sh
+cat >/dev/null
+cat <<'EOF'
+{"type":"result","subtype":"success","is_error":false,"result":"I will classify this now.\n{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}\nUsing that routing choice.","usage":{"input_tokens":7,"output_tokens":11}}
+EOF
+"#,
+        );
+        let provider = fixture.provider(1_000);
+        let mut request = claude_request();
+        request.interaction_kind = ModelInteractionKind::AutoSizing;
+        request.allowed_actions = AllowedActionSet::from_actions([]);
+
+        let response = provider.send_request_async(&request).await.unwrap();
+
+        assert_eq!(response.action_batch, None);
+        assert_eq!(
+            response.raw_text.trim(),
+            "{\"version\":1,\"size\":\"medium\",\"reasoning_effort\":\"high\",\"confidence\":0.82,\"rationale\":\"coding task needs a medium model\"}"
+        );
     }
 
     /// Verifies malformed Claude Code auto-sizing responses fail validation so
