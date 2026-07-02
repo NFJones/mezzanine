@@ -238,6 +238,11 @@ pub struct TerminalClientLoopConfig {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub mouse_selection_autoscroll_position: Option<CopyPosition>,
+    /// Whether the active copy mode came from scrollback navigation.
+    ///
+    /// Scrollback copy mode should preserve copy-mode navigation keys while
+    /// still allowing ordinary foreground input to return to the pane.
+    pub scrollback_copy_mode_active: bool,
     /// Whether a full-window command display overlay currently owns primary
     /// mouse input.
     ///
@@ -415,6 +420,7 @@ impl Default for TerminalClientLoopConfig {
             },
             mouse_selection_active: false,
             mouse_selection_autoscroll_position: None,
+            scrollback_copy_mode_active: false,
             primary_display_overlay_active: false,
             mouse_border_cells: Vec::new(),
             mouse_window_frame_cells: Vec::new(),

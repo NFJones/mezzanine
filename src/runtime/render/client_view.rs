@@ -730,6 +730,8 @@ impl RuntimeSessionService {
             config.mouse_policy.copy_mode_active =
                 self.active_copy_modes.contains_key(pane_id.as_str())
                     || active_mouse_selection_state.is_some();
+            config.scrollback_copy_mode_active =
+                self.scrollback_copy_mode_panes.contains(pane_id.as_str());
             config.mouse_policy.pane_application_mouse_mode = self
                 .pane_screens
                 .get(pane_id.as_str())

@@ -3998,6 +3998,19 @@ fn runtime_mouse_history_scroll_requests_diff_refresh() {
     assert!(!report.full_redraw_required);
     assert!(service.active_copy_modes.contains_key(&pane_id));
     assert!(service.scrollback_copy_mode_panes.contains(&pane_id));
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(config.scrollback_copy_mode_active);
+    assert_eq!(
+        crate::terminal::route_client_input(b"\x1b[5~", &config).unwrap(),
+        TerminalClientLoopAction::HandleCopyMode(crate::terminal::CopyModeKeyAction::PageUp)
+    );
+    assert_eq!(
+        crate::terminal::route_client_input(b"q", &config).unwrap(),
+        TerminalClientLoopAction::ForwardToPane(b"q".to_vec())
+    );
 }
 
 /// Verifies that pane split actions which cannot fit inside the active window

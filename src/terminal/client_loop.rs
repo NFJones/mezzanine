@@ -2166,8 +2166,14 @@ pub fn route_client_input(
     }
 
     if config.mouse_policy.copy_mode_active {
-        let action = classify_copy_mode_key_action(input).unwrap_or(CopyModeKeyAction::Ignore);
-        return Ok(TerminalClientLoopAction::HandleCopyMode(action));
+        if config.scrollback_copy_mode_active {
+            if let Some(action) = classify_copy_mode_key_action(input) {
+                return Ok(TerminalClientLoopAction::HandleCopyMode(action));
+            }
+        } else {
+            let action = classify_copy_mode_key_action(input).unwrap_or(CopyModeKeyAction::Ignore);
+            return Ok(TerminalClientLoopAction::HandleCopyMode(action));
+        }
     }
     match classify_terminal_input_with_command_bindings(
         input,

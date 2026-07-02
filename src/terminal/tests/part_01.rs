@@ -2309,6 +2309,7 @@ fn client_loop_consumes_pending_prefix_before_forwarding_remainder() {
     );
 }
 
+
 /// Verifies that pane applications receive mouse input only inside their own
 /// rendered content region. A mouse-aware program in one pane must not suppress
 /// Mezzanine history scrolling or selection in neighboring panes.
