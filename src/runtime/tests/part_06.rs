@@ -3068,6 +3068,11 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         feedback.content
     );
     assert!(
+        !feedback.content.contains("transport was truncated or incomplete"),
+        "{}",
+        feedback.content
+    );
+    assert!(
         !feedback.content.contains("exact old-context lines were not found"),
         "{}",
         feedback.content

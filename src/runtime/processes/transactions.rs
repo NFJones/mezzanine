@@ -7,6 +7,7 @@
 //! state transitions together.
 
 use super::*;
+use crate::agent::AgentAction;
 
 /// Defines the RUNTIME SHELL TRANSACTION OBSERVATION LIMIT BYTES const used by this subsystem.
 ///
@@ -37,6 +38,72 @@ pub(super) const RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS: usize = 32;
 pub(super) const RUNTIME_MEZ_OSC_PREFIX: &[u8] = b"\x1b]133;";
 /// Maximum OSC payload bytes scanned for a Mezzanine-owned transaction marker.
 pub(super) const RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES: usize = 4096;
+
+/// Classifies semantic local-action failures by the failed boundary instead of
+/// conflating every non-zero write transaction with an ordinary shell exit.
+fn shell_action_failure_diagnostic(
+    action: &AgentAction,
+    exit_code: i32,
+    output: &str,
+    command: &str,
+) -> (&'static str, String) {
+    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+        let diagnostic_text = if output.is_empty() {
+            command.to_string()
+        } else {
+            format!(
+                "{output}
+{command}"
+            )
+        };
+        if diagnostic_text.contains("read phase output was truncated or transport-incomplete") {
+            return (
+                "apply_patch_read_transport_incomplete",
+                "apply_patch read phase transport was truncated or incomplete".to_string(),
+            );
+        }
+        if diagnostic_text.contains("transport-incomplete") {
+            return (
+                "apply_patch_transport_incomplete",
+                "apply_patch transport was incomplete".to_string(),
+            );
+        }
+        if diagnostic_text.contains("payload") && diagnostic_text.contains("cap") {
+            return (
+                "apply_patch_payload_cap_exceeded",
+                "apply_patch payload exceeded a transport boundary".to_string(),
+            );
+        }
+        if diagnostic_text.contains("checksum") {
+            return (
+                "apply_patch_snapshot_checksum_mismatch",
+                "apply_patch snapshot checksum mismatch".to_string(),
+            );
+        }
+        if diagnostic_text.contains("byte-count") || diagnostic_text.contains("byte count") {
+            return (
+                "apply_patch_snapshot_byte_count_mismatch",
+                "apply_patch snapshot byte-count mismatch".to_string(),
+            );
+        }
+        if diagnostic_text.contains("hunk did not match")
+            || diagnostic_text.contains("hunk header anchor")
+        {
+            return (
+                "apply_patch_hunk_context_mismatch",
+                "apply_patch hunk or context did not match".to_string(),
+            );
+        }
+        return (
+            "apply_patch_write_failed",
+            format!("apply_patch write phase exited with status {exit_code}"),
+        );
+    }
+    (
+        "shell_command_failed",
+        format!("shell command exited with status {exit_code}"),
+    )
+}
 /// Maximum time a transaction may wait for its payload receiver start marker.
 ///
 /// Non-stateful agent actions stream the command body only after the shell
@@ -2239,12 +2306,18 @@ impl RuntimeSessionService {
                 };
                 ActionResult::succeeded(&turn, &action, success_content, Some(structured_content))
             } else {
+                let (failure_code, failure_message) = shell_action_failure_diagnostic(
+                    &action,
+                    exit_code,
+                    &transaction_ref.observed_output_preview,
+                    &transaction_ref.command,
+                );
                 let mut result = ActionResult::failed(
                     &turn,
                     &action,
                     ActionStatus::Failed,
-                    "shell_command_failed",
-                    format!("shell command exited with status {exit_code}"),
+                    failure_code,
+                    failure_message,
                 )?;
                 if !transaction_ref.observed_output_preview.trim().is_empty() {
                     result.content = vec![ActionContentBlock::text(

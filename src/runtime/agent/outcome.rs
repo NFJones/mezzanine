@@ -1140,6 +1140,36 @@ pub(super) fn runtime_failure_feedback_specific_guidance(
                 "Apply-patch recovery: the runtime could not deliver the generated patch command to the pane shell. Next step: use the action result to retry with a smaller Mezzanine patch or another bounded corrective action instead of treating this as a file-context mismatch. If another attempt is needed, break large mutations into smaller apply_patch actions after any necessary inspection.{path_hint} Use shell_command only for local inspection, path operations, validation, or raw unified diffs that apply_patch cannot express."
             ));
         }
+        if runtime_execution_has_apply_patch_error_code(
+            execution,
+            "apply_patch_read_transport_incomplete",
+        ) || runtime_execution_has_apply_patch_error_code(
+            execution,
+            "apply_patch_transport_incomplete",
+        ) {
+            return Some(format!(
+                "Apply-patch recovery: the pane-shell apply_patch transport was truncated or incomplete before Mezzanine could finish the read/write boundary. Next step: retry with a smaller patch, split large multi-file changes into separate apply_patch actions, or use a bounded shell_command edit fallback if the transport boundary keeps failing. Do not treat this as stale file context or a hunk mismatch unless a later diagnostic says so.{path_hint}"
+            ));
+        }
+        if runtime_execution_has_apply_patch_error_code(
+            execution,
+            "apply_patch_payload_cap_exceeded",
+        ) {
+            return Some(format!(
+                "Apply-patch recovery: the apply_patch payload exceeded a transport boundary. Next step: split the patch into smaller apply_patch actions by file or owner range before retrying.{path_hint} Do not reread files unless needed to build a smaller exact patch."
+            ));
+        }
+        if runtime_execution_has_apply_patch_error_code(
+            execution,
+            "apply_patch_snapshot_checksum_mismatch",
+        ) || runtime_execution_has_apply_patch_error_code(
+            execution,
+            "apply_patch_snapshot_byte_count_mismatch",
+        ) {
+            return Some(format!(
+                "Apply-patch recovery: the apply_patch read/write snapshot verification failed, so the target changed or the captured bytes did not match before writing. Next step: inspect the affected path(s), rebuild the patch against current contents, and retry with a fresh Mezzanine patch.{path_hint}"
+            ));
+        }
         if runtime_execution_has_apply_patch_failure_marker(
             execution,
             "replacement_hint_next_step=skip_or_reconcile_already_applied_change",

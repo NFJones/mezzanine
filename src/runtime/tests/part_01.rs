@@ -2849,6 +2849,36 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         "{}",
         write_transaction.command
     );
+    let write_marker = service
+        .running_shell_transactions
+        .keys()
+        .find(|candidate| *candidate != &marker)
+        .cloned()
+        .expect("write-phase error transaction should have a marker");
+    service
+        .observe_agent_shell_transaction_start("%1", &write_marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &write_marker, "turn-1", "agent-%1", "%1", 1)
+        .unwrap();
+    assert!(!service.agent_turn_executions.contains_key("turn-1"));
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let feedback = context
+        .blocks
+        .iter()
+        .rev()
+        .find(|block| {
+            block.source == ContextSourceKind::RuntimeHint
+                && block.label == "action failure feedback"
+        })
+        .expect("feedback block should be present");
+    assert!(
+        feedback
+            .content
+            .contains("transport was truncated or incomplete"),
+        "{}",
+        feedback.content
+    );
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
