@@ -4807,17 +4807,27 @@ fn terminal_screen_resize_counts_agent_gutters_when_restoring_cursor() {
 #[test]
 fn terminal_screen_resize_shrink_preserves_dropped_row_copy_text_in_history() {
     let mut screen = TerminalScreen::new(Size::new(10, 5).unwrap(), 10).unwrap();
-    screen.feed(b"line0\nline1");
-    // Annotate rows that will be dropped when shrinking to 3 rows.
-    screen.line_copy_texts[3] = Some("copy-three".to_string());
-    screen.line_copy_texts[4] = Some("copy-four".to_string());
+    screen.restore_normal_content(
+        &[],
+        &[
+            "line0".to_string(),
+            "line1".to_string(),
+            "line2".to_string(),
+            "line3".to_string(),
+            "line4".to_string(),
+        ],
+    );
+    // Annotate only one dropped row; plain dropped rows must still be kept.
+    screen.line_copy_texts[1] = Some("copy-one".to_string());
 
     screen.resize(Size::new(10, 3).unwrap());
 
-    // Dropped rows 3 and 4 must land in history with their copy-text intact.
+    // Dropped rows 0 and 1 must land in history, preserving copy-text when present.
     let history_styled: Vec<_> = screen.history().styled_lines().collect();
     assert_eq!(history_styled.len(), 2);
-    assert_eq!(history_styled[0].copy_text.as_deref(), Some("copy-three"));
-    assert_eq!(history_styled[1].copy_text.as_deref(), Some("copy-four"));
-    assert_eq!(screen.visible_lines(), vec!["line0", "line1", ""]);
+    assert_eq!(history_styled[0].text, "line0");
+    assert_eq!(history_styled[0].copy_text, None);
+    assert_eq!(history_styled[1].text, "line1");
+    assert_eq!(history_styled[1].copy_text.as_deref(), Some("copy-one"));
+    assert_eq!(screen.visible_lines(), vec!["line2", "line3", "line4"]);
 }

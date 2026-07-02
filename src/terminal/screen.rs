@@ -1289,15 +1289,21 @@ impl TerminalScreen {
             line_copy_texts[row_index] = self.line_copy_texts.get(source_row).cloned().flatten();
         }
 
-        // Commit dropped rows to history so copy-text annotations are preserved.
-        if new_rows < old_rows && !preserve_bottom && self.alternate.should_record_to_history() {
-            for row in new_rows..old_rows {
-                if self.line_copy_texts.get(row).is_some_and(|ct| ct.is_some()) {
+        // Commit content-bearing dropped rows to history so shrink content is preserved.
+        if new_rows < old_rows && self.alternate.should_record_to_history() {
+            let dropped_rows = if preserve_bottom {
+                0..row_offset
+            } else {
+                new_rows..old_rows
+            };
+            for row in dropped_rows {
+                let copy_text = self.line_copy_texts.get(row).cloned().flatten();
+                if copy_text.is_some() || self.cells[row].iter().any(|cell| !cell.is_blank()) {
                     self.history.push_styled_line_with_wrap(
                         styled_line_from_row_with_copy_text(
                             &self.cells[row],
                             &self.renditions[row],
-                            self.line_copy_texts.get(row).cloned().flatten(),
+                            copy_text,
                         ),
                         self.line_wraps.get(row).copied().unwrap_or(false),
                     );
