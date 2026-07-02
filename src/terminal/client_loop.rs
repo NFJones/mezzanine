@@ -1335,7 +1335,9 @@ pub(crate) fn encode_attached_terminal_output_update_frame_with_styles(
             modes,
         );
     };
-    if output_row_count_changed(previous, lines) {
+    if output_row_count_changed(previous, lines)
+        || previous.alternate_screen != modes.alternate_screen
+    {
         return encode_attached_terminal_output_frame_with_styles(
             lines,
             line_style_spans,

@@ -787,12 +787,23 @@ impl RuntimeSessionService {
             self.visible_pane_output_bytes(output.pane_id.as_str(), &output.bytes);
         let render_bytes =
             self.renderable_pane_output_bytes(output.pane_id.as_str(), &transaction_bytes);
+        let previous_transaction_alternate_active = self
+            .pane_transaction_osc_screens
+            .get(output.pane_id.as_str())
+            .is_some_and(TerminalScreen::alternate_screen_active);
         let (osc_events, transaction_alternate_active) = self.terminal_osc_events_for_pane_bytes(
             output.pane_id.as_str(),
             descriptor_size,
             &transaction_bytes,
         )?;
-        let (title, activity_events, bell_events, render_alternate_active, terminal_response_bytes) = {
+        let (
+            title,
+            activity_events,
+            bell_events,
+            previous_render_alternate_active,
+            render_alternate_active,
+            terminal_response_bytes,
+        ) = {
             let screen = self.pane_screens.entry(output.pane_id.clone()).or_insert(
                 TerminalScreen::new_with_history_config(
                     descriptor_size,
@@ -802,6 +813,7 @@ impl RuntimeSessionService {
             );
             let previous_activity_events = screen.activity_events();
             let previous_bell_events = screen.bell_events();
+            let previous_alternate_active = screen.alternate_screen_active();
             screen.feed(&render_bytes);
             let _ = screen.drain_osc_events();
             let terminal_response_bytes = screen.drain_terminal_response_bytes();
@@ -811,6 +823,7 @@ impl RuntimeSessionService {
                     .activity_events()
                     .saturating_sub(previous_activity_events),
                 screen.bell_events().saturating_sub(previous_bell_events),
+                previous_alternate_active,
                 screen.alternate_screen_active(),
                 terminal_response_bytes,
             )
@@ -821,7 +834,10 @@ impl RuntimeSessionService {
                 &terminal_response_bytes,
             )?;
         }
+        let previous_alternate_active =
+            previous_transaction_alternate_active || previous_render_alternate_active;
         let alternate_active = transaction_alternate_active || render_alternate_active;
+        let alternate_screen_exited = previous_alternate_active && !alternate_active;
         let terminal_title = osc_events.iter().rev().find_map(|event| match event {
             TerminalOscEvent::TitleChanged { title } => Some(title.clone()),
             _ => None,
@@ -839,6 +855,11 @@ impl RuntimeSessionService {
                 output.pane_id.as_str(),
                 PaneReadinessState::InteractiveBlocked,
             );
+        } else if alternate_screen_exited {
+            let _ = self.observe_passive_shell_prompt_candidate(
+                output.pane_id.as_str(),
+                "alternate-screen-exit",
+            )?;
         }
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;

@@ -3506,6 +3506,38 @@ fn runtime_passive_prompt_keeps_interactive_block_without_foreground_shell_proof
     );
 }
 
+/// Verifies alternate-screen exit moves stale interactive readiness into prompt recovery.
+///
+/// Full-screen terminal applications enter the alternate screen and mark pane
+/// readiness as interactive-blocked. When the application exits and process
+/// metadata already proves the primary shell is foreground again, the pane must
+/// move to prompt-candidate recovery immediately instead of leaving later shell
+/// actions blocked behind stale interactive readiness.
+#[test]
+fn runtime_alternate_screen_exit_recovers_interactive_blocked_readiness() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+
+    service
+        .apply_pane_output_bytes("%1", b"\x1b[?1049hfullscreen".to_vec())
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::InteractiveBlocked
+    );
+
+    service
+        .apply_pane_output_bytes("%1", b"\x1b[?1049l$ ".to_vec())
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies a pending shell action is recovered instead of failed when
 /// `interactive-blocked` is stale and the pane shell is foreground again.
 ///

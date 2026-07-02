@@ -4162,23 +4162,22 @@ fn attached_terminal_output_update_omits_unchanged_frame_bytes() {
     assert!(frame.is_empty(), "{:?}", String::from_utf8_lossy(&frame));
 }
 
-/// Verifies pane-local alternate-screen transitions do not force host terminal
-/// alternate-screen transitions or full redraws when the composed attached view
-/// is otherwise unchanged. The pane screen model still records the transition,
-/// but the attached host terminal must stay on its normal screen so normal
-/// terminal scrollback remains available for fullscreen agent TUIs.
+/// Verifies alternate-screen exit forces a full attached-terminal redraw even
+/// when the visible row count is unchanged. Exiting a fullscreen pane app can
+/// restore the shell prompt beneath stale host rows unless the diff encoder
+/// clears and repaints the composed normal-screen view in one frame.
 #[test]
-fn attached_terminal_output_update_ignores_alternate_screen_for_host_modes() {
+fn attached_terminal_output_update_full_redraws_on_alternate_screen_exit() {
     let lines = vec!["one    ".to_string(), "two    ".to_string()];
     let previous_modes = AttachedTerminalOutputModes {
         cursor_visible: true,
         cursor_blink: false,
-        alternate_screen: false,
+        alternate_screen: true,
         ..AttachedTerminalOutputModes::default()
     };
     let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], previous_modes);
     let next_modes = AttachedTerminalOutputModes {
-        alternate_screen: true,
+        alternate_screen: false,
         ..previous_modes
     };
 
@@ -4192,8 +4191,10 @@ fn attached_terminal_output_update_ignores_alternate_screen_for_host_modes() {
     let rendered = String::from_utf8(frame).unwrap();
 
     assert!(!rendered.contains("\x1b[?1049h"), "{rendered:?}");
-    assert!(!rendered.contains("\x1b[2J"), "{rendered:?}");
-    assert!(rendered.is_empty(), "{rendered:?}");
+    assert!(rendered.contains("\x1b[?1049l"), "{rendered:?}");
+    assert!(rendered.contains("\x1b[2J\x1b[H"), "{rendered:?}");
+    assert!(rendered.contains("one    "), "{rendered:?}");
+    assert!(rendered.contains("two    "), "{rendered:?}");
 }
 
 /// Verifies stable-size attached-terminal updates emit only cursor bytes when
