@@ -1421,12 +1421,16 @@ fn local_output_to_action_result_with_transport(
             Some(structured),
         ))
     } else {
+        let exit_message = match output.exit_code {
+            Some(exit_code) => format!("shell command exited with status {exit_code}"),
+            None => "shell command finished without an exit status".to_string(),
+        };
         let mut result = ActionResult::failed(
             turn,
             action,
             ActionStatus::Failed,
-            "shell_exit_nonzero",
-            "shell command exited with non-zero status",
+            "shell_command_failed",
+            exit_message,
         )?;
         result.content = action_text_content_blocks(content);
         result.structured_content_json = Some(structured);

@@ -2241,6 +2241,9 @@ fn native_apply_patch_executor_reports_stale_hunk_without_mutation() {
     let result = execute_local_action(&turn(), &action, marker(), &mut executor).unwrap();
 
     assert_eq!(result.status, ActionStatus::Failed);
+    let error = result.error.as_ref().unwrap();
+    assert_eq!(error.code, "shell_command_failed");
+    assert_eq!(error.message, "shell command exited with status 1");
     assert_eq!(
         std::fs::read_to_string(temp.join("note.txt")).unwrap(),
         "current\n"

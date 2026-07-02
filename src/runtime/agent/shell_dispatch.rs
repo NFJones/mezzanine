@@ -1192,7 +1192,17 @@ impl RuntimeSessionService {
             error_kind,
             error_message.clone(),
         )?;
-        result.structured_content_json = Some(
+        let execution_transport = if stage.starts_with("native_local_action") {
+            "native"
+        } else {
+            "pane_shell"
+        };
+        result.structured_content_json = Some(shell_command_structured_content_json(
+            action,
+            Some(execution_transport),
+            false,
+            serde_json::Value::Null,
+            &[],
             serde_json::json!({
                 "state": "dispatch_failed",
                 "stage": stage,
@@ -1201,9 +1211,8 @@ impl RuntimeSessionService {
                     "kind": error_kind,
                     "message": error.message()
                 }
-            })
-            .to_string(),
-        );
+            }),
+        )?);
         let _ = self.append_agent_error_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(
