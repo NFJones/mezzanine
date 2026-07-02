@@ -6300,6 +6300,31 @@ fn terminal_screen_keeps_resized_geometry_after_alternate_screen_exit() {
     assert_eq!(screen.cursor_state().column, 5);
 }
 
+/// Verifies alternate-screen exit uses normal resize semantics for saved rows.
+///
+/// If a pane shrinks while a fullscreen alternate-screen app is active, the
+/// saved normal screen must be restored through the same bottom-preserving
+/// resize path as ordinary shell output. Copying the saved grid from the
+/// top-left would drop the shell prompt tail and resume input on stale rows.
+#[test]
+fn terminal_screen_preserves_prompt_tail_after_alternate_screen_resize_shrink() {
+    let mut screen = TerminalScreen::new(Size::new(10, 4).unwrap(), 10).unwrap();
+
+    screen.feed(b"top\r\nmiddle\r\nprompt");
+    screen.feed(b"\x1b[?1049hfullscreen");
+    screen.resize(Size::new(10, 2).unwrap());
+
+    screen.feed(b"\x1b[?1049l!");
+
+    assert!(!screen.alternate_screen_active());
+    assert_eq!(screen.size(), Size::new(10, 2).unwrap());
+    let visible = screen.visible_lines();
+    assert_eq!(visible[0], "middle");
+    assert_eq!(visible[1], "prompt!");
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 7);
+}
+
 /// Verifies alternate-screen resize keeps the live grid top-left anchored.
 ///
 /// Normal-screen row shrink can preserve the bottom of overflowing content, but

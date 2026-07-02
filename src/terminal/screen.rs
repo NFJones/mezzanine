@@ -2588,51 +2588,32 @@ impl TerminalScreen {
     /// Restores saved normal-screen state after alternate mode exits.
     fn restore_saved_normal_screen_state(&mut self, state: SavedNormalScreenState) {
         let target_size = self.size;
-        if state.size == target_size {
-            self.cells = state.cells;
-            self.renditions = state.renditions;
-            self.line_wraps = state.line_wraps;
-            self.line_copy_texts = state.line_copy_texts;
-        } else {
-            let new_rows = usize::from(target_size.rows);
-            self.cells = blank_cells(target_size);
-            self.renditions = blank_renditions(target_size, GraphicRendition::default());
-            self.line_wraps = vec![false; new_rows];
-            self.line_copy_texts = vec![None; new_rows];
-            let rows = state.cells.len().min(self.cells.len());
-            let columns = state
-                .cells
-                .first()
-                .map(Vec::len)
-                .unwrap_or_default()
-                .min(self.cells.first().map(Vec::len).unwrap_or_default());
-            for row_index in 0..rows {
-                self.cells[row_index][..columns]
-                    .clone_from_slice(&state.cells[row_index][..columns]);
-                self.renditions[row_index][..columns]
-                    .copy_from_slice(&state.renditions[row_index][..columns]);
-                self.line_wraps[row_index] =
-                    state.line_wraps.get(row_index).copied().unwrap_or(false);
-                self.line_copy_texts[row_index] =
-                    state.line_copy_texts.get(row_index).cloned().flatten();
-            }
-        }
-        let max_row = self.max_row();
-        let max_column = self.max_column();
-        self.cursor = Cursor {
-            row: state.cursor.row.min(max_row),
-            column: state.cursor.column.min(max_column),
-        };
+        self.cells = state.cells;
+        self.renditions = state.renditions;
+        self.line_wraps = state.line_wraps;
+        self.line_copy_texts = state.line_copy_texts;
+        self.cursor = state.cursor;
         self.cursor_visible = state.cursor_visible;
         self.wrap_pending = state.wrap_pending;
-        self.saved_cursor = state.saved_cursor.map(|cursor| Cursor {
-            row: cursor.row.min(max_row),
-            column: cursor.column.min(max_column),
-        });
+        self.saved_cursor = state.saved_cursor;
         self.graphic_rendition = state.graphic_rendition;
         self.normal_viewport_detached_from_history = state.normal_viewport_detached_from_history;
-        self.size = target_size;
+        self.size = state.size;
         self.autowrap_enabled = state.autowrap_enabled;
+
+        if self.size != target_size {
+            self.resize(target_size);
+            return;
+        }
+
+        let max_row = self.max_row();
+        let max_column = self.max_column();
+        self.cursor.row = self.cursor.row.min(max_row);
+        self.cursor.column = self.cursor.column.min(max_column);
+        if let Some(cursor) = self.saved_cursor.as_mut() {
+            cursor.row = cursor.row.min(max_row);
+            cursor.column = cursor.column.min(max_column);
+        }
     }
 
     /// Runs the apply dec private modes operation for this subsystem.
