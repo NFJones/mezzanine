@@ -246,7 +246,7 @@ impl RuntimeSessionService {
                 {
                     apply_patch_transport_updates.push((
                         Self::apply_patch_batch_state_key(&transaction.turn_id, action_id),
-                        String::from_utf8_lossy(&observed_bytes).into_owned(),
+                        observed_bytes.clone(),
                     ));
                 }
                 transaction.observed_output_bytes = transaction
@@ -293,7 +293,9 @@ impl RuntimeSessionService {
         }
         for (state_key, transport_chunk) in apply_patch_transport_updates {
             if let Some(state) = self.apply_patch_batch_states.get_mut(&state_key) {
-                state.current_read_transport.push_str(&transport_chunk);
+                state
+                    .current_read_transport
+                    .extend_from_slice(&transport_chunk);
             }
         }
         for (turn_id, action_id, pane_id, lines) in status_line_updates {

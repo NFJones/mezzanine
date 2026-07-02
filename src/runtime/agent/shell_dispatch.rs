@@ -67,7 +67,7 @@ impl RuntimeSessionService {
                 RuntimeApplyPatchBatchState {
                     local_action_executor: self.agent_local_action_executor_for_pane(&turn.pane_id),
                     remaining_paths: apply_patch_touched_paths(patch)?,
-                    current_read_transport: String::new(),
+                    current_read_transport: Vec::new(),
                     read_outputs: Vec::new(),
                 },
             );
@@ -1125,10 +1125,12 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         let write_plan = if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
+            let retained_transport;
             let retained_transport = if state.current_read_transport.is_empty() {
-                &transaction.observed_output_preview
+                transaction.observed_output_preview.as_str()
             } else {
-                &state.current_read_transport
+                retained_transport = String::from_utf8_lossy(&state.current_read_transport);
+                retained_transport.as_ref()
             };
             let decoded_output = decode_shell_output_transport_with_diagnostics(retained_transport);
             if (state.current_read_transport.is_empty() && transaction.observed_output_truncated)

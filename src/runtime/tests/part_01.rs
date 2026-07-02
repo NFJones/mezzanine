@@ -3098,7 +3098,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
         .get_mut(&state_key)
         .expect("apply_patch batch state should exist")
         .current_read_transport
-        .push_str(snapshot);
+        .extend_from_slice(snapshot.as_bytes());
     service
         .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
         .unwrap();

@@ -912,12 +912,12 @@ pub(super) struct RuntimeApplyPatchBatchState {
     pub(super) local_action_executor: RuntimeLocalActionExecutor,
     /// Paths that still need read-phase snapshots.
     pub(super) remaining_paths: Vec<String>,
-    /// Full transport text captured for the currently running read-phase batch.
+    /// Full transport bytes captured for the currently running read-phase batch.
     ///
     /// Pane previews stay size-bounded for display, but write-phase planning
-    /// still needs the complete snapshot payload so large read batches can be
-    /// verified after the preview truncates.
-    pub(super) current_read_transport: String,
+    /// still needs the complete snapshot payload bytes so large read batches can
+    /// be verified after preview text truncates or normalizes lossy UTF-8.
+    pub(super) current_read_transport: Vec<u8>,
     /// Decoded read-phase outputs that completed without transport truncation.
     pub(super) read_outputs: Vec<String>,
 }
