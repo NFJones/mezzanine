@@ -2588,8 +2588,8 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
 /// host-side child process.
 ///
 /// Native mode does not send input to the pane shell, so alternate-screen TUIs
-/// and other non-ready pane states must not block model-authored local actions
-/// once the native executor has the pane working directory needed for scoping.
+/// and other non-ready pane states must not block model-authored local actions,
+/// even when pane working-directory metadata is unavailable.
 #[test]
 fn runtime_native_local_action_runs_when_pane_is_not_ready() {
     let mut service = test_runtime_service();
@@ -2598,10 +2598,12 @@ fn runtime_native_local_action_runs_when_pane_is_not_ready() {
         .unwrap();
     service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
-    service
-        .pane_current_working_directories
-        .insert("%1".to_string(), std::env::current_dir().unwrap());
-    let marker_path = temp_root("native-readiness-gate").join("marker");
+    service.pane_current_working_directories.remove("%1");
+    let marker_path = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("native-readiness-no-pane-cwd-marker");
+    let _ = std::fs::remove_file(&marker_path);
     let turn = crate::agent::AgentTurnRecord {
         turn_id: "turn-native-not-ready".to_string(),
         agent_id: "agent-%1".to_string(),
@@ -2690,15 +2692,25 @@ fn runtime_native_local_action_runs_when_pane_is_not_ready() {
         None
     );
     assert!(marker_path.exists());
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(
+        structured.contains(r#""execution_transport":"native""#),
+        "{structured}"
+    );
+    assert!(
+        structured.contains(r#""sent_to_pane":false"#),
+        "{structured}"
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(
-        pane_text.contains(&format!("$ touch {}", marker_path.display())),
-        "{pane_text}"
-    );
+    assert!(pane_text.contains("$ touch"), "{pane_text}");
+    assert!(!pane_text.contains("native_local_action_cwd"), "{pane_text}");
 }
 
 /// Verifies native `shell_command` execution logs the same wrapped command

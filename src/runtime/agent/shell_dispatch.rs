@@ -607,20 +607,26 @@ impl RuntimeSessionService {
                 == RuntimeLocalActionExecutor::Native
             {
                 let marker = runtime_marker_for_action(turn, &action.id)?;
-                let Some(working_directory) = self.pane_current_working_directory(&turn.pane_id)
-                else {
-                    let error = MezError::invalid_state(format!(
-                        "native local action executor has no working directory for pane {}",
-                        turn.pane_id
-                    ));
-                    execution.action_results[index] = self.shell_action_runtime_error_result(
-                        turn,
-                        action,
-                        command,
-                        "native_local_action_cwd",
-                        &error,
-                    )?;
-                    continue;
+                let working_directory = match self.pane_current_working_directory(&turn.pane_id) {
+                    Some(working_directory) => working_directory,
+                    None => match std::env::current_dir() {
+                        Ok(working_directory) => working_directory,
+                        Err(error) => {
+                            let error = MezError::invalid_state(format!(
+                                "native local action executor could not resolve host working directory for pane {}: {error}",
+                                turn.pane_id
+                            ));
+                            execution.action_results[index] = self
+                                .shell_action_runtime_error_result(
+                                    turn,
+                                    action,
+                                    command,
+                                    "native_local_action_cwd",
+                                    &error,
+                                )?;
+                            continue;
+                        }
+                    },
                 };
                 if !self
                     .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
