@@ -149,8 +149,12 @@ The repository currently ships built-in skills including:
 - `mez-reference`: Mezzanine terminal commands, slash commands, skill
   invocation, common workflows, and supported live configuration changes.
 - `create-skill`: guidance for creating or updating OpenAI-structured skills.
+- `add-doc`: guidance for saving durable documentation or reference content to
+  memory as readable Markdown using the `documentation` memory kind.
 - `add-issues`: guidance for turning recent concrete findings into local Mez
   issue tracker entries.
+- `add-research`: guidance for saving durable research findings to memory as
+  readable Markdown using the `research` memory kind.
 - `fix-issues`: guidance for working the local Mez issue tracker one issue at a
   time until verified fixes are removed.
 
