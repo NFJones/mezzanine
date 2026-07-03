@@ -1112,7 +1112,10 @@ fn find_unanchored_hunk_position_layered(
             return Ok(hunk_match);
         }
         let tolerant_ranges = if cursor > 0 {
-            vec![(cursor.min(lines.len()), lines.len()), (0, lines.len())]
+            vec![
+                (cursor.min(lines.len()), lines.len()),
+                (0, cursor.min(lines.len())),
+            ]
         } else {
             vec![(0, lines.len())]
         };
@@ -1751,4 +1754,34 @@ fn apply_patch_candidate_context_ranges(
         }
     }
     ranges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ApplyPatchBlankGapPolicy, find_unanchored_hunk_position_layered};
+
+    /// Verifies tolerant unanchored search uses non-overlapping cursor-before
+    /// and cursor-after ranges. A match at or after the cursor used to be
+    /// discovered once in the cursor-forward range and again in the full-file
+    /// fallback range, which made a unique blank-gap match look ambiguous.
+    #[test]
+    fn unanchored_tolerant_search_does_not_duplicate_cursor_forward_match() {
+        let lines = ["before", "target", "", "after", "tail"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let old = ["target", "after"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let blank_gap_policies = [
+            ApplyPatchBlankGapPolicy::Disallow,
+            ApplyPatchBlankGapPolicy::Preserve,
+        ];
+
+        let result =
+            find_unanchored_hunk_position_layered(&lines, &old, &blank_gap_policies, 1, None);
+
+        assert!(result.is_ok());
+    }
 }
