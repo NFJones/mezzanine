@@ -78,6 +78,7 @@ mod config_change;
 mod failures;
 mod issues;
 mod lifecycle;
+mod macros;
 mod mcp_network;
 mod memory;
 mod messages;

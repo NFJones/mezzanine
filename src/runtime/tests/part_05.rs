@@ -3092,6 +3092,73 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies `/list-macros` displays the effective pane macro catalog with the
+/// same `#macro` invocation syntax accepted by explicit macro prompts. This
+/// gives users a discoverable way to inspect configured prompt workflows before
+/// invoking one.
+#[test]
+fn runtime_agent_shell_list_macros_displays_effective_catalog() {
+    let config_root = temp_root("runtime-list-macros");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. Inspect release notes.\n2. Summarize release blockers.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root);
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/list-macros")
+        .unwrap();
+
+    assert!(response.contains("## Macros"), "{response}");
+    assert!(response.contains("Start a prompt with `#`"), "{response}");
+    assert!(
+        response.contains("`#<macro-name> [additional context]`"),
+        "{response}"
+    );
+    assert!(
+        response.contains("| `#release-check` | user | 2 | Release readiness workflow |"),
+        "{response}"
+    );
+}
+
+/// Verifies unknown `#macro` prompt submissions fail before starting provider
+/// work and point users to `/list-macros` for discovery.
+///
+/// Macro execution is implemented by later runtime orchestration work, but the
+/// UX layer should already reject misspelled or unavailable macro names instead
+/// of treating them as ordinary free-form prompts.
+#[test]
+fn runtime_agent_shell_unknown_macro_prompt_reports_list_macros_guidance() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(temp_root("runtime-unknown-macro"));
+
+    let response = service
+        .execute_agent_shell_command(&primary, "#missing-macro do the work")
+        .unwrap();
+
+    assert!(response.contains("agent macro error: unknown macro `#missing-macro`"), "{response}");
+    assert!(response.contains("/list-macros"), "{response}");
+    assert!(service.agent_turn_ledger.turns().is_empty());
+}
+
 /// Verifies `/list-skills` displays the effective pane skill catalog with the
 /// same `$skill` invocation syntax accepted by explicit skill prompts. This
 /// gives users a discoverable way to see and select available workflows before

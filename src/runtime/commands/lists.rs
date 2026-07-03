@@ -1,9 +1,9 @@
 //! Agent-shell read-only list command helpers.
 //!
 //! This module keeps small read-only agent command displays out of the main
-//! runtime command facade. It owns the effective skill catalog display and the
-//! pane-local modified-file summary used by `/list-skills` and
-//! `/list-modified-files`.
+//! runtime command facade. It owns the effective skill and macro catalog
+//! displays plus the pane-local modified-file summary used by `/list-skills`,
+//! `/list-macros`, and `/list-modified-files`.
 
 use super::*;
 
@@ -62,6 +62,68 @@ impl RuntimeSessionService {
         if !catalog.diagnostics.is_empty() {
             lines.push(String::new());
             lines.push("Skipped skill diagnostics:".to_string());
+            lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
+                format!("- `{}` - {}", diagnostic.path.display(), diagnostic.message)
+            }));
+        }
+        lines.join("\n")
+    }
+
+    /// Executes `/list-macros` and returns the effective macro catalog.
+    ///
+    /// The command is read-only and intentionally uses the same effective
+    /// catalog as `#macro` prompt recognition so users see only macros that can
+    /// be selected explicitly in the current pane.
+    pub(super) fn execute_agent_shell_list_macros_command(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        self.refresh_project_config_layers_for_pane(pane_id)?;
+        Ok(AgentShellCommandOutcome::Display {
+            command: "list-macros".to_string(),
+            body: self.runtime_agent_macro_catalog_display(pane_id),
+        })
+    }
+
+    /// Builds the user-facing macro catalog display for `/list-macros`.
+    ///
+    /// # Parameters
+    /// - `pane_id`: Pane whose config root and trusted project root determine
+    ///   the effective macro set.
+    fn runtime_agent_macro_catalog_display(&self, pane_id: &str) -> String {
+        let catalog = self.effective_macro_catalog_for_pane(pane_id);
+        let mut lines = vec![
+            "## Macros".to_string(),
+            String::new(),
+            "Start a prompt with `#` and press Tab to select a macro by name.".to_string(),
+            "Submit `#<macro-name> [additional context]` to invoke a macro explicitly.".to_string(),
+            String::new(),
+        ];
+        if catalog.macros.is_empty() {
+            lines.push("No macros are currently available.".to_string());
+        } else {
+            lines.push(format!("{} macros available:", catalog.macros.len()));
+            lines.push(String::new());
+            let rows = catalog
+                .macros
+                .iter()
+                .map(|macro_summary| {
+                    vec![
+                        format!("`#{}`", macro_summary.name),
+                        macro_summary.source.as_str().to_string(),
+                        macro_summary.step_count.to_string(),
+                        macro_summary.description.clone(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            lines.extend(runtime_markdown_table(
+                &["Macro", "Scope", "Steps", "Description"],
+                &rows,
+            ));
+        }
+        if !catalog.diagnostics.is_empty() {
+            lines.push(String::new());
+            lines.push("Skipped macro diagnostics:".to_string());
             lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
                 format!("- `{}` - {}", diagnostic.path.display(), diagnostic.message)
             }));

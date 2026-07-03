@@ -187,6 +187,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("approve", &[], SlashCommandEffect::PolicyMutation, true),
         slash("trust", &[], SlashCommandEffect::PolicyMutation, true),
         slash("list-sessions", &[], SlashCommandEffect::ReadOnly, true),
+        slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-skills", &[], SlashCommandEffect::ReadOnly, true),
         slash(
             "list-modified-files",
@@ -435,6 +436,10 @@ fn execute_agent_shell_command_with_context_inner(
         "list-sessions" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "session listing must be written through the live pane runtime".to_string(),
+        },
+        "list-macros" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "macro listing requires live runtime macro discovery".to_string(),
         },
         "list-skills" => AgentShellCommandOutcome::RequiresRuntime {
             command,

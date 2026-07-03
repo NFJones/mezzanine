@@ -621,6 +621,24 @@ impl RuntimeSessionService {
                     )),
                 )
             }));
+            let macro_catalog = self.effective_macro_catalog_for_pane(&pane_id);
+            candidates.extend(macro_catalog.macros.into_iter().map(|macro_summary| {
+                SelectorExtraCandidate::new(
+                    SelectorSurface::AgentCommand,
+                    "#",
+                    SelectorCandidate::new(
+                        format!("#{}", macro_summary.name),
+                        SelectorCandidateKind::Value,
+                        true,
+                    )
+                    .with_detail(format!(
+                        "{} ({}; {} steps)",
+                        macro_summary.description,
+                        macro_summary.source.as_str(),
+                        macro_summary.step_count
+                    )),
+                )
+            }));
         }
         let Some(store) = self.agent_transcript_store.as_ref() else {
             return candidates;

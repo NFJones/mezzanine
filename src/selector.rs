@@ -726,6 +726,14 @@ fn selector_candidates(
                 .map(|extra| extra.candidate.clone()),
         );
     }
+    if surface == SelectorSurface::AgentCommand && context.query.starts_with('#') {
+        candidates.extend(
+            extra_candidates
+                .iter()
+                .filter(|extra| extra.surface == surface && extra.command == "#")
+                .map(|extra| extra.candidate.clone()),
+        );
+    }
     let Some(command) = selector_context_command(surface, context) else {
         return candidates;
     };
@@ -1875,6 +1883,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.candidates[0].value, "$openai-docs");
+    }
+
+    /// Verifies explicit macro syntax uses runtime-provided `#macro` candidates
+    /// at the agent prompt root without mixing with skill or MCP namespaces.
+    #[test]
+    fn selector_plans_dynamic_agent_macro_candidates() {
+        let extra = vec![
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "#",
+                SelectorCandidate::new("#release-check", SelectorCandidateKind::Value, true),
+            ),
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "$",
+                SelectorCandidate::new("$release-check", SelectorCandidateKind::Value, true),
+            ),
+        ];
+
+        let plan =
+            plan_selector_with_extra(SelectorSurface::AgentCommand, "#rel", "#rel".len(), &extra)
+                .unwrap();
+
+        assert_eq!(plan.candidates[0].value, "#release-check");
+        assert!(
+            plan.candidates
+                .iter()
+                .all(|candidate| !candidate.value.starts_with("$"))
+        );
     }
 
     /// Verifies explicit skill syntax can complete at any prompt position and

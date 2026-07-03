@@ -799,7 +799,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         "approval" | "approve" | "routing" | "shell-mode" | "init" | "latency" | "list-mcp"
         | "log-level" | "memory" | "directive" | "logout" | "model" | "permissions"
         | "personality" | "trust" => "configuration",
-        "help" | "list-sessions" | "list-skills" => "discovery",
+        "help" | "list-macros" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
 }
@@ -821,6 +821,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "approval" => "inspect or change the session approval mode.",
         "approve" => "approve a pending pane-local agent action.",
         "trust" => "inspect or decide pending project trust requests.",
+        "list-macros" => "list available macros and their #macro prompt names.",
         "list-sessions" => "list resumable saved agent conversations.",
         "list-skills" => "list available skills and their $skill prompt names.",
         "list-modified-files" => "list files modified by this agent conversation.",

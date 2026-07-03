@@ -40,7 +40,7 @@
     - [9.11 Errors, Retries, and Persistence](#911-errors-retries-and-persistence)
   - [10. Agent Capabilities](#10-agent-capabilities)
     - [10.1 Baseline Capabilities](#101-baseline-capabilities)
-    - [10.2 Shell-Only Local Interaction](#102-shell-only-local-interaction)
+    - [10.2 Visible Local Interaction](#102-visible-local-interaction)
     - [10.3 Subagents](#103-subagents)
     - [10.4 Skills](#104-skills)
     - [10.5 Agent Macros](#105-agent-macros)

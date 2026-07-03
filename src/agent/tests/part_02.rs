@@ -487,6 +487,9 @@ fn slash_command_parser_normalizes_aliases_and_classifies_effects() {
     let sessions = parse_slash_command("/list-sessions").unwrap().unwrap();
     assert_eq!(sessions.name, "list-sessions");
     assert_eq!(sessions.effect, SlashCommandEffect::ReadOnly);
+    let macros = parse_slash_command("/list-macros").unwrap().unwrap();
+    assert_eq!(macros.name, "list-macros");
+    assert_eq!(macros.effect, SlashCommandEffect::ReadOnly);
     let skills = parse_slash_command("/list-skills").unwrap().unwrap();
     assert_eq!(skills.name, "list-skills");
     assert_eq!(skills.effect, SlashCommandEffect::ReadOnly);

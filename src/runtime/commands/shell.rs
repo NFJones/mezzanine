@@ -7,6 +7,7 @@
 //! modules own concrete slash-command behavior.
 
 use super::*;
+use crate::macros::parse_macro_prompt_invocation;
 
 /// Result of applying the live side effects for an agent-shell exit request.
 pub(in crate::runtime) struct RuntimeAgentShellExit {
@@ -247,6 +248,24 @@ impl RuntimeSessionService {
         if is_prompt {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
         }
+        if let Some(invocation) = parse_macro_prompt_invocation(input) {
+            let catalog = self.effective_macro_catalog_for_pane(&pane_id);
+            if catalog.get(&invocation.name).is_none() {
+                let body = format!(
+                    "agent macro error: unknown macro `#{}`. Run `/list-macros` to see available macros.",
+                    invocation.name
+                );
+                let outcome = AgentShellCommandOutcome::Display {
+                    command: "macro".to_string(),
+                    body,
+                };
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&outcome),
+                ));
+            }
+        }
         let outcome = match execute_agent_shell_command_with_context(
             &mut self.agent_shell_store,
             &pane_id,
@@ -394,6 +413,16 @@ impl RuntimeSessionService {
                         &pane_id,
                         input,
                         Some(&sessions_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "list-macros"
+                {
+                    let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&macros_outcome),
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
@@ -853,6 +882,17 @@ impl RuntimeSessionService {
                     &pane_id,
                     input,
                     Some(&memory_outcome),
+                ));
+            }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "list-macros"
+            {
+                let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&macros_outcome),
                 ));
             }
             Ok(runtime_agent_shell_command_response_json(
