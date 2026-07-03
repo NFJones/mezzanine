@@ -6430,6 +6430,33 @@ fn terminal_screen_dec1048_saves_cursor_without_switching_buffers() {
     assert!(screen.history().is_empty());
 }
 
+/// Verifies combined DEC private-mode sequences apply alternate-screen and cursor visibility together.
+///
+/// Full-screen TUIs can batch DEC private modes such as `CSI ?1049;25h` and
+/// `CSI ?1049;25l` in one control sequence. The parser must apply every
+/// parameter so combined mode updates enter the alternate buffer, restore the
+/// normal screen on exit, and update cursor visibility without leaking
+/// alternate content into scrollback.
+#[test]
+fn terminal_screen_combined_private_modes_enter_and_exit_alternate_screen() {
+    let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"[?25lkeep");
+    assert!(!screen.cursor_visible());
+
+    screen.feed(b"[?1049;25hsecret");
+    assert!(screen.alternate_screen_active());
+    assert!(screen.cursor_visible());
+    assert_eq!(screen.visible_lines()[0], "secret");
+
+    screen.feed(b"[?1049;25l!");
+
+    assert!(!screen.alternate_screen_active());
+    assert!(!screen.cursor_visible());
+    assert!(screen.history().is_empty());
+    assert_eq!(screen.visible_lines()[0], "keep!");
+}
+
 /// Verifies G0 DEC Special Graphics designation renders box-drawing glyphs.
 ///
 /// Ncurses ACS output commonly designates `ESC ( 0` and then emits ASCII box
