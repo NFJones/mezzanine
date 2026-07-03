@@ -35,6 +35,7 @@ use crate::runtime::{RuntimeLocalActionExecutor, runtime_execute_auto_sizing_wit
 use crate::terminal::{TerminalFdInterest, TerminalStyleSpan};
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 // Attached terminal client service construction.
@@ -1014,6 +1015,7 @@ where
     config.validate()?;
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let mut workers = JoinSet::new();
     let mut report = AsyncAgentProviderPollReport {
         polls: 0,
         executions: 0,
@@ -1024,7 +1026,9 @@ where
     loop {
         let state = *lifecycle.borrow();
         report.terminal_state = state;
+        drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
         if should_stop(report.polls, state) {
+            abort_agent_provider_workers(&mut workers).await;
             return Ok(report);
         }
 
@@ -1043,26 +1047,113 @@ where
             report.idle_polls = report.idle_polls.saturating_add(1);
             report.polls = report.polls.saturating_add(1);
             if should_stop(report.polls, state) {
+                abort_agent_provider_workers(&mut workers).await;
                 return Ok(report);
             }
-            tokio::select! {
-                _ = handle.wait_for_event_delivery() => {}
-                changed = side_effect_watcher.changed() => {
-                    let _ = changed;
-                }
-                changed = lifecycle.changed() => {
-                    if changed.is_err() {
-                        return Ok(report);
-                    }
-                }
-                _ = sleep(config.idle_interval) => {}
+            if let Some(joined) = wait_for_agent_provider_worker_wakeup(
+                handle,
+                &mut workers,
+                &mut lifecycle,
+                &mut side_effect_watcher,
+                config.idle_interval,
+            )
+            .await
+            {
+                record_joined_agent_provider_worker(joined, handle, &mut report).await?;
             }
         } else {
-            let executions = dispatch_agent_provider_side_effects(handle, dispatches).await?;
-            report.executions = report.executions.saturating_add(executions);
+            dispatch_agent_provider_side_effects(handle, dispatches, &mut workers).await?;
+            drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
             report.polls = report.polls.saturating_add(1);
         }
     }
+}
+
+type AsyncAgentProviderWorkerResult = Option<(RuntimeEvent, bool)>;
+
+/// Drains provider workers that completed without blocking new dispatch claims.
+async fn drain_completed_agent_provider_workers(
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    handle: &AsyncRuntimeSessionHandle,
+    report: &mut AsyncAgentProviderPollReport,
+) -> Result<()> {
+    while let Some(joined) = workers.try_join_next() {
+        record_joined_agent_provider_worker(joined, handle, report).await?;
+    }
+    Ok(())
+}
+
+/// Records one completed provider worker and applies its runtime event.
+async fn record_joined_agent_provider_worker(
+    joined: std::result::Result<Result<AsyncAgentProviderWorkerResult>, tokio::task::JoinError>,
+    handle: &AsyncRuntimeSessionHandle,
+    report: &mut AsyncAgentProviderPollReport,
+) -> Result<()> {
+    match joined {
+        Ok(Ok(Some((event, completed)))) => {
+            if completed {
+                report.executions = report.executions.saturating_add(1);
+            }
+            let mut batch = RuntimeEventBatch::new();
+            batch.push(event);
+            handle.submit_runtime_events(batch).await?;
+            Ok(())
+        }
+        Ok(Ok(None)) => Ok(()),
+        Ok(Err(error)) => Err(error),
+        Err(error) if error.is_cancelled() => Ok(()),
+        Err(error) => Err(MezError::invalid_state(format!(
+            "async agent provider worker task failed: {error}"
+        ))),
+    }
+}
+
+/// Waits until provider work, actor events, lifecycle changes, or idle probing
+/// should return control to the provider service loop.
+async fn wait_for_agent_provider_worker_wakeup(
+    handle: &AsyncRuntimeSessionHandle,
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
+    side_effect_watcher: &mut watch::Receiver<u64>,
+    idle_interval: Duration,
+) -> Option<std::result::Result<Result<AsyncAgentProviderWorkerResult>, tokio::task::JoinError>> {
+    if workers.is_empty() {
+        tokio::select! {
+            _ = handle.wait_for_event_delivery() => None,
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+                None
+            }
+            changed = lifecycle_watcher.changed() => {
+                let _ = changed;
+                None
+            }
+            _ = sleep(idle_interval) => None,
+        }
+    } else {
+        tokio::select! {
+            biased;
+            joined = workers.join_next() => joined,
+            _ = handle.wait_for_event_delivery() => None,
+            changed = side_effect_watcher.changed() => {
+                let _ = changed;
+                None
+            }
+            changed = lifecycle_watcher.changed() => {
+                let _ = changed;
+                None
+            }
+            _ = sleep(idle_interval) => None,
+        }
+    }
+}
+
+/// Aborts provider workers before the provider service exits.
+async fn abort_agent_provider_workers(
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+) {
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
 }
 
 /// Runs the dispatch agent provider side effects operation for this subsystem.
@@ -1073,10 +1164,8 @@ where
 async fn dispatch_agent_provider_side_effects(
     handle: &AsyncRuntimeSessionHandle,
     dispatches: Vec<RuntimeSideEffect>,
-) -> Result<u64> {
-    let mut worker_tasks = Vec::new();
-    let mut compaction_tasks = Vec::new();
-    let mut remember_tasks = Vec::new();
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+) -> Result<()> {
     for dispatch in dispatches {
         match dispatch {
             RuntimeSideEffect::DispatchAgentProvider { agent_id, turn_id } => {
@@ -1086,10 +1175,12 @@ async fn dispatch_agent_provider_side_effects(
                 else {
                     continue;
                 };
-                let task = tokio::spawn(async move {
-                    execute_runtime_agent_provider_dispatch(dispatch, None).await
-                });
-                worker_tasks.push((agent_id, turn_id, task));
+                workers.spawn(monitor_runtime_agent_provider_dispatch(
+                    handle.clone(),
+                    agent_id,
+                    turn_id,
+                    dispatch,
+                ));
             }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
                 let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
@@ -1112,10 +1203,11 @@ async fn dispatch_agent_provider_side_effects(
                         continue;
                     }
                 };
-                let task = tokio::spawn(async move {
-                    execute_runtime_agent_compaction_dispatch(dispatch).await
-                });
-                compaction_tasks.push((pane_id, task));
+                workers.spawn(monitor_runtime_agent_compaction_dispatch(
+                    handle.clone(),
+                    pane_id,
+                    dispatch,
+                ));
             }
             RuntimeSideEffect::DispatchAgentRemember { pane_id } => {
                 let dispatch = match handle.claim_agent_remember_task(pane_id.clone()).await {
@@ -1136,80 +1228,41 @@ async fn dispatch_agent_provider_side_effects(
                         continue;
                     }
                 };
-                let task =
-                    tokio::spawn(
-                        async move { execute_runtime_agent_remember_dispatch(dispatch).await },
-                    );
-                remember_tasks.push((pane_id, task));
+                workers.spawn(monitor_runtime_agent_remember_dispatch(
+                    handle.clone(),
+                    pane_id,
+                    dispatch,
+                ));
             }
             _ => {}
         }
     }
-
-    let mut executions = 0u64;
-    for (agent_id, turn_id, task) in worker_tasks {
-        let Some((event, completed)) =
-            await_agent_provider_worker(handle, agent_id, turn_id, task).await?
-        else {
-            continue;
-        };
-        if completed {
-            executions = executions.saturating_add(1);
-        }
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(event);
-        handle.submit_runtime_events(batch).await?;
-    }
-    for (pane_id, task) in compaction_tasks {
-        let Some((event, completed)) = await_agent_compaction_worker(handle, pane_id, task).await?
-        else {
-            continue;
-        };
-        if completed {
-            executions = executions.saturating_add(1);
-        }
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(event);
-        handle.submit_runtime_events(batch).await?;
-    }
-    for (pane_id, task) in remember_tasks {
-        let Some((event, completed)) = await_agent_remember_worker(handle, pane_id, task).await?
-        else {
-            continue;
-        };
-        if completed {
-            executions = executions.saturating_add(1);
-        }
-        let mut batch = RuntimeEventBatch::new();
-        batch.push(event);
-        handle.submit_runtime_events(batch).await?;
-    }
-    Ok(executions)
+    Ok(())
 }
 
-/// Waits for one provider worker while honoring turn cancellation.
+/// Runs one provider request while honoring turn cancellation.
 ///
 /// A provider task is claimed before it begins request serialization and
 /// network work. Once claimed, `/stop` removes the turn from runtime state,
-/// so the async side must actively abort the worker instead of waiting for
-/// it to finish and continue allocating memory for a cancelled turn.
-async fn await_agent_provider_worker(
-    handle: &AsyncRuntimeSessionHandle,
+/// so the async side must drop the provider future instead of waiting for it
+/// to finish and continue allocating memory for a cancelled turn.
+async fn monitor_runtime_agent_provider_dispatch(
+    handle: AsyncRuntimeSessionHandle,
     agent_id: AgentId,
     turn_id: String,
-    mut task: tokio::task::JoinHandle<Result<super::AgentTurnExecution>>,
-) -> Result<Option<(RuntimeEvent, bool)>> {
+    dispatch: RuntimeAgentProviderDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     if !handle.agent_turn_is_running(&turn_id).await? {
-        task.abort();
-        let _ = task.await;
         return Ok(None);
     }
+    let worker = execute_runtime_agent_provider_dispatch(dispatch, None);
+    tokio::pin!(worker);
     loop {
         tokio::select! {
-            result = &mut task => {
-                return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
+            result = &mut worker => {
+                return Ok(Some(provider_worker_event(agent_id, turn_id, Ok(result))));
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -1217,8 +1270,6 @@ async fn await_agent_provider_worker(
             }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
-                    task.abort();
-                    let _ = task.await;
                     return Ok(None);
                 }
             }
@@ -1227,25 +1278,25 @@ async fn await_agent_provider_worker(
         if is_terminal_runtime_lifecycle_state(lifecycle_state)
             || !handle.agent_turn_is_running(&turn_id).await?
         {
-            task.abort();
-            let _ = task.await;
             return Ok(None);
         }
     }
 }
 
-/// Waits for one model-backed compaction worker while honoring shutdown.
-async fn await_agent_compaction_worker(
-    handle: &AsyncRuntimeSessionHandle,
+/// Runs one model-backed compaction worker while honoring shutdown.
+async fn monitor_runtime_agent_compaction_dispatch(
+    handle: AsyncRuntimeSessionHandle,
     pane_id: String,
-    mut task: tokio::task::JoinHandle<Result<crate::agent::ModelResponse>>,
-) -> Result<Option<(RuntimeEvent, bool)>> {
+    dispatch: RuntimeAgentCompactionDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let worker = execute_runtime_agent_compaction_dispatch(dispatch);
+    tokio::pin!(worker);
     loop {
         tokio::select! {
-            result = &mut task => {
-                return Ok(Some(compaction_worker_event(pane_id, result)));
+            result = &mut worker => {
+                return Ok(Some(compaction_worker_event(pane_id, Ok(result))));
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -1253,32 +1304,30 @@ async fn await_agent_compaction_worker(
             }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
-                    task.abort();
-                    let _ = task.await;
                     return Ok(None);
                 }
             }
         }
         if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
-            task.abort();
-            let _ = task.await;
             return Ok(None);
         }
     }
 }
 
-/// Waits for one model-backed durable memory worker while honoring shutdown.
-async fn await_agent_remember_worker(
-    handle: &AsyncRuntimeSessionHandle,
+/// Runs one model-backed durable memory worker while honoring shutdown.
+async fn monitor_runtime_agent_remember_dispatch(
+    handle: AsyncRuntimeSessionHandle,
     pane_id: String,
-    mut task: tokio::task::JoinHandle<Result<crate::agent::ModelResponse>>,
-) -> Result<Option<(RuntimeEvent, bool)>> {
+    dispatch: RuntimeAgentRememberDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let worker = execute_runtime_agent_remember_dispatch(dispatch);
+    tokio::pin!(worker);
     loop {
         tokio::select! {
-            result = &mut task => {
-                return Ok(Some(remember_worker_event(pane_id, result)));
+            result = &mut worker => {
+                return Ok(Some(remember_worker_event(pane_id, Ok(result))));
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -1286,15 +1335,11 @@ async fn await_agent_remember_worker(
             }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
-                    task.abort();
-                    let _ = task.await;
                     return Ok(None);
                 }
             }
         }
         if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
-            task.abort();
-            let _ = task.await;
             return Ok(None);
         }
     }

@@ -1633,6 +1633,283 @@ async fn async_agent_provider_service_wakes_when_prompt_queues_work() {
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Reads one HTTP request from the local provider concurrency fixture.
+///
+/// The helper waits for the full body described by `Content-Length` so the
+/// fixture can distinguish the intentionally slow and fast prompt requests by
+/// their serialized model context.
+async fn async_provider_concurrency_read_http_request(
+    stream: &mut tokio::net::TcpStream,
+) -> String {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if let Some(header_end) = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+        {
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find_map(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end.saturating_add(content_length) {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&request).to_string()
+}
+
+/// Writes one OpenAI-compatible Chat Completions response for the provider
+/// concurrency fixture.
+///
+/// The response uses structured MAAP JSON content so the runtime can complete
+/// the turn without invoking privileged local actions.
+async fn async_provider_concurrency_write_chat_response(
+    stream: &mut tokio::net::TcpStream,
+    text: &str,
+) {
+    use tokio::io::AsyncWriteExt;
+
+    let content = serde_json::json!({
+        "rationale": "provider concurrency fixture completed the turn",
+        "thought": null,
+        "actions": [
+            {
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": text
+            }
+        ]
+    })
+    .to_string();
+    let body = serde_json::json!({
+        "model": "local-chat-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": []
+                }
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 2
+        }
+    })
+    .to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+}
+
+/// Verifies that one slow provider request does not block another pane's
+/// provider request from being claimed and executed.
+///
+/// The mock provider intentionally withholds the slow response until it has
+/// observed the fast request. A serialized provider service would wait forever
+/// on the first request and the test timeout would fail before the second pane
+/// could reach the server.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_provider_service_does_not_serialize_provider_requests_across_panes() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let fast_request_seen = StdArc::new(AtomicBool::new(false));
+    let fast_request_notify = StdArc::new(tokio::sync::Notify::new());
+    let request_count = StdArc::new(AtomicUsize::new(0));
+    let server_seen = request_count.clone();
+    let server_fast_seen = fast_request_seen.clone();
+    let server_notify = fast_request_notify.clone();
+    let server = tokio::spawn(async move {
+        let mut handlers = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request_count = server_seen.clone();
+            let fast_request_seen = server_fast_seen.clone();
+            let fast_request_notify = server_notify.clone();
+            handlers.push(tokio::spawn(async move {
+                let request = async_provider_concurrency_read_http_request(&mut stream).await;
+                request_count.fetch_add(1, Ordering::SeqCst);
+                if request.contains("fast-unblocked-provider") {
+                    fast_request_seen.store(true, Ordering::SeqCst);
+                    fast_request_notify.notify_waiters();
+                    async_provider_concurrency_write_chat_response(
+                        &mut stream,
+                        "fast pane completed",
+                    )
+                    .await;
+                } else if request.contains("slow-gated-provider") {
+                    while !fast_request_seen.load(Ordering::SeqCst) {
+                        fast_request_notify.notified().await;
+                    }
+                    async_provider_concurrency_write_chat_response(
+                        &mut stream,
+                        "slow pane completed",
+                    )
+                    .await;
+                } else {
+                    panic!("unexpected provider request: {request}");
+                }
+            }));
+        }
+        for handler in handlers {
+            handler.await.unwrap();
+        }
+    });
+
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[agents]\n\
+                 default_provider = \"local-chat\"\n\
+                 default_model_profile = \"default\"\n\
+                 max_concurrent_agents = 4\n\
+                 \n\
+                 [providers.local-chat]\n\
+                 kind = \"openai-compatible\"\n\
+                 base_url = \"http://{address}/v1\"\n\
+                 models = [\"local-chat-model\"]\n\
+                 default_model = \"local-chat-model\"\n\
+                 \n\
+                 [providers.local-chat.options]\n\
+                 maap_output = \"structured_json\"\n\
+                 structured_output = \"json_schema\"\n\
+                 \n\
+                 [model_profiles.default]\n\
+                 provider = \"local-chat\"\n\
+                 model = \"local-chat-model\"\n"
+            ),
+        }])
+        .unwrap();
+    let auth_root = std::env::temp_dir().join(format!(
+        "mez-async-provider-concurrency-auth-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&auth_root);
+    service.set_auth_store(crate::auth::AuthStore::new(
+        crate::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "slow-gated-provider")
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(
+            &primary,
+            crate::layout::SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second_pane.as_str())
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "fast-unblocked-provider")
+        .unwrap();
+    assert_eq!(service.pending_agent_provider_tasks().len(), 2);
+
+    let (handle, actor) =
+        AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+    let provider_handle = handle.clone();
+    let client = async move {
+        let pending = provider_handle.pending_agent_provider_tasks().await.unwrap();
+        assert_eq!(pending.len(), 2);
+        let side_effects = pending
+            .into_iter()
+            .map(|task| RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque(task.agent_id).unwrap(),
+                turn_id: task.turn_id,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            provider_handle
+                .queue_runtime_side_effects(side_effects)
+                .await
+                .unwrap(),
+            2
+        );
+        let report = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_async_agent_provider_service(
+                &provider_handle,
+                AsyncAgentProviderServiceConfig::new(1)
+                    .unwrap()
+                    .with_idle_interval(Duration::from_millis(5))
+                    .unwrap(),
+                |polls, _| polls >= 8,
+            ),
+        )
+        .await
+        .expect("provider service should not block behind the slow request")
+        .unwrap();
+        assert_eq!(report.executions, 2, "{report:?}");
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        report
+    };
+
+    let (report, mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(request_count.load(Ordering::SeqCst), 2);
+    assert!(fast_request_seen.load(Ordering::SeqCst));
+    assert!(exit.service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(exit.service.agent_scheduler().snapshot().running, 0);
+    assert_eq!(report.executions, 2);
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(auth_root);
+}
+
 /// Verifies async actor serializes lifecycle render and shutdown.
 ///
 /// This regression scenario documents the behavior being protected so a
