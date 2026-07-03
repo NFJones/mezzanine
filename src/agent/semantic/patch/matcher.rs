@@ -1294,13 +1294,29 @@ fn apply_patch_preferred_position(
 }
 
 fn structural_anchor_ranges(lines: &[String], chains: &[Vec<usize>]) -> Vec<(usize, usize)> {
-    chains
+    let ranges = chains
         .iter()
         .filter_map(|chain| {
             let anchor_line = chain.last().copied()?;
             rust_like_block_scope(lines, anchor_line)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    merge_overlapping_ranges(ranges)
+}
+
+fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    ranges.sort_unstable();
+    let mut merged = Vec::<(usize, usize)>::new();
+    for (start, end) in ranges {
+        if let Some((_, previous_end)) = merged.last_mut()
+            && start <= *previous_end
+        {
+            *previous_end = (*previous_end).max(end);
+            continue;
+        }
+        merged.push((start, end));
+    }
+    merged
 }
 
 fn rust_like_block_scope(lines: &[String], anchor_line: usize) -> Option<(usize, usize)> {
@@ -1773,6 +1789,7 @@ fn apply_patch_candidate_context_ranges(
 mod tests {
     use super::{
         ApplyPatchBlankGapPolicy, find_unanchored_hunk_position_layered, rust_like_brace_counts,
+        structural_anchor_ranges,
     };
 
     /// Verifies tolerant unanchored search uses non-overlapping cursor-before
@@ -1829,5 +1846,29 @@ mod tests {
         );
 
         assert_eq!(counts, None);
+    }
+
+    /// Verifies structural anchor scope ranges are merged before hunk matching
+    /// searches them. Nested anchors can otherwise produce overlapping ranges,
+    /// causing a unique old-context position inside the overlap to be collected
+    /// twice and reported as an ambiguous hunk match.
+    #[test]
+    fn structural_anchor_ranges_merge_nested_scope_overlaps() {
+        let lines = [
+            "fn outer() {",
+            "    impl Thing {",
+            "        fn update(&self) {",
+            "            println!(\"old\");",
+            "        }",
+            "    }",
+            "}",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        let ranges = structural_anchor_ranges(&lines, &[vec![0], vec![1]]);
+
+        assert_eq!(ranges, vec![(0, 7)]);
     }
 }
