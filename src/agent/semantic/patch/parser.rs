@@ -593,8 +593,7 @@ fn parse_mez_patch_hunk(
 }
 
 fn is_mez_hunk_header_line(line: &str) -> bool {
-    line.starts_with("@@")
-        || (!line.starts_with([' ', '+', '-']) && line.trim_start().starts_with("@@"))
+    line.trim_start().starts_with("@@")
 }
 
 fn parse_mez_patch_hunk_header(header: &str) -> (Vec<String>, Option<MezPatchRangeHint>, bool) {
@@ -692,4 +691,30 @@ fn clean_mez_patch_path(raw: &str) -> Result<String> {
         return apply_patch_parse_error(&format!("unsafe patch path: {raw}"));
     }
     Ok(parts.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_mez_hunk_header_line;
+
+    /// Verifies whitespace-indented hunk headers are still recognized as hunk
+    /// headers. Model-authored patches can arrive inside uniformly indented
+    /// blocks, and the parser must not silently skip the first header or merge
+    /// later hunks into the preceding hunk body.
+    #[test]
+    fn indented_mezzanine_hunk_headers_are_recognized() {
+        assert!(is_mez_hunk_header_line("  @@ fn target() {"));
+        assert!(is_mez_hunk_header_line("\t@@ -2,1 +2,1 @@ fn target() {"));
+    }
+
+    /// Verifies ordinary hunk body lines that start with add/remove/context
+    /// prefixes are not reclassified as headers merely because their content
+    /// later contains `@@`. The predicate trims only leading whitespace before
+    /// checking for an actual header marker at the start of the logical line.
+    #[test]
+    fn hunk_body_lines_with_later_header_markers_are_not_headers() {
+        assert!(!is_mez_hunk_header_line("+println!(\"@@ not a header\");"));
+        assert!(!is_mez_hunk_header_line("-println!(\"@@ not a header\");"));
+        assert!(!is_mez_hunk_header_line(" println!(\"@@ context text\");"));
+    }
 }
