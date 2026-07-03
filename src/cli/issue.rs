@@ -72,7 +72,13 @@ pub(super) fn run_issue<W: Write>(
         } => {
             let kind = kind.as_deref().map(IssueKind::parse).transpose()?;
             let state = state.as_deref().map(IssueState::parse).transpose()?;
-            let query = IssueQuery::new_with_state(project, kind, state, text, limit)?;
+            let query = IssueQuery::new_with_state(
+                project,
+                kind,
+                state.or(Some(IssueState::Open)),
+                text,
+                limit,
+            )?;
             issue_records_json(&store.query_issues(&query)?)?
         }
         IssueCliCommand::Delete { id } => {

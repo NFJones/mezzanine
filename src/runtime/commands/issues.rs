@@ -91,8 +91,13 @@ pub(super) fn execute_agent_shell_issue_command(
             text,
             limit,
         } => {
-            let query =
-                crate::issues::IssueQuery::new_with_state(project, kind, state, text, limit)?;
+            let query = crate::issues::IssueQuery::new_with_state(
+                project,
+                kind,
+                state.or(Some(crate::issues::IssueState::Open)),
+                text,
+                limit,
+            )?;
             let records = store.query_issues(&query)?;
             Ok(AgentShellCommandOutcome::Display {
                 command: "issue".to_string(),

@@ -208,7 +208,7 @@ impl RuntimeSessionService {
                 let query = crate::issues::IssueQuery::new_with_state(
                     project,
                     kind,
-                    state,
+                    state.or(Some(crate::issues::IssueState::Open)),
                     text.clone(),
                     limit,
                 )?;
