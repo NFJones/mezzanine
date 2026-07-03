@@ -236,6 +236,11 @@ pub struct SubagentSpawnRequest {
     pub write_scopes_defaulted: bool,
     /// Initial task prompt for the child agent.
     pub task_prompt: String,
+    /// When true the runtime creates the child pane and enters agent mode
+    /// but does not start an initial provider turn. Macro orchestration
+    /// uses this to create an idle persistent child session whose first
+    /// real turn is delivered through the macro step bridge.
+    pub skip_initial_turn: bool,
     /// Whether the user explicitly approved unrestricted writes.
     pub explicit_user_approval: bool,
 }

@@ -164,7 +164,7 @@ pub(super) fn runtime_subagent_state_json(
     agent_id: &str,
     display_name: &str,
     spawn: &SubagentSpawnRequest,
-    turn: &RuntimeAgentPromptTurnStart,
+    turn: Option<&RuntimeAgentPromptTurnStart>,
     model_profile: Option<&str>,
 ) -> String {
     let model = model_profile.unwrap_or("default");
@@ -178,14 +178,14 @@ pub(super) fn runtime_subagent_state_json(
         json_escape(display_name),
         json_escape(session.id.as_str()),
         json_escape(pane.id.as_str()),
-        runtime_agent_status_name(turn.state),
+        runtime_agent_status_name(turn.map_or(AgentTurnState::Queued, |t| t.state)),
         visible,
         json_escape(agent_id),
         json_escape(model),
         runtime_cooperation_mode_name(spawn.cooperation_mode),
         runtime_string_array_json(&spawn.read_scopes),
         runtime_string_array_json(&spawn.write_scopes),
-        json_escape(&turn.turn_id),
+        json_escape(turn.map_or("", |t| t.turn_id.as_str())),
         json_escape(&spawn.requested_role),
         json_escape(&spawn.parent_agent_id)
     )
@@ -809,6 +809,10 @@ pub(super) fn runtime_subagent_spawn_request(
         write_scopes_defaulted,
         task_prompt,
         explicit_user_approval: caller_is_primary,
+        skip_initial_turn: object
+            .get("skip_initial_turn")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 

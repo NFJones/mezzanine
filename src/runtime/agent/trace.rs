@@ -492,7 +492,7 @@ pub(super) fn runtime_maap_message_content_type(content_type: &str) -> String {
 /// Extracts child agent, display name, and turn ids from a spawn response.
 pub(super) fn runtime_spawn_json_agent_and_turn(
     spawn_json: &str,
-) -> Result<(String, Option<String>, String)> {
+) -> Result<(String, Option<String>, Option<String>)> {
     let value = serde_json::from_str::<serde_json::Value>(spawn_json).map_err(|error| {
         MezError::invalid_state(format!("subagent spawn response is invalid JSON: {error}"))
     })?;
@@ -508,13 +508,14 @@ pub(super) fn runtime_spawn_json_agent_and_turn(
         .map(ToOwned::to_owned);
     let child_turn_id = value
         .get("turn")
+        .filter(|turn| !turn.is_null())
         .and_then(|turn| turn.get("id"))
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| MezError::invalid_state("subagent spawn response missing turn id"))?;
+        .map(ToOwned::to_owned);
     Ok((
         child_agent_id.to_string(),
         child_display_name,
-        child_turn_id.to_string(),
+        child_turn_id,
     ))
 }
 

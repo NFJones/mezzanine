@@ -9,6 +9,7 @@
 use rand::RngExt;
 
 use super::*;
+use crate::runtime::RuntimeAgentPromptTurnStart;
 
 /// Minimum useful width for adding another pane to an existing subagent bucket.
 ///
@@ -413,6 +414,36 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
+        if spawn.skip_initial_turn {
+            let (window, pane) = match runtime_pane_by_id(&self.session, started.pane_id.as_str()) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.cleanup_failed_subagent_spawn(
+                        controller,
+                        &started.pane_id,
+                        &child_agent_id,
+                        None,
+                    );
+                    return Err(error);
+                }
+            };
+            return Ok(format!(
+                r#"{{"agent":{},"pane":{},"turn":null}}"#,
+                runtime_subagent_state_json(
+                    &self.session,
+                    pane,
+                    &child_agent_id,
+                    &child_display_name,
+                    &spawn,
+                    None as Option<&RuntimeAgentPromptTurnStart>,
+                    self.model_profile_overrides
+                        .agent_profiles
+                        .get(child_agent_id.as_str())
+                        .map(String::as_str),
+                ),
+                self.runtime_control_pane_state_json(window, pane),
+            ));
+        }
         if let Err(error) =
             self.append_agent_parent_prompt_to_terminal_buffer(&started.pane_id, &spawn.task_prompt)
         {
@@ -536,7 +567,7 @@ impl RuntimeSessionService {
                 &child_agent_id,
                 &child_display_name,
                 &spawn,
-                &turn,
+                Some(&turn),
                 self.model_profile_overrides
                     .agent_profiles
                     .get(child_agent_id.as_str())

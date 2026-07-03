@@ -24,7 +24,7 @@ impl SubagentSpawnRequest {
     pub fn validate(&self) -> Result<()> {
         if self.parent_agent_id.is_empty()
             || self.placement.is_empty()
-            || self.task_prompt.trim().is_empty()
+            || (self.task_prompt.trim().is_empty() && !self.skip_initial_turn)
         {
             return Err(MezError::invalid_args(
                 "subagent spawn request identity, placement, and task must not be empty",

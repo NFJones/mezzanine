@@ -3343,13 +3343,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .iter()
             .find(|turn| turn.turn_id == child_turn.turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Queued)
-    );
-    assert!(
-        service
-            .agent_scheduler()
-            .queued_turns()
-            .any(|queued| queued.turn_id == child_turn.turn_id)
+        Some(AgentTurnState::Running)
     );
     service.pane_processes_mut().terminate_all().unwrap();
 }

@@ -23,6 +23,7 @@ fn request(mode: CooperationMode) -> SubagentSpawnRequest {
         write_scopes_defaulted: false,
         task_prompt: "implement parser".to_string(),
         explicit_user_approval: false,
+        skip_initial_turn: false,
     }
 }
 

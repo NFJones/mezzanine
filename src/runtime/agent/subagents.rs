@@ -224,6 +224,9 @@ impl RuntimeSessionService {
         if self.subagent_wait_policy == SubagentWaitPolicy::Join {
             let (child_agent_id, child_display_name, child_turn_id) =
                 runtime_spawn_json_agent_and_turn(&spawn_json)?;
+            let child_turn_id = child_turn_id.ok_or_else(|| {
+                MezError::invalid_state("subagent spawn response missing turn id")
+            })?;
             self.joined_subagent_dependencies.insert(
                 child_turn_id.clone(),
                 JoinedSubagentDependency {
@@ -583,12 +586,17 @@ impl RuntimeSessionService {
             )?;
         }
         self.subagent_task_routes.remove(&turn.turn_id);
-        self.subagent_scopes.unregister(&turn.agent_id);
-        self.subagent_scope_declarations.remove(&turn.agent_id);
-        self.subagent_lineage.remove(&turn.agent_id);
+        let is_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step");
+        if !is_macro_step {
+            self.subagent_scopes.unregister(&turn.agent_id);
+            self.subagent_scope_declarations.remove(&turn.agent_id);
+            self.subagent_lineage.remove(&turn.agent_id);
+        }
         self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
-        self.pending_terminal_subagent_pane_closes
-            .insert(turn.pane_id.clone());
+        if !is_macro_step {
+            self.pending_terminal_subagent_pane_closes
+                .insert(turn.pane_id.clone());
+        }
         if let Err(error) = delivery {
             self.append_lifecycle_event(
                 EventKind::AgentStatus,

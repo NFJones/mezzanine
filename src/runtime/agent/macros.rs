@@ -88,13 +88,13 @@ impl RuntimeSessionService {
                 MezError::invalid_state("agent macro requires an attached primary")
             })?;
         let parent_agent_id = format!("agent-{pane_id}");
-        let child_prompt = runtime_macro_child_session_prompt(&definition.summary.name);
         let params = serde_json::json!({
             "parent_agent": { "agent_id": parent_agent_id },
             "placement": "new-window",
             "role": "worker",
             "cooperation_mode": "owned-write",
-            "prompt": child_prompt,
+           "prompt": "",
+           "skip_initial_turn": true,
         })
         .to_string();
         let spawn = runtime_subagent_spawn_request(&params, false)?;
@@ -102,7 +102,14 @@ impl RuntimeSessionService {
         let spawn_json = self.spawn_runtime_subagent(&controller, spawn, placement)?;
         let (child_agent_id, _child_display_name, _child_turn_id) =
             runtime_spawn_json_agent_and_turn(&spawn_json)?;
+        // idle spawn: child_turn_id is None, which is expected for macro session
+        let _ = _child_turn_id;
         self.register_macro_managed_subagent(&child_agent_id);
+        self.append_agent_trace_turn_event(
+            pane_id,
+            "",
+            &format!("macro child spawned idle child_agent_id={}", child_agent_id),
+        )?;
         let orchestration_prompt = runtime_macro_parent_orchestration_prompt(
             &definition,
             invocation.additional_context.as_deref(),
@@ -264,13 +271,6 @@ fn macro_message_recipient_agent_id(recipient: &str) -> Option<String> {
                 .starts_with("agent-%")
                 .then(|| recipient.to_string())
         })
-}
-
-/// Builds the initial prompt used to keep the macro child session alive.
-fn runtime_macro_child_session_prompt(macro_name: &str) -> String {
-    format!(
-        "You are the persistent subagent session for agent macro `{macro_name}`. Wait for macro step prompts from the parent over MMP. For each step, execute only that prompt as a normal agent-shell task, then return a concise result with evidence, blockers, and whether the step goal appears satisfied."
-    )
 }
 
 /// Builds the parent model prompt that orchestrates one active macro run.

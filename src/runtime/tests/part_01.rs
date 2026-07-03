@@ -4192,6 +4192,7 @@ fn runtime_spawned_subagent_inherits_parent_shell_mode_override() {
         write_scopes_defaulted: false,
         task_prompt: "inspect the renderer issue".to_string(),
         explicit_user_approval: false,
+        skip_initial_turn: false,
     };
 
     let spawned = service
@@ -4307,6 +4308,7 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
         write_scopes_defaulted: false,
         task_prompt: "inspect the renderer issue".to_string(),
         explicit_user_approval: false,
+        skip_initial_turn: false,
     };
 
     let spawned = service
