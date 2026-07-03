@@ -1363,9 +1363,6 @@ const RUST_STRUCTURAL_ANCHOR_PREFIXES: &[&str] = &[
 ];
 
 fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(usize, usize)> {
-    if line.contains("r#\"") || line.contains("r\"") {
-        return None;
-    }
     let mut opens = 0usize;
     let mut closes = 0usize;
     let mut chars = line.chars().peekable();
@@ -1406,6 +1403,7 @@ fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(us
                 chars.next();
                 *in_block_comment = true;
             }
+            'r' if rust_like_raw_string_literal_start(&mut chars) => return None,
             '"' => in_string = true,
             '\'' => in_char = true,
             '{' => opens += 1,
@@ -1414,6 +1412,21 @@ fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(us
         }
     }
     Some((opens, closes))
+}
+
+fn rust_like_raw_string_literal_start(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+) -> bool {
+    let mut clone = chars.clone();
+    if clone.peek() == Some(&'"') {
+        return true;
+    }
+    let mut saw_hash = false;
+    while clone.peek() == Some(&'#') {
+        saw_hash = true;
+        clone.next();
+    }
+    saw_hash && clone.peek() == Some(&'"')
 }
 
 fn ordered_anchor_chains(lines: &[String], anchors: &[String], cursor: usize) -> Vec<Vec<usize>> {
@@ -1758,7 +1771,9 @@ fn apply_patch_candidate_context_ranges(
 
 #[cfg(test)]
 mod tests {
-    use super::{ApplyPatchBlankGapPolicy, find_unanchored_hunk_position_layered};
+    use super::{
+        ApplyPatchBlankGapPolicy, find_unanchored_hunk_position_layered, rust_like_brace_counts,
+    };
 
     /// Verifies tolerant unanchored search uses non-overlapping cursor-before
     /// and cursor-after ranges. A match at or after the cursor used to be
@@ -1783,5 +1798,36 @@ mod tests {
             find_unanchored_hunk_position_layered(&lines, &old, &blank_gap_policies, 1, None);
 
         assert!(result.is_ok());
+    }
+
+    /// Verifies raw-string detection does not disable structural brace counts
+    /// merely because ordinary string or comment text contains the byte
+    /// sequence `r\"`. Structural anchor scoping depends on this helper
+    /// returning counts for ordinary Rust-like code.
+    #[test]
+    fn rust_like_brace_counts_ignores_raw_string_markers_inside_strings_and_comments() {
+        let mut in_block_comment = false;
+
+        let counts = rust_like_brace_counts(
+            r#"fn target() { let text = "mentions r\" without raw syntax"; } // r\" comment"#,
+            &mut in_block_comment,
+        );
+
+        assert_eq!(counts, Some((1, 1)));
+    }
+
+    /// Verifies real Rust raw string literals still disable structural brace
+    /// counting. The brace scanner intentionally bails out for raw strings so
+    /// braces inside raw-string bodies cannot corrupt anchor scope detection.
+    #[test]
+    fn rust_like_brace_counts_still_rejects_actual_raw_string_literals() {
+        let mut in_block_comment = false;
+
+        let counts = rust_like_brace_counts(
+            r##"fn target() { let text = r#"{"#; }"##,
+            &mut in_block_comment,
+        );
+
+        assert_eq!(counts, None);
     }
 }
