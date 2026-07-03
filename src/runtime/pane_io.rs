@@ -172,6 +172,12 @@ pub struct PaneOutputUpdate {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub background: bool,
+    /// Stores whether this output requires retained attached-terminal frame state
+    /// to be discarded before the next redraw.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    pub invalidate_output_frame: bool,
 }
 
 /// Carries Active Pane Pipe state for this subsystem.

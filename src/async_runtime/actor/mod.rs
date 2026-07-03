@@ -1124,10 +1124,11 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }) => {
                 let byte_count = bytes.len();
                 let pane_id_for_pipe_health = pane_id.clone();
-                let applied = self
-                    .service
-                    .apply_pane_output_bytes(pane_id, bytes)?
-                    .is_some();
+                let update = self.service.apply_pane_output_bytes(pane_id, bytes)?;
+                let invalidate_output_frame = update
+                    .as_ref()
+                    .is_some_and(|update| update.invalidate_output_frame);
+                let applied = update.is_some();
                 if applied {
                     self.metrics.pane_output_chunks =
                         self.metrics.pane_output_chunks.saturating_add(1);
@@ -1140,7 +1141,11 @@ impl AsyncRuntimeSessionActor {
                         .record(u64::try_from(byte_count).unwrap_or(u64::MAX));
                 }
                 let mut side_effects = if applied {
-                    self.render_side_effects(RenderInvalidationReason::PaneOutput)
+                    self.render_side_effects(if invalidate_output_frame {
+                        RenderInvalidationReason::FullRedraw
+                    } else {
+                        RenderInvalidationReason::PaneOutput
+                    })
                 } else {
                     Vec::new()
                 };

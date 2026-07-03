@@ -294,7 +294,8 @@ pub struct Pane {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub title: String,
-    /// Describes whether automatic process metadata may replace the title.
+    /// Describes whether automatic process metadata or program output owns the
+    /// current title.
     pub title_source: PaneTitleSource,
     /// Stores the size value for this data structure.
     ///
@@ -320,6 +321,8 @@ pub enum PaneTitleSource {
     Default,
     /// A title discovered from terminal or foreground-process metadata.
     Automatic,
+    /// A title explicitly emitted by the currently running foreground program.
+    Program,
     /// A title explicitly assigned by a user or agent command.
     Explicit,
 }

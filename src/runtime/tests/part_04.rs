@@ -3881,6 +3881,72 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
 /// async pane worker reports foreground process groups separately, and readiness
 /// recovery should use that cached observation instead of leaving shell actions
 /// stranded behind stale interactive-blocked state.
+/// Verifies program-emitted pane titles stay sticky across automatic foreground
+/// title refreshes, then restore the previous title mode when the foreground
+/// program changes. This protects pane status pill titles from rapidly flipping
+/// between OSC titles and auto-generated process titles.
+#[test]
+fn runtime_pane_program_title_stays_sticky_until_foreground_process_changes() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+
+    service
+        .apply_pane_foreground_process_event("%1", "vim", 4242, None)
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().active_pane().title,
+        "vim"
+    );
+
+    service
+        .apply_pane_process_output(
+            crate::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]2;editing notes\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().active_pane().title,
+        "editing notes"
+    );
+
+    service
+        .apply_pane_foreground_process_event("%1", "vim", 4242, None)
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().active_pane().title,
+        "editing notes"
+    );
+
+    service
+        .apply_pane_process_output(
+            crate::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]2;editing tests\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().active_pane().title,
+        "editing tests"
+    );
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().active_pane().title,
+        "shell"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 #[test]
 fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foreground_group() {
     let mut service = test_runtime_service();

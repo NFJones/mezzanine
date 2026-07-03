@@ -1589,6 +1589,63 @@ async fn async_actor_drains_render_side_effects_without_stealing_provider_dispat
     exit.service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies alternate-screen exit pane output is promoted to a full redraw
+/// invalidation instead of an ordinary pane-output update. This ensures the
+/// attached-terminal client discards retained differential frame state before
+/// repainting the restored primary buffer.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_uses_full_redraw_invalidation_for_alternate_screen_exit_output() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service).build().unwrap();
+
+    let client = async {
+        let mut enter = RuntimeEventBatch::new();
+        enter.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?1049halt".to_vec(),
+        }));
+        let report = handle.submit_runtime_events(enter).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::PaneOutput,
+            }]
+        );
+
+        let mut exit_batch = RuntimeEventBatch::new();
+        exit_batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?1049lback".to_vec(),
+        }));
+        let report = handle.submit_runtime_events(exit_batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::FullRedraw,
+            }]
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies manual `/compact` publishes visible compaction state and queues a
 /// provider-side compaction dispatch instead of blocking the actor while the
 /// model request runs. This protects the terminal UI from invisible synchronous

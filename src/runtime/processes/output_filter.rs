@@ -6,6 +6,7 @@
 //! keeps terminal byte parsing isolated and testable.
 
 use super::*;
+use crate::runtime::service_state::ProgramOwnedPaneTitle;
 
 /// Carries Pane Output Render Mode state for this subsystem.
 ///
@@ -766,7 +767,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn apply_pane_process_output(
+    pub(in crate::runtime) fn apply_pane_process_output(
         &mut self,
         output: PaneProcessOutput,
         terminal_title_panes: &mut BTreeSet<String>,
@@ -864,7 +865,22 @@ impl RuntimeSessionService {
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;
         self.write_active_pane_pipe(output.pane_id.as_str(), &render_bytes)?;
-        let title_changed = if let Some(title) = terminal_title.or(title) {
+        let title_changed = if let Some(title) = terminal_title {
+            let foreground_group = self
+                .pane_foreground_process_groups
+                .get(output.pane_id.as_str())
+                .copied()
+                .or_else(|| {
+                    self.pane_processes
+                        .foreground_process_group_id(output.pane_id.as_str())
+                })
+                .unwrap_or(output.primary_pid);
+            self.set_pane_title_from_program_output(
+                output.pane_id.as_str(),
+                title,
+                foreground_group,
+            )?
+        } else if let Some(title) = title {
             self.session
                 .set_pane_title_from_terminal(output.pane_id.as_str(), title)?
         } else {
@@ -880,6 +896,7 @@ impl RuntimeSessionService {
             activity_events,
             bell_events,
             background,
+            invalidate_output_frame: alternate_screen_exited,
         };
         self.append_pane_output_event(&update)?;
         if title_changed {
@@ -1433,13 +1450,19 @@ impl RuntimeSessionService {
             if skipped_panes.contains(&pane_id) {
                 continue;
             }
-            let Some(title) = self.foreground_process_pane_title(&pane_id) else {
+            let Some((title, foreground_group)) = self.foreground_process_pane_title(&pane_id)
+            else {
                 continue;
             };
-            if !self
+            let mut title_changed =
+                self.restore_program_pane_title_for_foreground_change(&pane_id, foreground_group)?;
+            if self.program_owned_pane_titles.contains_key(&pane_id) {
+                continue;
+            }
+            title_changed |= self
                 .session
-                .set_pane_title_from_terminal(pane_id.as_str(), title)?
-            {
+                .set_pane_title_from_terminal(pane_id.as_str(), title)?;
+            if !title_changed {
                 continue;
             }
             let Some(update) = self.pane_title_only_update(&pane_id) else {
@@ -1476,7 +1499,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn foreground_process_pane_title(&self, pane_id: &str) -> Option<String> {
+    fn foreground_process_pane_title(&self, pane_id: &str) -> Option<(String, u32)> {
         let foreground_name = self.pane_processes.foreground_process_name(pane_id)?;
         let foreground_group = self.pane_processes.foreground_process_group_id(pane_id)?;
         let primary_pid = self.pane_processes.primary_pid(pane_id)?;
@@ -1486,6 +1509,61 @@ impl RuntimeSessionService {
             foreground_group,
             primary_pid,
         )
+        .map(|title| (title, foreground_group))
+    }
+
+    /// Sets a pane title emitted by a foreground program and captures the prior mode.
+    fn set_pane_title_from_program_output(
+        &mut self,
+        pane_id: &str,
+        title: String,
+        foreground_process_group_id: u32,
+    ) -> Result<bool> {
+        if self
+            .program_owned_pane_titles
+            .get(pane_id)
+            .is_some_and(|state| state.foreground_process_group_id != foreground_process_group_id)
+        {
+            let _ = self.restore_program_pane_title_for_foreground_change(
+                pane_id,
+                foreground_process_group_id,
+            )?;
+        }
+        if !self.program_owned_pane_titles.contains_key(pane_id) {
+            let (previous_title, previous_source) = self.session.pane_title_state(pane_id)?;
+            if previous_source.is_explicit() {
+                return Ok(false);
+            }
+            self.program_owned_pane_titles.insert(
+                pane_id.to_string(),
+                ProgramOwnedPaneTitle {
+                    foreground_process_group_id,
+                    previous_title,
+                    previous_source,
+                },
+            );
+        }
+        self.session.set_pane_title_from_program(pane_id, title)
+    }
+
+    /// Restores the saved title mode when a program-title owner is no longer foreground.
+    fn restore_program_pane_title_for_foreground_change(
+        &mut self,
+        pane_id: &str,
+        foreground_process_group_id: u32,
+    ) -> Result<bool> {
+        if self
+            .program_owned_pane_titles
+            .get(pane_id)
+            .is_some_and(|state| state.foreground_process_group_id == foreground_process_group_id)
+        {
+            return Ok(false);
+        }
+        let Some(state) = self.program_owned_pane_titles.remove(pane_id) else {
+            return Ok(false);
+        };
+        self.session
+            .restore_pane_title_state(pane_id, state.previous_title, state.previous_source)
     }
 
     /// Applies foreground process metadata delivered by an async pane worker.
@@ -1517,10 +1595,15 @@ impl RuntimeSessionService {
         ) else {
             return Ok(false);
         };
-        if !self
+        let mut title_changed =
+            self.restore_program_pane_title_for_foreground_change(&pane_id, process_group_id)?;
+        if self.program_owned_pane_titles.contains_key(&pane_id) {
+            return Ok(false);
+        }
+        title_changed |= self
             .session
-            .set_pane_title_from_terminal(pane_id.as_str(), title)?
-        {
+            .set_pane_title_from_terminal(pane_id.as_str(), title)?;
+        if !title_changed {
             return Ok(false);
         }
         let Some(update) = self.pane_title_only_update(&pane_id) else {
@@ -1553,7 +1636,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn title_from_foreground_process_metadata(
         &self,
-        pane_id: &str,
+        _pane_id: &str,
         foreground_name: String,
         foreground_group: u32,
         primary_pid: u32,
@@ -1561,13 +1644,7 @@ impl RuntimeSessionService {
         if foreground_group == primary_pid
             && Some(foreground_name.as_str()) == self.session.shell.path().file_name()?.to_str()
         {
-            return self
-                .pane_screens
-                .get(pane_id)
-                .and_then(TerminalScreen::title)
-                .filter(|title| !title.trim().is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(|| Some("shell".to_string()));
+            return Some("shell".to_string());
         }
         Some(foreground_name)
     }
@@ -1590,6 +1667,7 @@ impl RuntimeSessionService {
             background: !self.session.active_window().is_some_and(|window| {
                 window.active_pane().id.as_str() == descriptor.pane_id.as_str()
             }),
+            invalidate_output_frame: false,
         })
     }
 }

@@ -33,11 +33,23 @@ use super::{
     execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
+use crate::layout::PaneTitleSource;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth, TerminalStyleSpan};
 use secrecy::ExposeSecret;
 
 // Runtime data types, connection tables, and provider/MCP registries.
+
+/// Prior pane title state for a title emitted by a foreground program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProgramOwnedPaneTitle {
+    /// Foreground process group that owned the program title.
+    pub(super) foreground_process_group_id: u32,
+    /// Title to restore when the foreground program exits or changes.
+    pub(super) previous_title: String,
+    /// Title provenance to restore when the foreground program exits or changes.
+    pub(super) previous_source: PaneTitleSource,
+}
 
 /// Defines the DEFAULT PTY READ LIMIT BYTES const used by this subsystem.
 ///
@@ -1555,6 +1567,12 @@ pub struct RuntimeSessionService {
     /// lets readiness recovery use the actor-owned foreground observation when
     /// it is newer than no host metadata at all.
     pub(super) pane_foreground_process_groups: BTreeMap<String, u32>,
+    /// Program-owned pane titles keyed by pane id.
+    ///
+    /// The map stores the pane title mode that was active before a foreground
+    /// program emitted an OSC title so process metadata refreshes can leave that
+    /// title sticky until the owning foreground process changes or exits.
+    pub(super) program_owned_pane_titles: BTreeMap<String, ProgramOwnedPaneTitle>,
     /// Stores the deferred pane inputs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

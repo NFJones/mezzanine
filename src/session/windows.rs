@@ -863,11 +863,72 @@ impl Session {
         if pane.title == title {
             return Ok(false);
         }
-        if pane.title_source.is_explicit() {
+        if pane.title_source.is_explicit() || pane.title_source == PaneTitleSource::Program {
             return Ok(false);
         }
         pane.title = title;
         pane.title_source = PaneTitleSource::Automatic;
+        self.record_event();
+        Ok(true)
+    }
+
+    /// Returns the current pane title and its provenance.
+    ///
+    /// The snapshot lets runtime code temporarily hand title ownership to a
+    /// foreground program and later restore the previous automatic or default
+    /// mode without reaching through session internals.
+    pub fn pane_title_state(&self, pane_id: &str) -> Result<(String, PaneTitleSource)> {
+        let (window_index, pane_index) = self.pane_location(Some(pane_id))?;
+        let pane = &self.windows[window_index].panes()[pane_index];
+        Ok((pane.title.clone(), pane.title_source))
+    }
+
+    /// Restores a pane title and provenance captured by `pane_title_state`.
+    ///
+    /// Returns whether the visible title or title provenance changed. This is
+    /// used when a foreground program that emitted an OSC title exits or gives
+    /// way to another foreground process.
+    pub fn restore_pane_title_state(
+        &mut self,
+        pane_id: &str,
+        title: impl Into<String>,
+        source: PaneTitleSource,
+    ) -> Result<bool> {
+        let title = terminal_pane_title_or_default(&title.into());
+        let (window_index, pane_index) = self.pane_location(Some(pane_id))?;
+        let pane = &mut self.windows[window_index].panes_mut()[pane_index];
+        let changed = pane.title != title || pane.title_source != source;
+        if !changed {
+            return Ok(false);
+        }
+        pane.title = title;
+        pane.title_source = source;
+        self.record_event();
+        Ok(true)
+    }
+
+    /// Runs the set pane title from program output operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub fn set_pane_title_from_program(
+        &mut self,
+        pane_id: &str,
+        title: impl Into<String>,
+    ) -> Result<bool> {
+        let title = terminal_pane_title_or_default(&title.into());
+        let (window_index, pane_index) = self.pane_location(Some(pane_id))?;
+        let pane = &mut self.windows[window_index].panes_mut()[pane_index];
+        let changed = pane.title != title || pane.title_source != PaneTitleSource::Program;
+        if !changed {
+            return Ok(false);
+        }
+        if pane.title_source.is_explicit() {
+            return Ok(false);
+        }
+        pane.title = title;
+        pane.title_source = PaneTitleSource::Program;
         self.record_event();
         Ok(true)
     }
