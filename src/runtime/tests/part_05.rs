@@ -3225,6 +3225,132 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         orchestration_context.contains("slash commands such as /loop remain valid"),
         "{orchestration_context}"
     );
+
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies macro step messages are queued as ordinary child agent-shell turns.
+///
+/// This protects slash-command compatibility for macro steps: a step containing
+/// `/loop` must not be delivered as a passive MMP message because that would
+/// bypass the subagent shell parser and break the feature contract.
+#[test]
+fn runtime_agent_macro_send_message_queues_child_shell_turn() {
+    let config_root = temp_root("runtime-macro-step-message");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. /loop inspect release notes for the requested version.\n2. Summarize release blockers.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root);
+
+    let response = service
+        .execute_agent_shell_command(&primary, "#release-check for v1.2")
+        .unwrap();
+    assert!(response.contains(r#""kind":"turn_started""#), "{response}");
+    let child_agent_id = service
+        .macro_managed_subagent_agents
+        .iter()
+        .next()
+        .cloned()
+        .expect("macro child should be registered");
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .cloned()
+        .expect("parent macro orchestration turn should exist");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "send macro step".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "send adapted macro step".to_string(),
+                thought: None,
+                turn_id: parent_turn.turn_id.clone(),
+                agent_id: parent_turn.agent_id.clone(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "macro-step-1".to_string(),
+                    rationale: "send first macro step".to_string(),
+                    payload: crate::agent::AgentActionPayload::SendMessage {
+                        recipient: format!("agent:{child_agent_id}"),
+                        content_type: "text/plain; charset=utf-8".to_string(),
+                        payload: "/loop inspect release notes for v1.2".to_string(),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            &parent_turn.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap_or_default();
+    assert!(structured.contains(r#""join_policy":"macro_step""#), "{structured}");
+    assert!(structured.contains(&child_agent_id), "{structured}");
+    assert!(
+        service
+            .message_service()
+            .receive_for(&AgentId::opaque(child_agent_id.clone()).unwrap(), u64::MAX)
+            .is_empty()
+    );
+    let child_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| {
+            turn.agent_id == child_agent_id && turn.cooperation_mode.as_deref() == Some("macro-step")
+        })
+        .cloned()
+        .expect("macro step should queue a child shell turn");
+    assert_eq!(child_turn.parent_turn_id.as_deref(), Some(parent_turn.turn_id.as_str()));
+    assert_eq!(child_turn.trigger, crate::agent::AgentTurnTrigger::LocalMessage);
+    assert!(service.joined_subagent_dependencies.contains_key(&child_turn.turn_id));
+    let child_context = service.agent_turn_contexts.get(&child_turn.turn_id).unwrap();
+    assert!(child_context.blocks.iter().any(|block| block.content.contains("/loop inspect release notes for v1.2")));
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == child_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Queued)
+    );
+    assert!(
+        service
+            .agent_scheduler()
+            .queued_turns()
+            .any(|queued| queued.turn_id == child_turn.turn_id)
+    );
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
