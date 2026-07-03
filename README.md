@@ -280,6 +280,7 @@ Useful slash commands include:
 | `/shell-mode`  | Inspect or change the local action executor for the active pane. |
 | `/directive`   | Show or set a session-scoped developer addendum.      |
 | `/list-skills` | Show the skills available to the active pane.         |
+| `/list-macros` | Show the agent macros available to the active pane.   |
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
 | `/remember`    | Generate durable memories from context or a statement while opportunistically pruning expired persistent records. |
@@ -294,14 +295,16 @@ Normal logging shows prompts, assistant text, concise progress, approvals,
 errors, command summaries, and final responses. Higher log levels are mainly
 for debugging.
 
-Mezzanine has three operator-facing command surfaces:
+Mezzanine has four operator-facing command surfaces:
 
 - terminal commands entered through the Mezzanine command prompt,
-- pane-local slash commands entered in the agent shell, and
-- explicit skills invoked with `$<skill-name> [additional context]`.
+- pane-local slash commands entered in the agent shell,
+- explicit skills invoked with `$<skill-name> [additional context]`, and
+- agent macros invoked with `#<macro-name> [additional context]`.
 
 See [docs/agent-skills-and-commands.md](docs/agent-skills-and-commands.md) for
-the command-surface breakdown, explicit skill syntax, and built-in skill usage.
+the command-surface breakdown, explicit skill and macro syntax, and built-in
+skill usage.
 
 ### Project context
 

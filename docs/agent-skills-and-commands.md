@@ -8,10 +8,12 @@ Related docs:
 - [Configuration reference](configuration-reference.md) for config paths and
   defaults that affect agent behavior.
 - [SPEC.md Section 10.4](../SPEC.md#104-skills) for normative skill behavior.
+- [SPEC.md Section 10.5](../SPEC.md#105-agent-macros) for normative macro
+  behavior.
 - [SPEC.md Section 11](../SPEC.md#11-agent-shell-commands) for the baseline
   slash-command contract.
 
-## The three command surfaces
+## The four command surfaces
 
 ### 1. Mezzanine terminal commands
 
@@ -112,6 +114,7 @@ Common slash commands:
 | `/shell-mode` | Inspect or change whether local actions use native runtime execution or pane-shell transport for the active pane. |
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
+| `/list-macros` | Show the effective agent macro catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
 | `/issue` | Add, show, update, query, or delete local project issues for the active pane repository, including mutable progress notes. |
@@ -142,6 +145,25 @@ $mez-reference switch to the nord theme and show the exact setting path
 
 Use `/list-skills` to inspect the effective catalog before invoking a skill.
 
+### 4. Explicit macro invocation
+
+You can invoke an agent macro by starting the agent prompt with:
+
+```text
+#<macro-name> [additional context]
+```
+
+Macros are ordered prompt sequences stored as `MACRO.md` files. A macro run uses
+one persistent subagent session for every step. Each step is submitted to that
+subagent as a normal agent-shell prompt, so slash commands such as `/loop`,
+explicit skills, and explicit MCP server syntax are interpreted with the same
+runtime semantics and permission checks they would have if typed directly into
+that subagent. The parent model may adapt step prompts to the user's stated
+context, then judges each subagent result before continuing.
+
+Use `/list-macros` to inspect the effective macro catalog before invoking a
+macro.
+
 ## Built-in skills
 
 The repository currently ships built-in skills including:
@@ -149,6 +171,8 @@ The repository currently ships built-in skills including:
 - `mez-reference`: Mezzanine terminal commands, slash commands, skill
   invocation, common workflows, and supported live configuration changes.
 - `create-skill`: guidance for creating or updating OpenAI-structured skills.
+- `create-macro`: guidance for creating or updating agent macros with
+  `MACRO.md` front matter and ordered prompt steps.
 - `add-doc`: guidance for saving durable documentation or reference content to
   memory as readable Markdown using the `documentation` memory kind.
 - `add-issues`: guidance for turning recent concrete findings into local Mez
@@ -159,14 +183,16 @@ The repository currently ships built-in skills including:
 - `fix-issues`: guidance for working the local Mez issue tracker in dependency
   order until verified fixes are removed.
 
-## Where skills live
+## Where skills and macros live
 
 - User skills: `~/.config/mezzanine/skills/<skill-name>/SKILL.md`
 - Project skills: `<project-root>/.mezzanine/skills/<skill-name>/SKILL.md`
+- User macros: `~/.config/mezzanine/macros/<macro-name>/MACRO.md`
+- Project macros: `<project-root>/.mezzanine/macros/<macro-name>/MACRO.md`
 
-Project skills are subject to project trust. Until the project root is trusted,
-project-local skills should not be treated as active user-facing capability for
-that pane.
+Project skills and macros are subject to project trust. Until the project root
+is trusted, project-local skills and macros should not be treated as active
+user-facing capability for that pane.
 
 ## Which surface should I use?
 
@@ -176,6 +202,8 @@ that pane.
   state, and pane-agent lifecycle.
 - Use **explicit skills** when you want a reusable workflow prompt scaffold at
   the start of an agent turn.
+- Use **explicit macros** when you want an ordered workflow of normal
+  agent-shell prompts to run through one persistent subagent session.
 - Use `@<mcp-server-name>` in an agent prompt, or inside an explicit skill, to
   inject that MCP server callable metadata for the current turn only. In the
   agent prompt, tab completion and shaded shadow text work for `@` MCP server

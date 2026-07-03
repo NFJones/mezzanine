@@ -43,6 +43,7 @@
     - [10.2 Shell-Only Local Interaction](#102-shell-only-local-interaction)
     - [10.3 Subagents](#103-subagents)
     - [10.4 Skills](#104-skills)
+    - [10.5 Agent Macros](#105-agent-macros)
   - [11. Agent Shell Commands](#11-agent-shell-commands)
   - [12. Local Message Passing Protocol](#12-local-message-passing-protocol)
     - [12.1 Protocol Name and Version](#121-protocol-name-and-version)
@@ -4879,6 +4880,15 @@ requested workflow actually needs them. It MUST default new skills to user
 scope unless the user explicitly requests a repo/project-scoped skill or says
 the skill must live with the current repository.
 
+Mezzanine MUST provide a built-in `create-macro` skill. It MUST guide agents to
+create and modify agent macro definitions in both user and project scopes. The
+built-in workflow MUST require a `MACRO.md` with `name` and `description` front
+matter, a directory basename matching the macro name, and a `## Steps` section
+containing an ordered list of prompt steps. It MUST explain the user and project
+macro roots, default new macros to user scope unless project scope is explicitly
+requested, and require each step to be a prompt suitable for the regular agent
+shell.
+
 Mezzanine MUST provide a built-in `mez-reference` skill. It MUST summarize
 Mezzanine terminal commands, pane-local agent slash commands, explicit
 `$<skill-name>` invocation, common operational workflows, and how to use
@@ -4929,21 +4939,112 @@ available skills with `/list-skills` and explicitly select them with
 `$<skill-name>` so prompt-cache stable prefixes do not churn when project or
 user skill files change.
 
+### 10.5 Agent Macros
+
+Agent macros are named, reusable, model-orchestrated workflows composed of an ordered
+sequence of prompts for a regular agent shell. Macro definitions are configured
+artifacts rather than MAAP actions, terminal commands, or shell programs.
+
+A macro definition MUST be a directory containing a required `MACRO.md` file with YAML
+front matter followed by markdown body text. The front matter MUST include:
+
+- `name`: The stable macro identifier.
+- `description`: A short description of when to invoke the macro.
+
+Macro names MUST contain only lowercase ASCII letters, decimal digits, and hyphens. The
+directory basename MUST match the `name` field. Implementations MUST reject or skip
+macro directories whose resolved name is empty, contains path traversal, contains path
+separators, or does not satisfy the macro-name grammar.
+
+Both user and project macro roots MUST use the same directory layout:
+
+- User macros: `~/.config/mezzanine/macros/<macro-name>/MACRO.md`.
+- Project macros: `<project-root>/.mezzanine/macros/<macro-name>/MACRO.md`.
+
+The `MACRO.md` body MUST contain a `## Steps` section whose ordered-list items are the
+scripted prompt steps. Implementations MUST support multiline list items that are
+indented under the ordered-list item. Empty step prompts MUST be rejected. Macro
+definitions are untrusted user or project configuration content and MUST NOT bypass
+normal permission, approval, filesystem, shell, MCP, or provider-action boundaries.
+
+Project macros MUST be discoverable only after the project root is trusted under the
+project trust rules in Section 8.1. User macros are configuration material from the
+primary user configuration directory. When a user macro and a trusted project macro have
+the same name, the trusted project macro MUST take precedence for panes whose current
+working directory is inside that project. Macro catalog order MUST be deterministic,
+sorted by effective macro name. Effective source scopes MUST include `user` and
+`project` when those source types are present. Built-in macros are optional; the
+baseline macro feature only requires the built-in `create-macro` skill described in
+Section 10.4.
+
+The pane-local agent prompt MUST support explicit macro invocation with:
+
+```text
+#<macro-name> [additional context]
+```
+
+Macro invocation MUST be recognized only when the submitted prompt starts with the macro
+token. `#<macro-name>` text that appears later in ordinary prose MUST remain normal
+prompt text. When a user submits the invocation form, Mezzanine MUST resolve `<macro-
+name>` from the effective macro catalog, preserve the submitted prompt as the latest
+user instruction, and make any text after the macro token available as user-stated
+invocation context. Unknown or invalid macro names MUST produce a readable pane-local
+error and MUST NOT start a provider turn.
+
+For each macro run, Mezzanine MUST create or select exactly one persistent subagent
+session for that run. The same subagent session MUST receive every step prompt in the
+macro sequence, and a macro run MUST NOT switch to another subagent session mid-run. The
+macro-created subagent MUST inherit the parent agent configuration, project
+instructions, permission policy, shell mode, routing state, and applicable scope limits
+in the same manner as other subagents, and it MUST count against the configured subagent
+concurrency and depth limits.
+
+Before submitting a step, the main model MAY adapt the scripted prompt to the user-
+stated invocation context. Adaptation MUST preserve the macro purpose, step order, and
+safety boundaries, and MUST NOT silently transform the macro into an unrelated workflow.
+Each step prompt MUST be submitted to the persistent subagent as a normal agent-shell
+prompt and MUST be interpreted by that subagent through the same agent-shell parsing
+path used for direct user prompt submissions. Step prompts MAY include supported slash
+commands such as `/loop`, explicit skill syntax, explicit MCP server syntax, and
+ordinary prompt text, subject to the same permissions, policy, turn lifecycle, loop
+limits, and runtime bounds that would apply if the prompt were typed directly in that
+subagent. The macro runner MUST NOT reinterpret slash commands itself or bypass normal
+agent-shell parsing.
+
+The main model MUST wait for the subagent response for each step before continuing. If a
+step prompt invokes a slash command such as `/loop` that creates repeated or long-
+running child work, the macro run MUST wait until that subagent step reaches its normal
+terminal result before judging the step. Step submission and result delivery MUST use
+MMP-visible coordination. If the runtime uses an internal helper to inject a macro step
+as a subagent prompt, that helper MUST preserve MMP task status and task result
+observability and MUST use stable idempotency keys so retries do not duplicate already-
+started or completed steps.
+
+After each step response, the main model MUST judge success or failure from the current
+step intent, the user-stated invocation context, the subagent response, and whether the
+remaining scripted steps are still valid and safe to run. On success, the main model
+MUST submit the next step prompt to the same subagent session. On failure, the main
+model MUST stop the macro run immediately and end the turn with a user-visible
+explanation. A macro run succeeds only when all required steps complete successfully in
+order, unless a future macro format explicitly defines an early-success condition.
+
 ## 11. Agent Shell Commands
 
 The agent shell MUST provide slash commands.
 
 The agent shell prompt MUST use the same selector behavior as the Mezzanine
 command prompt for slash-command names, slash-command arguments with
-enumerable values, explicit `$<skill-name>` tokens, and explicit
-`@<mcp-server-name>` tokens. Slash-command selection MUST preserve the leading
-`/` and MUST NOT affect ordinary non-slash prompt text. Skill completion MUST
-preserve the leading `$`; MCP server completion MUST preserve the leading `@`.
+enumerable values, explicit `$<skill-name>` tokens, explicit `#<macro-name>`
+tokens, and explicit `@<mcp-server-name>` tokens. Slash-command selection MUST
+preserve the leading `/` and MUST NOT affect ordinary non-slash prompt text.
+Skill completion MUST preserve the leading `$`; macro completion MUST preserve
+the leading `#`; MCP server completion MUST preserve the leading `@`.
 
 The agent shell prompt MUST render prefix-based shadow hints for slash-command
-names, enumerable slash-command arguments, explicit skill names, and explicit
-MCP server names. Slash commands that accept parameters SHOULD render a
-parameter placeholder until the user starts typing that parameter. Pane-local
+names, enumerable slash-command arguments, explicit skill names, explicit macro
+names, and explicit MCP server names. Slash commands that accept parameters
+SHOULD render a parameter placeholder until the user starts typing that
+parameter. Pane-local
 agent prompt input MUST render with a black or white foreground chosen from the
 active prompt background for readability, and shadow-hint completion text MUST
 use a shaded foreground derived from the same contrast decision. Invalid slash
@@ -4989,6 +5090,14 @@ The baseline command capabilities are:
   `$<skill-name> [additional context]`. Discovery diagnostics for skipped skill
   entries SHOULD be included so invalid skill installations are visible without
   preventing valid skills from being used.
+- `/list-macros`: Show the effective agent macros available to the active pane,
+  including each macro name, source scope, step count, and description. The
+  display MUST use the same catalog that backs `#<macro-name>` prompt
+  expansion. It SHOULD explain that users can type `#` and use prompt
+  completion to select a macro, and SHOULD show the explicit invocation form
+  `#<macro-name> [additional context]`. Discovery diagnostics for skipped macro
+  entries SHOULD be included so invalid macro installations are visible without
+  preventing valid macros from being used.
 - `/copy-context`: Copy the assembled model request context for the active
   pane's currently running agent turn. The command MUST accept `pane`, `buffer
   [name]`, and `clipboard` targets using the same target semantics as
@@ -5642,7 +5751,7 @@ The baseline control methods are:
 | `frame/read` | `{ "target": WindowTarget \| PaneTarget }` | `{ "fields": object, "rendered": string }` | Read-only and naturally idempotent. |
 | `agent/shell/show` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "agent": AgentState, "visible": true }` | Mutating UI state. |
 | `agent/shell/hide` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "agent": AgentState, "visible": false }` | Mutating UI state. MUST stop active pane-local agent work before hiding. |
-| `agent/shell/command` | `{ "input": string, "idempotency_key": string }` | `{ "pane_id": string, "input": string, "kind": string, "command": string \| null, "body": string \| null, "turn": AgentTaskState \| null }` | Primary-only command submitted through the visible agent shell for the active pane. Slash commands MUST return display, mutation, or runtime-required results. Non-slash prompts MUST create or queue an agent turn when no pane-local turn is active, or become mid-turn steering for the active turn. |
+| `agent/shell/command` | `{ "input": string, "idempotency_key": string }` | `{ "pane_id": string, "input": string, "kind": string, "command": string \| null, "body": string \| null, "turn": AgentTaskState \| null }` | Primary-only command submitted through the visible agent shell for the active pane. Slash commands MUST return display, mutation, or runtime-required results. Non-slash prompts MUST create or queue an agent turn when no pane-local turn is active, become mid-turn steering for the active turn, or start the macro orchestration flow when the prompt begins with a recognized `#<macro-name>` invocation. Internal macro step submission to a subagent MUST preserve the same normal agent-shell parsing semantics, including slash-command handling, even though it is not this primary-only control method. |
 | `agent/list` | `{ "target": SessionTarget }` | `{ "agents": [AgentState] }` | Read-only and naturally idempotent. |
 | `agent/task/list` | `{ "target": AgentTarget \| SessionTarget }` | `{ "tasks": [AgentTaskState] }` | Read-only and naturally idempotent. |
 | `agent/spawn` | `{ "parent_agent": AgentTarget, "placement": Placement, "role": string, "cooperation_mode": string, "read_scopes": [string], "write_scopes": [string], "prompt": string, "idempotency_key": string }` | `{ "agent": AgentState, "pane": PaneState }` | Mutating and permission-gated. |
