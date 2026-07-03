@@ -5152,6 +5152,100 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies subagent spawn-limit denials are recoverable model feedback.
+///
+/// Capacity exhaustion is a transient scheduling condition, not a malformed
+/// delegation request. The parent model should receive the denial as action
+/// result context so it can continue locally or wait for existing children
+/// instead of having the turn fail immediately.
+#[test]
+fn runtime_spawn_limit_denial_queues_model_recovery() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-spawn-limit-feedback","input":"delegate until capacity is full"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let action = runtime_spawn_agent_action("spawn-over-capacity", "start another child");
+    let denied = crate::agent::ActionResult::failed(
+        &turn,
+        &action,
+        ActionStatus::Denied,
+        "forbidden",
+        "subagent spawn limit reached for agent-%1: active direct children 4, agents.max_root_subagents 4",
+    )
+    .unwrap();
+    let mut execution = crate::agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn over capacity".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![denied],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    let queued = service
+        .queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "subagent_spawn_limit_reached",
+        )
+        .unwrap();
+
+    assert!(queued);
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block
+                .content
+                .contains("[action_result spawn-over-capacity spawn_agent denied]")
+            && block.content.contains("subagent spawn limit reached")
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint
+            && block.content.contains("attempt=1 max=5")
+            && block.content.contains("Spawn-agent recovery")
+    }));
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies unrecovered `apply_patch` failures do not expose shell-wrapper
 /// fragments when no actionable diagnostic survived capture.
 ///

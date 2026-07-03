@@ -675,6 +675,16 @@ pub(super) fn runtime_action_result_is_feedback_candidate(result: &ActionResult)
         return runtime_action_type_is_model_correctable(result.action_type)
             && !runtime_error_code_is_non_correctable(error.code.as_str());
     }
+    if result.action_type == "spawn_agent"
+        && result.status == ActionStatus::Denied
+        && error.code == "forbidden"
+        && error
+            .message
+            .to_ascii_lowercase()
+            .contains("subagent spawn limit reached")
+    {
+        return true;
+    }
     if result.status != ActionStatus::Failed {
         return false;
     }
@@ -1055,7 +1065,7 @@ pub(super) fn runtime_execution_has_spawn_agent_failure(execution: &AgentTurnExe
     execution.action_results.iter().any(|result| {
         result.is_error
             && result.action_type == "spawn_agent"
-            && result.status == ActionStatus::Failed
+            && matches!(result.status, ActionStatus::Failed | ActionStatus::Denied)
     })
 }
 
