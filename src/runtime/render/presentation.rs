@@ -3573,7 +3573,12 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             }
             header
         }
-        AgentActionPayload::IssueQuery { kind, text, limit } => {
+        AgentActionPayload::IssueQuery {
+            kind,
+            state,
+            text,
+            limit,
+        } => {
             let mut header = match kind
                 .as_deref()
                 .map(str::trim)
@@ -3582,6 +3587,12 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
                 Some(kind) => format!("issue query: kind={}", agent_action_display_preview(kind)),
                 None => "issue query: current project".to_string(),
             };
+            if let Some(state) = state.as_deref().map(str::trim)
+                && !state.is_empty()
+            {
+                header.push_str(" state=");
+                header.push_str(&agent_action_display_preview(state));
+            }
             if let Some(text) = text.as_deref().map(str::trim)
                 && !text.is_empty()
             {

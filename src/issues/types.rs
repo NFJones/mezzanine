@@ -40,6 +40,36 @@ impl IssueKind {
     }
 }
 
+/// Workflow state for one locally tracked issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueState {
+    /// Issue is still active and should be returned by default work queries.
+    Open,
+    /// Issue implementation and verification are complete, but history remains queryable.
+    Resolved,
+}
+
+impl IssueState {
+    /// Returns the stable storage and JSON name for this state.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+        }
+    }
+
+    /// Parses a user or model supplied issue state.
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "open" => Ok(Self::Open),
+            "resolved" => Ok(Self::Resolved),
+            _ => Err(MezError::invalid_args(
+                "issue state must be open or resolved",
+            )),
+        }
+    }
+}
+
 /// User-authored fields used to create one issue record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewIssueRecord {
@@ -66,6 +96,8 @@ pub struct IssueRecord {
     pub project: String,
     /// Defect or task classification.
     pub kind: IssueKind,
+    /// Open or resolved workflow state.
+    pub state: IssueState,
     /// Required single-line issue summary.
     pub title: String,
     /// Optional issue detail text.
@@ -115,6 +147,7 @@ impl IssueRecord {
             id,
             project: fields.project,
             kind: fields.kind,
+            state: IssueState::Open,
             title: fields.title,
             body: fields.body,
             notes: fields.notes,
@@ -154,6 +187,8 @@ impl IssueRecord {
 pub struct IssueUpdate {
     /// Optional replacement defect/task classification.
     pub kind: Option<IssueKind>,
+    /// Optional replacement open/resolved workflow state.
+    pub state: Option<IssueState>,
     /// Optional replacement single-line title.
     pub title: Option<String>,
     /// Optional replacement issue description.
@@ -174,6 +209,7 @@ impl IssueUpdate {
     /// Returns whether the patch requests at least one field mutation.
     pub fn has_changes(&self) -> bool {
         self.kind.is_some()
+            || self.state.is_some()
             || self.title.is_some()
             || self.body.is_some()
             || self.clear_body
@@ -258,6 +294,8 @@ pub struct IssueQuery {
     pub project: String,
     /// Optional defect/task filter.
     pub kind: Option<IssueKind>,
+    /// Optional open/resolved filter.
+    pub state: Option<IssueState>,
     /// Optional case-insensitive title/body substring query.
     pub text: Option<String>,
     /// Maximum records returned.
@@ -269,6 +307,17 @@ impl IssueQuery {
     pub fn new(
         project: String,
         kind: Option<IssueKind>,
+        text: Option<String>,
+        limit: Option<usize>,
+    ) -> Result<Self> {
+        Self::new_with_state(project, kind, Some(IssueState::Open), text, limit)
+    }
+
+    /// Builds a validated query with an explicit state filter.
+    pub fn new_with_state(
+        project: String,
+        kind: Option<IssueKind>,
+        state: Option<IssueState>,
         text: Option<String>,
         limit: Option<usize>,
     ) -> Result<Self> {
@@ -290,6 +339,7 @@ impl IssueQuery {
         Ok(Self {
             project,
             kind,
+            state,
             text,
             limit: limit.min(MAX_ISSUE_QUERY_LIMIT),
         })

@@ -5077,8 +5077,10 @@ The baseline command capabilities are:
   active pane project. It MUST accept `add`, `show`, `update`, `query` (or
   `list`), and `delete` (or `remove`). Records MUST be stored in the
   runtime-owned SQLite issue store and keyed by the active pane project root.
-  Issue records MUST support an optional body for the stable description and
-  optional mutable notes for progress, handoff context, and next steps.
+  Issue records MUST support open and resolved workflow states, default new
+  records to open, preserve resolved records for history, and support an
+  optional body for the stable description and optional mutable notes for
+  progress, handoff context, and next steps.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the
@@ -7581,7 +7583,7 @@ gated `issues` capability whose concrete action subset contains `issue_add`,
 `issue_update`, `issue_query`, and `issue_delete`. These on-demand actions MUST
 execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
-continuation. `issue_add` and `issue_update` MAY set dependency issue ids through a `depends_on` list; `issue_update` MAY also mutate body text, title, kind, notes, and dependencies. Dependencies MUST reference existing same-project issues and MUST NOT introduce cycles. Notes are the intended field for model working progress and handoff state.
+continuation. `issue_query` MUST default to open issues when no state filter is provided and MAY filter by open or resolved state. `issue_update` MAY mark issues open or resolved while preserving resolved records for history. `issue_add` and `issue_update` MAY set dependency issue ids through a `depends_on` list; `issue_update` MAY also mutate body text, title, kind, notes, state, and dependencies. Dependencies MUST reference existing same-project issues and MUST NOT introduce cycles. Notes are the intended field for model working progress and handoff state.
 When local issue tracking is disabled, the harness MUST deny the `issues`
 capability and MUST NOT expose issue actions.
 

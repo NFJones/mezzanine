@@ -85,8 +85,14 @@ pub(super) fn execute_agent_shell_issue_command(
                 visibility,
             })
         }
-        RuntimeIssueArgs::Query { kind, text, limit } => {
-            let query = crate::issues::IssueQuery::new(project, kind, text, limit)?;
+        RuntimeIssueArgs::Query {
+            kind,
+            state,
+            text,
+            limit,
+        } => {
+            let query =
+                crate::issues::IssueQuery::new_with_state(project, kind, state, text, limit)?;
             let records = store.query_issues(&query)?;
             Ok(AgentShellCommandOutcome::Display {
                 command: "issue".to_string(),
@@ -127,6 +133,7 @@ enum RuntimeIssueArgs {
     },
     Query {
         kind: Option<crate::issues::IssueKind>,
+        state: Option<crate::issues::IssueState>,
         text: Option<String>,
         limit: Option<usize>,
     },
@@ -228,6 +235,12 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                     tokens, index, "kind",
                 )?)?);
             }
+            "--state" => {
+                index = index.saturating_add(1);
+                update.state = Some(crate::issues::IssueState::parse(required_issue_value(
+                    tokens, index, "state",
+                )?)?);
+            }
             "--title" => {
                 index = index.saturating_add(1);
                 update.title = Some(required_issue_value(tokens, index, "title")?.to_string());
@@ -252,7 +265,7 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
             "--clear-depends-on" => update.clear_depends_on = true,
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue update accepts --kind, --title, --body, --clear-body, --notes, --clear-notes, --depends-on, and --clear-depends-on",
+                    "issue update accepts --kind, --state, --title, --body, --clear-body, --notes, --clear-notes, --depends-on, and --clear-depends-on",
                 ));
             }
         }
@@ -267,6 +280,7 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
 
 fn parse_issue_query_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     let mut kind = None;
+    let mut state = None;
     let mut text = None;
     let mut limit = None;
     let mut index = 0usize;
@@ -276,6 +290,12 @@ fn parse_issue_query_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                 index = index.saturating_add(1);
                 kind = Some(crate::issues::IssueKind::parse(required_issue_value(
                     tokens, index, "kind",
+                )?)?);
+            }
+            "--state" => {
+                index = index.saturating_add(1);
+                state = Some(crate::issues::IssueState::parse(required_issue_value(
+                    tokens, index, "state",
                 )?)?);
             }
             "--text" => {
@@ -294,13 +314,18 @@ fn parse_issue_query_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
             }
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue query accepts --kind, --text, and --limit",
+                    "issue query accepts --kind, --state, --text, and --limit",
                 ));
             }
         }
         index = index.saturating_add(1);
     }
-    Ok(RuntimeIssueArgs::Query { kind, text, limit })
+    Ok(RuntimeIssueArgs::Query {
+        kind,
+        state,
+        text,
+        limit,
+    })
 }
 
 fn parse_issue_delete_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
@@ -330,10 +355,11 @@ fn runtime_issue_record_detail_display(record: Option<&crate::issues::IssueRecor
         return "issue found=false".to_string();
     };
     format!(
-        "issue found=true\nid={}\nproject={}\nkind={}\ntitle={}\nbody={}\nnotes={}\ndepends_on={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
+        "issue found=true\nid={}\nproject={}\nkind={}\nstate={}\ntitle={}\nbody={}\nnotes={}\ndepends_on={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
         record.id,
         json_escape(&record.project),
         record.kind.as_str(),
+        record.state.as_str(),
         json_escape(&record.title),
         record
             .body
@@ -358,10 +384,11 @@ fn runtime_issue_records_display(records: &[crate::issues::IssueRecord]) -> Stri
     let mut lines = vec![format!("issues count={}", records.len())];
     for record in records {
         lines.push(format!(
-            "id={} project={} kind={} title={} depends_on={}",
+            "id={} project={} kind={} state={} title={} depends_on={}",
             record.id,
             json_escape(&record.project),
             record.kind.as_str(),
+            record.state.as_str(),
             json_escape(&record.title),
             runtime_issue_depends_on_display(&record.depends_on)
         ));

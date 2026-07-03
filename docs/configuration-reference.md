@@ -407,10 +407,13 @@ are Mezzanine-native themes.
 | `issues.storage` | string | `"sqlite"` | Local issue storage backend. Current builds support SQLite. |
 | `issues.database_path` | string | `""` | Optional database path override; empty uses `<config_root>/issues.sqlite`. Relative paths are created privately under `<config_root>`; absolute paths are opened as caller-owned locations without creating or chmodding the parent directory. |
 
-Issue records include a required single-line title, optional body text for the
-stable issue description, and optional mutable notes for working progress,
-handoff context, and next steps. The `mez issue`, `/issue`, and gated MAAP
-issue surfaces can update notes without rewriting the issue description.
+Issue records include a required single-line title, an open or resolved state,
+optional body text for the stable issue description, and optional mutable notes
+for working progress, handoff context, and next steps. New records default to
+open, normal issue queries return open records unless a state filter is supplied,
+and resolved records remain stored for history. The `mez issue`, `/issue`, and
+gated MAAP issue surfaces can update state and notes without rewriting the issue
+description.
 
 ### `agents`
 

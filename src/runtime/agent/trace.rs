@@ -722,8 +722,14 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             );
             data.insert("clear_notes".to_string(), serde_json::json!(clear_notes));
         }
-        AgentActionPayload::IssueQuery { kind, text, limit } => {
+        AgentActionPayload::IssueQuery {
+            kind,
+            state,
+            text,
+            limit,
+        } => {
             data.insert("kind".to_string(), serde_json::json!(kind));
+            data.insert("state".to_string(), serde_json::json!(state));
             data.insert(
                 "text".to_string(),
                 text.as_deref()

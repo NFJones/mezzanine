@@ -15,7 +15,7 @@ mod types;
 
 pub use store::IssueStore;
 pub use types::{
-    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueUpdate, NewIssueRecord,
+    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueState, IssueUpdate, NewIssueRecord,
     UpdateIssueResult, validate_issue_dependency_ids,
 };
 

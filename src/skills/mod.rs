@@ -51,7 +51,7 @@ const BUILTIN_ADD_ISSUES_SKILL_TEXT: &str = include_str!("builtin/add-issues/SKI
 const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
 const BUILTIN_ADD_RESEARCH_SKILL_TEXT: &str = include_str!("builtin/add-research/SKILL.md");
-const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, fix the returned issues, keep progress notes current, and remove verified fixed issues from the tracker.";
+const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, fix open issues, keep progress notes current, and mark verified fixes resolved.";
 const BUILTIN_FIX_ISSUES_SKILL_TEXT: &str = include_str!("builtin/fix-issues/SKILL.md");
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
 const BUILTIN_MEZ_REFERENCE_SKILL_TEXT: &str = include_str!("builtin/mez-reference/SKILL.md");
@@ -816,11 +816,9 @@ mod tests {
                 .text
                 .contains("Store the plan in the issue notes field")
         );
-        assert!(
-            fix_issues_document.text.contains(
-                "Do not delete an issue until implementation and verification are complete"
-            )
-        );
+        assert!(fix_issues_document.text.contains(
+            "mark the issue `resolved` with `issue_update` so history remains queryable"
+        ));
 
         let reference_document =
             load_skill_document(catalog.get(BUILTIN_MEZ_REFERENCE_SKILL_NAME).unwrap()).unwrap();

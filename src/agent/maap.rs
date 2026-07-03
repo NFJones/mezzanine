@@ -235,6 +235,8 @@ pub enum AgentActionPayload {
         id: String,
         /// Optional replacement issue kind: defect or task.
         kind: Option<String>,
+        /// Optional replacement issue workflow state: open or resolved.
+        state: Option<String>,
         /// Optional replacement single-line issue title.
         title: Option<String>,
         /// Optional replacement issue detail text.
@@ -254,6 +256,8 @@ pub enum AgentActionPayload {
     IssueQuery {
         /// Optional issue kind filter: defect or task.
         kind: Option<String>,
+        /// Optional issue state filter: open or resolved.
+        state: Option<String>,
         /// Optional title/body substring filter.
         text: Option<String>,
         /// Optional maximum records to return.
@@ -832,6 +836,7 @@ impl AgentAction {
             AgentActionPayload::IssueUpdate {
                 id,
                 kind,
+                state,
                 title,
                 body,
                 clear_body,
@@ -846,6 +851,10 @@ impl AgentAction {
                         .as_deref()
                         .map(crate::issues::IssueKind::parse)
                         .transpose()?,
+                    state: state
+                        .as_deref()
+                        .map(crate::issues::IssueState::parse)
+                        .transpose()?,
                     title: title.clone(),
                     body: body.clone(),
                     clear_body: *clear_body,
@@ -856,9 +865,17 @@ impl AgentAction {
                 }
                 .validate()
             }
-            AgentActionPayload::IssueQuery { kind, text, limit } => {
+            AgentActionPayload::IssueQuery {
+                kind,
+                state,
+                text,
+                limit,
+            } => {
                 if let Some(kind) = kind {
                     crate::issues::IssueKind::parse(kind)?;
+                }
+                if let Some(state) = state {
+                    crate::issues::IssueState::parse(state)?;
                 }
                 if let Some(text) = text
                     && text.bytes().any(|byte| byte == 0)
@@ -1346,6 +1363,7 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
         "issue_update" => AgentActionPayload::IssueUpdate {
             id: required_string(object, "id")?.to_string(),
             kind: optional_string(object, "kind")?.map(str::to_string),
+            state: optional_string(object, "state")?.map(str::to_string),
             title: optional_string(object, "title")?.map(str::to_string),
             body: optional_string(object, "body")?.map(str::to_string),
             clear_body: optional_bool(object, "clear_body")?.unwrap_or(false),
@@ -1356,6 +1374,7 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
         },
         "issue_query" => AgentActionPayload::IssueQuery {
             kind: optional_string(object, "kind")?.map(str::to_string),
+            state: optional_string(object, "state")?.map(str::to_string),
             text: optional_string(object, "text")?.map(str::to_string),
             limit: optional_nullable_u64(object, "limit")?,
         },

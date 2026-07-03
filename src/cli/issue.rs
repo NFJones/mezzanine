@@ -8,7 +8,7 @@ use super::{
     Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, load_runtime_config_layers,
 };
 use crate::issues::{
-    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, NewIssueRecord,
+    IssueKind, IssueQuery, IssueRecord, IssueState, IssueStore, IssueUpdate, NewIssueRecord,
     issue_database_location, project_key_for_working_directory,
 };
 
@@ -64,9 +64,15 @@ pub(super) fn run_issue<W: Write>(
             )?;
             issue_record_json(&record)?
         }
-        IssueCliCommand::Query { kind, text, limit } => {
+        IssueCliCommand::Query {
+            kind,
+            state,
+            text,
+            limit,
+        } => {
             let kind = kind.as_deref().map(IssueKind::parse).transpose()?;
-            let query = IssueQuery::new(project, kind, text, limit)?;
+            let state = state.as_deref().map(IssueState::parse).transpose()?;
+            let query = IssueQuery::new_with_state(project, kind, state, text, limit)?;
             issue_records_json(&store.query_issues(&query)?)?
         }
         IssueCliCommand::Delete { id } => {
@@ -84,6 +90,7 @@ pub(super) fn run_issue<W: Write>(
         IssueCliCommand::Update {
             id,
             kind,
+            state,
             title,
             body,
             clear_body,
@@ -97,6 +104,7 @@ pub(super) fn run_issue<W: Write>(
                 id,
                 IssueUpdate {
                     kind: kind.as_deref().map(IssueKind::parse).transpose()?,
+                    state: state.as_deref().map(IssueState::parse).transpose()?,
                     title,
                     body,
                     clear_body,
@@ -157,6 +165,9 @@ enum IssueCliCommand {
         /// Optional replacement issue kind: defect or task.
         #[arg(long)]
         kind: Option<String>,
+        /// Optional replacement workflow state: open or resolved.
+        #[arg(long)]
+        state: Option<String>,
         /// Optional replacement single-line issue title.
         #[arg(long, allow_hyphen_values = true)]
         title: Option<String>,
@@ -188,6 +199,9 @@ enum IssueCliCommand {
         /// Optional issue kind filter: defect or task.
         #[arg(long)]
         kind: Option<String>,
+        /// Optional issue state filter: open or resolved.
+        #[arg(long)]
+        state: Option<String>,
         /// Optional title/body substring query.
         #[arg(long, allow_hyphen_values = true)]
         text: Option<String>,
@@ -211,6 +225,8 @@ struct IssueRecordJson<'a> {
     project: &'a str,
     /// Defect or task classification.
     kind: &'static str,
+    /// Open or resolved workflow state.
+    state: &'static str,
     /// Required issue title.
     title: &'a str,
     /// Optional issue body.
@@ -231,6 +247,7 @@ impl<'a> From<&'a IssueRecord> for IssueRecordJson<'a> {
             id: &record.id,
             project: &record.project,
             kind: record.kind.as_str(),
+            state: record.state.as_str(),
             title: &record.title,
             body: record.body.as_deref(),
             notes: record.notes.as_deref(),

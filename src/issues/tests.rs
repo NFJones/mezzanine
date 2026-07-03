@@ -62,6 +62,58 @@ fn issue_store_adds_and_queries_by_project_and_kind() {
     assert_eq!(results, vec![defect]);
 }
 
+/// Verifies issue state defaults to open, resolved issues remain queryable, and
+/// default work queries exclude resolved issue history.
+#[test]
+fn issue_store_defaults_to_open_and_filters_resolved_state() {
+    let store = temp_store("state");
+    let issue = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "Track state".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    assert_eq!(issue.state, IssueState::Open);
+
+    let resolved = store
+        .update_issue(
+            "/repo".to_string(),
+            issue.id.clone(),
+            IssueUpdate {
+                state: Some(IssueState::Resolved),
+                ..IssueUpdate::default()
+            },
+            20,
+        )
+        .unwrap()
+        .record
+        .unwrap();
+    assert_eq!(resolved.state, IssueState::Resolved);
+
+    let default_results = store
+        .query_issues(&IssueQuery::new("/repo".to_string(), None, None, Some(10)).unwrap())
+        .unwrap();
+    assert!(default_results.is_empty());
+
+    let resolved_results = store
+        .query_issues(
+            &IssueQuery::new_with_state(
+                "/repo".to_string(),
+                None,
+                Some(IssueState::Resolved),
+                None,
+                Some(10),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(resolved_results, vec![resolved]);
+}
+
 /// Verifies query limits are bounded and ordered by recent updates.
 #[test]
 fn issue_store_query_limit_bounds_results() {

@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
-    DeleteIssueResult, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord, IssueUpdate,
-    MezError, NewIssueRecord, Path, PathBuf, Result, UpdateIssueResult, ensure_private_parent,
-    generate_issue_id, set_private_issue_file_permissions,
+    DeleteIssueResult, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord, IssueState,
+    IssueUpdate, MezError, NewIssueRecord, Path, PathBuf, Result, UpdateIssueResult,
+    ensure_private_parent, generate_issue_id, set_private_issue_file_permissions,
 };
 
 /// SQLite-backed local issue store.
@@ -100,48 +100,62 @@ impl IssueStore {
     pub fn query_issues(&self, query: &IssueQuery) -> Result<Vec<IssueRecord>> {
         let connection = self.open()?;
         let mut sql = String::from(
-            "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1",
+            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1",
         );
         let kind_name = query.kind.map(IssueKind::as_str);
+        let state_name = query.state.map(IssueState::as_str);
+        let mut parameter_index = 2usize;
         if kind_name.is_some() {
-            sql.push_str(" AND kind = ?2");
+            sql.push_str(&format!(" AND kind = ?{parameter_index}"));
+            parameter_index = parameter_index.saturating_add(1);
+        }
+        if state_name.is_some() {
+            sql.push_str(&format!(" AND state = ?{parameter_index}"));
+            parameter_index = parameter_index.saturating_add(1);
         }
         let text = query
             .text
             .as_deref()
             .map(|value| format!("%{}%", escape_like(value)));
         if text.is_some() {
-            if kind_name.is_some() {
-                sql.push_str(" AND (title LIKE ?3 ESCAPE '\\' OR body LIKE ?3 ESCAPE '\\')");
-            } else {
-                sql.push_str(" AND (title LIKE ?2 ESCAPE '\\' OR body LIKE ?2 ESCAPE '\\')");
-            }
+            sql.push_str(&format!(
+                " AND (title LIKE ?{parameter_index} ESCAPE '\\' OR body LIKE ?{parameter_index} ESCAPE '\\')"
+            ));
+            parameter_index = parameter_index.saturating_add(1);
         }
         sql.push_str(" ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT ?");
-        let limit_index = if kind_name.is_some() && text.is_some() {
-            4
-        } else if kind_name.is_some() || text.is_some() {
-            3
-        } else {
-            2
-        };
-        sql.push_str(&limit_index.to_string());
+        sql.push_str(&parameter_index.to_string());
 
         let limit = i64::try_from(query.limit)
             .map_err(|_| MezError::invalid_args("issue query limit exceeded SQLite range"))?;
         let mut statement = connection.prepare(&sql)?;
-        let rows = match (kind_name, text) {
-            (Some(kind), Some(text)) => statement.query_map(
+        let rows = match (kind_name, state_name, text) {
+            (Some(kind), Some(state), Some(text)) => statement.query_map(
+                params![query.project, kind, state, text, limit],
+                row_to_issue_record,
+            )?,
+            (Some(kind), Some(state), None) => statement.query_map(
+                params![query.project, kind, state, limit],
+                row_to_issue_record,
+            )?,
+            (Some(kind), None, Some(text)) => statement.query_map(
                 params![query.project, kind, text, limit],
                 row_to_issue_record,
             )?,
-            (Some(kind), None) => {
+            (Some(kind), None, None) => {
                 statement.query_map(params![query.project, kind, limit], row_to_issue_record)?
             }
-            (None, Some(text)) => {
+            (None, Some(state), Some(text)) => statement.query_map(
+                params![query.project, state, text, limit],
+                row_to_issue_record,
+            )?,
+            (None, Some(state), None) => {
+                statement.query_map(params![query.project, state, limit], row_to_issue_record)?
+            }
+            (None, None, Some(text)) => {
                 statement.query_map(params![query.project, text, limit], row_to_issue_record)?
             }
-            (None, None) => {
+            (None, None, None) => {
                 statement.query_map(params![query.project, limit], row_to_issue_record)?
             }
         };
@@ -206,6 +220,9 @@ impl IssueStore {
         if let Some(kind) = update.kind {
             record.kind = kind;
         }
+        if let Some(state) = update.state {
+            record.state = state;
+        }
         if let Some(title) = update.title {
             record.title = title;
         }
@@ -258,6 +275,7 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              id TEXT PRIMARY KEY NOT NULL,
              project TEXT NOT NULL,
              kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
+             state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved')),
              title TEXT NOT NULL,
              body TEXT,
              notes TEXT,
@@ -282,6 +300,27 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              ON issue_dependencies(project, depends_on_id);",
     )?;
     ensure_notes_column(connection)?;
+    ensure_state_column(connection)?;
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS issues_project_state_kind_idx
+         ON issues(project, state, kind, updated_at DESC, id ASC)",
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_state_column(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA table_info(issues)")?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "state" {
+            return Ok(());
+        }
+    }
+    connection.execute(
+        "ALTER TABLE issues ADD COLUMN state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved'))",
+        [],
+    )?;
     Ok(())
 }
 
@@ -300,12 +339,13 @@ fn ensure_notes_column(connection: &Connection) -> Result<()> {
 fn insert_issue(connection: &Connection, record: &IssueRecord) -> Result<()> {
     record.validate()?;
     connection.execute(
-        "INSERT INTO issues (id, project, kind, title, body, notes, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO issues (id, project, kind, state, title, body, notes, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             record.id,
             record.project,
             record.kind.as_str(),
+            record.state.as_str(),
             record.title,
             record.body,
             record.notes,
@@ -318,27 +358,30 @@ fn insert_issue(connection: &Connection, record: &IssueRecord) -> Result<()> {
 
 fn row_to_issue_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueRecord> {
     let kind: String = row.get(2)?;
+    let state: String = row.get(3)?;
     Ok(IssueRecord {
         id: row.get(0)?,
         project: row.get(1)?,
         kind: IssueKind::parse(&kind).map_err(rusqlite_from_mez_error)?,
-        title: row.get(3)?,
-        body: row.get(4)?,
-        notes: row.get(5)?,
+        state: IssueState::parse(&state).map_err(rusqlite_from_mez_error)?,
+        title: row.get(4)?,
+        body: row.get(5)?,
+        notes: row.get(6)?,
         depends_on: Vec::new(),
-        created_at_unix_seconds: row_u64(row, 6)?,
-        updated_at_unix_seconds: row_u64(row, 7)?,
+        created_at_unix_seconds: row_u64(row, 7)?,
+        updated_at_unix_seconds: row_u64(row, 8)?,
     })
 }
 
 fn update_issue_row(connection: &Connection, record: &IssueRecord) -> Result<()> {
     connection.execute(
-        "UPDATE issues SET kind = ?3, title = ?4, body = ?5, notes = ?6, updated_at = ?7
+        "UPDATE issues SET kind = ?3, state = ?4, title = ?5, body = ?6, notes = ?7, updated_at = ?8
          WHERE project = ?1 AND id = ?2",
         params![
             record.project,
             record.id,
             record.kind.as_str(),
+            record.state.as_str(),
             record.title,
             record.body,
             record.notes,
@@ -351,7 +394,7 @@ fn update_issue_row(connection: &Connection, record: &IssueRecord) -> Result<()>
 fn select_issue(connection: &Connection, project: &str, id: &str) -> Result<Option<IssueRecord>> {
     let mut record = connection
         .query_row(
-            "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1 AND id = ?2",
+            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1 AND id = ?2",
             params![project, id],
             row_to_issue_record,
         )
@@ -495,7 +538,7 @@ fn rusqlite_from_mez_error(error: MezError) -> rusqlite::Error {
 fn inspect_issue(connection: &Connection, id: &str) -> Result<Option<IssueRecord>> {
     connection
         .query_row(
-            "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE id = ?1",
+            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE id = ?1",
             params![id],
             row_to_issue_record,
         )

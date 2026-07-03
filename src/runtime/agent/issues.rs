@@ -148,6 +148,7 @@ impl RuntimeSessionService {
             AgentActionPayload::IssueUpdate {
                 id,
                 kind,
+                state,
                 title,
                 body,
                 clear_body,
@@ -163,6 +164,10 @@ impl RuntimeSessionService {
                         kind: kind
                             .as_deref()
                             .map(crate::issues::IssueKind::parse)
+                            .transpose()?,
+                        state: state
+                            .as_deref()
+                            .map(crate::issues::IssueState::parse)
                             .transpose()?,
                         title: title.clone(),
                         body: body.clone(),
@@ -185,13 +190,28 @@ impl RuntimeSessionService {
                     ),
                 }
             }
-            AgentActionPayload::IssueQuery { kind, text, limit } => {
+            AgentActionPayload::IssueQuery {
+                kind,
+                state,
+                text,
+                limit,
+            } => {
                 let kind = kind
                     .as_deref()
                     .map(crate::issues::IssueKind::parse)
                     .transpose()?;
+                let state = state
+                    .as_deref()
+                    .map(crate::issues::IssueState::parse)
+                    .transpose()?;
                 let limit = limit.and_then(|value| usize::try_from(value).ok());
-                let query = crate::issues::IssueQuery::new(project, kind, text.clone(), limit)?;
+                let query = crate::issues::IssueQuery::new_with_state(
+                    project,
+                    kind,
+                    state,
+                    text.clone(),
+                    limit,
+                )?;
                 match store.query_issues(&query) {
                     Ok(records) => Ok(issue_query_action_result(turn, action, &records)),
                     Err(error) => ActionResult::failed(
@@ -343,6 +363,7 @@ fn issue_record_json(record: &crate::issues::IssueRecord) -> serde_json::Value {
         "id": record.id,
         "project": record.project,
         "kind": record.kind.as_str(),
+        "state": record.state.as_str(),
         "title": record.title,
         "body": record.body,
         "notes": record.notes,

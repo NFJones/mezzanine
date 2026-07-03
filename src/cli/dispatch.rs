@@ -103,7 +103,7 @@ pub async fn run_with<W: Write, E: Write>(
     _stderr: &mut E,
 ) -> Result<()> {
     let invocation = match CliInvocation::parse_or_display(&args, &env.runtime, env.mez.as_ref())? {
-        CliInvocationParse::Invocation(invocation) => invocation,
+        CliInvocationParse::Invocation(invocation) => *invocation,
         CliInvocationParse::Display(display) => {
             write!(stdout, "{display}")?;
             return Ok(());

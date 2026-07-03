@@ -270,6 +270,7 @@ mod tests {
             payload: AgentActionPayload::IssueUpdate {
                 id: "issue-123".to_string(),
                 kind: Some("task".to_string()),
+                state: Some("resolved".to_string()),
                 title: Some("Update issue rendering".to_string()),
                 body: None,
                 clear_body: true,
@@ -284,6 +285,7 @@ mod tests {
             rationale: String::new(),
             payload: AgentActionPayload::IssueQuery {
                 kind: Some("task".to_string()),
+                state: Some("open".to_string()),
                 text: Some("rendering".to_string()),
                 limit: Some(5),
             },
@@ -310,7 +312,7 @@ mod tests {
         );
         assert_eq!(
             agent_action_execution_display_header(&query).as_deref(),
-            Some("issue query: kind=task text=rendering limit=5")
+            Some("issue query: kind=task state=open text=rendering limit=5")
         );
         assert_eq!(
             agent_action_execution_display_header(&delete).as_deref(),

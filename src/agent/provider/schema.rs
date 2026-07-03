@@ -644,6 +644,14 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
                 }),
             ),
             (
+                "state",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["open", "resolved", null],
+                    "description": "Optional replacement issue state. Use null to leave unchanged."
+                }),
+            ),
+            (
                 "title",
                 serde_json::json!({
                     "type": ["string", "null"],
@@ -697,6 +705,7 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
         &[
             "id",
             "kind",
+            "state",
             "title",
             "body",
             "clear_body",
@@ -722,6 +731,14 @@ fn maap_issue_query_action_schema() -> serde_json::Value {
                 }),
             ),
             (
+                "state",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["open", "resolved", null],
+                    "description": "Optional issue state filter. Use null for open issues by default."
+                }),
+            ),
+            (
                 "text",
                 serde_json::json!({
                     "type": ["string", "null"],
@@ -738,7 +755,7 @@ fn maap_issue_query_action_schema() -> serde_json::Value {
                 }),
             ),
         ],
-        &["kind", "text", "limit"],
+        &["kind", "state", "text", "limit"],
     )
 }
 
