@@ -3159,6 +3159,75 @@ fn runtime_agent_shell_unknown_macro_prompt_reports_list_macros_guidance() {
     assert!(service.agent_turn_ledger.turns().is_empty());
 }
 
+/// Verifies a known `#macro` prompt starts runtime orchestration instead of
+/// falling through as an ordinary user prompt. The macro run should create one
+/// persistent macro-managed child and give the parent turn the ordered steps,
+/// user context, and child recipient needed to drive the sequence.
+#[test]
+fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
+    let config_root = temp_root("runtime-known-macro");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. /loop inspect release notes for the requested version.\n2. Summarize release blockers.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root);
+
+    let response = service
+        .execute_agent_shell_command(&primary, "#release-check for v1.2")
+        .unwrap();
+
+    assert!(response.contains(r#""kind":"turn_started""#), "{response}");
+    let macro_children = service
+        .macro_managed_subagent_agents
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(macro_children.len(), 1, "{macro_children:?}");
+    let child_agent_id = &macro_children[0];
+    assert!(child_agent_id.starts_with("agent-%"), "{child_agent_id}");
+    let orchestration_context = service
+        .agent_turn_contexts
+        .values()
+        .map(|context| {
+            context
+                .blocks
+                .iter()
+                .map(|block| block.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .find(|content| content.contains("Agent macro invocation: #release-check"))
+        .expect("macro orchestration context should exist");
+    assert!(
+        orchestration_context.contains(&format!("Persistent subagent recipient: agent:{child_agent_id}")),
+        "{orchestration_context}"
+    );
+    assert!(
+        orchestration_context.contains("User additional context:\nfor v1.2"),
+        "{orchestration_context}"
+    );
+    assert!(
+        orchestration_context.contains("1. /loop inspect release notes for the requested version."),
+        "{orchestration_context}"
+    );
+    assert!(
+        orchestration_context.contains("slash commands such as /loop remain valid"),
+        "{orchestration_context}"
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies `/list-skills` displays the effective pane skill catalog with the
 /// same `$skill` invocation syntax accepted by explicit skill prompts. This
 /// gives users a discoverable way to see and select available workflows before

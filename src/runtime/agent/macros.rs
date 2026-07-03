@@ -93,7 +93,7 @@ impl RuntimeSessionService {
             "parent_agent": { "agent_id": parent_agent_id },
             "placement": "new-window",
             "role": "worker",
-            "cooperation_mode": "unrestricted",
+            "cooperation_mode": "owned-write",
             "prompt": child_prompt,
         })
         .to_string();
