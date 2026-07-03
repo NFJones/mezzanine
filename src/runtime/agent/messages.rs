@@ -111,6 +111,11 @@ impl RuntimeSessionService {
             ));
             return Ok(result);
         }
+        if let Some(result) =
+            self.queue_macro_managed_message_step(turn, action, recipient, &content_type, payload)?
+        {
+            return Ok(result);
+        }
         let sender = self.runtime_message_sender_identity(turn)?;
         let recipient_target = runtime_message_recipient(recipient)?;
         let message_id = format!("{}:{}", turn.turn_id, action.id);

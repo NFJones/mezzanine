@@ -2256,6 +2256,14 @@ pub struct RuntimeSessionService {
     /// The map is keyed by child turn id so task-result delivery can resolve
     /// the exact parent action result that was waiting.
     pub(super) joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
+    /// Subagents whose parent messages should become queued agent-shell steps.
+    ///
+    /// Agent macros keep one child session alive across multiple prompts. Those
+    /// prompts still travel through MMP `send_message`, but the runtime must
+    /// bridge each accepted message back into the child's normal agent-shell
+    /// turn path so slash commands and step results behave like ordinary
+    /// subagent prompt submissions.
+    pub(super) macro_managed_subagent_agents: BTreeSet<String>,
     /// Stores the subagent scope declarations value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
