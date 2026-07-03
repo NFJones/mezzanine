@@ -27,6 +27,8 @@ pub const SKILL_FILE_NAME: &str = "SKILL.md";
 pub const SKILL_ADDITIONAL_CONTEXT_HEADING: &str = "## Additional context";
 /// Stable name for the built-in skill-authoring workflow.
 pub const BUILTIN_CREATE_SKILL_NAME: &str = "create-skill";
+/// Stable name for the built-in macro-authoring workflow.
+pub const BUILTIN_CREATE_MACRO_NAME: &str = "create-macro";
 /// Stable name for the built-in documentation memory workflow.
 pub const BUILTIN_ADD_DOC_SKILL_NAME: &str = "add-doc";
 /// Stable name for the built-in issue filing workflow.
@@ -42,6 +44,8 @@ pub const BUILTIN_SKILL_PATH_PREFIX: &str = "<builtin>";
 
 const BUILTIN_CREATE_SKILL_DESCRIPTION: &str = "Create or modify concise Mezzanine skills in user or project scope. Use when the user asks to add, update, refactor, or repair a skill, SKILL.md, or skill resources.";
 const BUILTIN_CREATE_SKILL_TEXT: &str = include_str!("builtin/create-skill/SKILL.md");
+const BUILTIN_CREATE_MACRO_DESCRIPTION: &str = "Create or modify Mezzanine agent macros in user or project scope. Use when the user asks to add, update, refactor, or repair a macro, MACRO.md, or macro workflow.";
+const BUILTIN_CREATE_MACRO_TEXT: &str = include_str!("builtin/create-macro/SKILL.md");
 const BUILTIN_ADD_DOC_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable documentation or reference content into memory.";
 const BUILTIN_ADD_DOC_SKILL_TEXT: &str = include_str!("builtin/add-doc/SKILL.md");
@@ -302,6 +306,7 @@ pub fn skill_context_text(document: &SkillDocument, additional_context: Option<&
 fn builtin_skill_summaries() -> Vec<SkillSummary> {
     [
         (BUILTIN_CREATE_SKILL_NAME, BUILTIN_CREATE_SKILL_DESCRIPTION),
+        (BUILTIN_CREATE_MACRO_NAME, BUILTIN_CREATE_MACRO_DESCRIPTION),
         (
             BUILTIN_ADD_DOC_SKILL_NAME,
             BUILTIN_ADD_DOC_SKILL_DESCRIPTION,
@@ -350,6 +355,7 @@ fn builtin_skill_path(name: &str) -> PathBuf {
 fn builtin_skill_text(name: &str) -> Option<String> {
     match name {
         BUILTIN_CREATE_SKILL_NAME => Some(BUILTIN_CREATE_SKILL_TEXT.to_string()),
+        BUILTIN_CREATE_MACRO_NAME => Some(BUILTIN_CREATE_MACRO_TEXT.to_string()),
         BUILTIN_ADD_DOC_SKILL_NAME => Some(BUILTIN_ADD_DOC_SKILL_TEXT.to_string()),
         BUILTIN_ADD_ISSUES_SKILL_NAME => Some(BUILTIN_ADD_ISSUES_SKILL_TEXT.to_string()),
         BUILTIN_ADD_RESEARCH_SKILL_NAME => Some(BUILTIN_ADD_RESEARCH_SKILL_TEXT.to_string()),
@@ -614,10 +620,10 @@ pub fn is_valid_skill_name(name: &str) -> bool {
 mod tests {
     use super::{
         BUILTIN_ADD_DOC_SKILL_NAME, BUILTIN_ADD_ISSUES_SKILL_NAME, BUILTIN_ADD_RESEARCH_SKILL_NAME,
-        BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME, BUILTIN_MEZ_REFERENCE_SKILL_NAME,
-        BUILTIN_SKILL_PATH_PREFIX, SkillSource, discover_skill_catalog, is_valid_skill_name,
-        load_skill_document, parse_skill_prompt_invocation, skill_context_text,
-        split_skill_front_matter,
+        BUILTIN_CREATE_MACRO_NAME, BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME,
+        BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, SkillSource,
+        discover_skill_catalog, is_valid_skill_name, load_skill_document,
+        parse_skill_prompt_invocation, skill_context_text, split_skill_front_matter,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -692,6 +698,7 @@ mod tests {
                 "add-issues",
                 "add-research",
                 "audit",
+                "create-macro",
                 "create-skill",
                 "fix-issues",
                 "mez-reference",
@@ -777,6 +784,17 @@ mod tests {
                 .description
                 .contains("Create or modify concise Mezzanine skills")
         );
+
+        let create_macro_document =
+            load_skill_document(catalog.get(BUILTIN_CREATE_MACRO_NAME).unwrap()).unwrap();
+        assert!(create_macro_document.text.contains("name: create-macro"));
+        assert!(
+            create_macro_document
+                .text
+                .contains("User scope: `<config-root>/macros/<macro-name>/MACRO.md`")
+        );
+        assert!(create_macro_document.text.contains("## Steps"));
+        assert!(create_macro_document.text.contains("regular agent shell"));
 
         let add_doc_document =
             load_skill_document(catalog.get(BUILTIN_ADD_DOC_SKILL_NAME).unwrap()).unwrap();
