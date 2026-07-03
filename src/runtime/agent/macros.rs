@@ -6,8 +6,9 @@
 //! child subagent session.
 
 use super::*;
-use crate::macros::{MacroCatalog, discover_macro_catalog};
+use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
+use crate::runtime::RuntimeAgentPromptTurnStart;
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 
 impl RuntimeSessionService {
@@ -54,6 +55,73 @@ impl RuntimeSessionService {
     pub fn register_macro_managed_subagent(&mut self, child_agent_id: &str) {
         self.macro_managed_subagent_agents
             .insert(child_agent_id.to_string());
+    }
+
+    /// Starts the parent orchestration turn for an explicit `#macro` prompt.
+    ///
+    /// The runtime loads the configured macro, creates one persistent child
+    /// subagent, marks that child as macro-managed for later step messages, and
+    /// starts the parent model turn with a runtime hint that describes the
+    /// macro sequence and required child recipient. The parent model remains
+    /// responsible for adapting each step prompt and judging each child result.
+    ///
+    /// # Parameters
+    /// - `pane_id`: Parent pane where the user invoked the macro.
+    /// - `prompt`: Original user prompt beginning with `#<macro-name>`.
+    pub(in crate::runtime) fn start_agent_macro_prompt_turn(
+        &mut self,
+        pane_id: &str,
+        prompt: &str,
+    ) -> Result<RuntimeAgentPromptTurnStart> {
+        let invocation = crate::macros::parse_macro_prompt_invocation(prompt)
+            .ok_or_else(|| MezError::invalid_args("macro prompt must start with #<macro-name>"))?;
+        let catalog = self.effective_macro_catalog_for_pane(pane_id);
+        let summary = catalog.get(&invocation.name).cloned().ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                format!("agent macro is not available: #{}", invocation.name),
+            )
+        })?;
+        let definition = load_macro_definition(&summary)?;
+        let controller =
+            self.session.primary_client_id().cloned().ok_or_else(|| {
+                MezError::invalid_state("agent macro requires an attached primary")
+            })?;
+        let parent_agent_id = format!("agent-{pane_id}");
+        let child_prompt = runtime_macro_child_session_prompt(&definition.summary.name);
+        let params = serde_json::json!({
+            "parent_agent": { "agent_id": parent_agent_id },
+            "placement": "new-window",
+            "role": "worker",
+            "cooperation_mode": "unrestricted",
+            "prompt": child_prompt,
+        })
+        .to_string();
+        let spawn = runtime_subagent_spawn_request(&params, false)?;
+        let placement = runtime_subagent_placement_mode(&params)?;
+        let spawn_json = self.spawn_runtime_subagent(&controller, spawn, placement)?;
+        let (child_agent_id, _child_display_name, _child_turn_id) =
+            runtime_spawn_json_agent_and_turn(&spawn_json)?;
+        self.register_macro_managed_subagent(&child_agent_id);
+        let orchestration_prompt = runtime_macro_parent_orchestration_prompt(
+            &definition,
+            invocation.additional_context.as_deref(),
+            &child_agent_id,
+        );
+        let started = self.start_agent_prompt_turn_with_cooperation(
+            pane_id,
+            &orchestration_prompt,
+            Some("macro-orchestration".to_string()),
+        )?;
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &started.turn_id,
+            &format!(
+                "macro orchestration started name={} child_agent_id={}",
+                definition.summary.name, child_agent_id
+            ),
+        )?;
+        Ok(started)
     }
 
     /// Starts a normal child agent-shell turn for a macro step message.
@@ -196,4 +264,47 @@ fn macro_message_recipient_agent_id(recipient: &str) -> Option<String> {
                 .starts_with("agent-%")
                 .then(|| recipient.to_string())
         })
+}
+
+/// Builds the initial prompt used to keep the macro child session alive.
+fn runtime_macro_child_session_prompt(macro_name: &str) -> String {
+    format!(
+        "You are the persistent subagent session for agent macro `{macro_name}`. Wait for macro step prompts from the parent over MMP. For each step, execute only that prompt as a normal agent-shell task, then return a concise result with evidence, blockers, and whether the step goal appears satisfied."
+    )
+}
+
+/// Builds the parent model prompt that orchestrates one active macro run.
+fn runtime_macro_parent_orchestration_prompt(
+    definition: &MacroDefinition,
+    additional_context: Option<&str>,
+    child_agent_id: &str,
+) -> String {
+    let mut lines = vec![
+        format!("Agent macro invocation: #{}", definition.summary.name),
+        format!("Description: {}", definition.summary.description),
+        format!("Persistent subagent recipient: agent:{child_agent_id}"),
+        "".to_string(),
+        "Macro execution rules:".to_string(),
+        "- Use the same persistent subagent recipient for every step.".to_string(),
+        "- Send exactly one step prompt at a time with send_message.".to_string(),
+        "- Each step is interpreted as a normal agent-shell prompt in the subagent, so slash commands such as /loop remain valid.".to_string(),
+        "- You may adapt a scripted step to the user's stated intent, but preserve the macro purpose and step order.".to_string(),
+        "- After each subagent result, judge success against the step intent, user context, and remaining sequence.".to_string(),
+        "- On success, send the next step to the same recipient. On failure, stop and explain the failure.".to_string(),
+        "- Finish successfully only after all required steps complete in order.".to_string(),
+        "".to_string(),
+    ];
+    if let Some(context) = additional_context.filter(|context| !context.trim().is_empty()) {
+        lines.push("User additional context:".to_string());
+        lines.push(context.trim().to_string());
+        lines.push(String::new());
+    }
+    lines.push("Scripted steps:".to_string());
+    lines.extend(
+        definition
+            .steps
+            .iter()
+            .map(|step| format!("{}. {}", step.index, step.prompt)),
+    );
+    lines.join("\n")
 }

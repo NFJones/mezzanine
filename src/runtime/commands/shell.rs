@@ -646,6 +646,9 @@ impl RuntimeSessionService {
                             input,
                             Some(&steer_outcome),
                         )
+                    } else if parse_macro_prompt_invocation(input).is_some() {
+                        let started = self.start_agent_macro_prompt_turn(&pane_id, input)?;
+                        runtime_agent_shell_prompt_turn_response_json(&pane_id, input, &started)
                     } else {
                         let started = self.start_agent_prompt_turn(&pane_id, input)?;
                         runtime_agent_shell_prompt_turn_response_json(&pane_id, input, &started)
