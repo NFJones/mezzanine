@@ -226,6 +226,8 @@ pub enum AgentActionPayload {
         body: Option<String>,
         /// Optional mutable progress or handoff notes.
         notes: Option<String>,
+        /// Issue ids that this new issue depends on.
+        depends_on: Vec<String>,
     },
     /// Updates one local project issue through the runtime-owned issue store.
     IssueUpdate {
@@ -243,6 +245,10 @@ pub enum AgentActionPayload {
         notes: Option<String>,
         /// Clear existing mutable progress or handoff notes.
         clear_notes: bool,
+        /// Optional replacement dependency issue ids.
+        depends_on: Option<Vec<String>>,
+        /// Clear existing dependency issue ids.
+        clear_depends_on: bool,
     },
     /// Queries local project issues through the runtime-owned issue store.
     IssueQuery {
@@ -814,12 +820,14 @@ impl AgentAction {
                 title,
                 body,
                 notes,
+                depends_on,
             } => {
                 validate_non_empty("issue kind", kind)?;
                 crate::issues::IssueKind::parse(kind)?;
                 crate::issues::validate_issue_title(title)?;
                 crate::issues::validate_issue_body(body.as_deref())?;
-                crate::issues::validate_issue_notes(notes.as_deref())
+                crate::issues::validate_issue_notes(notes.as_deref())?;
+                crate::issues::validate_issue_dependency_ids(None, depends_on)
             }
             AgentActionPayload::IssueUpdate {
                 id,
@@ -829,6 +837,8 @@ impl AgentAction {
                 clear_body,
                 notes,
                 clear_notes,
+                depends_on,
+                clear_depends_on,
             } => {
                 validate_non_empty("issue id", id)?;
                 crate::issues::IssueUpdate {
@@ -841,6 +851,8 @@ impl AgentAction {
                     clear_body: *clear_body,
                     notes: notes.clone(),
                     clear_notes: *clear_notes,
+                    depends_on: depends_on.clone(),
+                    clear_depends_on: *clear_depends_on,
                 }
                 .validate()
             }
@@ -1329,6 +1341,7 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
             title: required_string(object, "title")?.to_string(),
             body: optional_string(object, "body")?.map(str::to_string),
             notes: optional_string(object, "notes")?.map(str::to_string),
+            depends_on: optional_string_array(object, "depends_on")?,
         },
         "issue_update" => AgentActionPayload::IssueUpdate {
             id: required_string(object, "id")?.to_string(),
@@ -1338,6 +1351,8 @@ fn parse_maap_action_value(_index: usize, value: &serde_json::Value) -> Result<A
             clear_body: optional_bool(object, "clear_body")?.unwrap_or(false),
             notes: optional_string(object, "notes")?.map(str::to_string),
             clear_notes: optional_bool(object, "clear_notes")?.unwrap_or(false),
+            depends_on: optional_nullable_string_array(object, "depends_on")?,
+            clear_depends_on: optional_bool(object, "clear_depends_on")?.unwrap_or(false),
         },
         "issue_query" => AgentActionPayload::IssueQuery {
             kind: optional_string(object, "kind")?.map(str::to_string),
@@ -1635,6 +1650,17 @@ fn optional_string_array(
         required_string_array(object, field)
     } else {
         Ok(Vec::new())
+    }
+}
+
+/// Returns an optional string array where missing or null means unchanged.
+fn optional_nullable_string_array(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<Vec<String>>> {
+    match object.get(field) {
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(_) => required_string_array(object, field).map(Some),
     }
 }
 

@@ -7581,8 +7581,7 @@ gated `issues` capability whose concrete action subset contains `issue_add`,
 `issue_update`, `issue_query`, and `issue_delete`. These on-demand actions MUST
 execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
-continuation. `issue_update` MAY mutate body text, title, kind, and notes;
-notes are the intended field for model working progress and handoff state.
+continuation. `issue_add` and `issue_update` MAY set dependency issue ids through a `depends_on` list; `issue_update` MAY also mutate body text, title, kind, notes, and dependencies. Dependencies MUST reference existing same-project issues and MUST NOT introduce cycles. Notes are the intended field for model working progress and handoff state.
 When local issue tracking is disabled, the harness MUST deny the `issues`
 capability and MUST NOT expose issue actions.
 

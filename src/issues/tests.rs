@@ -191,6 +191,72 @@ fn issue_store_persists_and_updates_notes() {
     assert_eq!(cleared.updated_at_unix_seconds, 30);
 }
 
+/// Verifies issue dependencies persist, query with records, and reject cycles.
+///
+/// Native dependency support is used by agents to choose a valid work order for
+/// split tasks. The store must reject nonexistent dependencies and dependency
+/// cycles so higher-level issue actions can trust the returned graph.
+#[test]
+fn issue_store_persists_dependencies_and_rejects_cycles() {
+    let store = temp_store("dependencies");
+    let prerequisite = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "Implement storage".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    let dependent = store
+        .add_issue_with_dependencies(
+            NewIssueRecord {
+                project: "/repo".to_string(),
+                kind: IssueKind::Task,
+                title: "Teach skills".to_string(),
+                body: None,
+                notes: None,
+                depends_on: vec![prerequisite.id.clone()],
+            },
+            20,
+        )
+        .unwrap();
+
+    assert_eq!(dependent.depends_on, vec![prerequisite.id.clone()]);
+    let queried = store
+        .query_issues(&IssueQuery::new("/repo".to_string(), None, None, Some(10)).unwrap())
+        .unwrap();
+    assert!(
+        queried.iter().any(|record| record.id == dependent.id
+            && record.depends_on == vec![prerequisite.id.clone()])
+    );
+
+    let missing = store.add_issue_with_dependencies(
+        NewIssueRecord {
+            project: "/repo".to_string(),
+            kind: IssueKind::Task,
+            title: "Blocked by missing issue".to_string(),
+            body: None,
+            notes: None,
+            depends_on: vec!["missing".to_string()],
+        },
+        30,
+    );
+    assert!(missing.is_err());
+
+    let cycle = store.update_issue(
+        "/repo".to_string(),
+        prerequisite.id.clone(),
+        IssueUpdate {
+            depends_on: Some(vec![dependent.id.clone()]),
+            ..IssueUpdate::default()
+        },
+        40,
+    );
+    assert!(cycle.is_err());
+}
+
 /// Verifies existing databases without a notes column migrate in place and
 /// preserve older issue rows with empty notes.
 #[test]

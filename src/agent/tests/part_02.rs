@@ -838,7 +838,9 @@ fn maap_batch_accepts_issue_update_actions() {
                 "body": null,
                 "clear_body": false,
                 "notes": "documented the next step",
-                "clear_notes": false
+                "clear_notes": false,
+                "depends_on": ["issue-0"],
+                "clear_depends_on": false
             }
         ]
     })
@@ -852,11 +854,15 @@ fn maap_batch_accepts_issue_update_actions() {
             id,
             notes,
             clear_notes,
+            depends_on,
+            clear_depends_on,
             ..
         } => {
             assert_eq!(id, "issue-1");
             assert_eq!(notes.as_deref(), Some("documented the next step"));
             assert!(!clear_notes);
+            assert_eq!(depends_on.as_deref(), Some(["issue-0".to_string()].as_slice()));
+            assert!(!clear_depends_on);
         }
         payload => panic!("expected issue_update payload, got {payload:?}"),
     }

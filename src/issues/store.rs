@@ -4,12 +4,14 @@
 //! keeps queries bounded. It deliberately uses exact project-key matching so
 //! issue records from different repositories do not bleed across surfaces.
 
+use std::collections::BTreeSet;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
     DeleteIssueResult, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord, IssueUpdate,
-    MezError, Path, PathBuf, Result, UpdateIssueResult, ensure_private_parent, generate_issue_id,
-    set_private_issue_file_permissions,
+    MezError, NewIssueRecord, Path, PathBuf, Result, UpdateIssueResult, ensure_private_parent,
+    generate_issue_id, set_private_issue_file_permissions,
 };
 
 /// SQLite-backed local issue store.
@@ -59,17 +61,38 @@ impl IssueStore {
         notes: Option<String>,
         now_unix_seconds: u64,
     ) -> Result<IssueRecord> {
-        let record = IssueRecord::new(
-            generate_issue_id(),
-            project,
-            kind,
-            title,
-            body,
-            notes,
+        self.add_issue_with_dependencies(
+            NewIssueRecord {
+                project,
+                kind,
+                title,
+                body,
+                notes,
+                depends_on: Vec::new(),
+            },
             now_unix_seconds,
+        )
+    }
+
+    /// Adds one issue record with dependency ids and returns the persisted value.
+    pub fn add_issue_with_dependencies(
+        &self,
+        fields: NewIssueRecord,
+        now_unix_seconds: u64,
+    ) -> Result<IssueRecord> {
+        let record = IssueRecord::new_with_fields(generate_issue_id(), fields, now_unix_seconds)?;
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        insert_issue(&transaction, &record)?;
+        validate_issue_dependency_targets(&transaction, &record.project, &record.depends_on)?;
+        replace_issue_dependencies(
+            &transaction,
+            &record.project,
+            &record.id,
+            &record.depends_on,
         )?;
-        let connection = self.open()?;
-        insert_issue(&connection, &record)?;
+        ensure_no_issue_dependency_cycle(&transaction, &record.project, &record.id)?;
+        transaction.commit()?;
         Ok(record)
     }
 
@@ -122,8 +145,11 @@ impl IssueStore {
                 statement.query_map(params![query.project, limit], row_to_issue_record)?
             }
         };
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(MezError::from)
+        let mut records = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(MezError::from)?;
+        load_issue_dependencies(&connection, &query.project, &mut records)?;
+        Ok(records)
     }
 
     /// Deletes one issue by project and id.
@@ -167,8 +193,9 @@ impl IssueStore {
             return Err(MezError::invalid_args("issue id must not be empty"));
         }
         update.validate()?;
-        let connection = self.open()?;
-        let Some(mut record) = select_issue(&connection, &project, &id)? else {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        let Some(mut record) = select_issue(&transaction, &project, &id)? else {
             return Ok(UpdateIssueResult {
                 project,
                 id,
@@ -192,9 +219,18 @@ impl IssueStore {
         } else if let Some(notes) = update.notes {
             record.notes = Some(notes);
         }
+        if update.clear_depends_on {
+            record.depends_on = Vec::new();
+        } else if let Some(depends_on) = update.depends_on {
+            record.depends_on = depends_on;
+        }
         record.updated_at_unix_seconds = now_unix_seconds;
         record.validate()?;
-        update_issue_row(&connection, &record)?;
+        validate_issue_dependency_targets(&transaction, &project, &record.depends_on)?;
+        update_issue_row(&transaction, &record)?;
+        replace_issue_dependencies(&transaction, &project, &id, &record.depends_on)?;
+        ensure_no_issue_dependency_cycle(&transaction, &project, &id)?;
+        transaction.commit()?;
         Ok(UpdateIssueResult {
             project,
             id,
@@ -231,7 +267,19 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS issues_project_kind_idx
              ON issues(project, kind, updated_at DESC, id ASC);
          CREATE INDEX IF NOT EXISTS issues_project_updated_idx
-             ON issues(project, updated_at DESC, id ASC);",
+             ON issues(project, updated_at DESC, id ASC);
+         CREATE TABLE IF NOT EXISTS issue_dependencies (
+             project TEXT NOT NULL,
+             issue_id TEXT NOT NULL,
+             depends_on_id TEXT NOT NULL,
+             PRIMARY KEY (project, issue_id, depends_on_id),
+             FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE,
+             FOREIGN KEY (depends_on_id) REFERENCES issues(id) ON DELETE CASCADE
+         );
+         CREATE INDEX IF NOT EXISTS issue_dependencies_project_issue_idx
+             ON issue_dependencies(project, issue_id);
+         CREATE INDEX IF NOT EXISTS issue_dependencies_project_depends_on_idx
+             ON issue_dependencies(project, depends_on_id);",
     )?;
     ensure_notes_column(connection)?;
     Ok(())
@@ -277,6 +325,7 @@ fn row_to_issue_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueRecord>
         title: row.get(3)?,
         body: row.get(4)?,
         notes: row.get(5)?,
+        depends_on: Vec::new(),
         created_at_unix_seconds: row_u64(row, 6)?,
         updated_at_unix_seconds: row_u64(row, 7)?,
     })
@@ -300,14 +349,119 @@ fn update_issue_row(connection: &Connection, record: &IssueRecord) -> Result<()>
 }
 
 fn select_issue(connection: &Connection, project: &str, id: &str) -> Result<Option<IssueRecord>> {
-    connection
+    let mut record = connection
         .query_row(
             "SELECT id, project, kind, title, body, notes, created_at, updated_at FROM issues WHERE project = ?1 AND id = ?2",
             params![project, id],
             row_to_issue_record,
         )
         .optional()
+        .map_err(MezError::from)?;
+    if let Some(record) = record.as_mut() {
+        record.depends_on = issue_dependencies_for_record(connection, project, &record.id)?;
+    }
+    Ok(record)
+}
+
+fn load_issue_dependencies(
+    connection: &Connection,
+    project: &str,
+    records: &mut [IssueRecord],
+) -> Result<()> {
+    for record in records {
+        record.depends_on = issue_dependencies_for_record(connection, project, &record.id)?;
+    }
+    Ok(())
+}
+
+fn issue_dependencies_for_record(
+    connection: &Connection,
+    project: &str,
+    issue_id: &str,
+) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT depends_on_id FROM issue_dependencies WHERE project = ?1 AND issue_id = ?2 ORDER BY depends_on_id ASC",
+    )?;
+    let rows = statement.query_map(params![project, issue_id], |row| row.get::<_, String>(0))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(MezError::from)
+}
+
+fn validate_issue_dependency_targets(
+    connection: &Connection,
+    project: &str,
+    depends_on: &[String],
+) -> Result<()> {
+    for dependency_id in depends_on {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM issues WHERE project = ?1 AND id = ?2)",
+            params![project, dependency_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(MezError::invalid_args(format!(
+                "issue dependency `{dependency_id}` does not exist in this project"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn replace_issue_dependencies(
+    connection: &Connection,
+    project: &str,
+    issue_id: &str,
+    depends_on: &[String],
+) -> Result<()> {
+    connection.execute(
+        "DELETE FROM issue_dependencies WHERE project = ?1 AND issue_id = ?2",
+        params![project, issue_id],
+    )?;
+    for dependency_id in depends_on {
+        connection.execute(
+            "INSERT INTO issue_dependencies (project, issue_id, depends_on_id) VALUES (?1, ?2, ?3)",
+            params![project, issue_id, dependency_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_no_issue_dependency_cycle(
+    connection: &Connection,
+    project: &str,
+    issue_id: &str,
+) -> Result<()> {
+    let mut visited = BTreeSet::new();
+    if issue_dependency_path_reaches(connection, project, issue_id, issue_id, &mut visited)? {
+        return Err(MezError::invalid_args("issue dependency cycle detected"));
+    }
+    Ok(())
+}
+
+fn issue_dependency_path_reaches(
+    connection: &Connection,
+    project: &str,
+    current_id: &str,
+    target_id: &str,
+    visited: &mut BTreeSet<String>,
+) -> Result<bool> {
+    if !visited.insert(current_id.to_string()) {
+        return Ok(false);
+    }
+    for dependency_id in issue_dependencies_for_record(connection, project, current_id)? {
+        if dependency_id == target_id
+            || issue_dependency_path_reaches(
+                connection,
+                project,
+                &dependency_id,
+                target_id,
+                visited,
+            )?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn escape_like(value: &str) -> String {

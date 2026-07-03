@@ -3,6 +3,8 @@
 //! These types define the durable shape shared by the issue SQLite store,
 //! process CLI, runtime slash commands, and model-authored semantic actions.
 
+use std::collections::BTreeSet;
+
 use crate::error::{MezError, Result};
 
 use super::{
@@ -38,6 +40,23 @@ impl IssueKind {
     }
 }
 
+/// User-authored fields used to create one issue record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewIssueRecord {
+    /// Canonical project key.
+    pub project: String,
+    /// Defect or task classification.
+    pub kind: IssueKind,
+    /// Required single-line issue summary.
+    pub title: String,
+    /// Optional issue detail text.
+    pub body: Option<String>,
+    /// Optional mutable progress or handoff notes.
+    pub notes: Option<String>,
+    /// Issue ids that must be completed before this issue can be worked.
+    pub depends_on: Vec<String>,
+}
+
 /// One durable issue record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueRecord {
@@ -53,6 +72,8 @@ pub struct IssueRecord {
     pub body: Option<String>,
     /// Optional mutable progress or handoff notes.
     pub notes: Option<String>,
+    /// Issue ids that must be completed before this issue can be worked.
+    pub depends_on: Vec<String>,
     /// Creation time as Unix seconds.
     pub created_at_unix_seconds: u64,
     /// Last update time as Unix seconds.
@@ -70,13 +91,34 @@ impl IssueRecord {
         notes: Option<String>,
         now_unix_seconds: u64,
     ) -> Result<Self> {
+        Self::new_with_fields(
+            id,
+            NewIssueRecord {
+                project,
+                kind,
+                title,
+                body,
+                notes,
+                depends_on: Vec::new(),
+            },
+            now_unix_seconds,
+        )
+    }
+
+    /// Builds a new issue record from user-authored fields.
+    pub fn new_with_fields(
+        id: String,
+        fields: NewIssueRecord,
+        now_unix_seconds: u64,
+    ) -> Result<Self> {
         let record = Self {
             id,
-            project,
-            kind,
-            title,
-            body,
-            notes,
+            project: fields.project,
+            kind: fields.kind,
+            title: fields.title,
+            body: fields.body,
+            notes: fields.notes,
+            depends_on: fields.depends_on,
             created_at_unix_seconds: now_unix_seconds,
             updated_at_unix_seconds: now_unix_seconds,
         };
@@ -90,6 +132,7 @@ impl IssueRecord {
         validate_issue_title(&self.title)?;
         validate_issue_body(self.body.as_deref())?;
         validate_issue_notes(self.notes.as_deref())?;
+        validate_issue_dependency_ids(Some(&self.id), &self.depends_on)?;
         if self.id.trim().is_empty() || self.id.bytes().any(|byte| byte == 0) {
             return Err(MezError::invalid_args("issue id must not be empty"));
         }
@@ -121,6 +164,10 @@ pub struct IssueUpdate {
     pub notes: Option<String>,
     /// Whether to clear mutable progress or handoff notes.
     pub clear_notes: bool,
+    /// Optional replacement dependency issue ids.
+    pub depends_on: Option<Vec<String>>,
+    /// Whether to clear dependency issue ids.
+    pub clear_depends_on: bool,
 }
 
 impl IssueUpdate {
@@ -132,6 +179,8 @@ impl IssueUpdate {
             || self.clear_body
             || self.notes.is_some()
             || self.clear_notes
+            || self.depends_on.is_some()
+            || self.clear_depends_on
     }
 
     /// Validates update fields before they are applied to a record.
@@ -151,13 +200,42 @@ impl IssueUpdate {
                 "issue update cannot set and clear notes",
             ));
         }
+        if self.depends_on.is_some() && self.clear_depends_on {
+            return Err(MezError::invalid_args(
+                "issue update cannot set and clear dependencies",
+            ));
+        }
         if let Some(title) = self.title.as_deref() {
             validate_issue_title(title)?;
         }
         validate_issue_body(self.body.as_deref())?;
         validate_issue_notes(self.notes.as_deref())?;
+        if let Some(depends_on) = self.depends_on.as_deref() {
+            validate_issue_dependency_ids(None, depends_on)?;
+        }
         Ok(())
     }
+}
+
+/// Validates issue dependency ids before project-specific lookup.
+pub fn validate_issue_dependency_ids(issue_id: Option<&str>, depends_on: &[String]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for dependency_id in depends_on {
+        if dependency_id.trim().is_empty() || dependency_id.bytes().any(|byte| byte == 0) {
+            return Err(MezError::invalid_args(
+                "issue dependency id must not be empty",
+            ));
+        }
+        if issue_id.is_some_and(|id| id == dependency_id) {
+            return Err(MezError::invalid_args("issue cannot depend on itself"));
+        }
+        if !seen.insert(dependency_id.as_str()) {
+            return Err(MezError::invalid_args(
+                "issue dependencies must not contain duplicates",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Result of updating one issue record.

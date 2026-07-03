@@ -261,6 +261,7 @@ mod tests {
                 title: "Fix issue rendering".to_string(),
                 body: Some("show useful issue arguments".to_string()),
                 notes: Some("progress notes".to_string()),
+                depends_on: Vec::new(),
             },
         };
         let update = AgentAction {
@@ -274,6 +275,8 @@ mod tests {
                 clear_body: true,
                 notes: Some("validated".to_string()),
                 clear_notes: false,
+                depends_on: None,
+                clear_depends_on: false,
             },
         };
         let query = AgentAction {

@@ -8,8 +8,8 @@ use super::{
     Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, load_runtime_config_layers,
 };
 use crate::issues::{
-    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, issue_database_location,
-    project_key_for_working_directory,
+    IssueKind, IssueQuery, IssueRecord, IssueStore, IssueUpdate, NewIssueRecord,
+    issue_database_location, project_key_for_working_directory,
 };
 
 /// Runs one `mez issue` command against the configured local issue store.
@@ -49,13 +49,17 @@ pub(super) fn run_issue<W: Write>(
             title,
             body,
             notes,
+            depends_on,
         } => {
-            let record = store.add_issue(
-                project,
-                IssueKind::parse(&kind)?,
-                title,
-                body,
-                notes,
+            let record = store.add_issue_with_dependencies(
+                NewIssueRecord {
+                    project,
+                    kind: IssueKind::parse(&kind)?,
+                    title,
+                    body,
+                    notes,
+                    depends_on,
+                },
                 super::current_unix_seconds()?,
             )?;
             issue_record_json(&record)?
@@ -85,6 +89,8 @@ pub(super) fn run_issue<W: Write>(
             clear_body,
             notes,
             clear_notes,
+            depends_on,
+            clear_depends_on,
         } => {
             let result = store.update_issue(
                 project,
@@ -96,6 +102,8 @@ pub(super) fn run_issue<W: Write>(
                     clear_body,
                     notes,
                     clear_notes,
+                    depends_on: (!depends_on.is_empty()).then_some(depends_on),
+                    clear_depends_on,
                 },
                 super::current_unix_seconds()?,
             )?;
@@ -133,6 +141,9 @@ enum IssueCliCommand {
         /// Optional mutable progress or handoff notes.
         #[arg(long, allow_hyphen_values = true)]
         notes: Option<String>,
+        /// Issue ids that must be completed before this issue.
+        #[arg(long = "depends-on", allow_hyphen_values = true)]
+        depends_on: Vec<String>,
     },
     /// Shows one issue by id within the current or specified project.
     Show {
@@ -161,6 +172,16 @@ enum IssueCliCommand {
         /// Clear existing mutable progress or handoff notes.
         #[arg(long)]
         clear_notes: bool,
+        /// Replacement dependency issue ids.
+        #[arg(
+            long = "depends-on",
+            allow_hyphen_values = true,
+            conflicts_with = "clear_depends_on"
+        )]
+        depends_on: Vec<String>,
+        /// Clear existing dependency issue ids.
+        #[arg(long = "clear-depends-on")]
+        clear_depends_on: bool,
     },
     /// Queries issues for the current or specified project.
     Query {
@@ -196,6 +217,8 @@ struct IssueRecordJson<'a> {
     body: Option<&'a str>,
     /// Optional mutable progress or handoff notes.
     notes: Option<&'a str>,
+    /// Issue ids that must be completed before this issue.
+    depends_on: &'a [String],
     /// Creation time as Unix seconds.
     created_at_unix_seconds: u64,
     /// Last update time as Unix seconds.
@@ -211,6 +234,7 @@ impl<'a> From<&'a IssueRecord> for IssueRecordJson<'a> {
             title: &record.title,
             body: record.body.as_deref(),
             notes: record.notes.as_deref(),
+            depends_on: &record.depends_on,
             created_at_unix_seconds: record.created_at_unix_seconds,
             updated_at_unix_seconds: record.updated_at_unix_seconds,
         }

@@ -616,8 +616,16 @@ fn maap_issue_add_action_schema() -> serde_json::Value {
                     "description": "Optional mutable progress or handoff notes. Use null when no notes are needed."
                 }),
             ),
+            (
+                "depends_on",
+                serde_json::json!({
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Issue ids this new issue depends on. Use [] when there are no dependencies."
+                }),
+            ),
         ],
-        &["kind", "title", "body", "notes"],
+        &["kind", "title", "body", "notes", "depends_on"],
     )
 }
 
@@ -670,6 +678,21 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
                     "description": "Whether to clear existing progress or handoff notes. Cannot be true when notes is set."
                 }),
             ),
+            (
+                "depends_on",
+                serde_json::json!({
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                    "description": "Optional replacement dependency issue ids. Use null to leave unchanged."
+                }),
+            ),
+            (
+                "clear_depends_on",
+                serde_json::json!({
+                    "type": "boolean",
+                    "description": "Whether to clear existing dependency issue ids. Cannot be true when depends_on is set."
+                }),
+            ),
         ],
         &[
             "id",
@@ -679,6 +702,8 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
             "clear_body",
             "notes",
             "clear_notes",
+            "depends_on",
+            "clear_depends_on",
         ],
     )
 }

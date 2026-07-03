@@ -3509,6 +3509,7 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             title,
             body,
             notes,
+            ..
         } => {
             let mut header = format!(
                 "issue add: kind={} title={}",
@@ -3537,6 +3538,7 @@ pub(super) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             clear_body,
             notes,
             clear_notes,
+            ..
         } => {
             let mut header = format!("issue update: id={}", agent_action_display_preview(id));
             if let Some(kind) = kind.as_deref().map(str::trim)

@@ -121,13 +121,17 @@ impl RuntimeSessionService {
                 title,
                 body,
                 notes,
+                depends_on,
             } => {
-                let result = store.add_issue(
-                    project,
-                    crate::issues::IssueKind::parse(kind)?,
-                    title.clone(),
-                    body.clone(),
-                    notes.clone(),
+                let result = store.add_issue_with_dependencies(
+                    crate::issues::NewIssueRecord {
+                        project,
+                        kind: crate::issues::IssueKind::parse(kind)?,
+                        title: title.clone(),
+                        body: body.clone(),
+                        notes: notes.clone(),
+                        depends_on: depends_on.clone(),
+                    },
                     current_unix_seconds(),
                 );
                 match result {
@@ -149,6 +153,8 @@ impl RuntimeSessionService {
                 clear_body,
                 notes,
                 clear_notes,
+                depends_on,
+                clear_depends_on,
             } => {
                 let result = store.update_issue(
                     project,
@@ -163,6 +169,8 @@ impl RuntimeSessionService {
                         clear_body: *clear_body,
                         notes: notes.clone(),
                         clear_notes: *clear_notes,
+                        depends_on: depends_on.clone(),
+                        clear_depends_on: *clear_depends_on,
                     },
                     current_unix_seconds(),
                 );
@@ -338,6 +346,7 @@ fn issue_record_json(record: &crate::issues::IssueRecord) -> serde_json::Value {
         "title": record.title,
         "body": record.body,
         "notes": record.notes,
+        "depends_on": record.depends_on,
         "created_at_unix_seconds": record.created_at_unix_seconds,
         "updated_at_unix_seconds": record.updated_at_unix_seconds,
     })

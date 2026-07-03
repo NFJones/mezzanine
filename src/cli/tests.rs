@@ -4530,12 +4530,37 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
     assert!(add_output.contains(r#""kind":"defect""#));
     assert!(add_output.contains(r#""title":"Fix renderer panic""#));
     assert!(add_output.contains(r#""notes":"initial investigation started""#));
+    assert!(add_output.contains(r#""depends_on":[]"#));
     let id = add_output
         .split(r#""id":""#)
         .nth(1)
         .and_then(|tail| tail.split('"').next())
         .unwrap()
         .to_string();
+
+    let mut dependent_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "add".to_string(),
+            "--kind".to_string(),
+            "task".to_string(),
+            "--title".to_string(),
+            "Follow up after renderer fix".to_string(),
+            "--depends-on".to_string(),
+            id.clone(),
+        ],
+        env.clone(),
+        false,
+        &mut dependent_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    let dependent_output = String::from_utf8(dependent_stdout).unwrap();
+    assert!(dependent_output.contains(&format!(r#""depends_on":["{}"]"#, id)));
 
     let mut query_stdout = Vec::new();
     run_with(

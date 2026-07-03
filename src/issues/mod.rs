@@ -15,7 +15,8 @@ mod types;
 
 pub use store::IssueStore;
 pub use types::{
-    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueUpdate, UpdateIssueResult,
+    DeleteIssueResult, IssueKind, IssueQuery, IssueRecord, IssueUpdate, NewIssueRecord,
+    UpdateIssueResult, validate_issue_dependency_ids,
 };
 
 /// Default maximum issue records returned by one query.

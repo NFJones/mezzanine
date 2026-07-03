@@ -40,9 +40,19 @@ pub(super) fn execute_agent_shell_issue_command(
             title,
             body,
             notes,
+            depends_on,
         } => {
-            let record =
-                store.add_issue(project, kind, title, body, notes, current_unix_seconds())?;
+            let record = store.add_issue_with_dependencies(
+                crate::issues::NewIssueRecord {
+                    project,
+                    kind,
+                    title,
+                    body,
+                    notes,
+                    depends_on,
+                },
+                current_unix_seconds(),
+            )?;
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "issue".to_string(),
                 body: format!(
@@ -106,6 +116,7 @@ enum RuntimeIssueArgs {
         title: String,
         body: Option<String>,
         notes: Option<String>,
+        depends_on: Vec<String>,
     },
     Show {
         id: String,
@@ -152,6 +163,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     let mut title = None;
     let mut body = None;
     let mut notes = None;
+    let mut depends_on = Vec::new();
     let mut index = 0usize;
     while index < tokens.len() {
         match tokens[index].as_str() {
@@ -172,9 +184,13 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                 index = index.saturating_add(1);
                 notes = Some(required_issue_value(tokens, index, "notes")?.to_string());
             }
+            "--depends-on" => {
+                index = index.saturating_add(1);
+                depends_on.push(required_issue_value(tokens, index, "depends-on")?.to_string());
+            }
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue add accepts --kind, --title, --body, and --notes",
+                    "issue add accepts --kind, --title, --body, --notes, and --depends-on",
                 ));
             }
         }
@@ -185,6 +201,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
         title: title.ok_or_else(|| MezError::invalid_args("issue add requires --title"))?,
         body,
         notes,
+        depends_on,
     })
 }
 
@@ -225,9 +242,17 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                 update.notes = Some(required_issue_value(tokens, index, "notes")?.to_string());
             }
             "--clear-notes" => update.clear_notes = true,
+            "--depends-on" => {
+                index = index.saturating_add(1);
+                update
+                    .depends_on
+                    .get_or_insert_with(Vec::new)
+                    .push(required_issue_value(tokens, index, "depends-on")?.to_string());
+            }
+            "--clear-depends-on" => update.clear_depends_on = true,
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue update accepts --kind, --title, --body, --clear-body, --notes, and --clear-notes",
+                    "issue update accepts --kind, --title, --body, --clear-body, --notes, --clear-notes, --depends-on, and --clear-depends-on",
                 ));
             }
         }
@@ -305,7 +330,7 @@ fn runtime_issue_record_detail_display(record: Option<&crate::issues::IssueRecor
         return "issue found=false".to_string();
     };
     format!(
-        "issue found=true\nid={}\nproject={}\nkind={}\ntitle={}\nbody={}\nnotes={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
+        "issue found=true\nid={}\nproject={}\nkind={}\ntitle={}\nbody={}\nnotes={}\ndepends_on={}\ncreated_at_unix_seconds={}\nupdated_at_unix_seconds={}",
         record.id,
         json_escape(&record.project),
         record.kind.as_str(),
@@ -320,6 +345,7 @@ fn runtime_issue_record_detail_display(record: Option<&crate::issues::IssueRecor
             .as_deref()
             .map(json_escape)
             .unwrap_or_else(|| "null".to_string()),
+        runtime_issue_depends_on_display(&record.depends_on),
         record.created_at_unix_seconds,
         record.updated_at_unix_seconds
     )
@@ -332,14 +358,19 @@ fn runtime_issue_records_display(records: &[crate::issues::IssueRecord]) -> Stri
     let mut lines = vec![format!("issues count={}", records.len())];
     for record in records {
         lines.push(format!(
-            "id={} project={} kind={} title={}",
+            "id={} project={} kind={} title={} depends_on={}",
             record.id,
             json_escape(&record.project),
             record.kind.as_str(),
-            json_escape(&record.title)
+            json_escape(&record.title),
+            runtime_issue_depends_on_display(&record.depends_on)
         ));
     }
     lines.join("\n")
+}
+
+fn runtime_issue_depends_on_display(depends_on: &[String]) -> String {
+    serde_json::json!(depends_on).to_string()
 }
 
 fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {

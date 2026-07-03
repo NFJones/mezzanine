@@ -666,6 +666,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             title,
             body,
             notes,
+            ..
         } => {
             data.insert("kind".to_string(), serde_json::json!(kind));
             data.insert(
@@ -694,6 +695,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             clear_body,
             notes,
             clear_notes,
+            ..
         } => {
             data.insert("id".to_string(), runtime_bounded_trace_string_value(id));
             data.insert("kind".to_string(), serde_json::json!(kind));
