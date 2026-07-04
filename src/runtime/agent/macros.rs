@@ -179,16 +179,25 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
-        let child_lineage = self
-            .subagent_lineage
-            .get(child_agent_id.as_str())
-            .ok_or_else(|| MezError::invalid_state("macro-managed subagent lineage is missing"))?;
+        let Some(child_lineage) = self.subagent_lineage.get(child_agent_id.as_str()) else {
+            return Ok(Some(ActionResult::failed(
+                parent_turn,
+                action,
+                ActionStatus::Failed,
+                "macro_bridge_error",
+                "macro-managed subagent lineage is missing",
+            )?));
+        };
         let child_parent_agent_id = child_lineage.parent_agent_id.clone();
         let child_display_name = child_lineage.display_name.clone();
         if child_parent_agent_id != parent_turn.agent_id {
-            return Err(MezError::forbidden(
+            return Ok(Some(ActionResult::failed(
+                parent_turn,
+                action,
+                ActionStatus::Failed,
+                "macro_bridge_error",
                 "macro-managed subagent step recipient does not belong to the parent turn",
-            ));
+            )?));
         }
         let child_pane_id = child_agent_id
             .strip_prefix("agent-")
