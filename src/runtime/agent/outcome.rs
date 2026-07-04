@@ -302,7 +302,7 @@ pub(super) fn runtime_validate_provider_completion_identity(
 /// - `execution`: The provider execution payload.
 pub(in crate::runtime) fn runtime_validate_provider_completion_execution(
     turn: &AgentTurnRecord,
-    execution: &AgentTurnExecution,
+    execution: &mut AgentTurnExecution,
 ) -> Result<()> {
     let Some(batch) = execution.response.action_batch.as_ref() else {
         if runtime_execution_is_missing_batch_terminal_failure(execution) {
@@ -313,9 +313,12 @@ pub(in crate::runtime) fn runtime_validate_provider_completion_execution(
                 "agent provider completion without an action batch included action results",
             ));
         }
-        return Err(MezError::invalid_state(
-            "agent provider completion without an action batch must be a terminal failed execution",
-        ));
+        // A missing action batch is always a terminal provider/controller
+        // failure. Normalize it here so the turn does not remain stranded
+        // in Running state with no progress path.
+        execution.terminal_state = AgentTurnState::Failed;
+        execution.final_turn = true;
+        return Ok(());
     };
     let controller_failure_summary =
         runtime_execution_is_controller_failure_summary(execution, batch);
