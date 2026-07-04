@@ -490,7 +490,7 @@ fn parse_macro_steps(body: &str) -> std::result::Result<Vec<MacroStep>, String> 
             }
             continue;
         }
-        if trimmed.starts_with('#') {
+        if line.starts_with('#') && is_markdown_section_heading(line) {
             break;
         }
         if let Some((indent, content)) = parse_ordered_list_item(line) {
@@ -524,6 +524,23 @@ fn parse_macro_steps(body: &str) -> std::result::Result<Vec<MacroStep>, String> 
         return Err("Steps section must contain at least one prompt step".to_string());
     }
     Ok(steps)
+}
+
+/// Returns true when `line` is a markdown ATX section heading (starts with
+/// one or more `#` characters at column zero, optionally followed by a space
+/// and heading text).
+///
+/// This is intentionally more restrictive than a bare `starts_with('#')`
+/// check so that indented continuation lines beginning with `#` (e.g. nested
+/// macro invocations, shell comments) are not misidentified as headings.
+fn is_markdown_section_heading(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    let hash_count = trimmed.chars().take_while(|c| *c == '#').count();
+    if hash_count == 0 || hash_count > 6 {
+        return false;
+    }
+    let after_hashes = &trimmed[hash_count..];
+    after_hashes.is_empty() || after_hashes.starts_with(' ')
 }
 
 /// Pushes accumulated step lines into the parsed step vector.
@@ -625,7 +642,7 @@ pub fn is_valid_macro_name(name: &str) -> bool {
 mod tests {
     use super::{
         MacroSource, discover_macro_catalog, is_valid_macro_name, load_macro_definition,
-        parse_macro_prompt_invocation,
+        parse_macro_prompt_invocation, parse_macro_steps,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -861,5 +878,39 @@ mod tests {
         assert!(!is_valid_macro_name("release/check"));
         assert!(!is_valid_macro_name(".."));
         assert!(!is_valid_macro_name("---"));
+    }
+
+    /// Verifies that continuation lines beginning with `#` (e.g. nested macro
+    /// invocations, shell comments) are preserved as step body text rather than
+    /// being misidentified as markdown headings that terminate step parsing.
+    #[test]
+    fn macro_steps_accept_hash_prefixed_continuation_lines() {
+        let body = "## Steps\n\n1. First step\n   # nested macro call\n2. Second step\n";
+        let steps = parse_macro_steps(body).unwrap();
+        assert_eq!(steps.len(), 2, "both steps should be parsed");
+        assert_eq!(steps[0].index, 1);
+        assert!(
+            steps[0].prompt.contains("# nested macro call"),
+            "continuation line with # should be in step body, got: {:?}",
+            steps[0].prompt
+        );
+        assert_eq!(steps[1].index, 2);
+        assert_eq!(steps[1].prompt, "Second step");
+    }
+
+    /// Verifies that actual markdown ATX headings (line starting with `#` at
+    /// column zero followed by a space) still terminate step parsing so that
+    /// subsequent sections are not ingested as steps.
+    #[test]
+    fn macro_steps_heading_terminates_parsing() {
+        let body = "## Steps\n\n1. First step\n2. Second step\n\n## Next Section\n\n3. Should not appear\n";
+        let steps = parse_macro_steps(body).unwrap();
+        assert_eq!(
+            steps.len(),
+            2,
+            "heading should have terminated parsing before step 3"
+        );
+        assert_eq!(steps[0].prompt, "First step");
+        assert_eq!(steps[1].prompt, "Second step");
     }
 }
