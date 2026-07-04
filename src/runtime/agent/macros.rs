@@ -203,6 +203,102 @@ impl RuntimeSessionService {
             .strip_prefix("agent-")
             .ok_or_else(|| MezError::invalid_state("macro-managed child agent id is invalid"))?;
         runtime_pane_by_id(&self.session, child_pane_id)?;
+        // --- Ordering guard: reject if a macro step is already in-flight for
+        // this parent turn + child agent pair. ---
+        let macro_step_in_flight = self
+            .joined_subagent_dependencies
+            .values()
+            .any(|dep| {
+                dep.parent_turn_id == parent_turn.turn_id
+                    && dep.child_agent_id == child_agent_id
+                    && self.joined_subagent_dependency_has_live_child(dep)
+            });
+        if macro_step_in_flight {
+            return Ok(Some(ActionResult::failed(
+                parent_turn,
+                action,
+                ActionStatus::Failed,
+                "macro_step_ordering",
+                "a macro step is already in flight for this subagent; wait for it to complete before sending the next step",
+            )?));
+        }
+        // --- Idempotency guard: retried parent actions reuse the original
+        // step result instead of creating another child turn. ---
+        if let Some(existing) = self
+            .joined_subagent_dependencies
+            .values()
+            .find(|dep| {
+                dep.parent_turn_id == parent_turn.turn_id
+                    && dep.parent_action_id == action.id
+            })
+        {
+            if self.joined_subagent_dependency_has_live_child(existing) {
+                // Still in progress — return the same running result.
+                return Ok(Some(ActionResult::running(
+                    parent_turn,
+                    action,
+                    vec![format!(
+                        "macro step already in progress for {child_agent_id}; waiting for subagent result"
+                    )],
+                    Some(format!(
+                        r#"{{"recipient":"{}","delivery_status":"accepted","join_policy":"macro_step","join_state":"waiting","child_agent_id":"{}","child_turn_id":"{}","idempotent":true,"error":null}}"#,
+                        json_escape(recipient),
+                        json_escape(&child_agent_id),
+                        json_escape(&existing.child_turn_id)
+                    )),
+                )));
+            }
+            // Child turn already reached a terminal state — return idempotent
+            // terminal result.
+            let child_state = self
+                .agent_turn_ledger
+                .turns()
+                .iter()
+                .find(|t| t.turn_id == existing.child_turn_id)
+                .map(|t| t.state);
+            match child_state {
+                Some(AgentTurnState::Completed) => {
+                    return Ok(Some(ActionResult::succeeded(
+                        parent_turn,
+                        action,
+                        vec![format!(
+                            "macro step already completed by {child_agent_id} (idempotent)"
+                        )],
+                        Some(format!(
+                            r#"{{"recipient":"{}","delivery_status":"completed","join_policy":"macro_step","child_agent_id":"{}","child_turn_id":"{}","idempotent":true,"error":null}}"#,
+                            json_escape(recipient),
+                            json_escape(&child_agent_id),
+                            json_escape(&existing.child_turn_id)
+                        )),
+                    )));
+                }
+                Some(AgentTurnState::Failed) | Some(AgentTurnState::Interrupted) => {
+                    return Ok(Some(ActionResult::failed(
+                        parent_turn,
+                        action,
+                        ActionStatus::Failed,
+                        "macro_step_failed",
+                        "macro step previously failed; cannot retry",
+                    )?));
+                }
+                _ => {
+                    // Other terminal state — treat as resolved.
+                    return Ok(Some(ActionResult::succeeded(
+                        parent_turn,
+                        action,
+                        vec![format!(
+                            "macro step already resolved by {child_agent_id} (idempotent)"
+                        )],
+                        Some(format!(
+                            r#"{{"recipient":"{}","delivery_status":"resolved","join_policy":"macro_step","child_agent_id":"{}","child_turn_id":"{}","idempotent":true,"error":null}}"#,
+                            json_escape(recipient),
+                            json_escape(&child_agent_id),
+                            json_escape(&existing.child_turn_id)
+                        )),
+                    )));
+                }
+            }
+        }
         let context = self.agent_context_for_pane_prompt(child_pane_id, payload, 100)?;
         let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
         let turn_id = self.next_agent_turn_id();

@@ -521,7 +521,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         vec!["The provider request failed before any action could run.".to_string()],
         None,
     );
-    let execution = crate::agent::AgentTurnExecution {
+    let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: crate::agent::ModelResponse {
             provider: "openai".to_string(),
@@ -550,7 +550,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         terminal_state: AgentTurnState::Failed,
     };
 
-    super::agent::runtime_validate_provider_completion_execution(&turn, &execution).unwrap();
+    super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution).unwrap();
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -591,7 +591,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             arguments_json: "{}".to_string(),
         },
     };
-    let execution = crate::agent::AgentTurnExecution {
+    let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: crate::agent::ModelResponse {
             provider: "openai".to_string(),
@@ -618,7 +618,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
         terminal_state: AgentTurnState::Failed,
     };
 
-    super::agent::runtime_validate_provider_completion_execution(&turn, &execution).unwrap();
+    super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution).unwrap();
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -648,7 +648,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    let execution = crate::agent::AgentTurnExecution {
+    let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: crate::agent::ModelResponse {
             provider: "openai".to_string(),
@@ -667,7 +667,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         terminal_state: AgentTurnState::Running,
     };
 
-    let error = super::agent::runtime_validate_provider_completion_execution(&turn, &execution)
+    let error = super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution)
         .unwrap_err();
 
     assert!(
@@ -704,7 +704,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    let execution = crate::agent::AgentTurnExecution {
+    let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: crate::agent::ModelResponse {
             provider: "openai".to_string(),
@@ -731,7 +731,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
         terminal_state: AgentTurnState::Running,
     };
 
-    let error = super::agent::runtime_validate_provider_completion_execution(&turn, &execution)
+    let error = super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution)
         .unwrap_err();
 
     assert!(

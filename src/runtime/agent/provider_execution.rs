@@ -614,7 +614,7 @@ impl RuntimeSessionService {
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        execution: AgentTurnExecution,
+        mut execution: AgentTurnExecution,
     ) -> Result<bool> {
         self.require_live()?;
         let Some(turn) = self
@@ -655,7 +655,7 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         }
-        if let Err(error) = runtime_validate_provider_completion_execution(&turn, &execution) {
+        if let Err(error) = runtime_validate_provider_completion_execution(&turn, &mut execution) {
             let provider_id = execution.response.provider.clone();
             self.fail_agent_turn_after_provider_completion_application_error(
                 &turn,

@@ -163,6 +163,13 @@ impl RuntimeSessionService {
             AgentTurnState::Failed,
             "provider_error",
         )?;
+        if turn.cooperation_mode.as_deref() == Some("macro-orchestration") {
+            let parent_agent_id = format!("agent-{}", turn.pane_id);
+            let _ = self.close_subagent_descendants_for_parent_agent(
+                &parent_agent_id,
+                "macro orchestration turn failed",
+            );
+        }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
