@@ -265,7 +265,7 @@ fn macro_message_recipient_agent_id(recipient: &str) -> Option<String> {
     recipient
         .strip_prefix("agent:")
         .filter(|agent_id| !agent_id.trim().is_empty())
-        .map(ToOwned::to_owned)
+        .map(|id| id.trim().to_owned())
         .or_else(|| {
             recipient
                 .starts_with("agent-%")
@@ -307,4 +307,45 @@ fn runtime_macro_parent_orchestration_prompt(
             .map(|step| format!("{}. {}", step.index, step.prompt)),
     );
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that `macro_message_recipient_agent_id` trims whitespace
+    /// from the extracted agent id after the `agent:` prefix, so that
+    /// recipients like `"agent: agent-%3"` or `"agent:agent-%3 "` are
+    /// correctly routed through the macro bridge instead of silently
+    /// falling back to plain MMP delivery.
+    #[test]
+    fn macro_recipient_trims_whitespace_after_agent_prefix() {
+        // Leading whitespace after `agent:`
+        assert_eq!(
+            macro_message_recipient_agent_id("agent: agent-%5"),
+            Some("agent-%5".to_string())
+        );
+        // Trailing whitespace
+        assert_eq!(
+            macro_message_recipient_agent_id("agent:agent-%7 "),
+            Some("agent-%7".to_string())
+        );
+        // Both leading and trailing whitespace
+        assert_eq!(
+            macro_message_recipient_agent_id("agent:  agent-%9  "),
+            Some("agent-%9".to_string())
+        );
+        // Only whitespace after agent: should still be filtered (empty after trim)
+        assert_eq!(macro_message_recipient_agent_id("agent:   "), None);
+        // Normal untrimmed case still works
+        assert_eq!(
+            macro_message_recipient_agent_id("agent:agent-%3"),
+            Some("agent-%3".to_string())
+        );
+        // Bare agent-% pattern (no agent: prefix) still works
+        assert_eq!(
+            macro_message_recipient_agent_id("agent-%12"),
+            Some("agent-%12".to_string())
+        );
+    }
 }
