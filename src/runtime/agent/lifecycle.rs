@@ -428,6 +428,7 @@ impl RuntimeSessionService {
         let mut closed = 0usize;
         for agent_id in descendants {
             let Some(pane_id) = runtime_agent_pane_id(&agent_id) else {
+                self.deregister_macro_managed_subagent(&agent_id);
                 self.subagent_lineage.remove(&agent_id);
                 self.subagent_scope_declarations.remove(&agent_id);
                 self.subagent_scopes.unregister(&agent_id);

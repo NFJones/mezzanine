@@ -815,6 +815,7 @@ impl RuntimeSessionService {
         self.subagent_scopes.unregister(&agent_id);
         self.subagent_scope_declarations.remove(&agent_id);
         self.subagent_lineage.remove(&agent_id);
+        self.deregister_macro_managed_subagent(&agent_id);
         if let Some(agent_id) = AgentId::opaque(agent_id)
             && self
                 .message_service

@@ -835,6 +835,7 @@ impl RuntimeSessionService {
         self.subagent_scopes.unregister(child_agent_id);
         self.subagent_scope_declarations.remove(child_agent_id);
         self.subagent_lineage.remove(child_agent_id);
+        self.deregister_macro_managed_subagent(child_agent_id);
         self.model_profile_overrides
             .agent_profiles
             .remove(child_agent_id);

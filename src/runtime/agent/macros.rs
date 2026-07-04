@@ -57,6 +57,19 @@ impl RuntimeSessionService {
             .insert(child_agent_id.to_string());
     }
 
+    /// Removes a subagent from the macro-managed set.
+    ///
+    /// Must be called whenever a macro-managed child pane closes, fails to
+    /// spawn, or is torn down with its parent. This prevents stale entries
+    /// from accumulating and prevents recycled pane ids from hijacking
+    /// macro bridge routing.
+    ///
+    /// # Parameters
+    /// - `child_agent_id`: Runtime child agent id, such as `agent-%2`.
+    pub fn deregister_macro_managed_subagent(&mut self, child_agent_id: &str) {
+        self.macro_managed_subagent_agents.remove(child_agent_id);
+    }
+
     /// Starts the parent orchestration turn for an explicit `#macro` prompt.
     ///
     /// The runtime loads the configured macro, creates one persistent child
@@ -347,5 +360,30 @@ mod tests {
             macro_message_recipient_agent_id("agent-%12"),
             Some("agent-%12".to_string())
         );
+    }
+
+    /// Verifies that `deregister_macro_managed_subagent` removes an agent
+    /// from the macro-managed set, preventing stale entries from accumulating
+    /// and preventing recycled pane ids from hijacking macro bridge routing.
+    #[test]
+    fn deregister_macro_managed_removes_agent_from_set() {
+        let fixture = crate::test_support::runtime::RuntimeServiceFixture::new();
+        let mut service = fixture.build();
+        let agent_id = "agent-%99";
+
+        // Initially empty
+        assert!(!service.macro_managed_subagent_agents.contains(agent_id));
+
+        // Register
+        service.register_macro_managed_subagent(agent_id);
+        assert!(service.macro_managed_subagent_agents.contains(agent_id));
+
+        // Deregister
+        service.deregister_macro_managed_subagent(agent_id);
+        assert!(!service.macro_managed_subagent_agents.contains(agent_id));
+
+        // Deregistering an already-absent id is a no-op
+        service.deregister_macro_managed_subagent(agent_id);
+        assert!(!service.macro_managed_subagent_agents.contains(agent_id));
     }
 }
