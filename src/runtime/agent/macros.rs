@@ -12,7 +12,9 @@ use crate::agent::{
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::RuntimeAgentPromptTurnStart;
-use crate::runtime::service_state::MacroManagedSubagent;
+use crate::runtime::service_state::{
+    MacroManagedSubagent, MacroRunPhase, MacroRunState, MacroRunStep,
+};
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 
 impl RuntimeSessionService {
@@ -90,6 +92,50 @@ impl RuntimeSessionService {
         self.macro_managed_subagent_agents.remove(child_agent_id);
     }
 
+    /// Records a newly started macro run before any step is submitted.
+    ///
+    /// The loaded step list is copied into runtime state so later file edits to
+    /// the macro definition cannot change an in-flight run. The parent turn id
+    /// is the stable run id for the current macro format.
+    fn register_macro_run_state(
+        &mut self,
+        pane_id: &str,
+        prompt: &str,
+        definition: &MacroDefinition,
+        additional_context: Option<&str>,
+        started: &RuntimeAgentPromptTurnStart,
+        child_agent_id: &str,
+    ) {
+        let steps = definition
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| MacroRunStep {
+                index,
+                scripted_prompt: step.prompt.clone(),
+                submitted_prompt: None,
+                child_turn_id: None,
+            })
+            .collect();
+        self.macro_runs_by_parent_turn.insert(
+            started.turn_id.clone(),
+            MacroRunState {
+                run_id: started.turn_id.clone(),
+                parent_turn_id: started.turn_id.clone(),
+                parent_agent_id: started.agent_id.clone(),
+                parent_pane_id: pane_id.to_string(),
+                child_agent_id: child_agent_id.to_string(),
+                macro_name: definition.summary.name.clone(),
+                macro_description: definition.summary.description.clone(),
+                invocation_prompt: prompt.to_string(),
+                invocation_context: additional_context.map(ToOwned::to_owned),
+                steps,
+                current_step: 0,
+                phase: MacroRunPhase::DispatchingStep { step_index: 0 },
+            },
+        );
+    }
+
     /// Starts the parent orchestration turn for an explicit `#macro` prompt.
     ///
     /// The runtime loads the configured macro, creates one persistent child
@@ -160,6 +206,14 @@ impl RuntimeSessionService {
             &parent_agent_id,
             &definition.summary.name,
         );
+        self.register_macro_run_state(
+            pane_id,
+            prompt,
+            &definition,
+            invocation.additional_context.as_deref(),
+            &started,
+            &child_agent_id,
+        );
         self.queue_runtime_owned_first_macro_step(
             pane_id,
             &started,
@@ -217,16 +271,18 @@ impl RuntimeSessionService {
                 payload,
             },
         };
+        let submitted_prompt = match &action.payload {
+            AgentActionPayload::SendMessage { payload, .. } => payload.clone(),
+            _ => unreachable!("synthetic macro action is always send_message"),
+        };
         let result = self
-            .queue_macro_managed_message_step(
+            .queue_runtime_macro_step_prompt(
                 &parent_turn,
                 &action,
                 &format!("agent:{child_agent_id}"),
                 "text/plain; charset=utf-8",
-                match &action.payload {
-                    AgentActionPayload::SendMessage { payload, .. } => payload.as_str(),
-                    _ => unreachable!("synthetic macro action is always send_message"),
-                },
+                submitted_prompt.as_str(),
+                0,
             )?
             .ok_or_else(|| MezError::invalid_state("runtime-owned macro step was not accepted"))?;
         let batch = MaapBatch {
@@ -277,6 +333,59 @@ impl RuntimeSessionService {
             "provider_task removed reason=runtime_owned_macro_first_step",
         )?;
         Ok(())
+    }
+
+    /// Queues one runtime-owned macro step and records the submitted child turn.
+    ///
+    /// This helper preserves the existing macro bridge behavior while adding
+    /// explicit per-run step state for harness-owned sequencing.
+    fn queue_runtime_macro_step_prompt(
+        &mut self,
+        parent_turn: &AgentTurnRecord,
+        action: &AgentAction,
+        recipient: &str,
+        content_type: &str,
+        payload: &str,
+        step_index: usize,
+    ) -> Result<Option<ActionResult>> {
+        let result = self.queue_macro_managed_message_step(
+            parent_turn,
+            action,
+            recipient,
+            content_type,
+            payload,
+        )?;
+        if result.is_some() {
+            let child_turn_id = self
+                .joined_subagent_dependencies
+                .values()
+                .find(|dependency| {
+                    dependency.parent_turn_id == parent_turn.turn_id
+                        && dependency.parent_action_id == action.id
+                })
+                .map(|dependency| dependency.child_turn_id.clone());
+            if let Some(run) = self
+                .macro_runs_by_parent_turn
+                .get_mut(parent_turn.turn_id.as_str())
+            {
+                run.current_step = step_index;
+                if let Some(step) = run.steps.get_mut(step_index) {
+                    step.submitted_prompt = Some(payload.to_string());
+                    step.child_turn_id = child_turn_id.clone();
+                }
+                if let Some(child_turn_id) = child_turn_id {
+                    run.phase = MacroRunPhase::WaitingForStep {
+                        step_index,
+                        child_turn_id: child_turn_id.clone(),
+                    };
+                    self.macro_run_by_child_turn
+                        .insert(child_turn_id, parent_turn.turn_id.clone());
+                } else {
+                    run.phase = MacroRunPhase::DispatchingStep { step_index };
+                }
+            }
+        }
+        Ok(result)
     }
 
     /// Starts a normal child agent-shell turn for a macro step message.

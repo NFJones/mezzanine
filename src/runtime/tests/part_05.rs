@@ -3196,6 +3196,35 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
     assert_eq!(macro_children.len(), 1, "{macro_children:?}");
     let child_agent_id = &macro_children[0];
     assert!(child_agent_id.starts_with("agent-%"), "{child_agent_id}");
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .cloned()
+        .expect("parent macro orchestration turn should exist");
+    let macro_run = service
+        .macro_runs_by_parent_turn
+        .get(parent_turn.turn_id.as_str())
+        .expect("macro run state should be keyed by parent turn");
+    assert_eq!(macro_run.run_id, parent_turn.turn_id);
+    assert_eq!(macro_run.parent_turn_id, parent_turn.turn_id);
+    assert_eq!(macro_run.parent_agent_id, parent_turn.agent_id);
+    assert_eq!(macro_run.parent_pane_id, "%1");
+    assert_eq!(macro_run.child_agent_id, *child_agent_id);
+    assert_eq!(macro_run.macro_name, "release-check");
+    assert_eq!(macro_run.macro_description, "Release readiness workflow");
+    assert_eq!(macro_run.invocation_prompt, "#release-check for v1.2");
+    assert_eq!(macro_run.invocation_context.as_deref(), Some("for v1.2"));
+    assert_eq!(macro_run.current_step, 0);
+    assert_eq!(macro_run.steps.len(), 2);
+    assert_eq!(macro_run.steps[0].index, 0);
+    assert_eq!(
+        macro_run.steps[0].scripted_prompt,
+        "/loop inspect release notes for the requested version."
+    );
+    assert_eq!(macro_run.steps[1].index, 1);
+    assert_eq!(macro_run.steps[1].scripted_prompt, "Summarize release blockers.");
     let orchestration_context = service
         .agent_turn_contexts
         .values()
@@ -3314,6 +3343,23 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
     assert_eq!(child_turn.parent_turn_id.as_deref(), Some(parent_turn.turn_id.as_str()));
     assert_eq!(child_turn.trigger, crate::agent::AgentTurnTrigger::LocalMessage);
     assert!(service.joined_subagent_dependencies.contains_key(&child_turn.turn_id));
+    let macro_run = service
+        .macro_runs_by_parent_turn
+        .get(parent_turn.turn_id.as_str())
+        .expect("macro run state should be keyed by parent turn");
+    assert_eq!(macro_run.current_step, 0);
+    assert_eq!(macro_run.steps[0].child_turn_id.as_deref(), Some(child_turn.turn_id.as_str()));
+    assert_eq!(
+        service.macro_run_by_child_turn.get(child_turn.turn_id.as_str()),
+        Some(&parent_turn.turn_id)
+    );
+    assert!(
+        macro_run.steps[0]
+            .submitted_prompt
+            .as_deref()
+            .unwrap_or_default()
+            .contains("User additional context for this macro invocation:\nfor v1.2")
+    );
     let child_context = service.agent_turn_contexts.get(&child_turn.turn_id).unwrap();
     assert!(child_context.blocks.iter().any(|block| block.content.contains("/loop inspect release notes for the requested version.")));
     assert!(child_context.blocks.iter().any(|block| block.content.contains("User additional context for this macro invocation:\nfor v1.2")));

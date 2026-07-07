@@ -665,6 +665,65 @@ pub(super) struct MacroManagedSubagent {
     pub macro_name: String,
 }
 
+/// Describes the current runtime-owned phase for one active macro run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MacroRunPhase {
+    /// The runtime is preparing or retrying one step submission.
+    DispatchingStep {
+        /// Zero-based index of the step being dispatched.
+        step_index: usize,
+    },
+    /// The runtime is waiting for the submitted child turn to finish.
+    WaitingForStep {
+        /// Zero-based index of the submitted step.
+        step_index: usize,
+        /// Child turn currently executing the step prompt.
+        child_turn_id: String,
+    },
+}
+
+/// Stores one scripted macro step and its runtime submission metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MacroRunStep {
+    /// Zero-based index copied from the loaded macro definition.
+    pub index: usize,
+    /// Scripted prompt copied at run start so in-flight runs are stable.
+    pub scripted_prompt: String,
+    /// Prompt text submitted to the child, including invocation context.
+    pub submitted_prompt: Option<String>,
+    /// Child turn created for the submitted step, when one exists.
+    pub child_turn_id: Option<String>,
+}
+
+/// Tracks explicit runtime state for a harness-owned macro run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MacroRunState {
+    /// Stable macro run identifier; currently equal to the parent turn id.
+    pub run_id: String,
+    /// Parent macro orchestration turn id.
+    pub parent_turn_id: String,
+    /// Parent agent that owns the macro run.
+    pub parent_agent_id: String,
+    /// Parent pane where the macro was invoked.
+    pub parent_pane_id: String,
+    /// Persistent child agent used for all macro steps.
+    pub child_agent_id: String,
+    /// Macro name copied from the loaded definition.
+    pub macro_name: String,
+    /// Macro description copied from the loaded definition.
+    pub macro_description: String,
+    /// Original user prompt that invoked the macro.
+    pub invocation_prompt: String,
+    /// User-supplied context after the macro token, if any.
+    pub invocation_context: Option<String>,
+    /// Ordered steps copied from the loaded definition at run start.
+    pub steps: Vec<MacroRunStep>,
+    /// Zero-based index of the current step.
+    pub current_step: usize,
+    /// Current runtime-owned macro run phase.
+    pub phase: MacroRunPhase,
+}
+
 /// Tracks one spawned child turn that a parent turn is waiting to join.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct JoinedSubagentDependency {
@@ -2276,6 +2335,10 @@ pub struct RuntimeSessionService {
     /// subagent prompt submissions. Entries are scoped to the owning macro
     /// parent turn so stale child recipients cannot be reused by later turns.
     pub(super) macro_managed_subagent_agents: BTreeMap<String, MacroManagedSubagent>,
+    /// Active macro runs keyed by their parent orchestration turn id.
+    pub(super) macro_runs_by_parent_turn: BTreeMap<String, MacroRunState>,
+    /// Reverse lookup from child step turn id to parent macro run id.
+    pub(super) macro_run_by_child_turn: BTreeMap<String, String>,
     /// Stores the subagent scope declarations value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

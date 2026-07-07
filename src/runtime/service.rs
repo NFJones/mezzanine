@@ -371,6 +371,8 @@ impl RuntimeSessionService {
             subagent_wait_policy: DEFAULT_SUBAGENT_WAIT_POLICY,
             joined_subagent_dependencies: BTreeMap::new(),
             macro_managed_subagent_agents: BTreeMap::new(),
+            macro_runs_by_parent_turn: BTreeMap::new(),
+            macro_run_by_child_turn: BTreeMap::new(),
             subagent_scope_declarations: BTreeMap::new(),
             subagent_lineage: BTreeMap::new(),
             blocked_agent_approval_refs: BTreeMap::new(),
