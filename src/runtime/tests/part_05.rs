@@ -3243,15 +3243,15 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         "{orchestration_context}"
     );
     assert!(
-        orchestration_context.contains("Step 1 has already been sent to the persistent subagent by the runtime; wait for that result before deciding whether to continue."),
+        orchestration_context.contains("Step 1 has already been sent to the persistent subagent by the runtime; wait for that result before judging whether to continue."),
         "{orchestration_context}"
     );
     assert!(
-        orchestration_context.contains(&format!("Every macro step send_message must use recipient `agent:{child_agent_id}` and content_type `text/plain; charset=utf-8`")),
+        orchestration_context.contains(&format!("The runtime submits every later macro step to `agent:{child_agent_id}` after a valid structured judge decision.")),
         "{orchestration_context}"
     );
     assert!(
-        orchestration_context.contains("put only the current step prompt in the payload"),
+        orchestration_context.contains("Judge each completed step with one outcome: continue, continue_with_adapted_prompt, stop_failure, or finish_success"),
         "{orchestration_context}"
     );
     assert!(

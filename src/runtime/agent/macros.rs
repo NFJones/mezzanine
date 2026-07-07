@@ -2,8 +2,8 @@
 //!
 //! This module keeps pane-scoped macro catalog discovery beside the skill
 //! discovery helpers. It also owns the narrow bridge that lets macro-managed
-//! `send_message` traffic become ordinary agent-shell turns in a persistent
-//! child subagent session.
+//! step traffic become ordinary agent-shell turns in a persistent child
+//! subagent session.
 
 use super::*;
 #[cfg(test)]
@@ -145,11 +145,11 @@ impl RuntimeSessionService {
     /// Starts the parent orchestration turn for an explicit `#macro` prompt.
     ///
     /// The runtime loads the configured macro, creates one persistent child
-    /// subagent, marks that child as macro-managed for later step messages,
-    /// and delivers the first scripted step through runtime-owned macro-step
-    /// routing before the parent model is asked to continue orchestration. The
-    /// parent model remains responsible for judging each child result and
-    /// adapting later step prompts.
+    /// subagent, marks that child as macro-managed for step routing, and
+    /// delivers the first scripted step through runtime-owned macro-step
+    /// routing before the parent model is asked for a structured judge
+    /// decision. The runtime remains responsible for submitting every step;
+    /// the parent model only judges completed child results.
     ///
     /// # Parameters
     /// - `pane_id`: Parent pane where the user invoked the macro.
@@ -933,13 +933,13 @@ fn runtime_macro_parent_orchestration_prompt(
         "".to_string(),
         "Macro execution rules:".to_string(),
         "- Use the same persistent subagent recipient for every step.".to_string(),
-        "- Step 1 has already been sent to the persistent subagent by the runtime; wait for that result before deciding whether to continue.".to_string(),
-        format!("- Every macro step send_message must use recipient `agent:{child_agent_id}` and content_type `text/plain; charset=utf-8`."),
-        "- Send exactly one step prompt at a time with send_message; put only the current step prompt in the payload.".to_string(),
+        "- Step 1 has already been sent to the persistent subagent by the runtime; wait for that result before judging whether to continue.".to_string(),
+        format!("- The runtime submits every later macro step to `agent:{child_agent_id}` after a valid structured judge decision."),
+        "- Judge each completed step with one outcome: continue, continue_with_adapted_prompt, stop_failure, or finish_success.".to_string(),
         "- Each step is interpreted as a normal agent-shell prompt in the subagent, so slash commands such as /loop remain valid.".to_string(),
         "- You may adapt a scripted step to the user's stated intent, but preserve the macro purpose and step order.".to_string(),
         "- After each subagent result, judge success against the step intent, user context, and remaining sequence.".to_string(),
-        "- On success, send the next step to the same recipient. On failure, stop and explain the failure.".to_string(),
+        "- On success, choose a continuation outcome; on failure, choose stop_failure with a concise explanation.".to_string(),
         "- Finish successfully only after all required steps complete in order.".to_string(),
         "".to_string(),
     ];

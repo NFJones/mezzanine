@@ -300,7 +300,7 @@ Mezzanine has four operator-facing command surfaces:
 - terminal commands entered through the Mezzanine command prompt,
 - pane-local slash commands entered in the agent shell,
 - explicit skills invoked with `$<skill-name> [additional context]`, and
-- agent macros invoked with `#<macro-name> [additional context]`.
+- harness-sequenced, model-judged agent macros invoked with `#<macro-name> [additional context]`.
 
 See [docs/agent-skills-and-commands.md](docs/agent-skills-and-commands.md) for
 the command-surface breakdown, explicit skill and macro syntax, and built-in

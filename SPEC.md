@@ -5002,35 +5002,40 @@ concurrency and depth limits.
 For the first step in a macro run, the runtime MUST submit the scripted prompt to the
 persistent subagent before any parent model continuation is required. The runtime MAY
 append the user-stated invocation context to that first prompt, but it MUST preserve the
-scripted prompt, macro purpose, step order, and safety boundaries. Before submitting
-later steps, the main model MAY adapt the scripted prompt to the user-stated invocation
-context. Adaptation MUST preserve the macro purpose, step order, and safety boundaries,
-and MUST NOT silently transform the macro into an unrelated workflow. Each step prompt
-MUST be submitted to the persistent subagent as a normal agent-shell prompt and MUST be
+scripted prompt, macro purpose, step order, and safety boundaries. For later steps, the
+runtime MUST ask the main model for a constrained macro-judge decision and then submit
+the next scripted or adapted prompt itself after the decision validates. The main model
+MAY adapt the next scripted prompt only through that structured judgment. Adaptation
+MUST preserve the macro purpose, step order, and safety boundaries, and MUST NOT
+silently transform the macro into an unrelated workflow. Each step prompt MUST be
+submitted to the persistent subagent as a normal agent-shell prompt and MUST be
 interpreted by that subagent through the same agent-shell parsing path used for direct
-user prompt submissions. Step prompts MAY include supported slash
-commands such as `/loop`, explicit skill syntax, explicit MCP server syntax, and
-ordinary prompt text, subject to the same permissions, policy, turn lifecycle, loop
-limits, and runtime bounds that would apply if the prompt were typed directly in that
-subagent. The macro runner MUST NOT reinterpret slash commands itself or bypass normal
-agent-shell parsing.
+user prompt submissions. Step prompts MAY include supported slash commands such as
+`/loop`, explicit skill syntax, explicit MCP server syntax, and ordinary prompt text,
+subject to the same permissions, policy, turn lifecycle, loop limits, and runtime
+bounds that would apply if the prompt were typed directly in that subagent. The macro
+runner MUST NOT reinterpret slash commands itself or bypass normal agent-shell parsing.
 
-The main model MUST wait for the subagent response for each step before continuing. If a
-step prompt invokes a slash command such as `/loop` that creates repeated or long-
-running child work, the macro run MUST wait until that subagent step reaches its normal
-terminal result before judging the step. Step submission and result delivery MUST use
-MMP-visible coordination. If the runtime uses an internal helper to inject a macro step
-as a subagent prompt, that helper MUST preserve MMP task status and task result
-observability and MUST use stable idempotency keys so retries do not duplicate already-
-started or completed steps.
+The runtime MUST wait for the subagent response for each step before asking for the
+next macro-judge decision. If a step prompt invokes a slash command such as `/loop`
+that creates repeated or long-running child work, the macro run MUST wait until that
+subagent step reaches its normal terminal result before judging the step. Step
+submission and result delivery MUST use MMP-visible coordination. If the runtime uses
+an internal helper to inject a macro step as a subagent prompt, that helper MUST
+preserve MMP task status and task result observability and MUST use stable idempotency
+keys so retries do not duplicate already-started or completed steps.
 
 After each step response, the main model MUST judge success or failure from the current
 step intent, the user-stated invocation context, the subagent response, and whether the
-remaining scripted steps are still valid and safe to run. On success, the main model
-MUST submit the next step prompt to the same subagent session. On failure, the main
-model MUST stop the macro run immediately and end the turn with a user-visible
-explanation. A macro run succeeds only when all required steps complete successfully in
-order, unless a future macro format explicitly defines an early-success condition.
+remaining scripted steps are still valid and safe to run. The judge response MUST be a
+runtime-validated structured decision such as `continue`,
+`continue_with_adapted_prompt`, `stop_failure`, or `finish_success`; it is not a MAAP
+action batch and MUST NOT require the model to emit `send_message` for macro
+sequencing. On success, the runtime MUST submit the next scripted or adapted step
+prompt to the same subagent session. On failure, the runtime MUST stop the macro run
+immediately and show the judge-provided user-visible explanation. A macro run succeeds
+only when all required steps complete successfully in order, unless a future macro
+format explicitly defines an early-success condition.
 
 ## 11. Agent Shell Commands
 

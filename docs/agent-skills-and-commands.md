@@ -158,8 +158,10 @@ one persistent subagent session for every step. Each step is submitted to that
 subagent as a normal agent-shell prompt, so slash commands such as `/loop`,
 explicit skills, and explicit MCP server syntax are interpreted with the same
 runtime semantics and permission checks they would have if typed directly into
-that subagent. The parent model may adapt step prompts to the user's stated
-context, then judges each subagent result before continuing.
+that subagent. The runtime submits each later step after the parent model returns a
+bounded structured judgment: continue, continue with an adapted prompt,
+stop as failure, or finish after the final step. The model judges results;
+the harness owns step sequencing.
 
 Use `/list-macros` to inspect the effective macro catalog before invoking a
 macro.
