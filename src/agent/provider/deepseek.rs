@@ -926,8 +926,7 @@ fn parse_deepseek_content_maap_action_batch(
 
 /// Returns whether this DeepSeek request must produce a provider action batch.
 fn deepseek_request_requires_maap(request: &ModelRequest) -> bool {
-    request.interaction_kind != ModelInteractionKind::AutoSizing
-        && !request.allowed_actions.actions.is_empty()
+    request.interaction_kind.expects_maap_batch() && !request.allowed_actions.actions.is_empty()
 }
 
 /// Converts terminal DeepSeek finish reasons into runtime-recoverable errors.

@@ -29,6 +29,10 @@ pub enum ModelInteractionKind {
     /// response is parsed as structured JSON and is not replayed as ordinary
     /// conversation context.
     AutoSizing,
+    /// The model is judging one completed agent-macro step. The response is a
+    /// constrained JSON decision that the runtime validates and executes; it is
+    /// not a MAAP action batch and is not replayed as conversation content.
+    MacroJudge,
 }
 
 impl ModelInteractionKind {
@@ -39,7 +43,26 @@ impl ModelInteractionKind {
             ModelInteractionKind::ActionExecution => "action_execution",
             ModelInteractionKind::Repair => "repair",
             ModelInteractionKind::AutoSizing => "auto_sizing",
+            ModelInteractionKind::MacroJudge => "macro_judge",
         }
+    }
+
+    /// Reports whether this provider request expects a MAAP action batch.
+    pub fn expects_maap_batch(self) -> bool {
+        matches!(
+            self,
+            ModelInteractionKind::CapabilityDecision
+                | ModelInteractionKind::ActionExecution
+                | ModelInteractionKind::Repair
+        )
+    }
+
+    /// Reports whether this provider request expects runtime-owned JSON.
+    pub fn expects_structured_json(self) -> bool {
+        matches!(
+            self,
+            ModelInteractionKind::AutoSizing | ModelInteractionKind::MacroJudge
+        )
     }
 }
 

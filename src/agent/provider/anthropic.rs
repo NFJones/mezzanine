@@ -411,8 +411,7 @@ fn anthropic_maap_tool_choice() -> serde_json::Value {
 
 /// Returns whether this Anthropic request must produce a MAAP action batch.
 fn anthropic_request_requires_maap(request: &ModelRequest) -> bool {
-    request.interaction_kind != super::ModelInteractionKind::AutoSizing
-        && !request.allowed_actions.actions.is_empty()
+    request.interaction_kind.expects_maap_batch() && !request.allowed_actions.actions.is_empty()
 }
 
 /// Parses one Anthropic provider body using the transport mode selected for

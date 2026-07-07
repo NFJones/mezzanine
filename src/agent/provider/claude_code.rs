@@ -347,10 +347,16 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                 ));
             }
             let (raw_text, usage, latest_request_usage, action_batch) =
-                if request.interaction_kind == ModelInteractionKind::AutoSizing {
+                if request.interaction_kind.expects_structured_json() {
                     let prompt = claude_code_prompt(request, None);
                     let system_prompt = claude_code_system_prompt(request, None);
-                    let auto_sizing_json_schema = claude_code_auto_sizing_json_schema()?;
+                    let json_schema = match request.interaction_kind {
+                        ModelInteractionKind::AutoSizing => claude_code_auto_sizing_json_schema()?,
+                        ModelInteractionKind::MacroJudge => claude_code_macro_judge_json_schema()?,
+                        _ => unreachable!(
+                            "structured JSON branch is limited to structured interactions"
+                        ),
+                    };
                     let output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
                         program: &self.program,
                         model: &request.model,
@@ -361,16 +367,20 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                         reasoning_effort: request.reasoning_effort.as_deref(),
                         timeout_ms: self.timeout_ms,
                         json_output: true,
-                        json_schema: Some(&auto_sizing_json_schema),
+                        json_schema: Some(&json_schema),
                     })
                     .await?;
                     if output.assistant_text.is_empty() && output.structured_output.is_none() {
                         return Err(claude_code_empty_output_error(&output.stderr));
                     }
-                    let raw_text = validate_claude_code_auto_sizing_output(
-                        &output.assistant_text,
-                        output.structured_output.as_deref(),
-                    )?;
+                    let raw_text = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+                        validate_claude_code_auto_sizing_output(
+                            &output.assistant_text,
+                            output.structured_output.as_deref(),
+                        )?
+                    } else {
+                        output.structured_output.unwrap_or(output.assistant_text)
+                    };
                     (raw_text, output.usage, None, None)
                 } else {
                     let output = run_claude_code_request_with_corrective_retry(
@@ -608,6 +618,56 @@ fn claude_code_auto_sizing_json_schema() -> Result<String> {
     .map_err(|error| {
         MezError::invalid_state(format!(
             "Claude Code auto-sizing JSON schema could not be serialized: {error}"
+        ))
+    })
+}
+
+/// Builds the Claude Code JSON schema argument for internal macro-step judge
+/// decisions.
+fn claude_code_macro_judge_json_schema() -> Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "version",
+            "outcome",
+            "step_success",
+            "rationale",
+            "adapted_prompt",
+            "user_message"
+        ],
+        "properties": {
+            "version": {
+                "type": "integer",
+                "enum": [1]
+            },
+            "outcome": {
+                "type": "string",
+                "enum": [
+                    "continue",
+                    "continue_with_adapted_prompt",
+                    "stop_failure",
+                    "finish_success"
+                ]
+            },
+            "step_success": {
+                "type": "boolean"
+            },
+            "rationale": {
+                "type": "string",
+                "minLength": 1
+            },
+            "adapted_prompt": {
+                "type": ["string", "null"]
+            },
+            "user_message": {
+                "type": ["string", "null"]
+            }
+        }
+    }))
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "Claude Code macro judge JSON schema could not be serialized: {error}"
         ))
     })
 }

@@ -659,8 +659,7 @@ fn parse_openai_chat_completions_http_response(
 
 /// Returns whether this OpenAI-compatible request must produce a provider action batch.
 fn openai_chat_completions_request_requires_maap(request: &ModelRequest) -> bool {
-    request.interaction_kind != ModelInteractionKind::AutoSizing
-        && !request.allowed_actions.actions.is_empty()
+    request.interaction_kind.expects_maap_batch() && !request.allowed_actions.actions.is_empty()
 }
 
 /// Converts terminal OpenAI-compatible finish reasons into runtime-recoverable errors.

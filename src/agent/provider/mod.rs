@@ -1176,7 +1176,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
         let (model, raw_text, usage) =
             parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
         let quota_usage = provider_quota_usage_from_headers(&response.headers);
-        let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        let action_batch = if !request.interaction_kind.expects_maap_batch() {
             None
         } else {
             match parse_provider_native_maap_action_batch(&raw_text, request)? {
@@ -1290,7 +1290,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
             let (model, raw_text, usage) =
                 parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
             let quota_usage = provider_quota_usage_from_headers(&response.headers);
-            let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+            let action_batch = if !request.interaction_kind.expects_maap_batch() {
                 None
             } else {
                 match parse_provider_native_maap_action_batch(&raw_text, request)? {

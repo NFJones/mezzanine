@@ -337,12 +337,52 @@ fn openai_auto_sizing_response_format() -> serde_json::Value {
     })
 }
 
+/// Builds the OpenAI structured-output schema for internal macro-step judge
+/// decisions.
+fn openai_macro_judge_response_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "name": "mezzanine_macro_judge_decision",
+        "description": "Internal Mezzanine agent-macro step continuation decision.",
+        "strict": true,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "outcome": {
+                    "type": "string",
+                    "enum": [
+                        "continue",
+                        "continue_with_adapted_prompt",
+                        "stop_failure",
+                        "finish_success"
+                    ]
+                },
+                "step_success": { "type": "boolean" },
+                "rationale": { "type": "string", "minLength": 1 },
+                "adapted_prompt": { "type": ["string", "null"] },
+                "user_message": { "type": ["string", "null"] }
+            },
+            "required": [
+                "version",
+                "outcome",
+                "step_success",
+                "rationale",
+                "adapted_prompt",
+                "user_message"
+            ],
+            "additionalProperties": false
+        }
+    })
+}
+
 /// Returns the OpenAI response-format field for special request modes.
 pub(super) fn openai_response_format(request: &ModelRequest) -> Option<serde_json::Value> {
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        return Some(openai_auto_sizing_response_format());
+    match request.interaction_kind {
+        ModelInteractionKind::AutoSizing => Some(openai_auto_sizing_response_format()),
+        ModelInteractionKind::MacroJudge => Some(openai_macro_judge_response_format()),
+        _ => None,
     }
-    None
 }
 
 /// Builds a stable, non-secret OpenAI prompt-cache routing key for a request.
@@ -404,7 +444,7 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
             "OpenAI response-format diagnostics failed: {error}"
         ))
     })?;
-    let tools = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+    let tools = if request.interaction_kind.expects_structured_json() {
         serde_json::json!([])
     } else {
         serde_json::json!(openai_maap_action_batch_tools(request))
@@ -412,7 +452,7 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     let tools_text = serde_json::to_string(&tools).map_err(|error| {
         MezError::invalid_state(format!("OpenAI tools diagnostics failed: {error}"))
     })?;
-    let tool_choice = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+    let tool_choice = if request.interaction_kind.expects_structured_json() {
         serde_json::json!("none")
     } else {
         serde_json::json!({

@@ -11,7 +11,7 @@ use super::cache::{
 };
 use super::schema::openai_maap_action_batch_tools;
 use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
-use crate::agent::{ModelInteractionKind, ModelRequest};
+use crate::agent::ModelRequest;
 use crate::error::{MezError, Result};
 
 /// Builds a non-streaming OpenAI Responses request body.
@@ -73,7 +73,7 @@ pub(super) fn openai_responses_request_control_shape_with_stream(
     {
         body["service_tier"] = serde_json::json!(service_tier);
     }
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
+    if request.interaction_kind.expects_structured_json() {
         body["tool_choice"] = serde_json::json!("none");
     } else {
         body["tools"] = serde_json::json!(openai_maap_action_batch_tools(request));
