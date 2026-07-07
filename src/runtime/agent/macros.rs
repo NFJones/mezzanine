@@ -6,6 +6,9 @@
 //! child subagent session.
 
 use super::*;
+use crate::agent::{
+    AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+};
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::RuntimeAgentPromptTurnStart;
@@ -90,10 +93,11 @@ impl RuntimeSessionService {
     /// Starts the parent orchestration turn for an explicit `#macro` prompt.
     ///
     /// The runtime loads the configured macro, creates one persistent child
-    /// subagent, marks that child as macro-managed for later step messages, and
-    /// starts the parent model turn with a runtime hint that describes the
-    /// macro sequence and required child recipient. The parent model remains
-    /// responsible for adapting each step prompt and judging each child result.
+    /// subagent, marks that child as macro-managed for later step messages,
+    /// and delivers the first scripted step through runtime-owned macro-step
+    /// routing before the parent model is asked to continue orchestration. The
+    /// parent model remains responsible for judging each child result and
+    /// adapting later step prompts.
     ///
     /// # Parameters
     /// - `pane_id`: Parent pane where the user invoked the macro.
@@ -156,6 +160,13 @@ impl RuntimeSessionService {
             &parent_agent_id,
             &definition.summary.name,
         );
+        self.queue_runtime_owned_first_macro_step(
+            pane_id,
+            &started,
+            &definition,
+            invocation.additional_context.as_deref(),
+            &child_agent_id,
+        )?;
         self.append_agent_trace_turn_event(
             pane_id,
             &started.turn_id,
@@ -165,6 +176,107 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(started)
+    }
+
+    /// Queues the first macro step without requiring the parent model to emit
+    /// an initial `send_message` action.
+    ///
+    /// Macro startup owns the deterministic first handoff so a provider that
+    /// returns ordinary text instead of a MAAP batch cannot fail the run before
+    /// any child work starts. The synthetic parent execution mirrors the shape
+    /// produced by a model-owned `send_message` action so the existing joined
+    /// subagent resolution path can append the child result and resume provider
+    /// orchestration for later steps.
+    fn queue_runtime_owned_first_macro_step(
+        &mut self,
+        pane_id: &str,
+        started: &RuntimeAgentPromptTurnStart,
+        definition: &MacroDefinition,
+        additional_context: Option<&str>,
+        child_agent_id: &str,
+    ) -> Result<()> {
+        let parent_turn = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == started.turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("macro parent turn disappeared"))?;
+        let first_step = definition
+            .steps
+            .first()
+            .ok_or_else(|| MezError::invalid_state("agent macro has no scripted steps"))?;
+        let payload =
+            runtime_macro_initial_step_prompt(first_step.prompt.as_str(), additional_context);
+        let action = AgentAction {
+            id: "macro-step-1".to_string(),
+            rationale: "send first macro step".to_string(),
+            payload: AgentActionPayload::SendMessage {
+                recipient: format!("agent:{child_agent_id}"),
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload,
+            },
+        };
+        let result = self
+            .queue_macro_managed_message_step(
+                &parent_turn,
+                &action,
+                &format!("agent:{child_agent_id}"),
+                "text/plain; charset=utf-8",
+                match &action.payload {
+                    AgentActionPayload::SendMessage { payload, .. } => payload.as_str(),
+                    _ => unreachable!("synthetic macro action is always send_message"),
+                },
+            )?
+            .ok_or_else(|| MezError::invalid_state("runtime-owned macro step was not accepted"))?;
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "send first macro step".to_string(),
+            thought: None,
+            turn_id: parent_turn.turn_id.clone(),
+            agent_id: parent_turn.agent_id.clone(),
+            actions: vec![action],
+            final_turn: false,
+        };
+        self.agent_turn_executions.insert(
+            parent_turn.turn_id.clone(),
+            AgentTurnExecution {
+                request: runtime_owned_macro_step_model_request(&parent_turn),
+                response: ModelResponse {
+                    provider: "runtime".to_string(),
+                    model: "macro-orchestration".to_string(),
+                    raw_text: "runtime-owned macro first step".to_string(),
+                    usage: Default::default(),
+                    latest_request_usage: None,
+                    quota_usage: Default::default(),
+                    action_batch: Some(batch),
+                    provider_transcript_events: Vec::new(),
+                },
+                latest_response_usage: Default::default(),
+                routing_token_usage_by_model: Default::default(),
+                action_results: vec![result],
+                final_turn: false,
+                terminal_state: AgentTurnState::Running,
+            },
+        );
+        self.pending_agent_provider_tasks
+            .remove(&parent_turn.turn_id);
+        self.claimed_agent_provider_tasks
+            .remove(&parent_turn.turn_id);
+        self.agent_turn_ledger
+            .finish_turn(&parent_turn.turn_id, AgentTurnState::Blocked)?;
+        self.append_agent_trace_turn_transition(
+            &parent_turn,
+            AgentTurnState::Running,
+            AgentTurnState::Blocked,
+            "runtime_owned_macro_first_step",
+        )?;
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &parent_turn.turn_id,
+            "provider_task removed reason=runtime_owned_macro_first_step",
+        )?;
+        Ok(())
     }
 
     /// Starts a normal child agent-shell turn for a macro step message.
@@ -425,7 +537,7 @@ fn runtime_macro_parent_orchestration_prompt(
         "".to_string(),
         "Macro execution rules:".to_string(),
         "- Use the same persistent subagent recipient for every step.".to_string(),
-        "- Your immediate first response must be one MAAP action batch containing exactly one send_message action for step 1; do not answer with prose or a plan before sending it.".to_string(),
+        "- Step 1 has already been sent to the persistent subagent by the runtime; wait for that result before deciding whether to continue.".to_string(),
         format!("- Every macro step send_message must use recipient `agent:{child_agent_id}` and content_type `text/plain; charset=utf-8`."),
         "- Send exactly one step prompt at a time with send_message; put only the current step prompt in the payload.".to_string(),
         "- Each step is interpreted as a normal agent-shell prompt in the subagent, so slash commands such as /loop remain valid.".to_string(),
@@ -448,6 +560,49 @@ fn runtime_macro_parent_orchestration_prompt(
             .map(|step| format!("{}. {}", step.index, step.prompt)),
     );
     lines.join("\n")
+}
+
+/// Builds the runtime-owned first macro-step prompt sent to the child agent.
+fn runtime_macro_initial_step_prompt(
+    step_prompt: &str,
+    additional_context: Option<&str>,
+) -> String {
+    let Some(context) = additional_context.filter(|context| !context.trim().is_empty()) else {
+        return step_prompt.to_string();
+    };
+    format!(
+        "{step_prompt}\n\nUser additional context for this macro invocation:\n{}",
+        context.trim()
+    )
+}
+
+/// Builds a synthetic request record for the runtime-owned macro first step.
+fn runtime_owned_macro_step_model_request(parent_turn: &AgentTurnRecord) -> ModelRequest {
+    ModelRequest {
+        provider: "runtime".to_string(),
+        model: "macro-orchestration".to_string(),
+        reasoning_effort: None,
+        thinking_enabled: None,
+        latency_preference: None,
+        prompt_cache_retention: None,
+        max_output_tokens: None,
+        temperature: None,
+        prompt_cache_session_id: None,
+        prompt_cache_lineage_id: None,
+        turn_id: parent_turn.turn_id.clone(),
+        agent_id: parent_turn.agent_id.clone(),
+        available_mcp_tools: Vec::new(),
+        memory_actions_enabled: false,
+        issue_actions_enabled: false,
+        interaction_kind: ModelInteractionKind::ActionExecution,
+        allowed_actions: AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent),
+        stop: None,
+        messages: vec![ModelMessage {
+            role: ModelMessageRole::User,
+            source: ContextSourceKind::TranscriptUser,
+            content: "runtime-owned macro first step".to_string(),
+        }],
+    }
 }
 
 #[cfg(test)]

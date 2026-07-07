@@ -4999,12 +4999,16 @@ instructions, permission policy, shell mode, routing state, and applicable scope
 in the same manner as other subagents, and it MUST count against the configured subagent
 concurrency and depth limits.
 
-Before submitting a step, the main model MAY adapt the scripted prompt to the user-
-stated invocation context. Adaptation MUST preserve the macro purpose, step order, and
-safety boundaries, and MUST NOT silently transform the macro into an unrelated workflow.
-Each step prompt MUST be submitted to the persistent subagent as a normal agent-shell
-prompt and MUST be interpreted by that subagent through the same agent-shell parsing
-path used for direct user prompt submissions. Step prompts MAY include supported slash
+For the first step in a macro run, the runtime MUST submit the scripted prompt to the
+persistent subagent before any parent model continuation is required. The runtime MAY
+append the user-stated invocation context to that first prompt, but it MUST preserve the
+scripted prompt, macro purpose, step order, and safety boundaries. Before submitting
+later steps, the main model MAY adapt the scripted prompt to the user-stated invocation
+context. Adaptation MUST preserve the macro purpose, step order, and safety boundaries,
+and MUST NOT silently transform the macro into an unrelated workflow. Each step prompt
+MUST be submitted to the persistent subagent as a normal agent-shell prompt and MUST be
+interpreted by that subagent through the same agent-shell parsing path used for direct
+user prompt submissions. Step prompts MAY include supported slash
 commands such as `/loop`, explicit skill syntax, explicit MCP server syntax, and
 ordinary prompt text, subject to the same permissions, policy, turn lifecycle, loop
 limits, and runtime bounds that would apply if the prompt were typed directly in that

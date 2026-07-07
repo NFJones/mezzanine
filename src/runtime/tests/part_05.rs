@@ -3214,7 +3214,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         "{orchestration_context}"
     );
     assert!(
-        orchestration_context.contains("Your immediate first response must be one MAAP action batch containing exactly one send_message action for step 1"),
+        orchestration_context.contains("Step 1 has already been sent to the persistent subagent by the runtime; wait for that result before deciding whether to continue."),
         "{orchestration_context}"
     );
     assert!(
@@ -3283,46 +3283,14 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         .find(|turn| turn.agent_id == "agent-%1")
         .cloned()
         .expect("parent macro orchestration turn should exist");
-    let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
-            provider: "runtime-batch".to_string(),
-            model: "test".to_string(),
-            raw_text: "send macro step".to_string(),
-            usage: Default::default(),
-            latest_request_usage: None,
-            quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
-                protocol: "maap/1".to_string(),
-                rationale: "send adapted macro step".to_string(),
-                thought: None,
-                turn_id: parent_turn.turn_id.clone(),
-                agent_id: parent_turn.agent_id.clone(),
-                actions: vec![crate::agent::AgentAction {
-                    id: "macro-step-1".to_string(),
-                    rationale: "send first macro step".to_string(),
-                    payload: crate::agent::AgentActionPayload::SendMessage {
-                        recipient: format!("agent:{child_agent_id}"),
-                        content_type: "text/plain; charset=utf-8".to_string(),
-                        payload: "/loop inspect release notes for v1.2".to_string(),
-                    },
-                }],
-                final_turn: false,
-            }),
-            provider_transcript_events: Vec::new(),
-        },
-    };
-
-    let execution = service
-        .execute_agent_turn_with_provider(
-            &parent_turn.turn_id,
-            &provider,
-            runtime_model_profile("runtime-batch", "test"),
-        )
-        .unwrap();
-
-    assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
-    let structured = execution.action_results[0]
+    assert_eq!(parent_turn.state, AgentTurnState::Blocked);
+    let parent_execution = service
+        .agent_turn_executions
+        .get(&parent_turn.turn_id)
+        .expect("parent macro orchestration execution should be waiting on runtime-owned first step");
+    assert_eq!(parent_execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(parent_execution.action_results[0].status, ActionStatus::Running);
+    let structured = parent_execution.action_results[0]
         .structured_content_json
         .as_deref()
         .unwrap_or_default();
@@ -3342,12 +3310,13 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             turn.agent_id == child_agent_id && turn.cooperation_mode.as_deref() == Some("macro-step")
         })
         .cloned()
-        .expect("macro step should queue a child shell turn");
+        .expect("runtime-owned first macro step should queue a child shell turn");
     assert_eq!(child_turn.parent_turn_id.as_deref(), Some(parent_turn.turn_id.as_str()));
     assert_eq!(child_turn.trigger, crate::agent::AgentTurnTrigger::LocalMessage);
     assert!(service.joined_subagent_dependencies.contains_key(&child_turn.turn_id));
     let child_context = service.agent_turn_contexts.get(&child_turn.turn_id).unwrap();
-    assert!(child_context.blocks.iter().any(|block| block.content.contains("/loop inspect release notes for v1.2")));
+    assert!(child_context.blocks.iter().any(|block| block.content.contains("/loop inspect release notes for the requested version.")));
+    assert!(child_context.blocks.iter().any(|block| block.content.contains("User additional context for this macro invocation:\nfor v1.2")));
     assert_eq!(
         service
             .agent_turn_ledger
@@ -3357,23 +3326,6 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .map(|turn| turn.state),
         Some(AgentTurnState::Running)
     );
-
-    let retry_execution = service
-        .execute_agent_turn_with_provider(
-            &parent_turn.turn_id,
-            &provider,
-            runtime_model_profile("runtime-batch", "test"),
-        )
-        .unwrap();
-    assert_eq!(retry_execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(retry_execution.action_results[0].status, ActionStatus::Running);
-    let retry_structured = retry_execution.action_results[0]
-        .structured_content_json
-        .as_deref()
-        .unwrap_or_default();
-    assert!(retry_structured.contains(r#""idempotent":true"#), "{retry_structured}");
-    assert!(retry_structured.contains(r#""join_state":"waiting""#), "{retry_structured}");
-    assert!(!retry_structured.contains("macro_step_ordering"), "{retry_structured}");
     let macro_step_turns = service
         .agent_turn_ledger
         .turns()
