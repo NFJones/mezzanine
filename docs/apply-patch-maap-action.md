@@ -8,8 +8,8 @@ content edits; local inspection, validation, directory creation, path-only
 moves, and other non-content operations belong in `shell_command` instead.
 
 This document summarizes the normative behavior in [`SPEC.md`](../SPEC.md) and
-the current implementation in `src/agent/semantic/patch/` and
-`src/subagent/validation.rs`.
+the current implementation in `src/agent/maap.rs`,
+`src/agent/semantic/patch/`, and `src/subagent/validation.rs`.
 
 ## What `apply_patch` is for
 
@@ -77,7 +77,8 @@ contain only added lines plus an optional `*** End of File` marker.
 The runtime accepts a wider compatibility surface than the canonical form so it
 can repair common model output shapes. For example, Mezzanine may accept:
 
-- raw unified diffs and convert them to Mezzanine patch form;
+- many raw unified diffs and convert them to Mezzanine patch form before
+  validation;
 - omitted `@@` on the first update hunk only;
 - safe `./`, `a/`, or `b/` path prefixes;
 - Markdown-fenced or uniformly indented patch payloads; and
@@ -85,6 +86,42 @@ can repair common model output shapes. For example, Mezzanine may accept:
 
 Agents should still emit the canonical unwrapped Mezzanine patch format because
 it is the least ambiguous and easiest to recover when a patch fails.
+
+Delete-style unified diffs are not part of that compatibility path. The
+runtime's unified-diff conversion is intentionally narrower than the canonical
+Mezzanine patch grammar, so the most portable representation is still an
+explicit `*** Begin Patch` block.
+
+## Action lifecycle
+
+`apply_patch` stays a semantic MAAP action from the model's point of view even
+when Mezzanine lowers it into transport-specific local work.
+
+The main stages are:
+
+1. compatibility normalization;
+2. MAAP validation and patch parsing;
+3. target snapshot collection for touched paths;
+4. hunk matching and change planning against those snapshots; and
+5. final write execution or a structured failure result.
+
+More concretely:
+
+- `src/agent/semantic/patch/mod.rs` first attempts compatibility conversion
+  such as unified-diff normalization, then validates the resulting payload;
+- `src/agent/maap.rs` and the patch parser require a non-empty Mezzanine patch
+  block with `*** Begin Patch`, `*** End Patch`, and at least one file
+  operation;
+- patch headers are parsed early so touched paths and scope checks can happen
+  before mutation; and
+- `strip` is intentionally unsupported for Mezzanine patch blocks even though
+  some non-Mezzanine patch tools expose it.
+
+Shell-backed execution is deliberately two phase. Mezzanine first snapshots the
+current target files for the touched paths, then builds a verified write plan
+from those snapshots. Native execution reuses the same parser, matcher, path
+safety checks, and preimage verification logic, but applies the resulting
+changes directly through Rust rather than by sending pane shell input.
 
 ## Path, scope, and safety rules
 
@@ -142,15 +179,24 @@ application:
 
 - `apply_patch` is the baseline semantic local action for file-content
   mutation.
+- Shell-backed `apply_patch` is a stateful read-then-write transaction, not a
+  single blind shell rewrite.
 - Mezzanine synthesizes the concrete local execution plan and the user-facing
   change preview; agents do not need to generate shell wrappers or diffs.
 - The action uses a short explicit timeout rather than inheriting the ordinary
   shell-command default so malformed or blocked patches fail quickly.
+- Structured action results keep the semantic action identity as
+  `apply_patch` even when the underlying transport is pane-shell or native.
 - If a multi-file patch applies changes to one path and later fails on another,
   already-completed per-file mutations are preserved. The diagnostic identifies
   what succeeded and what still needs retry.
 - Shell-backed execution still uses the pane environment so the action works in
   the pane's actual filesystem context, including remote panes.
+
+This means that a successful or failed action result is reporting the outcome
+of Mezzanine's patch transaction, not the outcome of a model-authored shell
+wrapper. The generated transport details are runtime-owned implementation
+machinery.
 
 The implementation owners for these behaviors are primarily:
 
