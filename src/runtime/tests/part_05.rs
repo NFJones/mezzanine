@@ -3386,6 +3386,102 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+
+/// Verifies a completed macro step asks the main model for a structured judge
+/// decision and lets the runtime dispatch the next scripted step itself. This
+/// protects harness-owned continuation from regressing to a parent MAAP
+/// `send_message` requirement after the first child step finishes.
+#[test]
+fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
+    let config_root = temp_root("runtime-macro-judge-next-step");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. Inspect release notes.\n2. Summarize release blockers.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    service.set_config_root(config_root);
+
+    let response = service
+        .execute_agent_shell_command(&primary, "#release-check for v1.2")
+        .unwrap();
+    assert!(response.contains(r#""kind":"turn_started""#), "{response}");
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .cloned()
+        .expect("parent macro orchestration turn should exist");
+    let first_child_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
+        .cloned()
+        .expect("first runtime-owned macro step should create a child turn");
+
+    service
+        .agent_turn_ledger
+        .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
+        .unwrap();
+    service
+        .emit_subagent_task_result_for_state(&first_child_turn, AgentTurnState::Completed)
+        .unwrap();
+    assert_eq!(
+        service.macro_judge_step_index_for_turn(&parent_turn.turn_id),
+        Some(0)
+    );
+
+    let judge_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: r#"{"outcome":"continue","step_success":true,"rationale":"step one satisfied its intent","adapted_prompt":null,"user_message":null}"#.to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent_turn.turn_id,
+            &judge_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    let macro_run = service
+        .macro_runs_by_parent_turn
+        .get(parent_turn.turn_id.as_str())
+        .expect("macro should continue after a valid judge decision");
+    assert_eq!(macro_run.current_step, 1);
+    assert!(macro_run.steps[0].task_result.as_ref().unwrap().success);
+    assert_eq!(macro_run.steps[0].judgment.as_ref().unwrap().outcome, crate::runtime::service_state::MacroJudgeOutcome::Continue);
+    assert_eq!(macro_run.steps[1].submitted_prompt.as_deref(), Some("Summarize release blockers."));
+    let second_child_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| {
+            turn.cooperation_mode.as_deref() == Some("macro-step")
+                && turn.turn_id != first_child_turn.turn_id
+        })
+        .expect("judge continuation should dispatch the next child step");
+    assert_eq!(second_child_turn.parent_turn_id.as_deref(), Some(parent_turn.turn_id.as_str()));
+    assert!(service.joined_subagent_dependencies.contains_key(&second_child_turn.turn_id));
+
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies `/list-skills` displays the effective pane skill catalog with the
 /// same `$skill` invocation syntax accepted by explicit skill prompts. This
 /// gives users a discoverable way to see and select available workflows before
