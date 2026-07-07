@@ -123,6 +123,64 @@ from those snapshots. Native execution reuses the same parser, matcher, path
 safety checks, and preimage verification logic, but applies the resulting
 changes directly through Rust rather than by sending pane shell input.
 
+## Major implementation components
+
+The current implementation splits `apply_patch` into a small set of focused
+owners:
+
+- `src/agent/maap.rs` validates the action payload at the MAAP boundary,
+  applies compatibility normalization such as unified-diff conversion when
+  applicable, and rejects non-Mezzanine patch payloads before execution
+  planning.
+- `src/agent/semantic/patch/parser.rs` normalizes wrapped or fenced patch text
+  and parses file operations, hunk anchors, unified-diff old-line hints, and
+  whole-file replacement hunks into typed patch structures.
+- `src/agent/semantic/patch/snapshot.rs` parses the shell read-phase snapshot
+  transport into typed path states such as regular file, missing path,
+  non-regular target, outside-working-directory target, or resolution error.
+  The current matcher pipeline is text-oriented, so regular files must decode as
+  UTF-8 before hunk matching can proceed.
+- `src/agent/semantic/patch/matcher.rs` applies update hunks to current text
+  snapshots, including exact matching, bounded tolerant matching,
+  ambiguity detection, and model-correctable mismatch diagnostics.
+- `src/agent/semantic/patch/transaction.rs` generates the shell-backed read and
+  write phases, including marker-framed base64 snapshot transport, verified
+  write commands, and the runtime-generated diff preview shown after successful
+  mutation.
+- `src/subagent/validation.rs` checks touched paths ahead of execution so
+  subagent write scopes and path boundaries are enforced consistently.
+
+This split is important operationally: parsing, matching, snapshot handling,
+and transport generation are separate on purpose so stale-context failures can
+produce specific diagnostics without blurring syntax errors, safety failures,
+and write-time races into one generic patch error.
+
+## Shell-backed transaction flow
+
+When `apply_patch` runs through the pane shell, the flow is deliberately a
+planned transaction instead of a blind one-shot rewrite:
+
+1. Mezzanine parses the patch and derives the full touched-path set from file
+   operations, including move-with-edit destinations.
+2. The generated read phase emits a marker-framed snapshot stream for each
+   touched path, including base64-encoded path metadata, resolved paths, path
+   status, and file bytes for regular files.
+3. Rust parses those snapshots, normalizes regular files into current text
+   state, and applies patch hunks against the read-phase preimage rather than
+   against guessed shell output.
+4. If planning succeeds, Mezzanine generates a write phase that re-resolves the
+   target path, rechecks the expected resolved location, verifies the original
+   bytes for existing files, and only then writes the verified final bytes.
+5. After successful writes, Mezzanine renders the resulting diff/change preview
+   itself. If a later file operation fails, earlier per-file writes remain in
+   place and the diagnostic identifies both the already-applied path set and
+   the failed operation.
+
+That transaction shape explains why `apply_patch` failures are usually
+recoverable with better context: the failure is typically coming from Mezzanine
+rejecting a stale or unsafe plan, not from a shell script partially guessing
+where to edit.
+
 ## Path, scope, and safety rules
 
 `apply_patch` path headers are relative to the pane current working directory.
@@ -154,6 +212,16 @@ snapshot of the current file and can use several bounded recovery strategies,
 including anchor-constrained search and conservative old-line range hints from
 unified diff headers. It must still fail closed when the result is ambiguous.
 
+After exact old-context matching, the matcher may fall back in deterministic
+order to trailing-whitespace-insensitive matching,
+surrounding-whitespace-insensitive matching, and a limited punctuation/space
+normalization pass. Those compatibility modes do not give the patch permission
+to rewrite unchanged context from the patch text: when a non-exact match is
+accepted, current unchanged context is preserved from the real target file.
+The matcher may also tolerate omitted blank-only separator lines in bounded
+cases, but it must still reject nonblank gaps, tied candidates, near-ties, and
+other unresolved ambiguity.
+
 When a hunk does not match cleanly, the runtime returns a diagnostic that can
 include:
 
@@ -181,8 +249,14 @@ application:
   mutation.
 - Shell-backed `apply_patch` is a stateful read-then-write transaction, not a
   single blind shell rewrite.
+- The shell-backed read phase uses marker-framed snapshot transport and base64
+  payloads so Mezzanine can reconstruct exact current-file state before it
+  plans any write.
 - Mezzanine synthesizes the concrete local execution plan and the user-facing
   change preview; agents do not need to generate shell wrappers or diffs.
+- Generated shell transactions avoid model-authored heredocs and move file
+  content through bounded encoded shell lines rather than embedding raw patch or
+  file bytes in ad hoc shell source.
 - The action uses a short explicit timeout rather than inheriting the ordinary
   shell-command default so malformed or blocked patches fail quickly.
 - Structured action results keep the semantic action identity as
@@ -192,6 +266,9 @@ application:
   what succeeded and what still needs retry.
 - Shell-backed execution still uses the pane environment so the action works in
   the pane's actual filesystem context, including remote panes.
+- The current hunk-matching pipeline is text-based rather than byte-oriented,
+  so non-UTF-8 regular files fail during snapshot normalization instead of being
+  patched as opaque binary blobs.
 
 This means that a successful or failed action result is reporting the outcome
 of Mezzanine's patch transaction, not the outcome of a model-authored shell
@@ -225,6 +302,24 @@ Choose `shell_command` for:
 
 This split keeps file-content mutation in a structured semantic action while
 leaving general filesystem and process control in the shell surface.
+
+## Current boundaries and deliberate non-goals
+
+Some constraints are intentional design boundaries, not accidental omissions:
+
+- `apply_patch` is for content mutation, not general filesystem orchestration.
+  Path-only renames, directory creation, recursive deletion, and other bulk
+  filesystem workflows still belong in `shell_command`.
+- The action accepts some unified-diff-shaped payloads for compatibility, but
+  raw unified diff is still an interop convenience rather than the primary
+  contract. The canonical and most repairable representation remains an
+  explicit Mezzanine `*** Begin Patch` block.
+- There is no standalone `*** Replace File` directive. Whole-file replacement is
+  expressed only through the single-hunk `@@ replace whole file` convention.
+- `strip`-style path rewriting is intentionally unsupported for Mezzanine patch
+  blocks.
+- The current implementation is designed around bounded text editing with
+  explicit context, not binary patching or arbitrary patch-tool emulation.
 
 ## Minimal examples
 
