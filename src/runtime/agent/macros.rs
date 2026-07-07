@@ -6,14 +6,18 @@
 //! child subagent session.
 
 use super::*;
+#[cfg(test)]
+use crate::agent::ModelProvider;
 use crate::agent::{
-    AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
+    ModelRequest, ModelResponse,
 };
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::RuntimeAgentPromptTurnStart;
 use crate::runtime::service_state::{
-    MacroManagedSubagent, MacroRunPhase, MacroRunState, MacroRunStep,
+    MacroJudgeDecision, MacroJudgeOutcome, MacroManagedSubagent, MacroRunPhase, MacroRunState,
+    MacroRunStep,
 };
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 
@@ -390,6 +394,287 @@ impl RuntimeSessionService {
         Ok(result)
     }
 
+    /// Returns whether one parent turn is waiting for a structured macro judge
+    /// response rather than an ordinary MAAP action batch.
+    ///
+    /// Macro judge turns reuse the parent provider task slot so the scheduler
+    /// retains a normal progress path, but the provider response is parsed as a
+    /// constrained JSON decision and then executed by the runtime.
+    ///
+    /// # Parameters
+    /// - `turn_id`: Parent macro orchestration turn id.
+    pub(in crate::runtime) fn macro_judge_step_index_for_turn(
+        &self,
+        turn_id: &str,
+    ) -> Option<usize> {
+        match self.macro_runs_by_parent_turn.get(turn_id)?.phase {
+            MacroRunPhase::WaitingForJudge { step_index } => Some(step_index),
+            _ => None,
+        }
+    }
+
+    /// Executes one pending macro judge request through the parent model and
+    /// applies the validated decision to the runtime-owned macro run.
+    ///
+    /// The provider response is intentionally not interpreted as MAAP. A valid
+    /// `continue` decision dispatches the next scripted child step internally,
+    /// while terminal decisions complete or fail the parent turn directly.
+    ///
+    /// # Parameters
+    /// - `provider`: Model provider used for the parent pane.
+    /// - `turn`: Parent macro orchestration turn currently running.
+    /// - `model_profile`: Parent model profile used to make the judge request.
+    /// - `step_index`: Completed step index that needs semantic judgment.
+    #[cfg(test)]
+    pub(in crate::runtime) fn execute_macro_judge_with_provider<P: ModelProvider>(
+        &mut self,
+        provider: &P,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        step_index: usize,
+    ) -> Result<AgentTurnExecution> {
+        let request = self.macro_judge_model_request(turn, model_profile, step_index)?;
+        self.append_provider_request_audit(turn, model_profile, provider.provider_id(), "started")?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "macro_judge_request started provider={} model={} step_index={}",
+                provider.provider_id(),
+                model_profile.model,
+                step_index
+            ),
+        )?;
+        let response = provider.send_request(&request)?;
+        let decision =
+            self.macro_judge_decision_from_response(&turn.turn_id, step_index, &response)?;
+        self.apply_macro_judge_decision(turn, step_index, decision.clone())?;
+        self.pending_agent_provider_tasks.remove(&turn.turn_id);
+        self.claimed_agent_provider_tasks.remove(&turn.turn_id);
+        self.append_provider_request_audit(
+            turn,
+            model_profile,
+            provider.provider_id(),
+            "succeeded",
+        )?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "macro_judge_response applied outcome={} step_index={}",
+                macro_judge_outcome_wire_value(decision.outcome),
+                step_index
+            ),
+        )?;
+        Ok(AgentTurnExecution {
+            request,
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: Vec::new(),
+            final_turn: false,
+            terminal_state: turn.state,
+        })
+    }
+
+    /// Builds the structured provider request used to judge one completed
+    /// macro step.
+    pub(in crate::runtime) fn macro_judge_model_request(
+        &self,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        step_index: usize,
+    ) -> Result<ModelRequest> {
+        let run = self
+            .macro_runs_by_parent_turn
+            .get(turn.turn_id.as_str())
+            .ok_or_else(|| {
+                MezError::invalid_state("macro judge requested for unknown macro run")
+            })?;
+        let step = run
+            .steps
+            .get(step_index)
+            .ok_or_else(|| MezError::invalid_state("macro judge step index is out of range"))?;
+        let result = step
+            .task_result
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("macro judge requested before child result"))?;
+        let next_step = run.steps.get(step_index.saturating_add(1));
+        Ok(ModelRequest {
+            provider: model_profile.provider.clone(),
+            model: model_profile.model.clone(),
+            reasoning_effort: model_profile.reasoning_profile.clone(),
+            thinking_enabled: model_profile.thinking_enabled(),
+            latency_preference: model_profile.latency_preference.clone(),
+            prompt_cache_retention: None,
+            max_output_tokens: model_profile.max_output_tokens(),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: ModelInteractionKind::MacroJudge,
+            allowed_actions: AllowedActionSet::for_capability(
+                crate::agent::AgentCapability::RespondOnly,
+            ),
+            stop: None,
+            messages: vec![
+                ModelMessage {
+                    role: ModelMessageRole::System,
+                    source: ContextSourceKind::RuntimeHint,
+                    content: runtime_macro_judge_policy(),
+                },
+                ModelMessage {
+                    role: ModelMessageRole::User,
+                    source: ContextSourceKind::RuntimeHint,
+                    content: runtime_macro_judge_task(run, step, result, next_step),
+                },
+            ],
+        })
+    }
+
+    /// Parses and validates the structured JSON decision returned by the judge
+    /// provider for one macro step.
+    fn macro_judge_decision_from_response(
+        &self,
+        turn_id: &str,
+        step_index: usize,
+        response: &ModelResponse,
+    ) -> Result<MacroJudgeDecision> {
+        let run = self
+            .macro_runs_by_parent_turn
+            .get(turn_id)
+            .ok_or_else(|| MezError::invalid_state("macro judge response has no macro run"))?;
+        macro_judge_decision_from_text(&response.raw_text, run.steps.len(), step_index)
+    }
+
+    /// Applies one validated macro judge decision to the parent macro run.
+    pub(in crate::runtime) fn apply_macro_judge_provider_response(
+        &mut self,
+        turn: &AgentTurnRecord,
+        step_index: usize,
+        response: &ModelResponse,
+    ) -> Result<()> {
+        let decision =
+            self.macro_judge_decision_from_response(&turn.turn_id, step_index, response)?;
+        self.apply_macro_judge_decision(turn, step_index, decision)
+    }
+
+    /// Applies one validated macro judge decision to the parent macro run.
+    fn apply_macro_judge_decision(
+        &mut self,
+        turn: &AgentTurnRecord,
+        step_index: usize,
+        decision: MacroJudgeDecision,
+    ) -> Result<()> {
+        let next_step_index = step_index.saturating_add(1);
+        if let Some(run) = self
+            .macro_runs_by_parent_turn
+            .get_mut(turn.turn_id.as_str())
+        {
+            let Some(step) = run.steps.get_mut(step_index) else {
+                return Err(MezError::invalid_state(
+                    "macro judge step index disappeared",
+                ));
+            };
+            step.judgment = Some(decision.clone());
+        }
+        match decision.outcome {
+            MacroJudgeOutcome::Continue | MacroJudgeOutcome::ContinueWithAdaptedPrompt => {
+                let (child_agent_id, prompt) = {
+                    let run = self
+                        .macro_runs_by_parent_turn
+                        .get(turn.turn_id.as_str())
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "macro run disappeared before next step dispatch",
+                            )
+                        })?;
+                    let next_step = run.steps.get(next_step_index).ok_or_else(|| {
+                        MezError::invalid_state(
+                            "macro judge requested continuation after final step",
+                        )
+                    })?;
+                    let prompt = decision
+                        .adapted_prompt
+                        .clone()
+                        .unwrap_or_else(|| next_step.scripted_prompt.clone());
+                    (run.child_agent_id.clone(), prompt)
+                };
+                let action = AgentAction {
+                    id: format!("macro-step-{}", next_step_index.saturating_add(1)),
+                    rationale: "send next macro step".to_string(),
+                    payload: AgentActionPayload::SendMessage {
+                        recipient: format!("agent:{child_agent_id}"),
+                        content_type: "text/plain; charset=utf-8".to_string(),
+                        payload: prompt.clone(),
+                    },
+                };
+                let result = self
+                    .queue_runtime_macro_step_prompt(
+                        turn,
+                        &action,
+                        &format!("agent:{child_agent_id}"),
+                        "text/plain; charset=utf-8",
+                        prompt.as_str(),
+                        next_step_index,
+                    )?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("macro judge next step was not accepted")
+                    })?;
+                if let Some(execution) = self.agent_turn_executions.get_mut(&turn.turn_id)
+                    && let Some(batch) = execution.response.action_batch.as_mut()
+                {
+                    batch.actions.push(action);
+                    execution.action_results.push(result);
+                    execution.final_turn = false;
+                    execution.terminal_state = AgentTurnState::Running;
+                }
+                self.agent_turn_ledger
+                    .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
+                self.append_agent_trace_turn_transition(
+                    turn,
+                    AgentTurnState::Running,
+                    AgentTurnState::Blocked,
+                    "macro_judge_dispatched_next_step",
+                )?;
+            }
+            MacroJudgeOutcome::StopFailure => {
+                let message = decision
+                    .user_message
+                    .as_deref()
+                    .unwrap_or("macro judge stopped the macro");
+                self.append_agent_error_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!("agent: macro failed: {message}"),
+                )?;
+                let _ = self.agent_scheduler.complete(&turn.turn_id);
+                self.agent_turn_ledger
+                    .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
+                self.macro_runs_by_parent_turn.remove(&turn.turn_id);
+                self.append_agent_trace_turn_transition(
+                    turn,
+                    AgentTurnState::Running,
+                    AgentTurnState::Failed,
+                    "macro_judge_stop_failure",
+                )?;
+            }
+            MacroJudgeOutcome::FinishSuccess => {
+                self.agent_turn_ledger
+                    .finish_turn(&turn.turn_id, AgentTurnState::Completed)?;
+                self.macro_runs_by_parent_turn.remove(&turn.turn_id);
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    "agent: macro completed successfully",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Starts a normal child agent-shell turn for a macro step message.
     ///
     /// The bridge is intentionally limited to macro-managed child agents and
@@ -716,9 +1001,256 @@ fn runtime_owned_macro_step_model_request(parent_turn: &AgentTurnRecord) -> Mode
     }
 }
 
+/// Returns the stable wire value for one macro judge outcome.
+fn macro_judge_outcome_wire_value(outcome: MacroJudgeOutcome) -> &'static str {
+    match outcome {
+        MacroJudgeOutcome::Continue => "continue",
+        MacroJudgeOutcome::ContinueWithAdaptedPrompt => "continue_with_adapted_prompt",
+        MacroJudgeOutcome::StopFailure => "stop_failure",
+        MacroJudgeOutcome::FinishSuccess => "finish_success",
+    }
+}
+
+/// Builds the system policy for a structured macro judge request.
+fn runtime_macro_judge_policy() -> String {
+    [
+        "You are judging one completed Mezzanine agent macro step.",
+        "Return only JSON matching the requested macro-judge schema.",
+        "Choose continue only when the completed step satisfied its intent and another scripted step remains.",
+        "Choose continue_with_adapted_prompt only when another step remains and the next prompt needs bounded adaptation.",
+        "Choose stop_failure when the completed step did not satisfy its intent or continuation would violate the macro purpose.",
+        "Choose finish_success only after the final required step completed successfully.",
+    ]
+    .join("\n")
+}
+
+/// Builds the user task for a structured macro judge request.
+fn runtime_macro_judge_task(
+    run: &MacroRunState,
+    step: &MacroRunStep,
+    result: &crate::runtime::service_state::MacroStepTaskResult,
+    next_step: Option<&MacroRunStep>,
+) -> String {
+    let mut value = serde_json::json!({
+        "macro_name": run.macro_name,
+        "macro_description": run.macro_description,
+        "invocation_prompt": run.invocation_prompt,
+        "invocation_context": run.invocation_context,
+        "completed_step": {
+            "index": step.index,
+            "scripted_prompt": step.scripted_prompt,
+            "submitted_prompt": step.submitted_prompt,
+            "child_turn_id": step.child_turn_id,
+            "task_result": {
+                "success": result.success,
+                "summary": result.summary,
+                "output": result.output,
+            }
+        },
+        "prior_steps": run.steps.iter().filter(|candidate| candidate.index < step.index).map(|candidate| {
+            serde_json::json!({
+                "index": candidate.index,
+                "scripted_prompt": candidate.scripted_prompt,
+                "task_result": candidate.task_result.as_ref().map(|task_result| serde_json::json!({
+                    "success": task_result.success,
+                    "summary": task_result.summary,
+                })),
+                "judgment": candidate.judgment.as_ref().map(|judgment| serde_json::json!({
+                    "outcome": macro_judge_outcome_wire_value(judgment.outcome),
+                    "step_success": judgment.step_success,
+                    "rationale": judgment.rationale,
+                })),
+            })
+        }).collect::<Vec<_>>(),
+        "next_step": next_step.map(|next_step| serde_json::json!({
+            "index": next_step.index,
+            "scripted_prompt": next_step.scripted_prompt,
+        })),
+    });
+    value["instructions"] = serde_json::json!(
+        "Judge whether the completed step satisfies the macro intent and select the next runtime action."
+    );
+    value.to_string()
+}
+
+/// Parses and validates one structured macro judge response.
+fn macro_judge_decision_from_text(
+    text: &str,
+    step_count: usize,
+    step_index: usize,
+) -> Result<MacroJudgeDecision> {
+    let value: serde_json::Value = serde_json::from_str(text.trim()).map_err(|error| {
+        MezError::invalid_args(format!(
+            "macro judge response invalid after step {}: expected JSON object: {error}",
+            step_index.saturating_add(1)
+        ))
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        MezError::invalid_args(format!(
+            "macro judge response invalid after step {}: expected JSON object",
+            step_index.saturating_add(1)
+        ))
+    })?;
+    let outcome = object
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| MezError::invalid_args("macro judge response missing outcome"))?
+        .parse::<MacroJudgeOutcome>()
+        .map_err(MezError::invalid_args)?;
+    let step_success = object
+        .get("step_success")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| MezError::invalid_args("macro judge response missing step_success"))?;
+    let rationale = object
+        .get("rationale")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| MezError::invalid_args("macro judge response missing rationale"))?
+        .to_string();
+    let adapted_prompt = object
+        .get("adapted_prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let user_message = object
+        .get("user_message")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let final_step = step_index.saturating_add(1) >= step_count;
+    match outcome {
+        MacroJudgeOutcome::Continue if final_step => {
+            return Err(MezError::invalid_args(
+                "macro judge cannot continue after the final step",
+            ));
+        }
+        MacroJudgeOutcome::ContinueWithAdaptedPrompt if final_step => {
+            return Err(MezError::invalid_args(
+                "macro judge cannot adapt a next prompt after the final step",
+            ));
+        }
+        MacroJudgeOutcome::ContinueWithAdaptedPrompt if adapted_prompt.is_none() => {
+            return Err(MezError::invalid_args(
+                "macro judge adapted continuation requires adapted_prompt",
+            ));
+        }
+        MacroJudgeOutcome::StopFailure if user_message.is_none() => {
+            return Err(MezError::invalid_args(
+                "macro judge stop_failure requires user_message",
+            ));
+        }
+        MacroJudgeOutcome::FinishSuccess if !final_step => {
+            return Err(MezError::invalid_args(
+                "macro judge cannot finish before the final step",
+            ));
+        }
+        _ => {}
+    }
+    Ok(MacroJudgeDecision {
+        outcome,
+        step_success,
+        rationale,
+        adapted_prompt,
+        user_message,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies that a macro judge can only continue with an adapted prompt
+    /// when another scripted step remains and the adapted prompt is non-empty.
+    /// This protects the harness-owned continuation path from dispatching an
+    /// empty or out-of-order next macro step after structured provider output.
+    #[test]
+    fn macro_judge_decision_validates_adapted_continuation() {
+        let decision = macro_judge_decision_from_text(
+            r#"{"outcome":"continue_with_adapted_prompt","step_success":true,"rationale":"step passed","adapted_prompt":"Run the next step with the observed id.","user_message":null}"#,
+            2,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            decision.outcome,
+            MacroJudgeOutcome::ContinueWithAdaptedPrompt
+        );
+        assert_eq!(
+            decision.adapted_prompt.as_deref(),
+            Some("Run the next step with the observed id.")
+        );
+
+        let missing_prompt = macro_judge_decision_from_text(
+            r#"{"outcome":"continue_with_adapted_prompt","step_success":true,"rationale":"step passed","adapted_prompt":null,"user_message":null}"#,
+            2,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            missing_prompt
+                .message()
+                .contains("adapted continuation requires adapted_prompt"),
+            "{missing_prompt}"
+        );
+
+        let final_step = macro_judge_decision_from_text(
+            r#"{"outcome":"continue_with_adapted_prompt","step_success":true,"rationale":"step passed","adapted_prompt":"extra work","user_message":null}"#,
+            1,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            final_step
+                .message()
+                .contains("cannot adapt a next prompt after the final step"),
+            "{final_step}"
+        );
+    }
+
+    /// Verifies that terminal macro judge decisions are position-sensitive:
+    /// `finish_success` is accepted only after the last scripted step and
+    /// `stop_failure` must include a user-visible explanation. These checks
+    /// keep invalid structured judge output from becoming a stranded parent
+    /// turn or a generic missing-MAAP failure.
+    #[test]
+    fn macro_judge_decision_validates_terminal_outcomes() {
+        let finish = macro_judge_decision_from_text(
+            r#"{"outcome":"finish_success","step_success":true,"rationale":"all steps completed","adapted_prompt":null,"user_message":null}"#,
+            2,
+            1,
+        )
+        .unwrap();
+        assert_eq!(finish.outcome, MacroJudgeOutcome::FinishSuccess);
+
+        let early_finish = macro_judge_decision_from_text(
+            r#"{"outcome":"finish_success","step_success":true,"rationale":"done early","adapted_prompt":null,"user_message":null}"#,
+            2,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            early_finish
+                .message()
+                .contains("cannot finish before the final step"),
+            "{early_finish}"
+        );
+
+        let missing_message = macro_judge_decision_from_text(
+            r#"{"outcome":"stop_failure","step_success":false,"rationale":"step failed","adapted_prompt":null,"user_message":null}"#,
+            2,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            missing_message
+                .message()
+                .contains("stop_failure requires user_message"),
+            "{missing_message}"
+        );
+    }
 
     /// Verifies that `macro_message_recipient_agent_id` trims whitespace
     /// from the extracted agent id after the `agent:` prefix, so that

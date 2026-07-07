@@ -243,6 +243,9 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub model_profile: ModelProfile,
+    /// Structured macro judge request awaiting model feedback instead of an
+    /// ordinary MAAP action batch.
+    pub macro_judge_request: Option<ModelRequest>,
     /// Optional automatic sizing context for the worker's first provider step.
     pub auto_sizing: Option<RuntimeAutoSizingDispatch>,
     /// Optional router provider for auto-sizing when different from the main

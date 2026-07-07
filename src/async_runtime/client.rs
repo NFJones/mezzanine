@@ -1474,6 +1474,7 @@ async fn execute_runtime_agent_provider_dispatch(
         turn,
         context,
         mut model_profile,
+        macro_judge_request,
         auto_sizing,
         auto_sizing_provider,
         auto_sizing_target_providers,
@@ -1496,6 +1497,34 @@ async fn execute_runtime_agent_provider_dispatch(
     let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
     let mut selected_auto_sizing_profile: Option<ModelProfile> = None;
     let loop_allowed_actions = None;
+    if let Some(request) = macro_judge_request {
+        let response = match provider {
+            RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+                provider.send_request_async(&request).await?
+            }
+            RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
+                provider.send_request_async(&request).await?
+            }
+            RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+                provider.send_request_async(&request).await?
+            }
+            RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+                provider.send_request_async(&request).await?
+            }
+            RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
+                provider.send_request_async(&request).await?
+            }
+        };
+        return Ok(super::AgentTurnExecution {
+            request,
+            response,
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model,
+            action_results: Vec::new(),
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        });
+    }
     if let Some(auto_sizing) = auto_sizing.as_ref()
         && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
     {

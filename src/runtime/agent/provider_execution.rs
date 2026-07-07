@@ -57,6 +57,14 @@ impl RuntimeSessionService {
         }
         self.agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
+        if let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) {
+            return self.execute_macro_judge_with_provider(
+                provider,
+                &turn,
+                &model_profile,
+                step_index,
+            );
+        }
         self.refresh_agent_turn_project_guidance_context(&turn)?;
         self.drain_pending_agent_turn_steering_context(&turn)?;
         let context = self
@@ -365,6 +373,14 @@ impl RuntimeSessionService {
         }
         self.agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
+        if let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) {
+            return self.execute_macro_judge_with_provider(
+                provider,
+                &turn,
+                &model_profile,
+                step_index,
+            );
+        }
         let context = self
             .agent_turn_contexts
             .get(turn_id)
@@ -657,6 +673,40 @@ impl RuntimeSessionService {
                 Some(&model_profile),
                 &error,
             );
+            return Ok(true);
+        }
+        if execution.request.interaction_kind == crate::agent::ModelInteractionKind::MacroJudge {
+            let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) else {
+                let error = MezError::invalid_state(
+                    "macro judge completion has no pending macro judge step",
+                );
+                let provider_id = execution.response.provider.clone();
+                self.fail_agent_turn_after_provider_completion_application_error(
+                    &turn,
+                    &provider_id,
+                    Some(&model_profile),
+                    &error,
+                );
+                return Ok(true);
+            };
+            let provider_id = execution.response.provider.clone();
+            self.pending_agent_provider_tasks.remove(turn_id);
+            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                "provider_task completed reason=macro_judge_provider_event",
+            )?;
+            if let Err(error) =
+                self.apply_macro_judge_provider_response(&turn, step_index, &execution.response)
+            {
+                self.fail_agent_turn_after_provider_completion_application_error(
+                    &turn,
+                    &provider_id,
+                    Some(&model_profile),
+                    &error,
+                );
+            }
             return Ok(true);
         }
         if let Err(error) = runtime_validate_provider_completion_execution(&turn, &mut execution) {

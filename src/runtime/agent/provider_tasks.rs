@@ -198,22 +198,45 @@ impl RuntimeSessionService {
             &provider_config,
             "provider_request",
         )?;
+        let macro_judge_step_index = self.macro_judge_step_index_for_turn(turn_id);
+        let macro_judge_request = macro_judge_step_index
+            .map(|step_index| self.macro_judge_model_request(&turn, &model_profile, step_index))
+            .transpose()?;
 
         self.agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
-        self.refresh_agent_turn_project_guidance_context(&turn)?;
-        self.drain_pending_agent_turn_steering_context(&turn)?;
-        let context = self
-            .agent_turn_contexts
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let mcp_summary = self.mcp_registry.prompt_summary();
-        let context = append_mcp_context(context, &mcp_summary)?;
-        let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-        self.agent_turn_contexts
-            .insert(turn_id.to_string(), context.clone());
-        let auto_sizing = self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?;
+        let (context, available_mcp_tools) = if macro_judge_step_index.is_some() {
+            (
+                self.agent_turn_contexts
+                    .get(turn_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("runtime agent turn context is unavailable")
+                    })?,
+                Vec::new(),
+            )
+        } else {
+            self.refresh_agent_turn_project_guidance_context(&turn)?;
+            self.drain_pending_agent_turn_steering_context(&turn)?;
+            let context = self
+                .agent_turn_contexts
+                .get(turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?;
+            let mcp_summary = self.mcp_registry.prompt_summary();
+            let context = append_mcp_context(context, &mcp_summary)?;
+            let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
+            self.agent_turn_contexts
+                .insert(turn_id.to_string(), context.clone());
+            (context, available_mcp_tools)
+        };
+        let auto_sizing = if macro_judge_step_index.is_some() {
+            None
+        } else {
+            self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
+        };
         if let Some(auto_sizing) = auto_sizing.as_ref() {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -410,6 +433,7 @@ impl RuntimeSessionService {
             turn,
             context,
             model_profile,
+            macro_judge_request,
             auto_sizing,
             auto_sizing_provider,
             auto_sizing_target_providers,
