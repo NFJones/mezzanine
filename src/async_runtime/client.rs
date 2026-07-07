@@ -2365,6 +2365,8 @@ mod tests {
             parent_turn_id: None,
             state: AgentTurnState::Running,
             cooperation_mode: None,
+
+            initial_capability: None,
         };
         let action = AgentAction {
             id: "native-worker-shell".to_string(),
@@ -2473,6 +2475,8 @@ mod tests {
             parent_turn_id: None,
             state: AgentTurnState::Running,
             cooperation_mode: None,
+
+            initial_capability: None,
         };
         let action = AgentAction {
             id: "native-worker-shell-nonblocking".to_string(),
@@ -2588,6 +2592,8 @@ mod tests {
             parent_turn_id: None,
             state: AgentTurnState::Running,
             cooperation_mode: None,
+
+            initial_capability: None,
         };
         let action = AgentAction {
             id: "native-worker-shell-abort".to_string(),
@@ -2980,6 +2986,8 @@ mod tests {
             parent_turn_id: None,
             state: AgentTurnState::Running,
             cooperation_mode: None,
+
+            initial_capability: None,
         };
         let context = AgentContext {
             blocks: vec![ContextBlock {
@@ -3046,6 +3054,8 @@ mod tests {
             parent_turn_id: None,
             state: AgentTurnState::Running,
             cooperation_mode: None,
+
+            initial_capability: None,
         };
         let context = AgentContext {
             blocks: vec![ContextBlock {

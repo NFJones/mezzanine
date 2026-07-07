@@ -659,7 +659,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
-        self.start_agent_prompt_turn_inner(pane_id, prompt, None)
+        self.start_agent_prompt_turn_inner(pane_id, prompt, None, None)
     }
 
     /// Returns whether a pane still has a running or queued turn owned by its loop controller.
@@ -776,7 +776,7 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries) =
             self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
-        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None)?;
+        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None)?;
         self.agent_loop_turns.insert(
             started.turn_id.clone(),
             RuntimeAgentLoopTurn {
@@ -948,8 +948,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
         cooperation_mode: Option<String>,
+        initial_capability: Option<crate::agent::AgentCapability>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
-        self.start_agent_prompt_turn_inner(pane_id, prompt, cooperation_mode)
+        self.start_agent_prompt_turn_inner(pane_id, prompt, cooperation_mode, initial_capability)
     }
 
     /// Runs the start agent prompt turn inner operation for this subsystem.
@@ -962,6 +963,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
         cooperation_mode: Option<String>,
+        initial_capability: Option<crate::agent::AgentCapability>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self
@@ -1007,6 +1009,7 @@ impl RuntimeSessionService {
             parent_turn_id: None,
             cooperation_mode: cooperation_mode.clone(),
             state: AgentTurnState::Queued,
+            initial_capability,
         };
         self.agent_turn_ledger.queue_turn(turn.clone())?;
         self.append_agent_trace_turn_event(

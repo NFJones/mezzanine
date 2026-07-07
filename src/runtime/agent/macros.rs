@@ -9,6 +9,7 @@ use super::*;
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::RuntimeAgentPromptTurnStart;
+use crate::runtime::service_state::MacroManagedSubagent;
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 
 impl RuntimeSessionService {
@@ -43,18 +44,34 @@ impl RuntimeSessionService {
             .map(|record| record.project_root.clone())
     }
 
-    /// Registers one spawned subagent as macro-managed.
+    /// Registers one spawned subagent as macro-managed for one macro run.
     ///
     /// Future macro orchestration uses this marker after creating the one
-    /// persistent child session for a macro run. Only marked children receive
-    /// the send-message-to-agent-shell bridge, which preserves ordinary MMP
-    /// behavior for unrelated ad hoc subagent messages.
+    /// persistent child session and parent orchestration turn for a macro run.
+    /// Only the owning parent turn may bridge `send_message` traffic into
+    /// agent-shell steps, which preserves ordinary MMP behavior for unrelated
+    /// ad hoc subagent messages and later parent turns.
     ///
     /// # Parameters
     /// - `child_agent_id`: Runtime child agent id, such as `agent-%2`.
-    pub fn register_macro_managed_subagent(&mut self, child_agent_id: &str) {
-        self.macro_managed_subagent_agents
-            .insert(child_agent_id.to_string());
+    /// - `parent_turn_id`: Parent macro orchestration turn id.
+    /// - `parent_agent_id`: Parent pane agent id that owns the macro.
+    /// - `macro_name`: Macro name used for diagnostics and traceability.
+    pub fn register_macro_managed_subagent(
+        &mut self,
+        child_agent_id: &str,
+        parent_turn_id: &str,
+        parent_agent_id: &str,
+        macro_name: &str,
+    ) {
+        self.macro_managed_subagent_agents.insert(
+            child_agent_id.to_string(),
+            MacroManagedSubagent {
+                parent_turn_id: parent_turn_id.to_string(),
+                parent_agent_id: parent_agent_id.to_string(),
+                macro_name: macro_name.to_string(),
+            },
+        );
     }
 
     /// Removes a subagent from the macro-managed set.
@@ -117,7 +134,6 @@ impl RuntimeSessionService {
             runtime_spawn_json_agent_and_turn(&spawn_json)?;
         // idle spawn: child_turn_id is None, which is expected for macro session
         let _ = _child_turn_id;
-        self.register_macro_managed_subagent(&child_agent_id);
         self.append_agent_trace_turn_event(
             pane_id,
             "",
@@ -132,7 +148,14 @@ impl RuntimeSessionService {
             pane_id,
             &orchestration_prompt,
             Some("macro-orchestration".to_string()),
+            Some(crate::agent::AgentCapability::Subagent),
         )?;
+        self.register_macro_managed_subagent(
+            &child_agent_id,
+            &started.turn_id,
+            &parent_agent_id,
+            &definition.summary.name,
+        );
         self.append_agent_trace_turn_event(
             pane_id,
             &started.turn_id,
@@ -173,12 +196,12 @@ impl RuntimeSessionService {
         let Some(child_agent_id) = macro_message_recipient_agent_id(recipient) else {
             return Ok(None);
         };
-        if !self
+        let Some(macro_owner) = self
             .macro_managed_subagent_agents
-            .contains(child_agent_id.as_str())
-        {
+            .get(child_agent_id.as_str())
+        else {
             return Ok(None);
-        }
+        };
         let Some(child_lineage) = self.subagent_lineage.get(child_agent_id.as_str()) else {
             return Ok(Some(ActionResult::failed(
                 parent_turn,
@@ -190,48 +213,29 @@ impl RuntimeSessionService {
         };
         let child_parent_agent_id = child_lineage.parent_agent_id.clone();
         let child_display_name = child_lineage.display_name.clone();
-        if child_parent_agent_id != parent_turn.agent_id {
+        if child_parent_agent_id != parent_turn.agent_id
+            || macro_owner.parent_agent_id != parent_turn.agent_id
+            || macro_owner.parent_turn_id != parent_turn.turn_id
+        {
             return Ok(Some(ActionResult::failed(
                 parent_turn,
                 action,
                 ActionStatus::Failed,
                 "macro_bridge_error",
-                "macro-managed subagent step recipient does not belong to the parent turn",
+                "macro-managed subagent step recipient does not belong to this macro run",
             )?));
         }
         let child_pane_id = child_agent_id
             .strip_prefix("agent-")
             .ok_or_else(|| MezError::invalid_state("macro-managed child agent id is invalid"))?;
         runtime_pane_by_id(&self.session, child_pane_id)?;
-        // --- Ordering guard: reject if a macro step is already in-flight for
-        // this parent turn + child agent pair. ---
-        let macro_step_in_flight = self
-            .joined_subagent_dependencies
-            .values()
-            .any(|dep| {
-                dep.parent_turn_id == parent_turn.turn_id
-                    && dep.child_agent_id == child_agent_id
-                    && self.joined_subagent_dependency_has_live_child(dep)
-            });
-        if macro_step_in_flight {
-            return Ok(Some(ActionResult::failed(
-                parent_turn,
-                action,
-                ActionStatus::Failed,
-                "macro_step_ordering",
-                "a macro step is already in flight for this subagent; wait for it to complete before sending the next step",
-            )?));
-        }
         // --- Idempotency guard: retried parent actions reuse the original
-        // step result instead of creating another child turn. ---
-        if let Some(existing) = self
-            .joined_subagent_dependencies
-            .values()
-            .find(|dep| {
-                dep.parent_turn_id == parent_turn.turn_id
-                    && dep.parent_action_id == action.id
-            })
-        {
+        // step result instead of creating another child turn. Check this before
+        // the generic in-flight guard so retries of the same accepted action
+        // remain safe while the child turn is still running. ---
+        if let Some(existing) = self.joined_subagent_dependencies.values().find(|dep| {
+            dep.parent_turn_id == parent_turn.turn_id && dep.parent_action_id == action.id
+        }) {
             if self.joined_subagent_dependency_has_live_child(existing) {
                 // Still in progress — return the same running result.
                 return Ok(Some(ActionResult::running(
@@ -299,6 +303,22 @@ impl RuntimeSessionService {
                 }
             }
         }
+        // --- Ordering guard: reject if a different macro step is already
+        // in-flight for this parent turn + child agent pair. ---
+        let macro_step_in_flight = self.joined_subagent_dependencies.values().any(|dep| {
+            dep.parent_turn_id == parent_turn.turn_id
+                && dep.child_agent_id == child_agent_id
+                && self.joined_subagent_dependency_has_live_child(dep)
+        });
+        if macro_step_in_flight {
+            return Ok(Some(ActionResult::failed(
+                parent_turn,
+                action,
+                ActionStatus::Failed,
+                "macro_step_ordering",
+                "a macro step is already in flight for this subagent; wait for it to complete before sending the next step",
+            )?));
+        }
         let context = self.agent_context_for_pane_prompt(child_pane_id, payload, 100)?;
         let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
         let turn_id = self.next_agent_turn_id();
@@ -316,6 +336,7 @@ impl RuntimeSessionService {
             parent_turn_id: Some(parent_turn.turn_id.clone()),
             cooperation_mode: Some("macro-step".to_string()),
             state: AgentTurnState::Queued,
+            initial_capability: None,
         };
         self.agent_turn_ledger.queue_turn(turn.clone())?;
         self.agent_turn_contexts.insert(turn_id.clone(), context);
@@ -404,7 +425,9 @@ fn runtime_macro_parent_orchestration_prompt(
         "".to_string(),
         "Macro execution rules:".to_string(),
         "- Use the same persistent subagent recipient for every step.".to_string(),
-        "- Send exactly one step prompt at a time with send_message.".to_string(),
+        "- Your immediate first response must be one MAAP action batch containing exactly one send_message action for step 1; do not answer with prose or a plan before sending it.".to_string(),
+        format!("- Every macro step send_message must use recipient `agent:{child_agent_id}` and content_type `text/plain; charset=utf-8`."),
+        "- Send exactly one step prompt at a time with send_message; put only the current step prompt in the payload.".to_string(),
         "- Each step is interpreted as a normal agent-shell prompt in the subagent, so slash commands such as /loop remain valid.".to_string(),
         "- You may adapt a scripted step to the user's stated intent, but preserve the macro purpose and step order.".to_string(),
         "- After each subagent result, judge success against the step intent, user context, and remaining sequence.".to_string(),
@@ -477,18 +500,18 @@ mod tests {
         let agent_id = "agent-%99";
 
         // Initially empty
-        assert!(!service.macro_managed_subagent_agents.contains(agent_id));
+        assert!(!service.macro_managed_subagent_agents.contains_key(agent_id));
 
         // Register
-        service.register_macro_managed_subagent(agent_id);
-        assert!(service.macro_managed_subagent_agents.contains(agent_id));
+        service.register_macro_managed_subagent(agent_id, "turn-99", "agent-%1", "test-macro");
+        assert!(service.macro_managed_subagent_agents.contains_key(agent_id));
 
         // Deregister
         service.deregister_macro_managed_subagent(agent_id);
-        assert!(!service.macro_managed_subagent_agents.contains(agent_id));
+        assert!(!service.macro_managed_subagent_agents.contains_key(agent_id));
 
         // Deregistering an already-absent id is a no-op
         service.deregister_macro_managed_subagent(agent_id);
-        assert!(!service.macro_managed_subagent_agents.contains(agent_id));
+        assert!(!service.macro_managed_subagent_agents.contains_key(agent_id));
     }
 }

@@ -482,6 +482,7 @@ impl RuntimeSessionService {
             &started.pane_id,
             &spawn.task_prompt,
             Some(runtime_cooperation_mode_name(spawn.cooperation_mode).to_string()),
+            None,
         ) {
             Ok(turn) => turn,
             Err(error) => {

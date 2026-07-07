@@ -70,6 +70,12 @@ pub struct AgentTurnRecord {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub cooperation_mode: Option<String>,
+    /// Optional capability to pre-seed the initial allowed-action surface.
+    ///
+    /// When set, the first provider request uses `AllowedActionSet::for_capability`
+    /// instead of `capability_decision()`, so the model can emit executable actions
+    /// without a separate capability-request round-trip.
+    pub initial_capability: Option<crate::agent::AgentCapability>,
 }
 
 /// Carries Agent Turn Ledger state for this subsystem.

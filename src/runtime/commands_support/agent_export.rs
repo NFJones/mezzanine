@@ -229,6 +229,7 @@ fn runtime_idle_agent_context_dump_for_pane(
         parent_turn_id: None,
         cooperation_mode: None,
         state: AgentTurnState::Queued,
+        initial_capability: None,
     };
     let mut request = assemble_model_request_with_retained_tail_percent(
         &model_profile,

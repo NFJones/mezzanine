@@ -723,7 +723,11 @@ impl RuntimeSessionService {
         summary: &str,
         output: &str,
     ) -> Result<()> {
-        let Some(dependency) = self.joined_subagent_dependencies.remove(&turn.turn_id) else {
+        let Some(dependency) = self
+            .joined_subagent_dependencies
+            .get(&turn.turn_id)
+            .cloned()
+        else {
             return Ok(());
         };
         let Some(parent_turn) = self
@@ -770,24 +774,37 @@ impl RuntimeSessionService {
             } else {
                 format!("subagent {child_label} failed: {summary}")
             };
-            let observed_result = ActionResult::succeeded(
-                &parent_turn,
-                &action,
-                vec![result_summary],
-                Some(format!(
-                    r#"{{"join_policy":"join","join_state":"completed","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","task_result":{{"success":{},"summary":"{}","output":"{}"}}}}"#,
-                    json_escape(&dependency.child_agent_id),
-                    dependency
-                        .child_display_name
-                        .as_deref()
-                        .map(|name| format!(r#""{}""#, json_escape(name)))
-                        .unwrap_or_else(|| "null".to_string()),
-                    json_escape(&dependency.child_turn_id),
-                    success,
-                    json_escape(summary),
-                    json_escape(output)
-                )),
+            let structured_result = format!(
+                r#"{{"join_policy":"join","join_state":"completed","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","task_result":{{"success":{},"summary":"{}","output":"{}"}}}}"#,
+                json_escape(&dependency.child_agent_id),
+                dependency
+                    .child_display_name
+                    .as_deref()
+                    .map(|name| format!(r#""{}""#, json_escape(name)))
+                    .unwrap_or_else(|| "null".to_string()),
+                json_escape(&dependency.child_turn_id),
+                success,
+                json_escape(summary),
+                json_escape(output)
             );
+            let observed_result = if success {
+                ActionResult::succeeded(
+                    &parent_turn,
+                    &action,
+                    vec![result_summary],
+                    Some(structured_result),
+                )
+            } else {
+                let mut result = ActionResult::failed(
+                    &parent_turn,
+                    &action,
+                    ActionStatus::Failed,
+                    "macro_step_failed",
+                    result_summary,
+                )?;
+                result.structured_content_json = Some(structured_result);
+                result
+            };
             execution.action_results[result_index] = observed_result.clone();
             execution.final_turn = false;
             execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -805,6 +822,7 @@ impl RuntimeSessionService {
                 content: action_result_context_content(&observed_result),
             });
         }
+        self.joined_subagent_dependencies.remove(&turn.turn_id);
         self.append_agent_trace_turn_event(
             &parent_turn.pane_id,
             &parent_turn.turn_id,

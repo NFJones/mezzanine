@@ -438,7 +438,8 @@ fn runtime_frame_context_animates_active_agent_status_without_live_footer() {
             parent_turn_id: None,
             cooperation_mode: None,
             state: AgentTurnState::Running,
-        })
+        
+            initial_capability: None,})
         .unwrap();
 
     let config = service
@@ -800,7 +801,8 @@ fn runtime_frame_context_reports_agent_compacting_substate() {
             parent_turn_id: None,
             cooperation_mode: None,
             state: AgentTurnState::Queued,
-        })
+        
+            initial_capability: None,})
         .unwrap();
     service
         .agent_turn_ledger

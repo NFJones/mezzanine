@@ -370,7 +370,7 @@ impl RuntimeSessionService {
             max_subagent_depth: DEFAULT_MAX_SUBAGENT_DEPTH,
             subagent_wait_policy: DEFAULT_SUBAGENT_WAIT_POLICY,
             joined_subagent_dependencies: BTreeMap::new(),
-            macro_managed_subagent_agents: BTreeSet::new(),
+            macro_managed_subagent_agents: BTreeMap::new(),
             subagent_scope_declarations: BTreeMap::new(),
             subagent_lineage: BTreeMap::new(),
             blocked_agent_approval_refs: BTreeMap::new(),
@@ -2067,6 +2067,7 @@ impl RuntimeSessionService {
                     parent_turn_id: None,
                     state: AgentTurnState::Queued,
                     cooperation_mode: None,
+                    initial_capability: None,
                 })?;
                 self.agent_turn_ledger
                     .finish_turn(&turn_id, AgentTurnState::Interrupted)?;

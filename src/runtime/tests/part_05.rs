@@ -3190,7 +3190,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let macro_children = service
         .macro_managed_subagent_agents
-        .iter()
+        .keys()
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(macro_children.len(), 1, "{macro_children:?}");
@@ -3211,6 +3211,18 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .expect("macro orchestration context should exist");
     assert!(
         orchestration_context.contains(&format!("Persistent subagent recipient: agent:{child_agent_id}")),
+        "{orchestration_context}"
+    );
+    assert!(
+        orchestration_context.contains("Your immediate first response must be one MAAP action batch containing exactly one send_message action for step 1"),
+        "{orchestration_context}"
+    );
+    assert!(
+        orchestration_context.contains(&format!("Every macro step send_message must use recipient `agent:{child_agent_id}` and content_type `text/plain; charset=utf-8`")),
+        "{orchestration_context}"
+    );
+    assert!(
+        orchestration_context.contains("put only the current step prompt in the payload"),
         "{orchestration_context}"
     );
     assert!(
@@ -3260,7 +3272,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let child_agent_id = service
         .macro_managed_subagent_agents
-        .iter()
+        .keys()
         .next()
         .cloned()
         .expect("macro child should be registered");
@@ -3345,6 +3357,34 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .map(|turn| turn.state),
         Some(AgentTurnState::Running)
     );
+
+    let retry_execution = service
+        .execute_agent_turn_with_provider(
+            &parent_turn.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(retry_execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(retry_execution.action_results[0].status, ActionStatus::Running);
+    let retry_structured = retry_execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap_or_default();
+    assert!(retry_structured.contains(r#""idempotent":true"#), "{retry_structured}");
+    assert!(retry_structured.contains(r#""join_state":"waiting""#), "{retry_structured}");
+    assert!(!retry_structured.contains("macro_step_ordering"), "{retry_structured}");
+    let macro_step_turns = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .filter(|turn| {
+            turn.agent_id == child_agent_id
+                && turn.cooperation_mode.as_deref() == Some("macro-step")
+        })
+        .count();
+    assert_eq!(macro_step_turns, 1);
+    assert_eq!(service.joined_subagent_dependencies.len(), 1);
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -6277,9 +6317,9 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
 /// Macro steps are ordinary child agent-shell turns, but queued or blocked
 /// children can fail through the no-shell-session cleanup path before a
 /// provider execution exists. The parent macro orchestration turn must receive
-/// that failed step result and be queued for continuation so the model can stop
-/// with the user-visible explanation required by SPEC §10.5 instead of being
-/// reaped as unreachable.
+/// that failed step result as a runtime-level failed parent action so the
+/// macro stops with the user-visible explanation required by SPEC §10.5 instead
+/// of treating the child failure as a successful join.
 #[test]
 fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
     let mut service = test_runtime_service();
@@ -6386,9 +6426,10 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         .unwrap();
 
     assert!(!service.joined_subagent_dependencies.contains_key(&child.turn_id));
-    assert!(service.pending_agent_provider_tasks.contains(&parent.turn_id));
+    assert!(!service.pending_agent_provider_tasks.contains(&parent.turn_id));
     let execution = service.agent_turn_executions.get(&parent.turn_id).unwrap();
-    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
     let structured = execution.action_results[0]
         .structured_content_json
         .as_deref()

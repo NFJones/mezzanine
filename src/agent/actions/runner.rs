@@ -360,7 +360,6 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 
     /// Executes a borrowed-context turn with an optional controller-selected
     /// initial action surface.
-    #[cfg(test)]
     pub fn run_turn_ref_with_allowed_actions(
         &self,
         ledger: &mut AgentTurnLedger,

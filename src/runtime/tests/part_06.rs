@@ -2468,6 +2468,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
@@ -2614,6 +2615,7 @@ fn runtime_native_local_action_runs_when_pane_is_not_ready() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
@@ -2749,6 +2751,7 @@ fn runtime_native_shell_command_logs_styled_execution_line() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
@@ -2858,6 +2861,7 @@ fn runtime_native_apply_patch_logs_execution_and_diff_preview() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     service.agent_turn_ledger.start_turn(turn.clone()).unwrap();

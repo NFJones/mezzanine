@@ -2057,6 +2057,8 @@ fn agent_state_dispatch_persists_visibility_and_lists_turns() {
             parent_turn_id: None,
             cooperation_mode: None,
             state: AgentTurnState::Queued,
+
+            initial_capability: None,
         })
         .unwrap();
 

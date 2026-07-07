@@ -1408,6 +1408,7 @@ fn turn() -> AgentTurnRecord {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Queued,
     }
 }

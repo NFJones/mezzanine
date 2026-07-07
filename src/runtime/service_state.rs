@@ -654,6 +654,17 @@ pub enum SubagentWaitPolicy {
     Detach,
 }
 
+/// Tracks one macro-managed persistent child and the parent macro run that owns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MacroManagedSubagent {
+    /// Parent macro orchestration turn allowed to send step prompts to this child.
+    pub parent_turn_id: String,
+    /// Parent agent that owns the macro run.
+    pub parent_agent_id: String,
+    /// Macro name used for diagnostics and traceability.
+    pub macro_name: String,
+}
+
 /// Tracks one spawned child turn that a parent turn is waiting to join.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct JoinedSubagentDependency {
@@ -2262,8 +2273,9 @@ pub struct RuntimeSessionService {
     /// prompts still travel through MMP `send_message`, but the runtime must
     /// bridge each accepted message back into the child's normal agent-shell
     /// turn path so slash commands and step results behave like ordinary
-    /// subagent prompt submissions.
-    pub(super) macro_managed_subagent_agents: BTreeSet<String>,
+    /// subagent prompt submissions. Entries are scoped to the owning macro
+    /// parent turn so stale child recipients cannot be reused by later turns.
+    pub(super) macro_managed_subagent_agents: BTreeMap<String, MacroManagedSubagent>,
     /// Stores the subagent scope declarations value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

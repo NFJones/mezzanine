@@ -199,7 +199,9 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let loop_allowed_actions = None;
+        let loop_allowed_actions = turn
+            .initial_capability
+            .map(crate::agent::AllowedActionSet::for_capability);
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -465,7 +467,9 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let loop_allowed_actions = None;
+        let loop_allowed_actions = turn
+            .initial_capability
+            .map(crate::agent::AllowedActionSet::for_capability);
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -1129,7 +1133,7 @@ impl RuntimeSessionService {
             if waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
-                let _ = self.agent_scheduler.complete(turn_id);
+                self.agent_scheduler.block_running(turn_id)?;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
@@ -1386,7 +1390,7 @@ impl RuntimeSessionService {
             if waiting_for_joined_subagents {
                 self.agent_turn_executions
                     .insert(turn_id.to_string(), execution.clone());
-                let _ = self.agent_scheduler.complete(turn_id);
+                self.agent_scheduler.block_running(turn_id)?;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,

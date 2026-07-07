@@ -3668,7 +3668,8 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let write_action = crate::agent::AgentAction {
         id: "patch-fail".to_string(),
         rationale: "write a source file".to_string(),
@@ -3855,7 +3856,8 @@ async fn async_actor_applies_agent_provider_completion_events() {
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let action = crate::agent::AgentAction {
         id: "say-1".to_string(),
         rationale: "complete with a visible summary".to_string(),
@@ -4030,7 +4032,8 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let action = crate::agent::AgentAction {
         id: "say-1".to_string(),
         rationale: "complete with a visible summary".to_string(),

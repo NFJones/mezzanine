@@ -404,7 +404,8 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let action = crate::agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "run a short shell command for the user".to_string(),
@@ -656,7 +657,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             parent_turn_id: None,
             state: crate::agent::AgentTurnState::Running,
             cooperation_mode: None,
-        };
+        
+            initial_capability: None,};
         let action = crate::agent::AgentAction {
             id: "shell-1".to_string(),
             rationale: "print a marker".to_string(),
@@ -799,7 +801,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             parent_turn_id: None,
             state: crate::agent::AgentTurnState::Running,
             cooperation_mode: None,
-        };
+        
+            initial_capability: None,};
         let second_action = crate::agent::AgentAction {
             id: "shell-2".to_string(),
             rationale: "verify the pane shell still accepts input".to_string(),
@@ -979,7 +982,8 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let action = crate::agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "list files".to_string(),
@@ -1150,7 +1154,8 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let batch_action = crate::agent::AgentAction {
         id: "fetch-listed".to_string(),
         rationale: "fetch the listed source".to_string(),
@@ -1307,7 +1312,8 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
         parent_turn_id: None,
         state: crate::agent::AgentTurnState::Running,
         cooperation_mode: None,
-    };
+    
+        initial_capability: None,};
     let action = crate::agent::AgentAction {
         id: "fetch-local-file".to_string(),
         rationale: "try a local file URL".to_string(),
