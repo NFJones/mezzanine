@@ -4704,7 +4704,6 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
     assert!(prompt.contains("Do not use memory_store before the first concrete inspection, implementation, or validation action"));
     assert!(prompt.contains("store it with memory_store only if it is durable, reusable beyond the current task"));
     assert!(prompt.contains("almost certain to be useful in future sessions"));
-    assert!(prompt.contains("Do not emit more than one memory_store action in one user turn"));
     assert!(
         prompt.contains("Do not store prompt-specific, one-off, current-turn, action-result")
     );

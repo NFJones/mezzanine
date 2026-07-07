@@ -6682,8 +6682,7 @@ at most one focused `memory_search`, and that the runtime MUST skip additional
 remotes, branches, commits, paths, CI state, MCP results, plans, progress, or
 other transient task state unless the user explicitly requested storing that
 exact content. They MUST state that `memory_store` is reserved for information
-almost certain to be useful in future sessions, and that the runtime MUST skip
-additional `memory_store` actions after one store in one user turn. When a
+almost certain to be useful in future sessions. When a
 memory action's model-authored rationale or thought frames it as compliance with
 a required function call, tool call, current-actions call, schema wrapper,
 action wrapper, or action envelope instead of a concrete durable-context need,
@@ -7691,9 +7690,7 @@ uncovered that is durable, reusable beyond the current task, not already
 present in current context, not provided by the user only for the current
 task, almost certain to be useful in future sessions, and unlikely to be
 cheaply rediscovered, agents MAY store it with `memory_store`; when unsure,
-they MUST NOT store it. Agents MUST NOT use more than one `memory_store`
-action in one user turn. When persistent memory is
-disabled, the harness MUST deny the `memory` capability and MUST NOT expose
+they MUST NOT store it. When persistent memory is
 `memory_search` or `memory_store`.
 
 When local issue tracking is enabled, the provider action surface MAY expose a

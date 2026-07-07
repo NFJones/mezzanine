@@ -2360,14 +2360,14 @@ fn turn_runner_counts_prior_memory_search_results_from_context() {
     );
 }
 
-/// Verifies prior memory stores in context consume the one-store turn budget.
+/// Verifies prior memory stores in context do not block later store actions.
 ///
-/// Memory storage should be exceptional because it persists beyond the current
-/// task. This regression ensures a continuation turn cannot save additional
-/// transient task state after a memory store has already been planned in the
-/// same active context.
+/// Macro and subagent workflows may need to persist a final document after
+/// earlier memory activity in the same active context. This regression ensures
+/// prior stores no longer consume a runtime turn budget that would skip the
+/// final durable store.
 #[test]
-fn turn_runner_skips_memory_store_after_per_turn_limit() {
+fn turn_runner_accepts_memory_store_after_prior_store_context() {
     let turn = turn();
     let provider = CapabilityBatchProvider::new(
         AgentCapability::Memory,
@@ -2437,26 +2437,16 @@ fn turn_runner_skips_memory_store_after_per_turn_limit() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(ledger.turns()[0].state, AgentTurnState::Running);
     assert_eq!(execution.action_results.len(), 1);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Succeeded);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert_eq!(
         execution.action_results[0].content_texts(),
-        vec![
-            "memory_store skipped: per-turn memory store limit reached; do not persist transient task state"
-        ]
+        vec!["memory action accepted for runtime execution"]
     );
     let structured = execution.action_results[0]
         .structured_content_json
         .as_deref()
         .unwrap();
-    assert!(
-        structured.contains(r#""state":"skipped_runtime_memory_guardrail""#),
-        "{structured}"
-    );
-    assert!(
-        structured.contains(r#""code":"memory_store_turn_limit""#),
-        "{structured}"
-    );
-    assert!(structured.contains(r#""limit":1"#), "{structured}");
+    assert!(structured.contains(r#""state":"pending_runtime_memory""#));
 }
 
 /// Verifies that auto-allow uses the model rationale as its reasonableness

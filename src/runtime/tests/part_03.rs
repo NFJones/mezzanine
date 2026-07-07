@@ -2539,6 +2539,66 @@ fn runtime_agent_prompt_ctrl_c_interrupts_running_turn() {
     assert!(!service.agent_turn_is_running("turn-1"));
 }
 
+
+/// Verifies Ctrl+C is idempotent when the tracked turn already terminalized.
+///
+/// Macro failure can mark a turn as failed while the pane-local shell session
+/// still carries the turn id during unwind. Ctrl+C should clear that stale
+/// binding through the stop path without trying to reclassify the ledger turn
+/// as interrupted and surfacing an already-terminal conflict.
+#[test]
+fn runtime_agent_prompt_ctrl_c_after_failed_turn_is_idempotent() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "run macro")
+        .unwrap();
+    let turn_id = started.turn_id.clone();
+    let _ = service.agent_scheduler.complete(&turn_id);
+    service
+        .agent_turn_ledger
+        .finish_turn(&turn_id, AgentTurnState::Failed)
+        .unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x03".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Default::default(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.running_turn_id.as_deref()),
+        None
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+}
+
 /// Verifies Escape is a no-op for an empty idle pane-local agent shell.
 ///
 /// Agent-shell exit is reserved for Ctrl+C confirmation or empty Ctrl+D, so

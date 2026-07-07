@@ -510,16 +510,56 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
-        self.emit_cancelled_subagent_task_result(&turn)?;
-        let session = if self
-            .agent_shell_store
-            .get(pane_id)
-            .and_then(|session| session.running_turn_id.as_deref())
-            == Some(turn_id.as_str())
-        {
-            self.finish_agent_turn(pane_id, &turn_id, AgentTurnState::Interrupted)?
+        let turn_was_already_terminal = matches!(
+            turn.state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        );
+        let session = if turn_was_already_terminal {
+            let running_in_shell = self
+                .agent_shell_store
+                .get(pane_id)
+                .and_then(|session| session.running_turn_id.as_deref())
+                == Some(turn_id.as_str());
+            let session = if running_in_shell {
+                let finished = self
+                    .agent_shell_store
+                    .finish_turn(pane_id, &turn_id)?
+                    .clone();
+                if finished.visibility == AgentShellVisibility::Hidden {
+                    self.advance_pane_shell_prompt_after_agent_exit(pane_id)?;
+                }
+                finished
+            } else {
+                self.agent_shell_store.ensure_session(pane_id)?.clone()
+            };
+            self.agent_turn_contexts.remove(&turn_id);
+            self.agent_turn_executions.remove(&turn_id);
+            self.agent_turn_pending_steering.remove(&turn_id);
+            self.clear_agent_failure_feedback_attempts_for_turn(&turn_id);
+            self.agent_turn_shell_dispatch_history.remove(&turn_id);
+            self.agent_turn_network_action_history.remove(&turn_id);
+            self.clear_joined_subagent_dependencies_for_turn(&turn_id);
+            self.clear_agent_pre_shell_hook_completions_for_turn(&turn_id);
+            self.agent_turn_model_profiles.remove(&turn_id);
+            self.pending_agent_provider_tasks.remove(&turn_id);
+            self.claimed_agent_provider_tasks.remove(&turn_id);
+            self.blocked_agent_approval_refs
+                .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
+            self.start_ready_agent_turns()?;
+            self.checkpoint_agent_session_metadata()?;
+            session
         } else {
-            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
+            self.emit_cancelled_subagent_task_result(&turn)?;
+            if self
+                .agent_shell_store
+                .get(pane_id)
+                .and_then(|session| session.running_turn_id.as_deref())
+                == Some(turn_id.as_str())
+            {
+                self.finish_agent_turn(pane_id, &turn_id, AgentTurnState::Interrupted)?
+            } else {
+                self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
+            }
         };
         if let Some(loop_turn) = self.agent_loop_turns.remove(&turn_id)
             && let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id)

@@ -1116,7 +1116,6 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
     assert!(content_description.contains("not already present in current context"));
     assert!(content_description.contains("not user-provided only for this task"));
     assert!(content_description.contains("almost certain to be useful in future sessions"));
-    assert!(content_description.contains("Emit at most one memory_store action in one user turn"));
     assert!(content_description.contains("current checkout repo slugs"));
     assert!(content_description.contains("owner/repo"));
     assert!(content_description.contains("CI results"));
@@ -4347,20 +4346,20 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
 
     eprintln!("DIAGNOSTICS {diagnostics:#?}");
     assert_eq!(diagnostics.prompt_cache_key, "mez-fcc0c3076055b2040cb8727ead0dbe7c");
-    assert_eq!(diagnostics.instructions_bytes, 44_554);
-    assert_eq!(diagnostics.instructions_sha256, "015ee75ff649298075e152b47449bda2c5c15b20aa9da0bf3b73cd4e521a27ad");
+    assert_eq!(diagnostics.instructions_bytes, 44_490);
+    assert_eq!(diagnostics.instructions_sha256, "a34dcdeef28829701e39022f7250dfba0bdac27a2c516083d574f7d8280d291b");
     assert_eq!(diagnostics.response_format_bytes, 4);
     assert_eq!(diagnostics.response_format_sha256, "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b");
-    assert_eq!(diagnostics.tools_bytes, 28_307);
-    assert_eq!(diagnostics.tools_sha256, "0c11d4ffb20988e58b8654c10c9be0c04442c491da9920409aa3b506411757e3");
+    assert_eq!(diagnostics.tools_bytes, 28_252);
+    assert_eq!(diagnostics.tools_sha256, "2de0db9fd2f3306c2b6bab9855c013b4b37402139746bf0010489b7532938591");
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(diagnostics.tool_choice_sha256, "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e");
-    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_717);
-    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "da19b776c6a7bccd3c3e9738fa99c6d487f84b3ea6c33d35fb0ec693e9886945");
-    assert_eq!(diagnostics.provider_request_shape_bytes, 28_518);
+    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_653);
+    assert_eq!(diagnostics.stable_prompt_prefix_sha256, "fb59fd2449bf99d2a17d9610db82a7204bc20f352ea5c06b15d000cfc1278573");
+    assert_eq!(diagnostics.provider_request_shape_bytes, 28_463);
     assert_eq!(
         diagnostics.provider_request_shape_sha256,
-        "d0d757f2431172010dcdfb909d7a020db29771eb17448fc22048311ac63602dd"
+        "6f4172cabd6c4d08dbb5706a9f1d18f1802c99cb1eafcc6128eab8d5a3af2bc1"
     );
 }
 

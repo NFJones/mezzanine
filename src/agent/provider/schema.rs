@@ -834,7 +834,7 @@ fn maap_memory_store_action_schema() -> serde_json::Value {
             ),
             described_string_property(
                 "content",
-                "Durable memory body to store. Store only information that is stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, almost certain to be useful in future sessions, and unlikely to be cheaply rediscovered. Emit at most one memory_store action in one user turn. Do not store secrets, credentials, tokens, sensitive personal data, current-task-only summaries, plans, action results, tool outputs, transient terminal noise, no-op placeholders, current-actions markers, current checkout repo slugs, owner/repo, git remotes, branches, commits, paths, CI results, or MCP results unless the user explicitly instructed storing that exact content.",
+                "Durable memory body to store. Store only information that is stable, reusable beyond the current task, not already present in current context, not user-provided only for this task, almost certain to be useful in future sessions, and unlikely to be cheaply rediscovered. Do not store secrets, credentials, tokens, sensitive personal data, current-task-only summaries, plans, action results, tool outputs, transient terminal noise, no-op placeholders, current-actions markers, current checkout repo slugs, owner/repo, git remotes, branches, commits, paths, CI results, or MCP results unless the user explicitly instructed storing that exact content.",
             ),
             (
                 "expires_in_days",

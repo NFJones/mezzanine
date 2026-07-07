@@ -54,21 +54,11 @@ const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
 /// exceptional follow-up while preventing paraphrase loops.
 const MEMORY_SEARCH_ACTION_LIMIT_PER_TURN: usize = 2;
 
-/// Maximum memory stores accepted during one user turn.
-///
-/// Storing multiple records from a single work loop is usually a sign that the
-/// model is persisting transient task state instead of saving a durable
-/// reusable fact.
-const MEMORY_STORE_ACTION_LIMIT_PER_TURN: usize = 1;
-
 #[derive(Debug, Clone, Copy, Default)]
 struct MemoryActionBudget {
     /// Number of memory search actions already accepted or observed in the
     /// active turn context.
     search_count: usize,
-    /// Number of memory store actions already accepted or observed in the
-    /// active turn context.
-    store_count: usize,
 }
 
 impl MemoryActionBudget {
@@ -85,9 +75,6 @@ impl MemoryActionBudget {
             }
             if action_result_block_has_action_type(&block.content, "memory_search") {
                 budget.search_count = budget.search_count.saturating_add(1);
-            }
-            if action_result_block_has_action_type(&block.content, "memory_store") {
-                budget.store_count = budget.store_count.saturating_add(1);
             }
         }
         budget
@@ -128,19 +115,7 @@ impl MemoryActionBudget {
                 self.search_count = self.search_count.saturating_add(1);
                 None
             }
-            AgentActionPayload::MemoryStore { .. } => {
-                if self.store_count >= MEMORY_STORE_ACTION_LIMIT_PER_TURN {
-                    return Some(memory_budget_skip_result(
-                        turn,
-                        action,
-                        "memory_store_turn_limit",
-                        "memory_store skipped: per-turn memory store limit reached; do not persist transient task state",
-                        MEMORY_STORE_ACTION_LIMIT_PER_TURN,
-                    ));
-                }
-                self.store_count = self.store_count.saturating_add(1);
-                None
-            }
+            AgentActionPayload::MemoryStore { .. } => None,
             _ => None,
         }
     }
