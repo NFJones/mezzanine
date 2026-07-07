@@ -4909,7 +4909,8 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
             parent_turn_id: None,
             cooperation_mode: None,
             state: AgentTurnState::Queued,
-        })
+        
+            initial_capability: None,})
         .unwrap();
     assert_eq!(
         transcript_store
@@ -6268,6 +6269,134 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .find(|turn| turn.turn_id == parent.turn_id)
             .map(|turn| turn.state),
         Some(AgentTurnState::Blocked)
+    );
+}
+
+/// Verifies a macro-step child failure without a shell binding still resolves the joined parent dependency.
+///
+/// Macro steps are ordinary child agent-shell turns, but queued or blocked
+/// children can fail through the no-shell-session cleanup path before a
+/// provider execution exists. The parent macro orchestration turn must receive
+/// that failed step result and be queued for continuation so the model can stop
+/// with the user-visible explanation required by SPEC §10.5 instead of being
+/// reaped as unreachable.
+#[test]
+fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    let child_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Horizontal)
+        .unwrap();
+    for pane in ["%1", child_pane.as_str()] {
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.pane_screens.insert(pane.to_string(), screen);
+    }
+
+    let parent = service.start_agent_prompt_turn("%1", "parent macro").unwrap();
+    let child = service
+        .start_agent_prompt_turn(child_pane.as_str(), "macro step")
+        .unwrap();
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "macro-step-1".to_string(),
+        rationale: "send macro step".to_string(),
+        payload: crate::agent::AgentActionPayload::SendMessage {
+            recipient: format!("agent:{}", child.agent_id),
+            content_type: "text/plain; charset=utf-8".to_string(),
+            payload: "step one".to_string(),
+        },
+    };
+    service.agent_turn_executions.insert(
+        parent.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "send macro step".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "test macro action batch".to_string(),
+                    thought: None,
+                    turn_id: parent.turn_id.clone(),
+                    agent_id: parent.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &parent_turn,
+                &action,
+                vec!["waiting for macro step".to_string()],
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.joined_subagent_dependencies.insert(
+        child.turn_id.clone(),
+        JoinedSubagentDependency {
+            parent_turn_id: parent.turn_id.clone(),
+            parent_action_id: "macro-step-1".to_string(),
+            child_turn_id: child.turn_id.clone(),
+            child_agent_id: child.agent_id.clone(),
+            child_display_name: Some("macro child".to_string()),
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&parent.turn_id);
+    service
+        .agent_scheduler_mut()
+        .complete(&parent.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger
+        .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+
+    let child_record = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child.turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .finish_agent_turn_without_shell_session(&child_record, AgentTurnState::Failed)
+        .unwrap();
+
+    assert!(!service.joined_subagent_dependencies.contains_key(&child.turn_id));
+    assert!(service.pending_agent_provider_tasks.contains(&parent.turn_id));
+    let execution = service.agent_turn_executions.get(&parent.turn_id).unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap_or_default();
+    assert!(structured.contains(r#""success":false"#), "{structured}");
+    assert!(
+        structured.contains("failed without provider output"),
+        "{structured}"
     );
 }
 

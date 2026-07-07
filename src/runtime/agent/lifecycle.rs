@@ -180,6 +180,12 @@ impl RuntimeSessionService {
                 &reason,
             )?;
         }
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.emit_subagent_task_result_for_state(turn, state)?;
+        }
         if let Some(footer) = runtime_agent_finished_footer_line(turn, state) {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }

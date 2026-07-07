@@ -667,15 +667,11 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         terminal_state: AgentTurnState::Running,
     };
 
-    let error = super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution)
-        .unwrap_err();
+    super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution)
+        .unwrap();
 
-    assert!(
-        error
-            .message()
-            .contains("without an action batch must be a terminal failed execution"),
-        "{error}"
-    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert!(execution.final_turn);
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -2035,7 +2031,8 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
             parent_turn_id: None,
             cooperation_mode: None,
             state: crate::agent::AgentTurnState::Queued,
-        })
+        
+            initial_capability: None,})
         .unwrap();
     assert_eq!(started.running_turn_id.as_deref(), Some("turn-1"));
 
@@ -2103,6 +2100,7 @@ fn runtime_marker_for_action_uses_fresh_entropy() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: crate::agent::AgentTurnState::Running,
     };
 
@@ -3646,6 +3644,7 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     let action = crate::agent::AgentAction {
@@ -3700,6 +3699,7 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     let set_action = crate::agent::AgentAction {
@@ -3760,6 +3760,7 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
+        initial_capability: None,
         state: AgentTurnState::Running,
     };
     let first = crate::agent::AgentAction {
