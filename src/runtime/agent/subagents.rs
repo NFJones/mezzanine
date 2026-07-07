@@ -588,13 +588,14 @@ impl RuntimeSessionService {
         }
         self.subagent_task_routes.remove(&turn.turn_id);
         let is_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step");
-        if !is_macro_step {
+        let terminal_macro_step_failure = is_macro_step && !success;
+        if !is_macro_step || terminal_macro_step_failure {
             self.subagent_scopes.unregister(&turn.agent_id);
             self.subagent_scope_declarations.remove(&turn.agent_id);
             self.subagent_lineage.remove(&turn.agent_id);
         }
         self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
-        if !is_macro_step {
+        if !is_macro_step || terminal_macro_step_failure {
             self.pending_terminal_subagent_pane_closes
                 .insert(turn.pane_id.clone());
         }
@@ -823,6 +824,7 @@ impl RuntimeSessionService {
                 content: action_result_context_content(&observed_result),
             });
         }
+        let mut failed_macro_parent_turn = None;
         if let Some(parent_run_id) = self.macro_run_by_child_turn.remove(&turn.turn_id)
             && parent_run_id == dependency.parent_turn_id
             && let Some(run) = self
@@ -842,6 +844,9 @@ impl RuntimeSessionService {
             run.phase = MacroRunPhase::WaitingForJudge {
                 step_index: step.index,
             };
+            if !success {
+                failed_macro_parent_turn = Some(parent_run_id);
+            }
         }
         self.joined_subagent_dependencies.remove(&turn.turn_id);
         self.append_agent_trace_turn_event(
@@ -852,6 +857,24 @@ impl RuntimeSessionService {
                 dependency.child_turn_id, dependency.child_agent_id, success
             ),
         )?;
+        if let Some(parent_turn_id) = failed_macro_parent_turn {
+            self.macro_runs_by_parent_turn.remove(&parent_turn_id);
+            let _ = self.agent_scheduler.complete(&parent_turn_id);
+            self.agent_turn_ledger
+                .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
+            self.append_agent_trace_turn_transition(
+                &parent_turn,
+                parent_previous_state,
+                AgentTurnState::Failed,
+                "macro_step_failed",
+            )?;
+            self.append_agent_error_text_to_terminal_buffer(
+                &parent_turn.pane_id,
+                &format!("agent: macro step failed: {summary}"),
+            )?;
+            self.start_ready_agent_turns()?;
+            return Ok(());
+        }
         if ready_for_continuation {
             let _ = self.agent_scheduler.resume_blocked(&parent_turn.turn_id);
             self.append_agent_trace_turn_event(
