@@ -5,6 +5,7 @@
 //! lifecycle coordination out of the main runtime agent facade.
 
 use super::*;
+use crate::runtime::service_state::MacroRunPhase;
 
 impl RuntimeSessionService {
     /// Clears joined-subagent dependencies owned by or waiting on a turn.
@@ -821,6 +822,26 @@ impl RuntimeSessionService {
                 label: format!("action result {}", observed_result.action_id),
                 content: action_result_context_content(&observed_result),
             });
+        }
+        if let Some(parent_run_id) = self.macro_run_by_child_turn.remove(&turn.turn_id)
+            && parent_run_id == dependency.parent_turn_id
+            && let Some(run) = self
+                .macro_runs_by_parent_turn
+                .get_mut(parent_run_id.as_str())
+            && let Some(step) = run
+                .steps
+                .iter_mut()
+                .find(|step| step.child_turn_id.as_deref() == Some(turn.turn_id.as_str()))
+        {
+            step.task_result = Some(crate::runtime::service_state::MacroStepTaskResult {
+                success,
+                summary: summary.to_string(),
+                output: output.to_string(),
+            });
+            run.current_step = step.index;
+            run.phase = MacroRunPhase::WaitingForJudge {
+                step_index: step.index,
+            };
         }
         self.joined_subagent_dependencies.remove(&turn.turn_id);
         self.append_agent_trace_turn_event(

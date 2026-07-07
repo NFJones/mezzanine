@@ -680,6 +680,66 @@ pub(super) enum MacroRunPhase {
         /// Child turn currently executing the step prompt.
         child_turn_id: String,
     },
+    /// The runtime is asking the parent model to judge a completed step.
+    WaitingForJudge {
+        /// Zero-based index of the step being judged.
+        step_index: usize,
+    },
+}
+
+/// Stores the terminal task result for one completed macro child step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MacroStepTaskResult {
+    /// Whether the child step completed successfully.
+    pub success: bool,
+    /// Child task summary supplied through the subagent task result.
+    pub summary: String,
+    /// Child task output supplied through the subagent task result.
+    pub output: String,
+}
+
+/// Runtime-validated outcome returned by the macro judge model request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MacroJudgeOutcome {
+    /// Continue with the next scripted prompt unchanged.
+    Continue,
+    /// Continue with a validated adapted prompt for the next step.
+    ContinueWithAdaptedPrompt,
+    /// Stop the macro as failed with a user-visible explanation.
+    StopFailure,
+    /// Complete the macro successfully after the final required step.
+    FinishSuccess,
+}
+
+impl std::str::FromStr for MacroJudgeOutcome {
+    type Err = &'static str;
+
+    /// Parses the stable wire value returned by the structured macro-judge
+    /// provider response.
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "continue" => Ok(Self::Continue),
+            "continue_with_adapted_prompt" => Ok(Self::ContinueWithAdaptedPrompt),
+            "stop_failure" => Ok(Self::StopFailure),
+            "finish_success" => Ok(Self::FinishSuccess),
+            _ => Err("unsupported macro judge outcome"),
+        }
+    }
+}
+
+/// Stores one validated macro judge decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MacroJudgeDecision {
+    /// Outcome selected by the judge.
+    pub outcome: MacroJudgeOutcome,
+    /// Whether the judge accepted the completed step as successful.
+    pub step_success: bool,
+    /// Short model-supplied rationale retained for diagnostics.
+    pub rationale: String,
+    /// Optional adapted prompt used only for `ContinueWithAdaptedPrompt`.
+    pub adapted_prompt: Option<String>,
+    /// Optional user-visible failure message for `StopFailure`.
+    pub user_message: Option<String>,
 }
 
 /// Stores one scripted macro step and its runtime submission metadata.
@@ -693,6 +753,10 @@ pub(super) struct MacroRunStep {
     pub submitted_prompt: Option<String>,
     /// Child turn created for the submitted step, when one exists.
     pub child_turn_id: Option<String>,
+    /// Terminal task result returned by the child step.
+    pub task_result: Option<MacroStepTaskResult>,
+    /// Runtime-validated judge decision for the completed step.
+    pub judgment: Option<MacroJudgeDecision>,
 }
 
 /// Tracks explicit runtime state for a harness-owned macro run.

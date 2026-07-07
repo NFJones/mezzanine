@@ -115,6 +115,8 @@ impl RuntimeSessionService {
                 scripted_prompt: step.prompt.clone(),
                 submitted_prompt: None,
                 child_turn_id: None,
+                task_result: None,
+                judgment: None,
             })
             .collect();
         self.macro_runs_by_parent_turn.insert(
