@@ -27,9 +27,6 @@ reference documentation.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
-- [apply-patch-maap-action.md](apply-patch-maap-action.md): reference for the
-  `apply_patch` MAAP action, including grammar, safety boundaries, matching,
-  and recovery behavior.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.
 
