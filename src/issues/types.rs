@@ -346,6 +346,68 @@ impl IssueQuery {
     }
 }
 
+/// Query filters for interactive issue-browser lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueBrowserQuery {
+    /// Optional project glob filter. When omitted, callers may default to the
+    /// current project before querying.
+    pub project_glob: Option<String>,
+    /// Optional defect/task filter.
+    pub kind: Option<IssueKind>,
+    /// Optional open/resolved filter.
+    pub state: Option<IssueState>,
+    /// Optional case-insensitive title/body substring query.
+    pub text: Option<String>,
+    /// Maximum records returned.
+    pub limit: usize,
+}
+
+impl IssueBrowserQuery {
+    /// Builds a validated browser query with default and maximum limit
+    /// enforcement.
+    pub fn new(
+        project_glob: Option<String>,
+        kind: Option<IssueKind>,
+        state: Option<IssueState>,
+        text: Option<String>,
+        limit: Option<usize>,
+    ) -> Result<Self> {
+        let project_glob = project_glob
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(project_glob) = project_glob.as_deref()
+            && project_glob.bytes().any(|byte| byte == 0)
+        {
+            return Err(MezError::invalid_args(
+                "issue browser project glob must not contain NUL bytes",
+            ));
+        }
+        let text = text
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(text) = text.as_deref()
+            && text.bytes().any(|byte| byte == 0)
+        {
+            return Err(MezError::invalid_args(
+                "issue browser query text must not contain NUL bytes",
+            ));
+        }
+        let limit = limit.unwrap_or(DEFAULT_ISSUE_QUERY_LIMIT);
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "issue browser query limit must be positive",
+            ));
+        }
+        Ok(Self {
+            project_glob,
+            kind,
+            state,
+            text,
+            limit: limit.min(MAX_ISSUE_QUERY_LIMIT),
+        })
+    }
+}
+
 /// Result of deleting one issue record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteIssueResult {

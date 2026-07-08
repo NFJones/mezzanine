@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
-    DeleteIssueResult, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord, IssueState,
-    IssueUpdate, MezError, NewIssueRecord, Path, PathBuf, Result, UpdateIssueResult,
+    DeleteIssueResult, IssueBrowserQuery, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord,
+    IssueState, IssueUpdate, MezError, NewIssueRecord, Path, PathBuf, Result, UpdateIssueResult,
     ensure_private_parent, generate_issue_id, set_private_issue_file_permissions,
 };
 
@@ -163,6 +163,104 @@ impl IssueStore {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(MezError::from)?;
         load_issue_dependencies(&connection, &query.project, &mut records)?;
+        Ok(records)
+    }
+
+    /// Queries issues for the interactive issue browser.
+    pub fn query_issue_browser(&self, query: &IssueBrowserQuery) -> Result<Vec<IssueRecord>> {
+        let connection = self.open()?;
+        let mut sql = String::from(
+            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE 1 = 1",
+        );
+        let project_glob = query.project_glob.as_deref().map(project_glob_like_pattern);
+        let kind_name = query.kind.map(IssueKind::as_str);
+        let state_name = query.state.map(IssueState::as_str);
+        let text = query
+            .text
+            .as_deref()
+            .map(|value| format!("%{}%", escape_like(value)));
+        let mut parameter_index = 1usize;
+        if project_glob.is_some() {
+            sql.push_str(&format!(" AND project LIKE ?{parameter_index} ESCAPE '\\'"));
+            parameter_index = parameter_index.saturating_add(1);
+        }
+        if kind_name.is_some() {
+            sql.push_str(&format!(" AND kind = ?{parameter_index}"));
+            parameter_index = parameter_index.saturating_add(1);
+        }
+        if state_name.is_some() {
+            sql.push_str(&format!(" AND state = ?{parameter_index}"));
+            parameter_index = parameter_index.saturating_add(1);
+        }
+        if text.is_some() {
+            sql.push_str(&format!(
+                " AND (title LIKE ?{parameter_index} ESCAPE '\\' OR body LIKE ?{parameter_index} ESCAPE '\\')"
+            ));
+            parameter_index = parameter_index.saturating_add(1);
+        }
+        sql.push_str(" ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT ?");
+        sql.push_str(&parameter_index.to_string());
+
+        let limit = i64::try_from(query.limit).map_err(|_| {
+            MezError::invalid_args("issue browser query limit exceeded SQLite range")
+        })?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = match (project_glob, kind_name, state_name, text) {
+            (Some(project), Some(kind), Some(state), Some(text)) => statement.query_map(
+                params![project, kind, state, text, limit],
+                row_to_issue_record,
+            )?,
+            (Some(project), Some(kind), Some(state), None) => {
+                statement.query_map(params![project, kind, state, limit], row_to_issue_record)?
+            }
+            (Some(project), Some(kind), None, Some(text)) => {
+                statement.query_map(params![project, kind, text, limit], row_to_issue_record)?
+            }
+            (Some(project), Some(kind), None, None) => {
+                statement.query_map(params![project, kind, limit], row_to_issue_record)?
+            }
+            (Some(project), None, Some(state), Some(text)) => {
+                statement.query_map(params![project, state, text, limit], row_to_issue_record)?
+            }
+            (Some(project), None, Some(state), None) => {
+                statement.query_map(params![project, state, limit], row_to_issue_record)?
+            }
+            (Some(project), None, None, Some(text)) => {
+                statement.query_map(params![project, text, limit], row_to_issue_record)?
+            }
+            (Some(project), None, None, None) => {
+                statement.query_map(params![project, limit], row_to_issue_record)?
+            }
+            (None, Some(kind), Some(state), Some(text)) => {
+                statement.query_map(params![kind, state, text, limit], row_to_issue_record)?
+            }
+            (None, Some(kind), Some(state), None) => {
+                statement.query_map(params![kind, state, limit], row_to_issue_record)?
+            }
+            (None, Some(kind), None, Some(text)) => {
+                statement.query_map(params![kind, text, limit], row_to_issue_record)?
+            }
+            (None, Some(kind), None, None) => {
+                statement.query_map(params![kind, limit], row_to_issue_record)?
+            }
+            (None, None, Some(state), Some(text)) => {
+                statement.query_map(params![state, text, limit], row_to_issue_record)?
+            }
+            (None, None, Some(state), None) => {
+                statement.query_map(params![state, limit], row_to_issue_record)?
+            }
+            (None, None, None, Some(text)) => {
+                statement.query_map(params![text, limit], row_to_issue_record)?
+            }
+            (None, None, None, None) => statement.query_map(params![limit], row_to_issue_record)?,
+        };
+        let mut records = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(MezError::from)?;
+        for record in &mut records {
+            record.depends_on =
+                issue_dependencies_for_record(&connection, &record.project, &record.id)?;
+        }
         Ok(records)
     }
 
@@ -505,6 +603,21 @@ fn issue_dependency_path_reaches(
         }
     }
     Ok(false)
+}
+
+fn project_glob_like_pattern(value: &str) -> String {
+    let mut pattern = String::new();
+    for character in value.chars() {
+        match character {
+            '*' => pattern.push('%'),
+            '?' => pattern.push('_'),
+            '\\' => pattern.push_str("\\\\"),
+            '%' => pattern.push_str("\\%"),
+            '_' => pattern.push_str("\\_"),
+            other => pattern.push(other),
+        }
+    }
+    pattern
 }
 
 fn escape_like(value: &str) -> String {

@@ -140,6 +140,135 @@ fn issue_store_query_limit_bounds_results() {
     assert_eq!(results[1].title, "Task 1");
 }
 
+/// Verifies browser queries can filter across matching project globs while
+/// keeping open issues as the default work surface.
+#[test]
+fn issue_store_browser_query_filters_by_project_glob_and_open_state() {
+    let store = temp_store("browser-project-glob");
+    let current_open = store
+        .add_issue(
+            "/repo/current".to_string(),
+            IssueKind::Task,
+            "Current open".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    let resolved = store
+        .add_issue(
+            "/repo/current".to_string(),
+            IssueKind::Task,
+            "Current resolved".to_string(),
+            None,
+            None,
+            11,
+        )
+        .unwrap();
+    store
+        .update_issue(
+            "/repo/current".to_string(),
+            resolved.id,
+            IssueUpdate {
+                state: Some(IssueState::Resolved),
+                ..IssueUpdate::default()
+            },
+            20,
+        )
+        .unwrap();
+    let sibling_open = store
+        .add_issue(
+            "/repo/other".to_string(),
+            IssueKind::Defect,
+            "Sibling open".to_string(),
+            None,
+            None,
+            12,
+        )
+        .unwrap();
+
+    let results = store
+        .query_issue_browser(
+            &IssueBrowserQuery::new(
+                Some("/repo/*".to_string()),
+                None,
+                Some(IssueState::Open),
+                None,
+                Some(100),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(results, vec![sibling_open, current_open]);
+}
+
+/// Verifies browser queries search title and body text, then keep bounded
+/// results ordered by recent updates.
+#[test]
+fn issue_store_browser_query_matches_text_and_respects_limit() {
+    let store = temp_store("browser-text");
+    let body_match = store
+        .add_issue(
+            "/repo/a".to_string(),
+            IssueKind::Task,
+            "Unrelated title".to_string(),
+            Some("panic happens in renderer".to_string()),
+            None,
+            10,
+        )
+        .unwrap();
+    let newer_title_match = store
+        .add_issue(
+            "/repo/b".to_string(),
+            IssueKind::Task,
+            "Panic follow-up".to_string(),
+            None,
+            None,
+            20,
+        )
+        .unwrap();
+    let _non_match = store
+        .add_issue(
+            "/repo/c".to_string(),
+            IssueKind::Task,
+            "Docs only".to_string(),
+            None,
+            None,
+            30,
+        )
+        .unwrap();
+
+    let results = store
+        .query_issue_browser(
+            &IssueBrowserQuery::new(
+                None,
+                None,
+                Some(IssueState::Open),
+                Some("panic".to_string()),
+                Some(1),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(results, vec![newer_title_match.clone()]);
+
+    let expanded = store
+        .query_issue_browser(
+            &IssueBrowserQuery::new(
+                None,
+                None,
+                Some(IssueState::Open),
+                Some("panic".to_string()),
+                Some(100),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(expanded, vec![newer_title_match, body_match]);
+}
+
 /// Verifies deletion is scoped by project so equal ids cannot remove records
 /// from another project key.
 #[test]
