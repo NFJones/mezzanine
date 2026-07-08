@@ -5029,10 +5029,14 @@ After each step response, the main model MUST judge success or failure from the 
 step intent, the user-stated invocation context, the subagent response, and whether the
 remaining scripted steps are still valid and safe to run. The judge response MUST be a
 runtime-validated structured decision such as `continue`,
-`continue_with_adapted_prompt`, `stop_failure`, or `finish_success`; it is not a MAAP
-action batch and MUST NOT require the model to emit `send_message` for macro
-sequencing. On success, the runtime MUST submit the next scripted or adapted step
-prompt to the same subagent session. On failure, the runtime MUST stop the macro run
+`continue_with_adapted_prompt`, `retry_current_step`, `stop_failure`, or
+`finish_success`; it is not a MAAP action batch and MUST NOT require the model
+to emit `send_message` for macro sequencing. On success, the runtime MUST
+submit the next scripted or adapted step prompt to the same subagent session. If
+the completed step is incomplete but recoverable, the main model MAY choose
+`retry_current_step`; the runtime MUST resubmit the current scripted or bounded
+adapted prompt to the same subagent session without advancing the macro step
+index. On failure, the runtime MUST stop the macro run
 immediately and show the judge-provided user-visible explanation. A macro run succeeds
 only when all required steps complete successfully in order, unless a future macro
 format explicitly defines an early-success condition.

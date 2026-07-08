@@ -378,6 +378,8 @@ impl RuntimeSessionService {
                 if let Some(step) = run.steps.get_mut(step_index) {
                     step.submitted_prompt = Some(payload.to_string());
                     step.child_turn_id = child_turn_id.clone();
+                    step.task_result = None;
+                    step.judgment = None;
                 }
                 if let Some(child_turn_id) = child_turn_id {
                     run.phase = MacroRunPhase::WaitingForStep {
@@ -640,6 +642,73 @@ impl RuntimeSessionService {
                     AgentTurnState::Running,
                     AgentTurnState::Blocked,
                     "macro_judge_dispatched_next_step",
+                )?;
+            }
+            MacroJudgeOutcome::RetryCurrentStep => {
+                let (child_agent_id, prompt, retry_action_id) = {
+                    let run = self
+                        .macro_runs_by_parent_turn
+                        .get(turn.turn_id.as_str())
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "macro run disappeared before retry step dispatch",
+                            )
+                        })?;
+                    let current_step = run.steps.get(step_index).ok_or_else(|| {
+                        MezError::invalid_state(
+                            "macro judge requested retry for missing current step",
+                        )
+                    })?;
+                    let prompt = decision
+                        .adapted_prompt
+                        .clone()
+                        .unwrap_or_else(|| current_step.scripted_prompt.clone());
+                    let retry_action_id = format!(
+                        "macro-step-{}-retry-{}",
+                        step_index.saturating_add(1),
+                        current_step
+                            .child_turn_id
+                            .clone()
+                            .unwrap_or_else(|| "current".to_string())
+                    );
+                    (run.child_agent_id.clone(), prompt, retry_action_id)
+                };
+                let action = AgentAction {
+                    id: retry_action_id,
+                    rationale: "retry current macro step".to_string(),
+                    payload: AgentActionPayload::SendMessage {
+                        recipient: format!("agent:{child_agent_id}"),
+                        content_type: "text/plain; charset=utf-8".to_string(),
+                        payload: prompt.clone(),
+                    },
+                };
+                let result = self
+                    .queue_runtime_macro_step_prompt(
+                        turn,
+                        &action,
+                        &format!("agent:{child_agent_id}"),
+                        "text/plain; charset=utf-8",
+                        prompt.as_str(),
+                        step_index,
+                    )?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("macro judge retry step was not accepted")
+                    })?;
+                if let Some(execution) = self.agent_turn_executions.get_mut(&turn.turn_id)
+                    && let Some(batch) = execution.response.action_batch.as_mut()
+                {
+                    batch.actions.push(action);
+                    execution.action_results.push(result);
+                    execution.final_turn = false;
+                    execution.terminal_state = AgentTurnState::Running;
+                }
+                self.agent_turn_ledger
+                    .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
+                self.append_agent_trace_turn_transition(
+                    turn,
+                    AgentTurnState::Running,
+                    AgentTurnState::Blocked,
+                    "macro_judge_retried_current_step",
                 )?;
             }
             MacroJudgeOutcome::StopFailure => {
@@ -1044,6 +1113,7 @@ fn macro_judge_outcome_wire_value(outcome: MacroJudgeOutcome) -> &'static str {
     match outcome {
         MacroJudgeOutcome::Continue => "continue",
         MacroJudgeOutcome::ContinueWithAdaptedPrompt => "continue_with_adapted_prompt",
+        MacroJudgeOutcome::RetryCurrentStep => "retry_current_step",
         MacroJudgeOutcome::StopFailure => "stop_failure",
         MacroJudgeOutcome::FinishSuccess => "finish_success",
     }
@@ -1056,6 +1126,7 @@ fn runtime_macro_judge_policy() -> String {
         "Return only JSON matching the requested macro-judge schema.",
         "Choose continue only when the completed step satisfied its intent and another scripted step remains.",
         "Choose continue_with_adapted_prompt only when another step remains and the next prompt needs bounded adaptation.",
+        "Choose retry_current_step when the completed step looks incomplete but recoverable and the same scripted step should be retried, optionally with a bounded adapted prompt.",
         "Choose stop_failure when the completed step did not satisfy its intent or continuation would violate the macro purpose.",
         "Choose finish_success only after the final required step completed successfully.",
     ]
@@ -1106,7 +1177,7 @@ fn runtime_macro_judge_task(
         })),
     });
     value["instructions"] = serde_json::json!(
-        "Judge whether the completed step satisfies the macro intent and select the next runtime action."
+        "Judge whether the completed step satisfies the macro intent and select the next runtime action, including retry_current_step for incomplete but recoverable output."
     );
     value.to_string()
 }
@@ -1246,6 +1317,33 @@ mod tests {
                 .contains("cannot adapt a next prompt after the final step"),
             "{final_step}"
         );
+    }
+
+    /// Verifies that recoverable macro judge decisions can retry the current
+    /// step without advancing the macro, including on the final scripted step.
+    /// This keeps incomplete-but-fixable subagent output on a runtime-owned
+    /// retry path instead of forcing failure or out-of-order continuation.
+    #[test]
+    fn macro_judge_decision_allows_retry_current_step() {
+        let retry = macro_judge_decision_from_text(
+            r#"{"outcome":"retry_current_step","step_success":false,"rationale":"the subagent asked for clarification but can retry with a narrower prompt","adapted_prompt":"Inspect the release notes directly and list blockers.","user_message":null}"#,
+            2,
+            0,
+        )
+        .unwrap();
+        assert_eq!(retry.outcome, MacroJudgeOutcome::RetryCurrentStep);
+        assert_eq!(
+            retry.adapted_prompt.as_deref(),
+            Some("Inspect the release notes directly and list blockers.")
+        );
+
+        let final_step = macro_judge_decision_from_text(
+            r#"{"outcome":"retry_current_step","step_success":false,"rationale":"the final step was incomplete but recoverable","adapted_prompt":null,"user_message":null}"#,
+            1,
+            0,
+        )
+        .unwrap();
+        assert_eq!(final_step.outcome, MacroJudgeOutcome::RetryCurrentStep);
     }
 
     /// Verifies that terminal macro judge decisions are position-sensitive:

@@ -705,6 +705,8 @@ pub(super) enum MacroJudgeOutcome {
     Continue,
     /// Continue with a validated adapted prompt for the next step.
     ContinueWithAdaptedPrompt,
+    /// Retry the current step, optionally with a bounded adapted prompt.
+    RetryCurrentStep,
     /// Stop the macro as failed with a user-visible explanation.
     StopFailure,
     /// Complete the macro successfully after the final required step.
@@ -720,6 +722,7 @@ impl std::str::FromStr for MacroJudgeOutcome {
         match value {
             "continue" => Ok(Self::Continue),
             "continue_with_adapted_prompt" => Ok(Self::ContinueWithAdaptedPrompt),
+            "retry_current_step" => Ok(Self::RetryCurrentStep),
             "stop_failure" => Ok(Self::StopFailure),
             "finish_success" => Ok(Self::FinishSuccess),
             _ => Err("unsupported macro judge outcome"),
