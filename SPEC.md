@@ -4250,10 +4250,10 @@ by Mezzanine, `structured_content` MUST include:
 - `kind`: The original MAAP action type.
 - `summary`: The user-facing action summary supplied by the model or
   synthesized by Mezzanine for semantic local actions.
-- `execution_transport`: The local action transport, either `pane_shell` or
-  `native`.
-- `command`: The exact shell input sent, proposed for pane execution, or used
-  as the native shell command for shell-command actions.
+- `execution_transport`: The local action transport. Model-authored local
+  actions MUST report `pane_shell`.
+- `command`: The exact shell input sent or proposed for pane execution for
+  shell-command actions.
 - `sent_to_pane`: Whether any input was sent to the pane shell.
 - `stateful`: Whether the action intentionally changes pane shell state.
 - `approval`: Approval state, request identity, decision, and scope when
@@ -4547,8 +4547,8 @@ the user, and subject to the same permission model as other agent actions.
 
 An agent MUST use Mezzanine-visible local MAAP actions for local file reads, file writes, command execution, process inspection, package management, version control operations, and other local system interactions. Mezzanine MUST service those actions through the pane shell and MUST report pane-shell transport metadata.
 
-This visible-local-action rule applies to the agent's native local interaction
-path. MCP servers and other explicitly configured connectors are external
+This visible-local-action rule applies to all agent local interaction paths.
+MCP servers and other explicitly configured connectors are external
 integrations, not hidden local shell tools. An agent MAY request an MCP tool
 call only through the configured external-integration path, and Mezzanine MUST
 evaluate that call under the permission and audit rules for external
@@ -6460,11 +6460,10 @@ native runtime transport, and MUST distinguish Mezzanine-generated semantic
 actions, which may internally use shell commands or native runtime code, from
 model-authored `shell_command` payloads.
 
-The prompt MUST state that `shell_command` runs through the pane shell by
-default, while configured native local execution may service eligible
-`shell_command` and `apply_patch` actions outside pane input and report
-`sent_to_pane = false`. It MAY describe configured MCP servers and connectors
-as external integrations when they are enabled, visible to the user, and subject
+The prompt MUST state that `shell_command` runs through the pane shell and
+MUST NOT advertise a configured native local execution mode for model-authored
+local actions. It MAY describe configured MCP servers and connectors as
+external integrations when they are enabled, visible to the user, and subject
 to policy.
 
 The prompt MUST include detailed action-selection guidance for baseline MAAP
@@ -6821,9 +6820,9 @@ summarize, or omit non-required context before the request is sent.
 
 ### 16.3 Required Prompt Prohibitions
 
-The prompt MUST prohibit bypassing visible MAAP local actions for native local
-system mutation, and MUST not imply that native runtime execution is an
-undeclared model capability. The prompt MAY describe explicitly configured MCP
+The prompt MUST prohibit bypassing visible MAAP local actions for local system
+mutation, and MUST not imply that native runtime execution is an undeclared
+model capability. The prompt MAY describe explicitly configured MCP
 servers and other connectors as external integrations; when it does, it MUST
 state that they are available only through Mezzanine's visible
 external-integration path.
