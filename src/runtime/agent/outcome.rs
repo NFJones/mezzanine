@@ -540,6 +540,15 @@ pub(super) fn runtime_agent_execution_failure(
     execution: &AgentTurnExecution,
 ) -> RuntimeAgentExecutionFailure {
     if execution.response.action_batch.is_none() {
+        if let Some(provider_error) = runtime_embedded_provider_error(&execution.response.raw_text)
+        {
+            return RuntimeAgentExecutionFailure {
+                kind: crate::error::MezErrorKind::InvalidState,
+                stage: "provider_error",
+                message: provider_error.to_string(),
+                action: None,
+            };
+        }
         return RuntimeAgentExecutionFailure {
             kind: crate::error::MezErrorKind::InvalidState,
             stage: "missing_action_batch",
@@ -593,6 +602,17 @@ pub(super) fn runtime_agent_execution_failure(
         message: "agent turn failed without a specific diagnostic".to_string(),
         action: None,
     }
+}
+
+/// Returns the runtime provider error diagnostic embedded in a failed response.
+fn runtime_embedded_provider_error(raw_text: &str) -> Option<&str> {
+    raw_text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("provider_error: "))
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
 }
 
 /// Runs the runtime agent execution failure json operation for this subsystem.

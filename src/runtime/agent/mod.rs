@@ -378,4 +378,76 @@ mod tests {
         ));
         assert!(!lines.iter().any(|line| line == "executing"));
     }
+
+    /// Verifies failed macro-judge completions display the structured runtime
+    /// application error instead of the generic missing-MAAP diagnostic.
+    ///
+    /// Macro-judge provider responses are intentionally JSON-only and do not
+    /// contain MAAP batches. When applying that JSON fails, the failed-turn
+    /// prompt must show the embedded provider error so users see the judge
+    /// validation problem that actually stopped the macro.
+    #[test]
+    fn failed_macro_judge_execution_prompt_shows_provider_error_not_missing_batch() {
+        let execution = AgentTurnExecution {
+            request: crate::agent::ModelRequest {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: false,
+                interaction_kind: crate::agent::ModelInteractionKind::MacroJudge,
+                allowed_actions: crate::agent::AllowedActionSet::for_capability(
+                    crate::agent::AgentCapability::RespondOnly,
+                ),
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "{\"outcome\":\"finish_success\",\"step_success\":true,\"rationale\":\"done\",\"adapted_prompt\":null,\"user_message\":null}\nprovider_error: InvalidArgs: macro judge cannot finish before the final step"
+                    .to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: Vec::new(),
+            final_turn: true,
+            terminal_state: AgentTurnState::Failed,
+        };
+
+        let lines = runtime_agent_execution_prompt_display_lines(
+            "turn-1",
+            "runtime-batch",
+            &execution,
+            0,
+            3,
+        );
+
+        assert!(
+            lines.contains(
+                &"agent: failure: InvalidArgs: macro judge cannot finish before the final step"
+                    .to_string(),
+            )
+        );
+        assert!(
+            lines.iter().all(|line| {
+                !line.contains("model response did not contain a MAAP action batch")
+            })
+        );
+    }
 }
