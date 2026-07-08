@@ -757,7 +757,6 @@ impl RuntimeSessionService {
         self.agent_planning_modes.remove(pane_id);
         self.agent_personality_selections.remove(pane_id);
         self.agent_response_styles.remove(pane_id);
-        self.agent_local_action_executor_overrides.remove(pane_id);
         self.agent_routing_overrides.remove(pane_id);
         self.agent_copy_outputs.remove(pane_id);
         self.agent_modified_files.remove(pane_id);

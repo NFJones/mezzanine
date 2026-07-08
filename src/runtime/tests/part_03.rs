@@ -2330,53 +2330,6 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies stale native-mode subshell tracking is cleared without pane input.
-///
-/// Native local actions do not use the pane PTY as their transport, so an old
-/// subshell marker must never cause agent-shell exit to send EOF or `exit` to
-/// whatever foreground program currently owns the pane.
-#[test]
-fn runtime_agent_shell_native_exit_clears_stale_subshell_without_input() {
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service.start_initial_pane_process(Some("cat")).unwrap();
-    let pane_id = service
-        .session()
-        .active_window()
-        .unwrap()
-        .active_pane()
-        .id
-        .to_string();
-    let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
-        .unwrap();
-    service.agent_local_action_executor = RuntimeLocalActionExecutor::Native;
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume(&pane_id)
-        .unwrap();
-    service.agent_subshell_panes.insert(pane_id.clone());
-    service
-        .agent_subshell_command_exit_panes
-        .insert(pane_id.clone());
-    service.remember_mez_wrapper_filter_command(&pane_id, "MEZ_MARKER_TOKEN=abc");
-
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-native-exit","method":"agent/shell/command","params":{"idempotency_key":"agent-native-exit","input":"/exit"}}"#,
-        &primary,
-    );
-
-    assert!(response.contains(r#""visibility":"hidden""#), "{response}");
-    assert!(service.drain_deferred_pane_inputs().is_empty());
-    assert!(!service.agent_subshell_panes.contains(&pane_id));
-    assert!(!service.agent_subshell_command_exit_panes.contains(&pane_id));
-    let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, b"user@host ~/repo $ ");
-    assert_eq!(prompt_repaint, b"user@host ~/repo $ ");
-    let _ = process.terminate(Duration::from_millis(10));
-}
-
 /// Verifies Escape does not interrupt active agent work or exit agent mode.
 ///
 /// The pane-local prompt owns Escape while visible. During active work it only

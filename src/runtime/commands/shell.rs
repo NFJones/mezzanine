@@ -143,51 +143,9 @@ impl RuntimeSessionService {
         self.reload_agent_prompt_history_for_pane(pane_id)?;
         self.enter_agent_subshell_if_needed(pane_id)?;
         self.clear_agent_shell_terminal_view(pane_id)?;
-        self.append_native_local_action_warning_on_agent_shell_entry(pane_id)?;
         self.sync_tracked_pty_sizes()?;
         self.checkpoint_agent_session_metadata()?;
         Ok(conversation_id)
-    }
-
-    /// Appends a warning when strict host equivalence cannot be proven for native local execution.
-    fn append_native_local_action_warning_on_agent_shell_entry(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<()> {
-        if self.agent_local_action_executor_for_pane(pane_id) != RuntimeLocalActionExecutor::Native
-        {
-            return Ok(());
-        }
-        let Some(working_directory) = self.pane_current_working_directory(pane_id) else {
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                "agent warning: native local execution is enabled, but Mezzanine could not resolve the pane working directory; local actions will execute on the Mezzanine host and may target a different environment",
-            )?;
-            return Ok(());
-        };
-        let probe = EnvironmentEquivalenceProbe::compare(
-            self.pane_environment_signatures.get(pane_id),
-            &working_directory,
-        );
-        if probe.equivalence == EnvironmentEquivalence::Equivalent {
-            return Ok(());
-        }
-        let detail = if probe.diagnostics.is_empty() {
-            format!("equivalence={}", probe.equivalence.as_str())
-        } else {
-            format!(
-                "equivalence={} diagnostics={}",
-                probe.equivalence.as_str(),
-                probe.diagnostics.join("; ")
-            )
-        };
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!(
-                "agent warning: native local execution is enabled, but Mezzanine could not prove the pane matches the native runtime; actions will execute on the Mezzanine host ({detail})"
-            ),
-        )?;
-        Ok(())
     }
 
     /// Runs the execute agent shell command operation for this subsystem.
@@ -373,17 +331,6 @@ impl RuntimeSessionService {
                         &pane_id,
                         input,
                         Some(&personality_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "shell-mode"
-                {
-                    let shell_mode_outcome =
-                        self.execute_agent_shell_shell_mode_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&shell_mode_outcome),
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
@@ -933,10 +880,6 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {
-        if self.agent_local_action_executor_for_pane(pane_id) == RuntimeLocalActionExecutor::Native
-        {
-            return Ok(false);
-        }
         if self.agent_subshell_panes.contains(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
         {
@@ -976,13 +919,6 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<bool> {
         if !self.agent_subshell_panes.contains(pane_id) {
-            return Ok(false);
-        }
-        if self.agent_local_action_executor_for_pane(pane_id) == RuntimeLocalActionExecutor::Native
-        {
-            self.agent_subshell_panes.remove(pane_id);
-            self.agent_subshell_command_exit_panes.remove(pane_id);
-            self.clear_shell_output_filters_for_foreground_input(pane_id);
             return Ok(false);
         }
         if self

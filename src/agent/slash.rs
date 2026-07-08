@@ -230,7 +230,6 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
         slash("routing", &[], SlashCommandEffect::PolicyMutation, true),
         slash("personality", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("shell-mode", &[], SlashCommandEffect::PolicyMutation, true),
         slash("loop", &[], SlashCommandEffect::SessionMutation, false),
         slash("stop", &[], SlashCommandEffect::BackgroundJobMutation, true),
         slash("fork", &[], SlashCommandEffect::SessionMutation, false),
@@ -562,10 +561,6 @@ fn execute_agent_shell_command_with_context_inner(
         "latency" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "latency preference changes require the live runtime".to_string(),
-        },
-        "shell-mode" => AgentShellCommandOutcome::RequiresRuntime {
-            command,
-            reason: "local action executor changes require the live runtime".to_string(),
         },
         "thinking" => AgentShellCommandOutcome::RequiresRuntime {
             command,

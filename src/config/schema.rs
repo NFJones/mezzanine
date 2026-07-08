@@ -100,7 +100,7 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
         },
         ConfigChangePathAnnotation {
             pattern: "agents.<key>",
-            purpose: "Change global agent behavior such as provider, model profile, local action transport, compaction, or subagent limits.",
+            purpose: "Change global agent behavior such as provider, model profile, compaction, or subagent limits.",
             value_type: "string, integer, or boolean",
             format: "Use supported agents keys; profile and enum fields are strings, counts/percents are integers, flags are booleans.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
@@ -480,7 +480,6 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "default_provider",
     "default_model_profile",
     "shell_only",
-    "local_action_executor",
     "compaction_raw_retention_percent",
     "routing",
     "action_failure_retry_limit",

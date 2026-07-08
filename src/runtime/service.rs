@@ -36,16 +36,15 @@ use super::{
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config,
     runtime_agent_implementation_pressure_after_shell_actions_from_config,
-    runtime_agent_local_action_executor_from_config, runtime_agent_loop_limit_from_config,
-    runtime_agent_personality_profiles_from_config, runtime_agent_routing_from_config,
-    runtime_approval_policy_name, runtime_audit_config_present, runtime_audit_log_from_config,
-    runtime_command_bindings_from_effective, runtime_default_agent_personality_from_config,
-    runtime_default_models_for_provider, runtime_effective_config_value,
-    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
-    runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
-    runtime_key_bindings_from_config, runtime_max_concurrent_agents_from_config,
-    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
-    runtime_max_subagent_panes_per_window_from_config,
+    runtime_agent_loop_limit_from_config, runtime_agent_personality_profiles_from_config,
+    runtime_agent_routing_from_config, runtime_approval_policy_name, runtime_audit_config_present,
+    runtime_audit_log_from_config, runtime_command_bindings_from_effective,
+    runtime_default_agent_personality_from_config, runtime_default_models_for_provider,
+    runtime_effective_config_value, runtime_history_limit_from_config,
+    runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
+    runtime_host_clipboard_from_config, runtime_key_bindings_from_config,
+    runtime_max_concurrent_agents_from_config, runtime_max_root_subagents_from_config,
+    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_pane_by_id, runtime_pane_frame_position_from_config,
     runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
@@ -322,7 +321,6 @@ impl RuntimeSessionService {
                 DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS,
             agent_loop_limit: DEFAULT_AGENT_LOOP_LIMIT,
             agent_local_action_executor: DEFAULT_AGENT_LOCAL_ACTION_EXECUTOR,
-            agent_local_action_executor_overrides: BTreeMap::new(),
             agent_loops_by_pane: BTreeMap::new(),
             agent_loop_turns: BTreeMap::new(),
             agent_turn_shell_dispatch_history: BTreeMap::new(),
@@ -838,8 +836,6 @@ impl RuntimeSessionService {
         self.agent_implementation_pressure_after_shell_actions =
             runtime_agent_implementation_pressure_after_shell_actions_from_config(&structured)?;
         self.agent_loop_limit = runtime_agent_loop_limit_from_config(&structured)?;
-        self.agent_local_action_executor =
-            runtime_agent_local_action_executor_from_config(&structured)?;
         self.provider_auth_refresh_leeway_seconds =
             runtime_provider_auth_refresh_leeway_seconds_from_config(&structured);
         self.agent_auto_sizing = runtime_agent_auto_sizing_from_config(&structured)?;

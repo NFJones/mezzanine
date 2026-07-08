@@ -11,7 +11,7 @@ use super::{
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 18;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 19;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +124,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             17 => {
                 current_text = migrate_v17_to_v18(format, &current_text)?;
                 current_version = 18;
+            }
+            18 => {
+                current_text = migrate_v18_to_v19(format, &current_text)?;
+                current_version = 19;
             }
             unsupported => {
                 return Err(MezError::config(format!(
@@ -1292,6 +1296,60 @@ fn migrate_json_compatible_v17_to_v18(format: ConfigFormat, text: &str) -> Resul
         ConfigFormat::Json => serde_json::to_string_pretty(&document)
             .map(|mut rendered| {
                 rendered.push('\n');
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}
+
+/// Applies the version 18 to version 19 migration.
+///
+/// The migration removes the deprecated local action executor setting because
+/// pane-shell execution is now the only user-configurable local action mode.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_v18_to_v19(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v18_to_v19(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v18_to_v19(format, text),
+    }
+}
+
+/// Applies the version 18 to version 19 migration to TOML config files.
+///
+/// # Parameters
+/// - `text`: The TOML document text to migrate.
+fn migrate_toml_v18_to_v19(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    remove_toml_path(&mut document, "agents.local_action_executor")?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(19))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 18 to version 19 migration to JSON and YAML config files.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+fn migrate_json_compatible_v18_to_v19(format: ConfigFormat, text: &str) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    remove_json_path(&mut document, "agents.local_action_executor");
+    set_json_path_value(&mut document, "version", serde_json::json!(19))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push(char::from(10));
                 rendered
             })
             .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),

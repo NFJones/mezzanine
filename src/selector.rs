@@ -937,20 +937,6 @@ fn agent_argument_candidates(command: &str, _context: &TokenContext) -> Vec<Sele
             "add", "query", "delete", "--kind", "--title", "--body", "--text", "--limit",
         ]),
         "latency" => value_candidates(&["slow", "default", "fast"]),
-        "shell-mode" => {
-            let mut candidates = value_candidates(&[
-                "native",
-                "pane",
-                "pane_shell",
-                "shell",
-                "status",
-                "show",
-                "session",
-                "config",
-            ]);
-            candidates.extend(flag_candidates(&["--scope"]));
-            candidates
-        }
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
             let mut candidates = value_candidates(&["ask", "auto-allow", "full-access"]);
@@ -1089,7 +1075,6 @@ fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "resume" => Some(" <session-uuid|--latest>"),
         "fork" => Some(" [conversation-id]"),
         "list-mcp" => Some(" [server-name]"),
-        "shell-mode" => Some(" <native|pane|pane_shell|shell|status> [--scope session|config]"),
         "title" => Some(" <title|default|off>"),
         "debug-config" => Some(" [filter]"),
         _ => None,
@@ -2262,10 +2247,6 @@ mod tests {
             ("/remember ", " [statement]"),
             ("/fork ", " [conversation-id]"),
             ("/debug-config ", " [filter]"),
-            (
-                "/shell-mode ",
-                " <native|pane|pane_shell|shell|status> [--scope session|config]",
-            ),
         ];
 
         for (line, expected) in cases {
@@ -2286,8 +2267,6 @@ mod tests {
                 "p_servers",
                 SelectorCandidateKind::Value,
             ),
-            ("/shell-mode na", "tive", SelectorCandidateKind::Value),
-            ("/shell-mode --s", "cope", SelectorCandidateKind::Flag),
         ];
 
         for (line, expected_text, expected_kind) in cases {

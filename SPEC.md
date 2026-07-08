@@ -2430,10 +2430,6 @@ plus obsolete no-op fields such as `history.search_mode`, memory storage path
 and injection placeholders, `issues.storage`, `agents.prompt_profile`,
 `agents.default_agent_role`, and `audit.redact_secrets`.
 
-The version 16 to version 17 primary-config migration MUST add
-`agents.local_action_executor = "pane_shell"` when absent and MUST preserve an
-explicit existing `agents.local_action_executor` value.
-
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with
 shell-like quoting rules or an array of command tokens. The copy command MUST
@@ -2511,7 +2507,7 @@ The `memory` table MUST support `enabled`, `max_records`, `max_bytes`,
 The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
-`shell_only`, `local_action_executor`, `compaction_raw_retention_percent`, `routing`,
+`shell_only`, `compaction_raw_retention_percent`, `routing`,
 `action_failure_retry_limit`, `implementation_pressure_after_shell_actions`,
 `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
@@ -2539,14 +2535,6 @@ greater of `10` or three times the configured threshold.
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
 reached.
-`agents.local_action_executor` MUST accept `pane_shell` and `native`, and MUST
-default to `pane_shell`. `pane_shell` MUST execute local actions through the
-active pane shell as defined by the shell-transaction contract. `native` MUST
-execute eligible local actions through Mezzanine's native runtime executor,
-MUST record the native transport in structured action results, and MUST fail
-the action rather than silently falling back to pane-shell execution when native
-execution is unavailable for that action.
-
 The `/loop` slash command MUST describe itself in help output as an iterative
 work command rather than a generic slash-command placeholder. By default,
 `/loop` MUST start each work iteration in the current pane conversation. When
@@ -2931,16 +2919,7 @@ state MUST NOT cause pane contents to be passively injected into model context.
 The agent harness MUST be able to send commands to the pane and observe the
 effects of those harness-initiated commands through terminal output.
 
-For local system interaction, agents MUST emit the same model-visible MAAP
-local actions regardless of runtime transport. In the default
-`agents.local_action_executor = "pane_shell"` mode, Mezzanine MUST service those
-actions through the pane shell. In `agents.local_action_executor = "native"`
-mode, Mezzanine MAY service eligible local actions through a native runtime
-executor while preserving the same action schema, permission checks, bounded
-output/result contracts, and audit trail. If Mezzanine cannot prove that the
-pane shell environment matches the native runtime environment when the agent
-shell is launched, it MUST surface a visible warning in the pane and continue
-to execute eligible local actions through the native executor. A Mezzanine agent MUST NOT
+For local system interaction, agents MUST emit model-visible MAAP local actions. Mezzanine MUST service local actions through the pane shell while preserving the same action schema, permission checks, bounded output/result contracts, and audit trail. A Mezzanine agent MUST NOT
 receive hidden host-side capabilities for local file system access, local
 process execution, or local system mutation outside the declared local action
 executor.
@@ -4334,14 +4313,7 @@ through the pane shell in normal mode using the bounded command preview rules.
 If the primary client rejects an action, the harness MUST record the rejection
 and MUST return a `maap/1` action result to the agent.
 
-When `agents.local_action_executor = "pane_shell"`, shell actions MUST be
-executed by sending input to the pane shell. When
-`agents.local_action_executor = "native"`, non-interactive, non-stateful shell
-actions MAY execute through the native runtime executor and MUST report
-`execution_transport = "native"` and `sent_to_pane = false`. If pane/native
-environment equivalence is unknown or different at agent-shell launch,
-Mezzanine MUST warn that native actions execute on the Mezzanine host and may
-target a different environment. The harness MUST NOT execute local shell
+Shell actions MUST be executed by sending input to the pane shell and MUST report pane-shell transport metadata. The harness MUST NOT execute local shell
 actions through an undeclared host-side command runner or silently fall back
 from native mode to pane-shell execution.
 
@@ -4573,14 +4545,7 @@ the user, and subject to the same permission model as other agent actions.
 
 ### 10.2 Visible Local Interaction
 
-An agent MUST use Mezzanine-visible local MAAP actions for local file reads, file
-writes, command execution, process inspection, package management, version
-control operations, and other local system interactions. In
-`agents.local_action_executor = "pane_shell"` mode, Mezzanine MUST service
-those actions through the pane shell. In `agents.local_action_executor =
-"native"` mode, eligible local actions MAY execute through the native runtime
-executor instead of pane input, and MUST report `execution_transport =
-"native"` and `sent_to_pane = false`.
+An agent MUST use Mezzanine-visible local MAAP actions for local file reads, file writes, command execution, process inspection, package management, version control operations, and other local system interactions. Mezzanine MUST service those actions through the pane shell and MUST report pane-shell transport metadata.
 
 This visible-local-action rule applies to the agent's native local interaction
 path. MCP servers and other explicitly configured connectors are external
@@ -5227,13 +5192,6 @@ The baseline command capabilities are:
   accept `on`, `off`, `toggle`, and `status`. The command MUST update the
   pane-local agent preference and MUST checkpoint that preference with other
   pane-scoped agent shell preferences.
-- `/shell-mode`: Inspect or change the local action executor for the active
-  agent shell. It MUST accept `native`, `pane`, `status`, and optional `--scope session|config`. Session scope MUST update
-  the active pane immediately without requiring an agent-shell restart. Config
-  scope MUST persist `agents.local_action_executor` through normal config
-  mutation validation and then use the persisted mode. Status output MUST show
-  the effective mode, configured mode, source, and native-mode host-equivalence
-  warning state when applicable.
 - `/personality`: Configure response style when supported.
 - `/stop`: Stop background jobs owned by the agent. User-initiated stops MUST
   settle the affected turn as interrupted/cancelled rather than failed.
