@@ -266,6 +266,11 @@ mod processes;
 /// The nested module keeps provider configuration records out of the central
 /// runtime service state.
 mod provider_registry;
+/// Exposes reusable pager state for record-oriented agent-shell browsers.
+///
+/// The module keeps list/detail navigation, prompt state, and save payloads
+/// independent from issue and memory adapters.
+mod record_browser;
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
