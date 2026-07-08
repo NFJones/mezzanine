@@ -647,17 +647,55 @@ impl RuntimeSessionService {
                     .user_message
                     .as_deref()
                     .unwrap_or("macro judge stopped the macro");
+                let child_agent_id = self
+                    .macro_runs_by_parent_turn
+                    .get(turn.turn_id.as_str())
+                    .map(|run| run.child_agent_id.clone());
+                self.macro_runs_by_parent_turn.remove(&turn.turn_id);
+                if let Some(child_agent_id) = child_agent_id.as_deref() {
+                    let reason = "macro judge rejected subagent output";
+                    self.close_subagent_descendants_for_parent_agent(child_agent_id, reason)?;
+                    if let Some(child_pane_id) = runtime_agent_pane_id(child_agent_id) {
+                        if self.find_pane_descriptor(child_pane_id.as_str()).is_some() {
+                            if let Some(primary_client_id) =
+                                self.session.primary_client_id().cloned()
+                            {
+                                self.dispatch_runtime_pane_close(
+                                    &primary_client_id,
+                                    &format!(
+                                        r#"{{"pane_id":"{}","force":true}}"#,
+                                        json_escape(child_pane_id.as_str())
+                                    ),
+                                )?;
+                                self.append_lifecycle_event(
+                                    EventKind::AgentStatus,
+                                    format!(
+                                        r#"{{"pane_id":"{}","agent_id":"{}","state":"closed","reason":"macro_judge_stop_failure","parent_agent_id":"{}","detail":"{}"}}"#,
+                                        json_escape(child_pane_id.as_str()),
+                                        json_escape(child_agent_id),
+                                        json_escape(&turn.agent_id),
+                                        json_escape(reason)
+                                    ),
+                                )?;
+                            } else {
+                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str());
+                            }
+                        } else {
+                            self.cleanup_removed_pane_runtime_state(child_pane_id.as_str());
+                        }
+                    } else {
+                        self.deregister_macro_managed_subagent(child_agent_id);
+                        self.subagent_lineage.remove(child_agent_id);
+                        self.subagent_scope_declarations.remove(child_agent_id);
+                        self.subagent_scopes.unregister(child_agent_id);
+                    }
+                }
                 self.append_agent_error_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!("agent: macro failed: {message}"),
                 )?;
-                let _ = self.agent_scheduler.complete(&turn.turn_id);
-                self.agent_turn_ledger
-                    .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                self.macro_runs_by_parent_turn.remove(&turn.turn_id);
-                self.append_agent_trace_turn_transition(
+                self.complete_running_agent_turn_and_start_ready(
                     turn,
-                    AgentTurnState::Running,
                     AgentTurnState::Failed,
                     "macro_judge_stop_failure",
                 )?;

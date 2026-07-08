@@ -3482,6 +3482,112 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies a macro judge stop-failure decision after a successful child result
+/// fully fails the parent turn and closes the persistent macro subagent.
+///
+/// Child `task_result.success` only reports transport-level task completion. The
+/// macro judge can still reject the returned content semantically; that failure
+/// path must tear down the macro-managed child and finish the parent shell turn
+/// instead of leaving the parent failed only in the ledger with a live subagent.
+#[test]
+fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
+    let config_root = temp_root("runtime-macro-judge-stop-failure-closes-child");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. Inspect release notes.\n2. Summarize release blockers.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    service.set_config_root(config_root);
+
+    let response = service
+        .execute_agent_shell_command(&primary, "#release-check for v1.2")
+        .unwrap();
+    assert!(response.contains(r#""kind":"turn_started""#), "{response}");
+    let parent_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .cloned()
+        .expect("parent macro orchestration turn should exist");
+    let first_child_turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
+        .cloned()
+        .expect("first runtime-owned macro step should create a child turn");
+    let child_agent_id = first_child_turn.agent_id.clone();
+    let child_pane_id = first_child_turn.pane_id.clone();
+
+    service
+        .agent_turn_ledger
+        .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
+        .unwrap();
+    service
+        .emit_subagent_task_result_for_state(&first_child_turn, AgentTurnState::Completed)
+        .unwrap();
+    assert_eq!(
+        service.macro_judge_step_index_for_turn(&parent_turn.turn_id),
+        Some(0)
+    );
+
+    let judge_provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: r#"{"outcome":"stop_failure","step_success":false,"rationale":"child asked for clarification instead of inspecting","adapted_prompt":null,"user_message":"the subagent did not perform the requested inspection"}"#
+                .to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &parent_turn.turn_id,
+            &judge_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(service.agent_shell_store().get("%1").is_some_and(|session| {
+        session.running_turn_id.as_deref() != Some(parent_turn.turn_id.as_str())
+    }));
+    assert!(!service.macro_runs_by_parent_turn.contains_key(parent_turn.turn_id.as_str()));
+    assert!(!service.macro_managed_subagent_agents.contains_key(&child_agent_id));
+    assert!(!service.subagent_lineage.contains_key(&child_agent_id));
+    assert!(!service.subagent_scope_declarations.contains_key(&child_agent_id));
+    assert!(service.agent_shell_store().get(&child_pane_id).is_none());
+    assert!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .all(|pane| pane.id.as_str() != child_pane_id)
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies `/list-skills` displays the effective pane skill catalog with the
 /// same `$skill` invocation syntax accepted by explicit skill prompts. This
 /// gives users a discoverable way to see and select available workflows before
