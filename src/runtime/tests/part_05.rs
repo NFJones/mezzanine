@@ -3021,6 +3021,13 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         pane_text.contains("user> /loop inspect release notes for the requested version."),
         "{pane_text}"
     );
+    let step_index = pane_text
+        .find("step: /loop inspect release notes for the requested version.")
+        .expect("parent transcript should include the first macro step line");
+    let prompt_index = pane_text
+        .find("user> /loop inspect release notes for the requested version.")
+        .expect("parent transcript should include the first macro prompt line");
+    assert!(step_index < prompt_index, "{pane_text}");
     let macro_children = service
         .macro_managed_subagent_agents
         .keys()
@@ -3327,6 +3334,13 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("user> Summarize release blockers."), "{pane_text}");
+    let step_index = pane_text
+        .find("step: Summarize release blockers.")
+        .expect("parent transcript should include the continued macro step line");
+    let prompt_index = pane_text
+        .find("user> Summarize release blockers.")
+        .expect("parent transcript should include the continued macro prompt line");
+    assert!(step_index < prompt_index, "{pane_text}");
 
     service.pane_processes_mut().terminate_all().unwrap();
 }

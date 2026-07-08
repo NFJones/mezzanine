@@ -378,6 +378,7 @@ impl RuntimeSessionService {
                 })
                 .map(|dependency| dependency.child_turn_id.clone());
             if child_turn_id.is_some() && !already_recorded_step_action {
+                self.append_agent_macro_step_to_terminal_buffer(&parent_turn.pane_id, payload)?;
                 self.append_agent_user_prompt_to_terminal_buffer(&parent_turn.pane_id, payload)?;
             }
             if let Some(run) = self

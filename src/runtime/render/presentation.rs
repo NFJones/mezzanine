@@ -3717,6 +3717,35 @@ pub(super) fn agent_thinking_display_lines_for_width(text: &str, columns: usize)
         .collect()
 }
 
+/// Builds width-bounded status-style macro-step lines from scripted prompts.
+pub(super) fn agent_macro_step_display_lines_for_width(text: &str, columns: usize) -> Vec<String> {
+    let prefix = "step: ";
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    let content_width = bounded_agent_terminal_presentation_columns(columns)
+        .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
+        .max(1);
+    let segment_width = content_width.saturating_sub(prefix_width).max(1);
+    let continuation = " ".repeat(prefix_width);
+    text.trim_end_matches(['\r', '\n'])
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .flat_map(|line| {
+            wrap_agent_terminal_text(&sanitized_agent_terminal_line(line), segment_width)
+                .into_iter()
+                .enumerate()
+                .map(|(index, segment)| {
+                    if index == 0 {
+                        format!("{prefix}{segment}")
+                    } else {
+                        format!("{continuation}{segment}")
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// Builds the compact header shown above elevated action result output.
 pub(super) fn agent_action_result_display_header(action: &AgentAction) -> Option<String> {
     agent_action_execution_display_header(action)
@@ -4330,6 +4359,24 @@ impl RuntimeSessionService {
             )?;
         }
         Ok(())
+    }
+
+    /// Appends one macro step as shadow-style status text in the parent pane.
+    ///
+    /// Macro orchestration should show the scripted step immediately before the
+    /// matching `user>` prompt so the parent transcript exposes runtime-owned
+    /// sequencing without changing the prompt text itself.
+    pub(in crate::runtime) fn append_agent_macro_step_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        let columns = self.agent_terminal_presentation_columns(pane_id)?;
+        self.append_agent_terminal_lines_to_buffer(
+            pane_id,
+            &agent_macro_step_display_lines_for_width(text, columns),
+            AgentTerminalPresentationStyle::Status,
+        )
     }
 
     /// Runs the append agent error text to terminal buffer operation for this subsystem.
