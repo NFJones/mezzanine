@@ -282,6 +282,8 @@ Useful slash commands include:
 | `/list-macros` | Show the agent macros available to the active pane.   |
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
+| `/show-issues` | Browse open project issues, filter issue records, open details, and save the rendered Markdown view. |
+| `/show-memories` | Browse project-scoped persistent memories, filter records, open details, and save the rendered Markdown view. |
 | `/remember`    | Generate durable memories from context or a statement while opportunistically pruning expired persistent records. |
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
 | `/stop`        | Interrupt the active turn.                            |

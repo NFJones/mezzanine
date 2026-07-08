@@ -1199,7 +1199,13 @@ fn command_accepts_path_argument(surface: SelectorSurface, command: &str) -> boo
                 | "save-layout"
                 | "load-layout"
         ),
-        SelectorSurface::AgentCommand => false,
+        SelectorSurface::AgentCommand => {
+            let command = command.strip_prefix('/').unwrap_or(command);
+            matches!(
+                canonical_agent_command(command),
+                "show-issues" | "show-memories"
+            )
+        }
     }
 }
 
@@ -1250,7 +1256,9 @@ fn relative_path_query_is_probable(query: &str) -> bool {
 fn agent_token_introduces_path(token: &str) -> bool {
     matches!(
         token.to_ascii_lowercase().as_str(),
-        "at" | "dir"
+        "--save"
+            | "at"
+            | "dir"
             | "directory"
             | "file"
             | "files"

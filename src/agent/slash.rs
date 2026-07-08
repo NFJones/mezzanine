@@ -223,7 +223,9 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("issue", &[], SlashCommandEffect::SessionMutation, true),
+        slash("show-issues", &[], SlashCommandEffect::ReadOnly, true),
         slash("memory", &[], SlashCommandEffect::PolicyMutation, true),
+        slash("show-memories", &[], SlashCommandEffect::ReadOnly, true),
         slash("remember", &[], SlashCommandEffect::SessionMutation, false),
         slash("model", &[], SlashCommandEffect::PolicyMutation, true),
         slash("thinking", &[], SlashCommandEffect::PolicyMutation, true),
@@ -553,6 +555,14 @@ fn execute_agent_shell_command_with_context_inner(
         "issue" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "local issue tracking requires the live runtime".to_string(),
+        },
+        "show-issues" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "issue browser display requires the live runtime".to_string(),
+        },
+        "show-memories" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "memory browser display requires the live runtime".to_string(),
         },
         "remember" => AgentShellCommandOutcome::RequiresRuntime {
             command,

@@ -684,7 +684,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds the durable memory scope used for `/remember` records.
-    fn runtime_remember_scope_for_pane(&self, pane_id: &str) -> MemoryScope {
+    pub(in crate::runtime) fn runtime_remember_scope_for_pane(&self, pane_id: &str) -> MemoryScope {
         self.pane_current_working_directory(pane_id)
             .map(|path| MemoryScope::Project {
                 root: discover_project_root(&path).to_string_lossy().into_owned(),

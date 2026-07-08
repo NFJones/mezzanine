@@ -73,6 +73,7 @@ mod preferences;
 mod remember;
 mod resume;
 mod shell;
+mod show_records;
 mod slash;
 mod status;
 

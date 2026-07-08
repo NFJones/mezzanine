@@ -405,7 +405,7 @@ fn runtime_issue_depends_on_display(depends_on: &[String]) -> String {
     serde_json::json!(depends_on).to_string()
 }
 
-fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
+pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
     runtime_effective_config_value(&service.config_layers)
         .ok()
         .and_then(|root| {
@@ -416,7 +416,7 @@ fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
         .unwrap_or(true)
 }
 
-fn runtime_issue_database_path(
+pub(super) fn runtime_issue_database_path(
     service: &RuntimeSessionService,
     config_root: &PathBuf,
 ) -> crate::issues::IssueDatabasePath {

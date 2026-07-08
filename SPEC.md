@@ -5168,6 +5168,17 @@ The baseline command capabilities are:
   records to open, preserve resolved records for history, and support an
   optional body for the stable description and optional mutable notes for
   progress, handoff context, and next steps.
+- `/show-issues`: Browse local issue records in a pager-backed record browser.
+  It MUST default to open issues for the active pane project, support optional
+  project glob, kind, state, full-text, and limit filters, render selectable
+  Markdown rows that open issue details, and allow saving the rendered raw
+  Markdown view to a user-supplied file path, overwriting the destination.
+- `/show-memories`: Browse persistent memory records in the shared
+  pager-backed record browser. It MUST default to active records in the active
+  pane project scope when that scope is known, support optional scope, kind,
+  state, full-text, and limit filters, render selectable Markdown rows that
+  open memory details, and allow saving the rendered raw Markdown view to a
+  user-supplied file path, overwriting the destination.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the

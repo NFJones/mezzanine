@@ -40,6 +40,8 @@ pub(crate) struct RuntimeRecordBrowserPage {
 pub(crate) struct RuntimeRecordBrowserRecord {
     /// Stable record id used for selection and metadata.
     pub id: String,
+    /// Optional agent-shell command that opens this record's detail view.
+    pub open_command: Option<String>,
     /// Short summary rendered in list rows and detail headings.
     pub title: String,
     /// Backend-specific metadata rendered above the Markdown body.
@@ -387,7 +389,16 @@ fn list_markdown(title: &str, records: &[RuntimeRecordBrowserRecord]) -> String 
         lines.push("No records found.".to_string());
     } else {
         for record in records {
-            lines.push(format!("- **{}** — {}", record.id, record.title));
+            let label = format!("{} — {}", record.id, record.title);
+            if let Some(command) = record.open_command.as_deref() {
+                lines.push(format!(
+                    "- [`{}`](mez-agent:{})",
+                    escape_markdown_link_label(&label),
+                    encode_mez_agent_command(command)
+                ));
+            } else {
+                lines.push(format!("- **{}** — {}", record.id, record.title));
+            }
         }
     }
     lines.join("\n")
@@ -415,6 +426,27 @@ fn escape_markdown_table(value: &str) -> String {
     value.replace('\\', "\\\\").replace('|', "\\|")
 }
 
+fn escape_markdown_link_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace('`', "\\`")
+}
+
+fn encode_mez_agent_command(command: &str) -> String {
+    let mut encoded = String::new();
+    for byte in command.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +454,7 @@ mod tests {
     fn browser_record(id: &str, title: &str) -> RuntimeRecordBrowserRecord {
         RuntimeRecordBrowserRecord {
             id: id.to_string(),
+            open_command: None,
             title: title.to_string(),
             metadata: vec![("project".to_string(), "/repo".to_string())],
             markdown: format!("Body for {title}"),
@@ -528,6 +561,7 @@ mod tests {
             "Issues",
             vec![RuntimeRecordBrowserRecord {
                 id: "issue-1".to_string(),
+                open_command: Some("/show-issues issue-1".to_string()),
                 title: "Pipe table".to_string(),
                 metadata: vec![("state".to_string(), "open|resolved".to_string())],
                 markdown: "Detail body".to_string(),

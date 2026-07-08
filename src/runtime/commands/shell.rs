@@ -518,6 +518,20 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "show-issues"
+                {
+                    let show_outcome =
+                        self.execute_agent_shell_show_issues_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "show-memories"
+                {
+                    let show_outcome =
+                        self.execute_agent_shell_show_memories_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "remember"
                 {
                     let remember_outcome =
