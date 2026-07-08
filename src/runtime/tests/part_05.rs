@@ -3193,6 +3193,16 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .unwrap_or_default()
             .contains("User additional context for this macro invocation:\nfor v1.2")
     );
+    let child_pane_id = child_agent_id.strip_prefix("agent-").unwrap();
+    let child_pane_text = service
+        .pane_screen(child_pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        child_pane_text.contains("user> /loop inspect release notes for the requested version."),
+        "{child_pane_text}"
+    );
     let child_context = service.agent_turn_contexts.get(&child_turn.turn_id).unwrap();
     assert!(child_context.blocks.iter().any(|block| block.content.contains("/loop inspect release notes for the requested version.")));
     assert!(child_context.blocks.iter().any(|block| block.content.contains("User additional context for this macro invocation:\nfor v1.2")));
