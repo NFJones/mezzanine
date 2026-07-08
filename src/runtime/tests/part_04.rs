@@ -2079,7 +2079,6 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.agent_local_action_executor = crate::runtime::RuntimeLocalActionExecutor::Native;
     service.host_clipboard =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service

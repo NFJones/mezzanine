@@ -14,7 +14,7 @@ use super::{
     MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, ModelProvider, OsString, PaneExitRecord,
     PaneExitUpdate, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision,
     RuleMatch, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeAgentModifiedFileSummary, RuntimeEnv, RuntimeLifecycleState, RuntimeLocalActionExecutor,
+    RuntimeAgentModifiedFileSummary, RuntimeEnv, RuntimeLifecycleState,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSubagentLineage,
     RuntimeSubagentPlacement, SenderIdentity,
     SocketDirectorySource, SplitDirection, SubagentWaitPolicy, TrustDecision, UnixStream,

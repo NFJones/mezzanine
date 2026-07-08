@@ -120,10 +120,9 @@ pub fn apply_patch_write_plan_from_read_outputs(
 
 /// Applies one model-authored patch directly through the host filesystem.
 ///
-/// The native path reuses the same parser, hunk matcher, path safety checks,
-/// and preimage verification as the shell-backed read/write pipeline while
-/// avoiding pane-shell dispatch for environments where native local execution
-/// has already been allowed by the runtime.
+/// This helper reuses the same parser, hunk matcher, path safety checks,
+/// and preimage verification as the shell-backed read/write pipeline so
+/// semantic patch writes share one implementation.
 pub fn apply_patch_natively(
     patch: &str,
     strip: Option<u64>,

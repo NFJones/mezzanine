@@ -65,7 +65,6 @@ impl RuntimeSessionService {
             self.apply_patch_batch_states.insert(
                 key.clone(),
                 RuntimeApplyPatchBatchState {
-                    local_action_executor: self.agent_local_action_executor_for_pane(&turn.pane_id),
                     remaining_paths: apply_patch_touched_paths(patch)?,
                     current_read_transport: Vec::new(),
                     read_outputs: Vec::new(),
@@ -548,10 +547,7 @@ impl RuntimeSessionService {
                     continue;
                 }
             };
-            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
-                && self.agent_local_action_executor_for_pane(&turn.pane_id)
-                    != RuntimeLocalActionExecutor::Native
-            {
+            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
                 self.prepare_apply_patch_batched_read_plan(turn, action, &mut plan)?;
             }
             let command = plan.command.as_str();
@@ -602,117 +598,6 @@ impl RuntimeSessionService {
                     )?;
                 }
                 execution.action_results[index] = result;
-                continue;
-            }
-            if self.agent_local_action_executor_for_pane(&turn.pane_id)
-                == RuntimeLocalActionExecutor::Native
-            {
-                let marker = runtime_marker_for_action(turn, &action.id)?;
-                let working_directory = match self.pane_current_working_directory(&turn.pane_id) {
-                    Some(working_directory) => working_directory,
-                    None => match std::env::current_dir() {
-                        Ok(working_directory) => working_directory,
-                        Err(error) => {
-                            let error = MezError::invalid_state(format!(
-                                "native local action executor could not resolve host working directory for pane {}: {error}",
-                                turn.pane_id
-                            ));
-                            execution.action_results[index] = self
-                                .shell_action_runtime_error_result(
-                                    turn,
-                                    action,
-                                    command,
-                                    "native_local_action_cwd",
-                                    &error,
-                                )?;
-                            continue;
-                        }
-                    },
-                };
-                if !self
-                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
-                {
-                    if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
-                        self.append_agent_command_preview_to_terminal_buffer(
-                            &turn.pane_id,
-                            command,
-                        )?;
-                    } else {
-                        self.append_agent_status_text_to_terminal_buffer(
-                            &turn.pane_id,
-                            &runtime_agent_shell_status(action, "native local action"),
-                        )?;
-                    }
-                }
-                let output_preview_lines = self.terminal_shell_output_preview_lines;
-                let progress_turn_id = turn.turn_id.clone();
-                let progress_action_id = action.id.clone();
-                let progress_pane_id = turn.pane_id.clone();
-                let native_result = {
-                    let mut native_executor = NativeShellLocalExecutor::new(
-                        self.session.shell.path(),
-                        &working_directory,
-                    )
-                    .with_output_progress(|output| {
-                        if self.agent_shell_transaction_action_shows_live_output(
-                            &progress_turn_id,
-                            &progress_action_id,
-                        ) {
-                            let lines =
-                                crate::runtime::processes::output_filter::latest_agent_shell_transaction_output_lines(output, output_preview_lines);
-                            if !lines.is_empty() {
-                                self.append_agent_shell_output_status_lines_to_terminal_buffer(
-                                    &progress_pane_id,
-                                    &lines,
-                                )?;
-                            }
-                        }
-                        Ok(())
-                    });
-                    execute_local_action(turn, action, marker, &mut native_executor)
-                };
-                let result = match native_result {
-                    Ok(result) => result,
-                    Err(error) => self.shell_action_runtime_error_result(
-                        turn,
-                        action,
-                        command,
-                        "native_local_action",
-                        &error,
-                    )?,
-                };
-                execution.action_results[index] = result;
-                let audit_outcome =
-                    if execution.action_results[index].status == ActionStatus::Succeeded {
-                        "succeeded"
-                    } else {
-                        "failed"
-                    };
-                self.append_agent_shell_command_audit(turn, action, command, audit_outcome)?;
-                if self.agent_action_result_renders_in_normal_mode(action) {
-                    let result_text = execution.action_results[index].content_text();
-                    if !result_text.trim().is_empty() {
-                        self.append_agent_action_result_text_to_terminal_buffer(
-                            &turn.pane_id,
-                            action,
-                            &execution.action_results[index],
-                            &result_text,
-                        )?;
-                    }
-                }
-                self.append_action_result_context_if_absent(
-                    &turn.turn_id,
-                    &execution.action_results[index],
-                )?;
-                dispatched = dispatched.saturating_add(1);
-                self.append_agent_trace_turn_event(
-                    &turn.pane_id,
-                    &turn.turn_id,
-                    &format!(
-                        "action {} executed native_local_action executed_count={}",
-                        action.id, dispatched
-                    ),
-                )?;
                 continue;
             }
             match self.pane_readiness_state(&turn.pane_id) {
@@ -1095,35 +980,6 @@ impl RuntimeSessionService {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
-        let selected_executor = self
-            .apply_patch_batch_states
-            .get(&state_key)
-            .map(|state| state.local_action_executor);
-        if selected_executor.is_some_and(|executor| {
-            executor != self.agent_local_action_executor_for_pane(&turn.pane_id)
-        }) {
-            self.apply_patch_batch_states.remove(&state_key);
-            let write_plan = apply_patch_error_plan(
-                "apply_patch execution mode changed after dispatch; aborting instead of switching execution modes mid-action",
-            );
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "action {} apply_patch_phase=abort reason=local_action_executor_changed",
-                    action.id
-                ),
-            )?;
-            self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
-            self.dispatch_shell_action_to_pane(
-                turn,
-                &action,
-                &write_plan.command,
-                write_plan.stateful,
-                write_plan.timeout_ms,
-            )?;
-            return Ok(true);
-        }
         let write_plan = if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
             let retained_transport;
             let retained_transport = if state.current_read_transport.is_empty() {
@@ -1231,11 +1087,7 @@ impl RuntimeSessionService {
             error_kind,
             error_message.clone(),
         )?;
-        let execution_transport = if stage.starts_with("native_local_action") {
-            "native"
-        } else {
-            "pane_shell"
-        };
+        let execution_transport = "pane_shell";
         result.structured_content_json = Some(shell_command_structured_content_json(
             action,
             Some(execution_transport),

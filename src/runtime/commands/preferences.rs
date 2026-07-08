@@ -8,14 +8,6 @@
 use super::*;
 
 impl RuntimeSessionService {
-    /// Returns the pane-effective local action executor.
-    pub(in crate::runtime) fn agent_local_action_executor_for_pane(
-        &self,
-        _pane_id: &str,
-    ) -> RuntimeLocalActionExecutor {
-        self.agent_local_action_executor
-    }
-
     /// Executes `/routing` against pane-scoped auto-sizing state.
     pub(in crate::runtime) fn execute_agent_shell_routing_command(
         &mut self,

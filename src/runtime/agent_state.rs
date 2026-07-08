@@ -11,12 +11,10 @@ use super::{
     DEFAULT_AUTO_SIZING_ROUTER_PROFILE, DEFAULT_AUTO_SIZING_SMALL_PROFILE,
     DeepSeekChatCompletionsProvider, MemoryScope, ModelProfile, ModelRequest,
     OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, PathScopes, PermissionPolicy,
-    ReqwestProviderHttpTransport, RuntimeLocalActionExecutor, SessionApprovalStore,
-    SubagentScopeDeclaration,
+    ReqwestProviderHttpTransport, SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::agent::{AnthropicMessagesProvider, ClaudeCodeProvider};
 use crate::mcp::McpPromptTool;
-use std::path::PathBuf;
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
 ///
@@ -302,15 +300,6 @@ pub struct RuntimeAgentProviderDispatch {
     pub memory_actions_enabled: bool,
     /// Whether local issue-tracking actions are enabled for this provider turn.
     pub issue_actions_enabled: bool,
-    /// Local action executor selected when the provider turn was claimed.
-    pub local_action_executor: RuntimeLocalActionExecutor,
-    /// Shell path used by native local action execution workers.
-    pub native_shell_path: PathBuf,
-    /// Working directory available for native local action execution workers.
-    pub native_working_directory: Option<PathBuf>,
-    /// Number of live shell-output preview lines visible during native local
-    /// action execution.
-    pub terminal_shell_output_preview_lines: usize,
     /// Optional `/loop` controller metadata for this provider turn.
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
 }
