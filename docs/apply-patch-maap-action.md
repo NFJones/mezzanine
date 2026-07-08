@@ -9,6 +9,11 @@ to recover when a patch does not apply cleanly.
 `apply_patch` is Mezzanine's structured file-content mutation action. It is a
 semantic MAAP action, not a pane shell executable.
 
+It is also the baseline runtime-owned semantic mutation path for text-file
+content changes. Models describe the desired filesystem edit as a Mezzanine
+patch block; Mezzanine then validates, plans, and applies the change through
+its own patch pipeline instead of trusting model-authored shell editing logic.
+
 Use `apply_patch` when the goal is to change file contents, including:
 
 - creating a new text file,
@@ -29,10 +34,33 @@ Use `shell_command` instead for:
 - path moves or deletions that are not file-content patch operations, and
 - raw diff application through explicit tools such as `git apply`.
 
+## MAAP action shape
+
+Within a MAAP batch, `apply_patch` is an action object with a `patch` string.
+
+```json
+{
+  "type": "apply_patch",
+  "patch": "*** Begin Patch\n*** Update File: src/lib.rs\n@@ fn owner\n-old_line();\n+new_line();\n*** End Patch"
+}
+```
+
+Important public-contract notes:
+
+- `patch` is semantic input to Mezzanine's patch pipeline, not pane-shell
+  source text.
+- The current public MAAP surface normally exposes only the `patch` field for
+  this action.
+- Internal or compatibility plumbing may still carry an optional `strip`
+  field, but Mezzanine rejects `strip` for canonical `apply_patch` Mezzanine
+  patch blocks.
+- Raw unified diffs may be accepted through compatibility normalization, but
+  canonical `*** Begin Patch` blocks remain the preferred authoring format.
+
 ## Core contract
 
-The model-facing payload is a patch string. Canonical patches start with
-`*** Begin Patch` and end with `*** End Patch`.
+The model-facing payload is the `apply_patch.patch` string. Canonical patches
+start with `*** Begin Patch` and end with `*** End Patch`.
 
 ```text
 *** Begin Patch
@@ -43,8 +71,9 @@ The model-facing payload is a patch string. Canonical patches start with
 *** End Patch
 ```
 
-At MAAP validation time, Mezzanine rejects payloads that are empty, missing the
-begin/end markers, or contain no file operations.
+Before semantic parsing, Mezzanine may normalize a few compatibility wrappers
+around the patch text. After normalization, Mezzanine rejects payloads that are
+empty, missing the begin/end markers, or contain no file operations.
 
 ## Supported file operations
 
@@ -122,6 +151,10 @@ For ordinary edits, the most reliable hunk shape is:
 Mezzanine treats copied old/context lines as authoritative current-file
 evidence. Inferred or reconstructed old context is intentionally fragile and is
 more likely to produce a mismatch diagnostic.
+
+Update hunks target text files. If the current file bytes are not valid UTF-8,
+the action fails with a diagnostic instead of guessing how to patch opaque
+binary content.
 
 ## Whole-file replacement
 
@@ -226,6 +259,9 @@ Important limits:
 - if entirely non-Mezzanine diff application is required, use `shell_command`
   with an explicit tool such as `git apply`.
 
+Auto-conversion is a compatibility path, not the preferred authoring format.
+Canonical Mezzanine patches remain easier to validate, diagnose, and retry.
+
 ## Runtime architecture
 
 `apply_patch` is a semantic action. The runtime does not trust the model to
@@ -256,6 +292,11 @@ When native execution is enabled for eligible local actions, Mezzanine still
 reuses the same parser, matcher, path-safety checks, snapshot verification, and
 planned-failure logic.
 
+The implementation currently gives `apply_patch` its own short timeout rather
+than inheriting the general shell-command default. In the Rust implementation,
+that timeout is `30_000` ms so malformed or blocked patch work fails quickly
+enough for the next repair step.
+
 ## Why `apply_patch` is multi-phase
 
 The split read/write design protects against common mutation hazards:
@@ -280,11 +321,18 @@ It supports:
 - anchor-guided matching,
 - structural-anchor scoping for repeated regions,
 - conservative use of unified old-line hints for disambiguation,
+- deterministic fallback matching modes when exact context is unavailable,
 - blank-line tolerant context handling in supported cases, and
 - detection of already-present replacement blocks or distinctive added lines.
 
 This helps patches stay local and recoverable, especially in repeated or
 partially changed files.
+
+When fallback matching succeeds, Mezzanine preserves unchanged context from the
+current target file instead of rewriting that context from the patch text. When
+matching remains ambiguous after anchors and range hints are considered, the
+action fails with a recoverable ambiguity diagnostic instead of choosing a
+location heuristically.
 
 ## Failure model and diagnostics
 
@@ -300,6 +348,11 @@ Validation rejects malformed payloads before execution, for example:
 - no file operations,
 - unsafe patch paths, or
 - malformed hunk lines.
+
+Additional validation and parse failures include unsupported directives,
+add-file lines that do not start with `+`, update operations with no hunks,
+whole-file replacement hunks that mix in old/context lines, and stray content
+after `*** End Patch`.
 
 These failures mean the patch structure is wrong, not that current file context
 needs to be reread.
@@ -337,6 +390,10 @@ The runtime also surfaces distinct recovery paths for cases such as:
 - path safety rejection, and
 - execution-mode changes during a multi-phase patch.
 
+Shell-backed and native execution share the same semantic checks, so these
+failures are about transport or filesystem state rather than a different patch
+grammar.
+
 These failures have different next steps from a content mismatch. For example,
 transport truncation usually calls for a smaller patch split by file or owner
 range rather than a reread of current file text.
@@ -347,6 +404,9 @@ If a multi-file patch applies some file operations before a later operation
 fails, Mezzanine preserves the completed file mutations and reports which paths
 were already applied. Recovery should then target only the remaining work.
 
+This behavior is intentional. A later failing file operation does not imply
+that earlier successful file mutations were rolled back.
+
 ## Recommended authoring pattern
 
 For the highest success rate:
@@ -356,7 +416,10 @@ For the highest success rate:
 3. emit one small patch for one coherent owner range,
 4. prefer distinctive `@@` anchors when context may repeat,
 5. use multiple small hunks instead of one brittle large hunk, and
-6. after a mismatch, reread only the implicated current region before retrying.
+6. after a mismatch, reread only the implicated current region before retrying,
+   and
+7. split broad multi-file edits when transport size or partial-failure recovery
+   would otherwise be harder to reason about.
 
 Avoid retrying substantially the same patch after a mismatch. Mezzanine's
 diagnostics are designed to tell the next model step which region or ambiguity
@@ -420,10 +483,11 @@ needs attention.
 For normative behavior, use:
 
 - `SPEC.md` for the authoritative contract,
+- `src/agent/maap.rs` for MAAP action parsing and payload validation,
 - `src/agent/semantic/patch/` for the parser, matcher, snapshot, and
   transaction implementation, and
-- `src/agent/tests/part_02.rs` plus `src/runtime/tests/part_06.rs` for
-  representative accepted forms and recovery behavior.
+- `src/runtime/tests/part_01.rs` plus `src/runtime/tests/part_06.rs` for
+  representative shell-backed execution, preview, and recovery behavior.
 
 This document is a contributor and operator guide. If this page and `SPEC.md`
 ever disagree, treat `SPEC.md` as the source of truth.
