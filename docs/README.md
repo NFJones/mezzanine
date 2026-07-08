@@ -9,8 +9,9 @@ reference documentation.
   overview, quick start, core workflows, and the first successful agent task.
 - **Daily users and operators**: use
   [Agent skills and commands](agent-skills-and-commands.md) for the command
-  surfaces and [Configuration reference](configuration-reference.md) for exact
-  configuration fields and defaults.
+  surfaces, [MAAP action reference](maap-actions-reference.md) for structured
+  agent actions, and [Configuration reference](configuration-reference.md) for
+  exact configuration fields and defaults.
 - **Contributors**: use [AGENTS.md](../AGENTS.md) for repository workflow,
   testing, and handoff requirements.
 - **Specification readers**: use [SPEC.md](../SPEC.md) as the normative source
@@ -27,6 +28,8 @@ reference documentation.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
+- [maap-actions-reference.md](maap-actions-reference.md): the currently defined
+  MAAP action objects, fields, capabilities, and runtime boundaries.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.
 

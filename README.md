@@ -517,6 +517,8 @@ Credentials belong in `mez auth`, not in config files.
   terminal commands, slash commands, and explicit skills.
 - [docs/configuration-reference.md](docs/configuration-reference.md): exact
   configuration fields, defaults, and layer behavior.
+- [docs/maap-actions-reference.md](docs/maap-actions-reference.md): currently
+  defined MAAP action objects, fields, capabilities, and runtime boundaries.
 - [docs/examples/config.toml](docs/examples/config.toml): generated baseline
   configuration example.
 
