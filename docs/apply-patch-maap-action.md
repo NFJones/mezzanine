@@ -145,7 +145,7 @@ patch grammar above. That is the most portable format and the easiest one to
 repair after a failure.
 
 The implementation still accepts a bounded compatibility surface so recovery is
- possible when provider output is slightly malformed. Current parser and test
+possible when provider output is slightly malformed. Current parser and test
 coverage show support for several common wrappers and leniencies, including:
 
 - omitted `@@` on the first update hunk only;
@@ -235,6 +235,25 @@ the same major invariants as the shell-backed path:
 
 From the model's perspective, the action is still `apply_patch`. Only the
 runtime transport changes.
+
+## Operational behavior and configuration context
+
+`apply_patch` has one model-facing action shape, but two operational execution
+paths:
+
+- a pane-shell-backed transaction, which depends on local shell dispatch; or
+- a native local execution path, which applies the same semantic patch through
+  Rust without sending shell input to the pane.
+
+Which path is used is a runtime/executor choice rather than a patch-authoring
+choice. The important contract for authors is that the action payload stays the
+same across both modes, while result metadata and failure modes reflect the
+selected transport.
+
+Operationally, this means shell-backed execution is subject to pane-shell
+readiness and shell transport behavior, while native execution avoids pane
+input but still enforces the same patch parsing, path-safety, timeout, and
+preimage-verification rules.
 
 ## Path, scope, and safety rules
 
@@ -369,6 +388,23 @@ front and center:
 The most important mental model is that `apply_patch` is a semantic,
 prevalidated, snapshot-based edit transaction. That is the main reason it is
 safer and more repairable than raw shell-authored patch application.
+
+## Current limits and unresolved edges
+
+The current implementation is strong on safe textual mutation, but a few edges
+are intentionally worth calling out:
+
+- regular-file content must decode as UTF-8 before semantic hunk matching can
+  proceed;
+- compatibility acceptance for wrapped or slightly malformed payloads is an
+  implementation recovery feature, not the normative authoring contract;
+- unified-diff acceptance exists as a lower-level compatibility path, but the
+  stable MAAP contract remains explicit Mezzanine `*** Begin Patch` blocks; and
+- transport-specific behavior such as pane readiness affects shell-backed
+  execution, even though the semantic action contract itself is unchanged.
+
+Those limits are not contradictions in the design; they are boundaries between
+the stable user-facing contract and current implementation conveniences.
 
 ## Source map
 
