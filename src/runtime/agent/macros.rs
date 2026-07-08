@@ -354,6 +354,13 @@ impl RuntimeSessionService {
         payload: &str,
         step_index: usize,
     ) -> Result<Option<ActionResult>> {
+        let already_recorded_step_action =
+            self.joined_subagent_dependencies
+                .values()
+                .any(|dependency| {
+                    dependency.parent_turn_id == parent_turn.turn_id
+                        && dependency.parent_action_id == action.id
+                });
         let result = self.queue_macro_managed_message_step(
             parent_turn,
             action,
@@ -370,6 +377,9 @@ impl RuntimeSessionService {
                         && dependency.parent_action_id == action.id
                 })
                 .map(|dependency| dependency.child_turn_id.clone());
+            if child_turn_id.is_some() && !already_recorded_step_action {
+                self.append_agent_user_prompt_to_terminal_buffer(&parent_turn.pane_id, payload)?;
+            }
             if let Some(run) = self
                 .macro_runs_by_parent_turn
                 .get_mut(parent_turn.turn_id.as_str())

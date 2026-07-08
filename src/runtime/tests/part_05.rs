@@ -3188,6 +3188,15 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .unwrap();
 
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("user> /loop inspect release notes for the requested version."),
+        "{pane_text}"
+    );
     let macro_children = service
         .macro_managed_subagent_agents
         .keys()
@@ -3478,6 +3487,12 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .expect("judge continuation should dispatch the next child step");
     assert_eq!(second_child_turn.parent_turn_id.as_deref(), Some(parent_turn.turn_id.as_str()));
     assert!(service.joined_subagent_dependencies.contains_key(&second_child_turn.turn_id));
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("user> Summarize release blockers."), "{pane_text}");
 
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -3578,6 +3593,15 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         .expect("judge retry should dispatch another child turn for the current step");
     assert_eq!(retry_child_turn.parent_turn_id.as_deref(), Some(parent_turn.turn_id.as_str()));
     assert!(service.joined_subagent_dependencies.contains_key(&retry_child_turn.turn_id));
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("user> Inspect release notes directly and list blockers."),
+        "{pane_text}"
+    );
 
     service.pane_processes_mut().terminate_all().unwrap();
 }
