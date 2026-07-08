@@ -1587,6 +1587,12 @@ impl RuntimeSessionService {
         }
         self.pane_foreground_process_groups
             .insert(pane_id.clone(), process_group_id);
+        if self.pane_foreground_primary_shell_state(&pane_id) == Some(true) {
+            let _ = self.observe_passive_shell_prompt_candidate(
+                pane_id.as_str(),
+                "foreground-process-event",
+            )?;
+        }
         let Some(title) = self.title_from_foreground_process_metadata(
             &pane_id,
             process_name.into(),

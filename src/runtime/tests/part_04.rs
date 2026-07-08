@@ -3420,6 +3420,49 @@ fn runtime_alternate_screen_exit_recovers_interactive_blocked_readiness() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies a later foreground-process event recovers interactive-blocked
+/// readiness after alternate-screen exit missed the prompt-candidate transition.
+///
+/// Some full-screen programs leave the alternate screen before the async
+/// foreground-process update reports that the shell owns the PTY again. The
+/// cached foreground-process event should reopen prompt-candidate recovery so
+/// later shell actions do not stay stranded in interactive-blocked state.
+#[test]
+fn runtime_foreground_process_event_recovers_after_alternate_screen_exit() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+
+    service
+        .apply_pane_output_bytes("%1", b"[?1049hfullscreen".to_vec())
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::InteractiveBlocked
+    );
+
+    service
+        .apply_pane_output_bytes("%1", b"[?1049l$ ".to_vec())
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::InteractiveBlocked
+    );
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies a pending shell action is recovered instead of failed when
 /// `interactive-blocked` is stale and the pane shell is foreground again.
 ///
