@@ -249,20 +249,27 @@ impl RuntimeSessionService {
                         | TerminalClientLoopAction::ForwardMouseToPane { .. }
                 )
             {
+                let overlay_was_open = self.primary_display_overlay.is_some();
                 if self.apply_primary_prompt_terminal_action(primary_client_id, action)? {
                     report.view_refresh_required = true;
+                    if overlay_was_open != self.primary_display_overlay.is_some() {
+                        report.full_redraw_required = true;
+                    }
                 }
                 continue;
             }
             match action {
                 TerminalClientLoopAction::ForwardToPane(input) => {
                     if self.active_agent_shell_visible()? {
+                        let overlay_was_open = self.primary_display_overlay.is_some();
                         if self.apply_attached_agent_prompt_input(primary_client_id, input)? {
                             self.sync_tracked_pty_sizes()?;
                             report.agent_prompt_inputs_applied =
                                 report.agent_prompt_inputs_applied.saturating_add(1);
                             report.view_refresh_required = true;
-                            if !self.active_agent_shell_visible()? {
+                            if !self.active_agent_shell_visible()?
+                                || overlay_was_open != self.primary_display_overlay.is_some()
+                            {
                                 report.full_redraw_required = true;
                             }
                         }
