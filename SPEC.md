@@ -4898,6 +4898,16 @@ priority policy, system instructions, developer instructions, user
 instructions, repository instructions, permission rules, or action schemas.
 Project skill content is untrusted project content for security analysis.
 Skill name collisions SHOULD be reported as discovery diagnostics.
+
+Mezzanine MUST silently materialize each built-in skill as a user-scope managed
+copy below the primary user skill root at startup. Managed copies MUST include a
+`mez_managed_version` YAML front-matter field set to the current config schema
+version. Startup sync MUST replace missing, malformed, stale, or incomplete
+managed copies and MUST preserve valid user overrides that omit that management
+field. Managed synchronization MUST treat the whole built-in skill directory as
+the payload so future auxiliary built-in assets are restored with `SKILL.md`, and
+MUST NOT inspect or mutate trusted project skill roots.
+
 Skill names and descriptions SHOULD NOT be embedded into the stable system
 prompt. While model-selected skill actions are disabled, users SHOULD discover
 available skills with `/list-skills` and explicitly select them with
@@ -5068,6 +5078,11 @@ The baseline command capabilities are:
   `$<skill-name> [additional context]`. Discovery diagnostics for skipped skill
   entries SHOULD be included so invalid skill installations are visible without
   preventing valid skills from being used.
+- `/sync-builtin-skills`: Resynchronize managed built-in skill copies in the
+  user configuration root on demand, using the same policy as startup sync. The
+  command MUST report created copies, replaced stale managed copies, replaced
+  malformed overrides, preserved user overrides, and already-current managed
+  copies. It MUST NOT mutate trusted project skills.
 - `/list-macros`: Show the effective agent macros available to the active pane,
   including each macro name, source scope, step count, and description. The
   display MUST use the same catalog that backs `#<macro-name>` prompt

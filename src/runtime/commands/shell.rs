@@ -383,6 +383,16 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "sync-builtin-skills"
+                {
+                    let skills_outcome = self.execute_agent_shell_sync_builtin_skills_command()?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&skills_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "list-modified-files"
                 {
                     let modified_outcome =
@@ -857,6 +867,28 @@ impl RuntimeSessionService {
                     &pane_id,
                     input,
                     Some(&macros_outcome),
+                ));
+            }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "list-skills"
+            {
+                let skills_outcome = self.execute_agent_shell_list_skills_command(&pane_id)?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&skills_outcome),
+                ));
+            }
+            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "sync-builtin-skills"
+            {
+                let skills_outcome = self.execute_agent_shell_sync_builtin_skills_command()?;
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&skills_outcome),
                 ));
             }
             Ok(runtime_agent_shell_command_response_json(

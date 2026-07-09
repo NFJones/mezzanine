@@ -3712,18 +3712,18 @@ fn runtime_agent_shell_list_skills_displays_effective_catalog() {
     );
     assert!(
         response
-            .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
+            .contains("| `$create-skill` | user | Create or modify concise Mezzanine skills"),
         "{response}"
     );
     assert!(
         response.contains(
-            "| `$add-issues` | builtin | Use when recent findings should be turned into Mezzanine project issue tracker entries. |"
+            "| `$add-issues` | user | Use when recent findings should be turned into mez issue tracker entries. |"
         ),
         "{response}"
     );
     assert!(
         response.contains(
-            "| `$fix-issues` | builtin | Use when you need to query the current project's Mez issue tracker, fix open issues, keep progress notes current, and mark verified fixes resolved. |"
+            "| `$fix-issues` | user | Use when you need to query the current project's mez issue tracker, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved. |"
         ),
         "{response}"
     );
@@ -3754,18 +3754,18 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
 
     assert!(
         response
-            .contains("| `$create-skill` | builtin | Create or modify concise Mezzanine skills"),
+            .contains("| `$create-skill` | user | Create or modify concise Mezzanine skills"),
         "{response}"
     );
     assert!(
         response.contains(
-            "| `$add-issues` | builtin | Use when recent findings should be turned into Mezzanine project issue tracker entries. |"
+            "| `$add-issues` | user | Use when recent findings should be turned into mez issue tracker entries. |"
         ),
         "{response}"
     );
     assert!(
         response.contains(
-            "| `$fix-issues` | builtin | Use when you need to query the current project's Mez issue tracker, fix open issues, keep progress notes current, and mark verified fixes resolved. |"
+            "| `$fix-issues` | user | Use when you need to query the current project's mez issue tracker, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved. |"
         ),
         "{response}"
     );
@@ -3774,6 +3774,47 @@ fn runtime_agent_shell_list_skills_reports_builtin_catalog_without_external_skil
         "{response}"
     );
     assert!(response.contains("Start a prompt with `$`"), "{response}");
+}
+
+/// Verifies `/sync-builtin-skills` reports managed built-in skill sync results
+/// and preserves user overrides in the user configuration root.
+#[test]
+fn runtime_agent_shell_sync_builtin_skills_reports_user_scope_results() {
+    let config_root = temp_root("runtime-sync-builtin-skills");
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root.clone());
+    fs::write(
+        config_root.join("skills/create-skill/SKILL.md"),
+        "---
+name: create-skill
+description: Custom skill workflow
+---
+
+Keep this override.
+",
+    )
+    .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/sync-builtin-skills")
+        .unwrap();
+
+    assert!(response.contains("## Built-in skill sync"), "{response}");
+    assert!(response.contains("7 built-in skills checked; 0 changed."), "{response}");
+    assert!(
+        response.contains("| `$create-skill` | preserved-override |"),
+        "{response}"
+    );
+    let override_text = fs::read_to_string(config_root.join("skills/create-skill/SKILL.md"))
+        .unwrap();
+    assert!(override_text.contains("Keep this override."));
 }
 
 /// Verifies overlapping compaction attempts are rejected before they can start

@@ -285,6 +285,7 @@ Useful slash commands include:
 | `/permissions` | Inspect or change permission policy.                  |
 | `/directive`   | Show or set a session-scoped developer addendum.      |
 | `/list-skills` | Show the skills available to the active pane.         |
+| `/sync-builtin-skills` | Resync managed built-in skill copies in the user config root. |
 | `/list-macros` | Show the agent macros available to the active pane.   |
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |

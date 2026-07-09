@@ -190,6 +190,12 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-skills", &[], SlashCommandEffect::ReadOnly, true),
         slash(
+            "sync-builtin-skills",
+            &[],
+            SlashCommandEffect::FileMutation,
+            true,
+        ),
+        slash(
             "list-modified-files",
             &[],
             SlashCommandEffect::ReadOnly,
@@ -445,6 +451,11 @@ fn execute_agent_shell_command_with_context_inner(
         "list-skills" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "skill listing requires live runtime skill discovery".to_string(),
+        },
+        "sync-builtin-skills" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "managed built-in skill synchronization requires the live user config root"
+                .to_string(),
         },
         "list-modified-files" => AgentShellCommandOutcome::RequiresRuntime {
             command,

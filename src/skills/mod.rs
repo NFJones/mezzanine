@@ -9,7 +9,7 @@
 use crate::agent::baseline_slash_commands;
 use crate::command::baseline_commands;
 use crate::config::{
-    CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION,
+    CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION, CURRENT_CONFIG_SCHEMA_VERSION,
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
 use crate::terminal::UI_COLOR_SLOT_NAMES;
@@ -206,6 +206,70 @@ struct SkillFrontMatter {
     name: String,
     /// Short model-facing description of when the skill should be used.
     description: String,
+    /// Schema version for a Mez-managed materialized built-in skill copy.
+    #[serde(default)]
+    mez_managed_version: Option<u64>,
+}
+
+/// Outcome for one user-scope built-in skill synchronization decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedBuiltinSkillSyncStatus {
+    /// A missing user-scope built-in copy was created.
+    Created,
+    /// A managed but stale or incomplete user-scope built-in copy was replaced.
+    ReplacedStale,
+    /// A malformed user-scope built-in override was replaced.
+    ReplacedMalformed,
+    /// A valid user override without the Mez-managed marker was preserved.
+    PreservedOverride,
+    /// The managed user-scope copy already matched the built-in payload.
+    Current,
+}
+
+impl ManagedBuiltinSkillSyncStatus {
+    /// Returns the stable report label for this status.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::ReplacedStale => "replaced-stale",
+            Self::ReplacedMalformed => "replaced-malformed",
+            Self::PreservedOverride => "preserved-override",
+            Self::Current => "current",
+        }
+    }
+}
+
+/// Synchronization result for one built-in skill directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedBuiltinSkillSyncEntry {
+    /// Built-in skill name that was checked.
+    pub name: String,
+    /// User-scope skill directory checked or written.
+    pub path: PathBuf,
+    /// Final decision for the skill directory.
+    pub status: ManagedBuiltinSkillSyncStatus,
+}
+
+/// Report for a managed built-in skill synchronization pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ManagedBuiltinSkillSyncReport {
+    /// Per-built-in synchronization decisions in deterministic skill order.
+    pub entries: Vec<ManagedBuiltinSkillSyncEntry>,
+}
+
+impl ManagedBuiltinSkillSyncReport {
+    /// Counts entries with the requested status.
+    pub fn count(&self, status: ManagedBuiltinSkillSyncStatus) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.status == status)
+            .count()
+    }
+}
+
+struct BuiltinSkillAsset {
+    relative_path: PathBuf,
+    contents: String,
 }
 
 /// Discovers the effective skill catalog for one user/project context.
@@ -242,6 +306,173 @@ pub fn discover_skill_catalog(
         skills: skills.into_values().collect(),
         diagnostics,
     }
+}
+
+/// Synchronizes Mez-managed built-in skill copies below the user skill root.
+///
+/// Missing built-ins are materialized, stale managed copies are replaced, and
+/// valid user overrides without a management marker are preserved. The sync is
+/// limited to the user configuration root and never inspects or mutates project
+/// skill roots.
+///
+/// # Parameters
+/// - `user_config_root`: Primary Mezzanine user configuration root.
+pub fn sync_managed_builtin_skills(
+    user_config_root: &Path,
+) -> Result<ManagedBuiltinSkillSyncReport> {
+    let mut report = ManagedBuiltinSkillSyncReport::default();
+    for summary in builtin_skill_summaries() {
+        let skill_dir = user_config_root
+            .join(SKILLS_DIRECTORY_NAME)
+            .join(&summary.name);
+        let status = sync_one_managed_builtin_skill(&summary.name, &skill_dir)?;
+        report.entries.push(ManagedBuiltinSkillSyncEntry {
+            name: summary.name,
+            path: skill_dir,
+            status,
+        });
+    }
+    Ok(report)
+}
+
+/// Synchronizes one built-in skill directory and returns its decision status.
+fn sync_one_managed_builtin_skill(
+    name: &str,
+    skill_dir: &Path,
+) -> Result<ManagedBuiltinSkillSyncStatus> {
+    let skill_path = skill_dir.join(SKILL_FILE_NAME);
+    let status = match fs::read_to_string(&skill_path) {
+        Ok(text) => match classify_existing_builtin_skill_copy(name, &text) {
+            ExistingBuiltinSkillCopy::Current => return Ok(ManagedBuiltinSkillSyncStatus::Current),
+            ExistingBuiltinSkillCopy::ManagedStale => ManagedBuiltinSkillSyncStatus::ReplacedStale,
+            ExistingBuiltinSkillCopy::UserOverride => {
+                return Ok(ManagedBuiltinSkillSyncStatus::PreservedOverride);
+            }
+            ExistingBuiltinSkillCopy::Malformed => ManagedBuiltinSkillSyncStatus::ReplacedMalformed,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ManagedBuiltinSkillSyncStatus::Created
+        }
+        Err(error) => {
+            return Err(MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "failed to read managed built-in skill {} from {}: {}",
+                    name,
+                    skill_path.display(),
+                    error
+                ),
+            ));
+        }
+    };
+    write_builtin_skill_assets(name, skill_dir)?;
+    Ok(status)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingBuiltinSkillCopy {
+    Current,
+    ManagedStale,
+    UserOverride,
+    Malformed,
+}
+
+/// Classifies an existing user-scope built-in skill directory before syncing.
+fn classify_existing_builtin_skill_copy(name: &str, text: &str) -> ExistingBuiltinSkillCopy {
+    let Ok((front_matter, _body)) = split_skill_front_matter(text) else {
+        return ExistingBuiltinSkillCopy::Malformed;
+    };
+    let Ok(front_matter) = serde_norway::from_str::<SkillFrontMatter>(front_matter) else {
+        return ExistingBuiltinSkillCopy::Malformed;
+    };
+    if front_matter.name != name || !is_valid_skill_name(&front_matter.name) {
+        return ExistingBuiltinSkillCopy::Malformed;
+    }
+    if front_matter.description.trim().is_empty() {
+        return ExistingBuiltinSkillCopy::Malformed;
+    }
+    let Some(version) = front_matter.mez_managed_version else {
+        return ExistingBuiltinSkillCopy::UserOverride;
+    };
+    if version == CURRENT_CONFIG_SCHEMA_VERSION && text == managed_builtin_skill_text(name) {
+        ExistingBuiltinSkillCopy::Current
+    } else {
+        ExistingBuiltinSkillCopy::ManagedStale
+    }
+}
+
+/// Writes every materialized asset for one built-in skill directory.
+fn write_builtin_skill_assets(name: &str, skill_dir: &Path) -> Result<()> {
+    if skill_dir.exists() {
+        fs::remove_dir_all(skill_dir).map_err(|error| {
+            MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "failed to replace managed built-in skill directory {}: {}",
+                    skill_dir.display(),
+                    error
+                ),
+            )
+        })?;
+    }
+    for asset in builtin_skill_assets(name)? {
+        let path = skill_dir.join(&asset.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                MezError::new(
+                    MezErrorKind::Io,
+                    format!(
+                        "failed to create managed built-in skill directory {}: {}",
+                        parent.display(),
+                        error
+                    ),
+                )
+            })?;
+        }
+        fs::write(&path, asset.contents).map_err(|error| {
+            MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "failed to write managed built-in skill asset {}: {}",
+                    path.display(),
+                    error
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Returns every filesystem asset that belongs to one built-in skill.
+fn builtin_skill_assets(name: &str) -> Result<Vec<BuiltinSkillAsset>> {
+    if builtin_skill_summaries()
+        .iter()
+        .any(|summary| summary.name == name)
+    {
+        Ok(vec![BuiltinSkillAsset {
+            relative_path: PathBuf::from(SKILL_FILE_NAME),
+            contents: managed_builtin_skill_text(name),
+        }])
+    } else {
+        Err(MezError::invalid_args(format!(
+            "unknown built-in skill {name:?}"
+        )))
+    }
+}
+
+/// Returns one built-in skill's materialized `SKILL.md` text with marker data.
+fn managed_builtin_skill_text(name: &str) -> String {
+    let text = builtin_skill_text(name).unwrap_or_default();
+    let Some(after_open) = text
+        .strip_prefix("---\r\n")
+        .or_else(|| text.strip_prefix("---\n"))
+    else {
+        return text;
+    };
+    format!(
+        "---\nmez_managed_version: {}\n{}",
+        CURRENT_CONFIG_SCHEMA_VERSION, after_open
+    )
 }
 
 /// Loads the full markdown for one skill summary.
@@ -621,9 +852,10 @@ mod tests {
     use super::{
         BUILTIN_ADD_DOC_SKILL_NAME, BUILTIN_ADD_ISSUES_SKILL_NAME, BUILTIN_ADD_RESEARCH_SKILL_NAME,
         BUILTIN_CREATE_MACRO_NAME, BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME,
-        BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, SkillSource,
-        discover_skill_catalog, is_valid_skill_name, load_skill_document,
+        BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, ManagedBuiltinSkillSyncStatus,
+        SkillSource, discover_skill_catalog, is_valid_skill_name, load_skill_document,
         parse_skill_prompt_invocation, skill_context_text, split_skill_front_matter,
+        sync_managed_builtin_skills,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -661,6 +893,92 @@ mod tests {
             format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"),
         )
         .unwrap();
+    }
+
+    /// Verifies managed built-in synchronization materializes user-scope
+    /// copies, preserves valid user overrides, replaces stale or malformed
+    /// managed entries, and never touches trusted project skill directories.
+    #[test]
+    fn managed_builtin_skill_sync_updates_only_managed_user_scope_copies() {
+        let root = test_temp_root("managed-sync");
+        let user_root = root.join("user");
+        let project_root = root.join("repo");
+
+        let created = sync_managed_builtin_skills(&user_root).unwrap();
+
+        assert_eq!(created.entries.len(), 7);
+        assert_eq!(
+            created.count(ManagedBuiltinSkillSyncStatus::Created),
+            created.entries.len()
+        );
+        let create_skill_text =
+            fs::read_to_string(user_root.join("skills/create-skill/SKILL.md")).unwrap();
+        assert!(create_skill_text.contains("mez_managed_version:"));
+        assert!(create_skill_text.contains("name: create-skill"));
+
+        write_skill(
+            &user_root.join("skills"),
+            "create-skill",
+            "Custom workflow",
+            "Keep the user's override.",
+        );
+        fs::write(
+            user_root.join("skills/add-doc/SKILL.md"),
+            "---\nmez_managed_version: 0\nname: add-doc\ndescription: Stale managed copy\n---\n\nold body\n",
+        )
+        .unwrap();
+        fs::create_dir_all(user_root.join("skills/add-doc/references")).unwrap();
+        fs::write(
+            user_root.join("skills/add-doc/references/stale.md"),
+            "stale auxiliary file",
+        )
+        .unwrap();
+        fs::write(
+            user_root.join("skills/add-issues/SKILL.md"),
+            "not valid skill front matter\n",
+        )
+        .unwrap();
+        write_skill(
+            &project_root.join(".mezzanine/skills"),
+            "add-doc",
+            "Project add doc workflow",
+            "Project skill must remain untouched.",
+        );
+
+        let synced = sync_managed_builtin_skills(&user_root).unwrap();
+        let status = |name: &str| {
+            synced
+                .entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .map(|entry| entry.status)
+                .unwrap()
+        };
+
+        assert_eq!(
+            status("create-skill"),
+            ManagedBuiltinSkillSyncStatus::PreservedOverride
+        );
+        assert_eq!(
+            status("add-doc"),
+            ManagedBuiltinSkillSyncStatus::ReplacedStale
+        );
+        assert_eq!(
+            status("add-issues"),
+            ManagedBuiltinSkillSyncStatus::ReplacedMalformed
+        );
+        assert!(
+            !user_root
+                .join("skills/add-doc/references/stale.md")
+                .exists()
+        );
+        let add_issues_text =
+            fs::read_to_string(user_root.join("skills/add-issues/SKILL.md")).unwrap();
+        assert!(add_issues_text.contains("mez_managed_version:"));
+        assert!(add_issues_text.contains("name: add-issues"));
+        let project_text =
+            fs::read_to_string(project_root.join(".mezzanine/skills/add-doc/SKILL.md")).unwrap();
+        assert!(project_text.contains("Project skill must remain untouched."));
     }
 
     /// Verifies user and project skill roots share the same layout while

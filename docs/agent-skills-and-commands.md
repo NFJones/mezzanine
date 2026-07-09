@@ -113,6 +113,7 @@ Common slash commands:
 | `/permissions` | Inspect or change permission policy. |
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
+| `/sync-builtin-skills` | Resync Mez-managed built-in skill copies in the user config root and report created, replaced, preserved, and current entries. |
 | `/list-macros` | Show the effective agent macro catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
@@ -146,7 +147,7 @@ $mez-reference show me the commands I need to inspect sessions and panes
 $mez-reference switch to the nord theme and show the exact setting path
 ```
 
-Use `/list-skills` to inspect the effective catalog before invoking a skill.
+Use `/list-skills` to inspect the effective catalog before invoking a skill. Mez also silently materializes and refreshes managed built-in skill copies under the user config root on startup; use `/sync-builtin-skills` to run that same user-scope sync on demand. Managed copies include a `mez_managed_version` front-matter field, while user overrides without that field are preserved.
 
 ### 4. Explicit macro invocation
 

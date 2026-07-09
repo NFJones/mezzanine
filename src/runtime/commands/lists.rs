@@ -69,6 +69,57 @@ impl RuntimeSessionService {
         lines.join("\n")
     }
 
+    /// Executes `/sync-builtin-skills` and reports managed built-in skill updates.
+    pub(super) fn execute_agent_shell_sync_builtin_skills_command(
+        &mut self,
+    ) -> Result<AgentShellCommandOutcome> {
+        let Some(config_root) = self.config_root.as_ref() else {
+            return Err(MezError::invalid_state(
+                "sync-builtin-skills requires a configured config root",
+            ));
+        };
+        let report = crate::skills::sync_managed_builtin_skills(config_root)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "sync-builtin-skills".to_string(),
+            body: Self::runtime_agent_builtin_skill_sync_display(&report),
+            visibility: AgentShellVisibility::Visible,
+        })
+    }
+
+    /// Builds the user-facing sync report for managed built-in skill copies.
+    fn runtime_agent_builtin_skill_sync_display(
+        report: &crate::skills::ManagedBuiltinSkillSyncReport,
+    ) -> String {
+        use crate::skills::ManagedBuiltinSkillSyncStatus;
+
+        let changed = report.count(ManagedBuiltinSkillSyncStatus::Created)
+            + report.count(ManagedBuiltinSkillSyncStatus::ReplacedStale)
+            + report.count(ManagedBuiltinSkillSyncStatus::ReplacedMalformed);
+        let mut lines = vec![
+            "## Built-in skill sync".to_string(),
+            String::new(),
+            format!(
+                "{} built-in skills checked; {} changed.",
+                report.entries.len(),
+                changed
+            ),
+            String::new(),
+        ];
+        let rows = report
+            .entries
+            .iter()
+            .map(|entry| {
+                vec![
+                    format!("`${}`", entry.name),
+                    entry.status.as_str().to_string(),
+                    format!("`{}`", entry.path.display()),
+                ]
+            })
+            .collect::<Vec<_>>();
+        lines.extend(runtime_markdown_table(&["Skill", "Status", "Path"], &rows));
+        lines.join("\n")
+    }
+
     /// Executes `/list-macros` and returns the effective macro catalog.
     ///
     /// The command is read-only and intentionally uses the same effective
