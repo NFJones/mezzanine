@@ -753,6 +753,10 @@ impl RuntimeSessionService {
                 let record_browser = content.command.as_ref().and_then(|command| {
                     let key = (pane_id.to_string(), command.clone());
                     let source = self.pending_record_browser_overlay_sources.remove(&key);
+                    let stack = self
+                        .pending_record_browser_overlay_stacks
+                        .remove(&key)
+                        .unwrap_or_default();
                     self.pending_record_browser_overlays
                         .remove(&key)
                         .map(|browser| RuntimeRecordBrowserOverlayState {
@@ -760,6 +764,7 @@ impl RuntimeSessionService {
                             command: command.clone(),
                             source,
                             browser,
+                            stack,
                         })
                 });
                 if runtime_command_display_should_open_overlay(&content) {

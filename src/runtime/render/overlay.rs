@@ -1875,6 +1875,13 @@ fn render_record_browser_overlay(overlay: &mut RuntimeDisplayOverlay) -> bool {
     true
 }
 
+fn record_browser_command_name(command: &str) -> Option<String> {
+    let trimmed = command.trim_start();
+    let body = trimmed.strip_prefix('/')?;
+    let name = body.split_whitespace().next()?;
+    matches!(name, "show-issues" | "show-memories").then(|| name.to_string())
+}
+
 impl RuntimeSessionService {
     /// Executes one command selected from the primary display overlay.
     pub(super) fn execute_primary_display_overlay_selection_command(
@@ -1882,10 +1889,29 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         command: &str,
     ) -> Result<bool> {
-        self.primary_display_overlay = None;
         if command.trim_start().starts_with('/') {
             let pane_id = self.active_pane_id()?.to_string();
+            let record_browser_stack = self.primary_display_overlay.as_ref().and_then(|overlay| {
+                let target_command = record_browser_command_name(command)?;
+                let record_browser = overlay.record_browser.as_ref()?;
+                let mut stack = record_browser.stack.clone();
+                stack.push(
+                    crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
+                        command: record_browser.command.clone(),
+                        source: record_browser.source.clone(),
+                        browser: record_browser.browser.clone(),
+                        scroll_offset: overlay.scroll_offset,
+                        active_selection_index: overlay.active_selection_index,
+                    },
+                );
+                Some((target_command, stack))
+            });
+            self.primary_display_overlay = None;
             let body = self.execute_agent_shell_command(primary_client_id, command)?;
+            if let Some((target_command, stack)) = record_browser_stack {
+                self.pending_record_browser_overlay_stacks
+                    .insert((pane_id.clone(), target_command), stack);
+            }
             let display_output = runtime_agent_shell_display_output(&body, &self.ui_theme)?;
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
@@ -1893,6 +1919,7 @@ impl RuntimeSessionService {
             }
             return Ok(true);
         }
+        self.primary_display_overlay = None;
         let content = self
             .execute_terminal_command(primary_client_id, command)
             .and_then(|body| runtime_command_display_overlay_content(&body, &self.ui_theme))?;
@@ -1954,7 +1981,32 @@ impl RuntimeSessionService {
                 RuntimeSelectorInputAction::Exit
             ) =>
             {
-                Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList)
+                if let Some(frame) = record_browser.stack.pop() {
+                    record_browser.command = frame.command;
+                    record_browser.source = frame.source;
+                    record_browser.browser = frame.browser;
+                    let scroll_offset = frame.scroll_offset;
+                    let active_selection_index = frame.active_selection_index;
+                    let changed = render_record_browser_overlay(overlay);
+                    overlay.scroll_offset = scroll_offset.min(modal_display_overlay_max_scroll(
+                        &overlay.lines,
+                        self.session.authoritative_size,
+                    ));
+                    overlay.active_selection_index = active_selection_index
+                        .filter(|index| *index < overlay.selections.len())
+                        .or_else(|| (!overlay.selections.is_empty()).then_some(0));
+                    return Ok(Some(changed));
+                }
+                let outcome = record_browser.browser.apply_action(
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList,
+                )?;
+                if matches!(
+                    outcome,
+                    crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Updated
+                ) {
+                    return Ok(Some(render_record_browser_overlay(overlay)));
+                }
+                return Ok(None);
             }
             _ => None,
         };

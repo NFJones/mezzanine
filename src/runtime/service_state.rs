@@ -879,6 +879,24 @@ pub(super) struct RuntimeRecordBrowserOverlayState {
     pub(super) source: Option<RuntimeRecordBrowserOverlaySource>,
     /// Backend-agnostic browser state rendered into the overlay.
     pub(super) browser: RuntimeRecordBrowser,
+    /// Parent record-browser views that should be restored when Escape leaves
+    /// the current top view.
+    pub(super) stack: Vec<RuntimeRecordBrowserOverlayFrame>,
+}
+
+/// One preserved record-browser view below the active overlay frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RuntimeRecordBrowserOverlayFrame {
+    /// Slash command backing the preserved browser.
+    pub(super) command: String,
+    /// Backend-specific query context retained for filter refreshes.
+    pub(super) source: Option<RuntimeRecordBrowserOverlaySource>,
+    /// Backend-agnostic browser state rendered into the preserved view.
+    pub(super) browser: RuntimeRecordBrowser,
+    /// Pager scroll offset to restore with the preserved view.
+    pub(super) scroll_offset: usize,
+    /// Active built-in pager link selection to restore with the preserved view.
+    pub(super) active_selection_index: Option<usize>,
 }
 
 /// Query context retained for one backend-specific record-browser overlay.
@@ -2315,6 +2333,9 @@ pub struct RuntimeSessionService {
     /// Query context waiting to be attached to pending record-browser overlays.
     pub(super) pending_record_browser_overlay_sources:
         BTreeMap<(String, String), RuntimeRecordBrowserOverlaySource>,
+    /// Parent view stacks waiting to be attached to pending record-browser overlays.
+    pub(super) pending_record_browser_overlay_stacks:
+        BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
     /// Stores the transient primary error status overlay value.
     ///
     /// Recoverable foreground errors use this one-line notice instead of the

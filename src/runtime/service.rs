@@ -334,6 +334,7 @@ impl RuntimeSessionService {
             primary_display_overlay: None,
             pending_record_browser_overlays: BTreeMap::new(),
             pending_record_browser_overlay_sources: BTreeMap::new(),
+            pending_record_browser_overlay_stacks: BTreeMap::new(),
             primary_error_status_overlay: None,
             pane_agent_status_selector: None,
             agent_turn_model_profiles: BTreeMap::new(),

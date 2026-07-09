@@ -4299,6 +4299,116 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays.is_empty());
 }
 
+/// Verifies Escape restores the parent record-browser list after a selected
+/// record opens a child detail view.
+///
+/// The detail command crosses the agent-shell display response boundary, so
+/// the parent browser and pager cursor must survive in the retained view stack
+/// instead of being replaced permanently by the child overlay.
+#[test]
+fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let parent_browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
+        "Issues",
+        vec![
+            crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+                id: "issue-1".to_string(),
+                open_command: Some("/show-issues issue-1".to_string()),
+                title: "First issue".to_string(),
+                metadata: vec![("kind".to_string(), "task".to_string())],
+                markdown: "First body".to_string(),
+            },
+            crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+                id: "issue-2".to_string(),
+                open_command: Some("/show-issues issue-2".to_string()),
+                title: "Second issue".to_string(),
+                metadata: vec![("kind".to_string(), "defect".to_string())],
+                markdown: "Second body".to_string(),
+            },
+        ],
+    )
+    .unwrap();
+    let mut child_browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
+        "Issue detail",
+        vec![crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: Some("/show-issues issue-1".to_string()),
+            title: "First issue".to_string(),
+            metadata: vec![("kind".to_string(), "task".to_string())],
+            markdown: "First body".to_string(),
+        }],
+    )
+    .unwrap();
+    child_browser.show_first_record_detail();
+    let child_page = child_browser.render_page();
+    service.pending_record_browser_overlays.insert(
+        (pane_id.clone(), "show-issues".to_string()),
+        child_browser,
+    );
+    service.pending_record_browser_overlay_stacks.insert(
+        (pane_id.clone(), "show-issues".to_string()),
+        vec![crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
+            command: "show-issues".to_string(),
+            source: None,
+            browser: parent_browser,
+            scroll_offset: 0,
+            active_selection_index: Some(1),
+        }],
+    );
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues issue-1",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: child_page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    assert_eq!(
+        service
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .map(|record_browser| record_browser.browser.render_page().title),
+        Some("First issue".to_string())
+    );
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert!(report.view_refresh_required);
+    let overlay = service
+        .primary_display_overlay
+        .as_ref()
+        .expect("Escape should keep the restored parent overlay open");
+    let record_browser = overlay
+        .record_browser
+        .as_ref()
+        .expect("restored overlay should keep record-browser state");
+    assert_eq!(record_browser.browser.render_page().title, "Issues");
+    assert!(record_browser.stack.is_empty());
+    assert_eq!(overlay.active_selection_index, Some(1));
+    assert!(overlay.lines.iter().any(|line| line.contains("issue-2")));
+}
+
 /// Verifies keyboard movement inside a primary command-output pager refreshes
 /// through the retained-frame diff path.
 ///
