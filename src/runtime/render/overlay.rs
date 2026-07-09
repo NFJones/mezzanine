@@ -1856,7 +1856,10 @@ fn record_browser_prompt_text(
     }
 }
 
-fn render_record_browser_overlay(overlay: &mut RuntimeDisplayOverlay) -> bool {
+fn render_record_browser_overlay(
+    overlay: &mut RuntimeDisplayOverlay,
+    ui_theme: &crate::terminal::UiTheme,
+) -> bool {
     let Some(record_browser) = overlay.record_browser.as_ref() else {
         return false;
     };
@@ -1864,7 +1867,7 @@ fn render_record_browser_overlay(overlay: &mut RuntimeDisplayOverlay) -> bool {
     let content = runtime_agent_shell_markdown_overlay_content(
         Some(record_browser.command.clone()),
         &page.markdown,
-        &crate::terminal::default_ui_theme(),
+        ui_theme,
     );
     overlay.lines = content.lines;
     overlay.line_style_spans = content.line_style_spans;
@@ -1987,7 +1990,7 @@ impl RuntimeSessionService {
                     record_browser.browser = frame.browser;
                     let scroll_offset = frame.scroll_offset;
                     let active_selection_index = frame.active_selection_index;
-                    let changed = render_record_browser_overlay(overlay);
+                    let changed = render_record_browser_overlay(overlay, &self.ui_theme);
                     overlay.scroll_offset = scroll_offset.min(modal_display_overlay_max_scroll(
                         &overlay.lines,
                         self.session.authoritative_size,
@@ -2004,7 +2007,7 @@ impl RuntimeSessionService {
                     outcome,
                     crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Updated
                 ) {
-                    return Ok(Some(render_record_browser_overlay(overlay)));
+                    return Ok(Some(render_record_browser_overlay(overlay, &self.ui_theme)));
                 }
                 return Ok(None);
             }
@@ -2020,7 +2023,7 @@ impl RuntimeSessionService {
         ) {
             return Ok(None);
         }
-        Ok(Some(render_record_browser_overlay(overlay)))
+        Ok(Some(render_record_browser_overlay(overlay, &self.ui_theme)))
     }
 
     /// Applies editing keys while a retained record-browser modal prompt is open.
@@ -2095,7 +2098,7 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(overlay))
+                Ok(render_record_browser_overlay(overlay, &self.ui_theme))
             }
             crate::runtime::record_browser::RuntimeRecordBrowserOutcome::SaveSubmitted {
                 path,
@@ -2112,13 +2115,13 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(overlay))
+                Ok(render_record_browser_overlay(overlay, &self.ui_theme))
             }
             _ => {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(overlay))
+                Ok(render_record_browser_overlay(overlay, &self.ui_theme))
             }
         }
     }
