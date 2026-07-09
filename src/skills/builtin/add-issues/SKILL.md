@@ -15,4 +15,6 @@ Create concise issue titles. In each issue body, capture the observed problem, i
 
 When adding an issue, set `kind` to `defect` for bugs or `task` for planned follow-up work. Provide a single-line `title`, use `body` for the supporting details, and set `depends_on` to the issue ids that are hard prerequisites. Use an empty dependency list when there are no prerequisites.
 
+Create prerequisite issues before dependent issues. When a new issue depends on another new issue, add the prerequisite issue first with an empty or already-known `depends_on` list, wait for the returned real issue id, and only then add the dependent issue in a later action batch using that returned id in `depends_on`. Do not invent, predict, or placeholder dependency ids in the same batch.
+
 Prefer one issue per distinct bug, gap, or follow-up task. Distinguish hard prerequisites from merely related follow-up work; only hard prerequisites belong in `depends_on`. Avoid creating dependency cycles, and report the blocker if the tracker rejects a cyclic or nonexistent dependency. Avoid filing speculative issues without concrete findings.

@@ -815,6 +815,12 @@ mod tests {
                 .text
                 .contains("request the `issues` capability before proceeding")
         );
+        assert!(add_issues_document.text.contains(
+            "add the prerequisite issue first with an empty or already-known `depends_on` list"
+        ));
+        assert!(add_issues_document.text.contains(
+            "only then add the dependent issue in a later action batch using that returned id"
+        ));
 
         let add_research_document =
             load_skill_document(catalog.get(BUILTIN_ADD_RESEARCH_SKILL_NAME).unwrap()).unwrap();
