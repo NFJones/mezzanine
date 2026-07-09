@@ -1845,6 +1845,61 @@ pub(super) fn runtime_selector_line(marker: &str, value: &str, width: usize) -> 
     line
 }
 
+fn record_browser_prompt_text(
+    prompt: &crate::runtime::record_browser::RuntimeRecordBrowserPrompt,
+) -> String {
+    match prompt {
+        crate::runtime::record_browser::RuntimeRecordBrowserPrompt::Filter { input, .. }
+        | crate::runtime::record_browser::RuntimeRecordBrowserPrompt::Save { input } => {
+            input.clone()
+        }
+    }
+}
+
+fn apply_record_browser_overlay_outcome(
+    overlay: &mut RuntimeDisplayOverlay,
+    outcome: crate::runtime::record_browser::RuntimeRecordBrowserOutcome,
+) -> bool {
+    if matches!(
+        outcome,
+        crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored
+    ) {
+        return false;
+    }
+    let Some(record_browser) = overlay.record_browser.as_ref() else {
+        return false;
+    };
+    let page = record_browser.browser.render_page();
+    let command = record_browser.command.clone();
+    overlay.lines = page.lines;
+    overlay.line_style_spans = vec![Vec::new(); overlay.lines.len()];
+    overlay.selections = page
+        .selections
+        .into_iter()
+        .map(|selection| RuntimeDisplayOverlaySelection {
+            line_index: selection.line_index,
+            start_column: 2,
+            width: UnicodeWidthStr::width(selection.label.as_str()),
+            command: format!("/{command} {}", selection.record_id),
+            kind: RuntimeDisplayOverlaySelectionKind::Primary,
+        })
+        .collect();
+    overlay.active_selection_index = (!overlay.selections.is_empty()).then_some(0);
+    overlay.search_input = None;
+    overlay.search_match = None;
+    overlay.search_status = match outcome {
+        crate::runtime::record_browser::RuntimeRecordBrowserOutcome::FilterSubmitted {
+            field,
+            value,
+        } => Some(format!("filter {:?}: {value}", field)),
+        crate::runtime::record_browser::RuntimeRecordBrowserOutcome::SaveSubmitted {
+            path, ..
+        } => Some(format!("save requested: {path}")),
+        _ => None,
+    };
+    true
+}
+
 impl RuntimeSessionService {
     /// Executes one command selected from the primary display overlay.
     pub(super) fn execute_primary_display_overlay_selection_command(
@@ -1882,6 +1937,117 @@ impl RuntimeSessionService {
         ))
     }
 
+    /// Applies one input chunk to a retained record-browser overlay, when one
+    /// is active.
+    fn apply_primary_record_browser_overlay_input(&mut self, input: &[u8]) -> Result<Option<bool>> {
+        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+            return Ok(Some(false));
+        };
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return Ok(None);
+        };
+        if record_browser.browser.prompt().is_some() {
+            return Self::apply_primary_record_browser_prompt_input(overlay, input).map(Some);
+        }
+        let action = match input {
+            b"k" => Some(
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
+                    crate::runtime::record_browser::RuntimeRecordBrowserFilterField::Kind,
+                ),
+            ),
+            b"p" => Some(
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
+                    crate::runtime::record_browser::RuntimeRecordBrowserFilterField::ProjectGlob,
+                ),
+            ),
+            b"x" => Some(
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
+                    crate::runtime::record_browser::RuntimeRecordBrowserFilterField::Text,
+                ),
+            ),
+            b"s" => Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::StartSave),
+            _ => match runtime_selector_input_action(input) {
+                RuntimeSelectorInputAction::Exit => {
+                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList)
+                }
+                RuntimeSelectorInputAction::Select => {
+                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::OpenFocused)
+                }
+                RuntimeSelectorInputAction::Previous => {
+                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::Previous)
+                }
+                RuntimeSelectorInputAction::Next => {
+                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::Next)
+                }
+                RuntimeSelectorInputAction::First
+                | RuntimeSelectorInputAction::Last
+                | RuntimeSelectorInputAction::Ignore => None,
+            },
+        };
+        let Some(action) = action else {
+            return Ok(None);
+        };
+        let close_on_ignored = input == b"\x1b" || input == b"\x03";
+        let outcome = record_browser.browser.apply_action(action)?;
+        if matches!(
+            outcome,
+            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored
+        ) && close_on_ignored
+        {
+            self.primary_display_overlay = None;
+            return Ok(Some(true));
+        }
+        Ok(Some(apply_record_browser_overlay_outcome(overlay, outcome)))
+    }
+
+    /// Applies editing keys while a retained record-browser modal prompt is open.
+    fn apply_primary_record_browser_prompt_input(
+        overlay: &mut RuntimeDisplayOverlay,
+        input: &[u8],
+    ) -> Result<bool> {
+        let Some(record_browser) = overlay.record_browser.as_mut() else {
+            return Ok(false);
+        };
+        let action = match runtime_display_overlay_input_action(input) {
+            RuntimeDisplayOverlayInputAction::Exit => {
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
+            }
+            RuntimeDisplayOverlayInputAction::SelectActive => {
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
+            }
+            RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
+                let mut text = record_browser
+                    .browser
+                    .prompt()
+                    .map(record_browser_prompt_text)
+                    .unwrap_or_default();
+                text.pop();
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
+            }
+            RuntimeDisplayOverlayInputAction::EditSearchText => {
+                let Ok(input) = std::str::from_utf8(input) else {
+                    return Ok(false);
+                };
+                let mut text = record_browser
+                    .browser
+                    .prompt()
+                    .map(record_browser_prompt_text)
+                    .unwrap_or_default();
+                text.push_str(input);
+                crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
+            }
+            RuntimeDisplayOverlayInputAction::StartSearch
+            | RuntimeDisplayOverlayInputAction::SelectPrevious
+            | RuntimeDisplayOverlayInputAction::SelectNext
+            | RuntimeDisplayOverlayInputAction::SelectFirst
+            | RuntimeDisplayOverlayInputAction::SelectLast
+            | RuntimeDisplayOverlayInputAction::ScrollBy(_)
+            | RuntimeDisplayOverlayInputAction::Ignore => return Ok(false),
+        };
+        let outcome = record_browser.browser.apply_action(action)?;
+        Ok(apply_record_browser_overlay_outcome(overlay, outcome))
+    }
+
     /// Runs the apply primary display overlay input operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1901,6 +2067,9 @@ impl RuntimeSessionService {
         }
         if overlay.search_input.is_some() {
             return self.apply_primary_display_overlay_search_input(input);
+        }
+        if let Some(changed) = self.apply_primary_record_browser_overlay_input(input)? {
+            return Ok(changed);
         }
         match runtime_display_overlay_input_action(input) {
             RuntimeDisplayOverlayInputAction::Exit => {
