@@ -1869,7 +1869,7 @@ fn render_record_browser_overlay(overlay: &mut RuntimeDisplayOverlay) -> bool {
         .into_iter()
         .map(|selection| RuntimeDisplayOverlaySelection {
             line_index: selection.line_index,
-            start_column: 2,
+            start_column: 0,
             width: UnicodeWidthStr::width(selection.label.as_str()),
             command: format!("/{command} {}", selection.record_id),
             kind: RuntimeDisplayOverlaySelectionKind::Primary,

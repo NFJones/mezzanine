@@ -312,9 +312,9 @@ impl RuntimeRecordBrowser {
         }
         let mut selections = Vec::new();
         for (index, record) in self.records.iter().enumerate() {
-            let marker = if index == self.active_index { ">" } else { " " };
             let line_index = lines.len();
-            lines.push(format!("{marker} {}", list_record_label(record)));
+            let _is_active = index == self.active_index;
+            lines.push(list_record_label(record));
             selections.push(RuntimeRecordBrowserSelection {
                 line_index,
                 record_id: record.id.clone(),
@@ -531,7 +531,13 @@ mod tests {
             list_page
                 .lines
                 .iter()
-                .any(|line| line == "> issue-2 — Second · project: /repo")
+                .any(|line| line == "issue-2 — Second · project: /repo")
+        );
+        assert!(
+            list_page
+                .lines
+                .iter()
+                .all(|line| { !line.starts_with("> issue-") && !line.starts_with("  issue-") })
         );
     }
 
