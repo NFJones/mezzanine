@@ -3070,7 +3070,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         .position(|message| {
             message["content"][0]["text"]
                 .as_str()
-                .is_some_and(|text| text.starts_with("[executed result]"))
+                .is_some_and(|text| text.starts_with("[current-turn executed result]"))
         })
         .unwrap();
     let action_message = &input[action_index];
@@ -3082,11 +3082,11 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
     );
     assert_eq!(action_message["role"], "user");
     assert!(
-        action_text.starts_with("[executed result]\n"),
+        action_text.starts_with("[current-turn executed result]\n"),
         "{action_text}"
     );
     assert!(
-        action_text.contains("executed Mezzanine action output, not a new user request"),
+        action_text.contains("produced in the current turn by the immediately preceding action batch"),
         "{action_text}"
     );
     assert!(
@@ -3845,7 +3845,7 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
         .iter()
         .find_map(|message| {
             let text = message["content"][0]["text"].as_str()?;
-            text.contains("[executed result]").then_some(text)
+            text.contains("[historical executed result transcript entry]").then_some(text)
         })
         .expect("historical tool result should replay as ordinary input");
     assert!(historical_tool_text.contains("stable evidence"));
@@ -3853,11 +3853,11 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
     assert!(first_input.iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("[executed result]"))
+            .is_some_and(|text| text.contains("[historical executed result transcript entry]"))
     }));
     let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
     let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
-    assert!(first_prefix.contains("[executed result]"));
+    assert!(first_prefix.contains("[historical executed result transcript entry]"));
     assert!(first_prefix.contains("stable evidence"));
     assert_eq!(first_prefix, second_prefix);
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
@@ -3929,23 +3929,23 @@ fn openai_current_action_results_remain_volatile_suffix() {
         .position(|message| {
             message["content"][0]["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("[executed result]") && text.contains("fresh evidence"))
+                .is_some_and(|text| text.contains("[current-turn executed result]") && text.contains("fresh evidence"))
         })
         .expect("current action result should be rendered into input");
     assert!(action_index > user_index);
     let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
-    assert!(prefix.contains("[executed result]"));
+    assert!(prefix.contains("[historical executed result transcript entry]"));
     assert!(prefix.contains("cached evidence"));
     assert!(!prefix.contains("fresh evidence"));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"].as_str().is_some_and(|text| {
-            text.contains("[executed result]") && text.contains("cached evidence")
+            text.contains("[historical executed result transcript entry]") && text.contains("cached evidence")
         })
     }));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("[executed result]") && text.contains("fresh evidence"))
+            .is_some_and(|text| text.contains("[current-turn executed result]") && text.contains("fresh evidence"))
     }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.stable_input_bytes > 2);
@@ -4001,7 +4001,7 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
     let raw_results = input
         .iter()
         .filter_map(|message| message["content"][0]["text"].as_str())
-        .filter(|text| text.contains("[executed result]") && text.contains("[action_result read-"))
+        .filter(|text| text.contains("[current-turn executed result]") && text.contains("[action_result read-"))
         .collect::<Vec<_>>();
 
     assert_eq!(raw_results.len(), 3, "{raw_results:#?}");
@@ -4681,14 +4681,14 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     assert_eq!(input.len(), 3);
     assert_eq!(input[0]["role"], "user");
     let historical_text = input[0]["content"][0]["text"].as_str().unwrap();
-    assert!(historical_text.contains("[user prompt transcript entry]"));
-    assert!(historical_text.contains("earlier user prompts are historical context only"));
+    assert!(historical_text.contains("[historical user prompt transcript entry]"));
+    assert!(historical_text.contains("historical context only, not the active task"));
     assert!(historical_text.contains("Output a large multiline JSON object"));
 
     assert_eq!(input[1]["role"], "user");
     let current_text = input[1]["content"][0]["text"].as_str().unwrap();
-    assert!(current_text.contains("[user prompt transcript entry]"));
-    assert!(current_text.contains("The latest user prompt is the active task"));
+    assert!(current_text.contains("[current user prompt]"));
+    assert!(current_text.contains("latest user prompt and the active task"));
     assert!(current_text.contains("Patch the prompt context manager"));
 
     assert_eq!(input[2]["role"], "developer");

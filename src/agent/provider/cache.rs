@@ -196,43 +196,60 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
     }
 }
 
-/// Renders user-role input through a byte-stable prompt wrapper.
-///
-/// OpenAI receives previous user prompts and the current user prompt through
-/// the same provider role. The wrapper must not depend on whether a prompt is
-/// currently active or replayed from transcript history because the active
-/// prompt becomes a historical transcript entry on the next turn. Keeping those
-/// bytes identical preserves provider prompt-cache continuity while the late
-/// allowed-action surface identifies the latest user prompt as the active task.
+/// Renders user-role input with explicit current-turn or historical provenance.
 fn openai_user_input_text(message: &ModelMessage) -> String {
     match message.source {
-        ContextSourceKind::Transcript
-        | ContextSourceKind::TranscriptUser
-        | ContextSourceKind::UserInstruction => openai_user_prompt_entry_text(&message.content),
+        ContextSourceKind::Transcript | ContextSourceKind::TranscriptUser => {
+            openai_historical_user_prompt_entry_text(&message.content)
+        }
+        ContextSourceKind::UserInstruction => {
+            openai_current_user_prompt_entry_text(&message.content)
+        }
         _ => message.content.clone(),
     }
 }
 
-/// Returns the provider-visible wrapper shared by active and historical user
-/// prompts so the completed turn can be replayed without changing bytes.
-fn openai_user_prompt_entry_text(content: &str) -> String {
+/// Returns the provider-visible wrapper for replayed prior user prompts.
+fn openai_historical_user_prompt_entry_text(content: &str) -> String {
     format!(
-        "[user prompt transcript entry]\n\
-         This is one user prompt in the ordered conversation. The latest user prompt is the active task; earlier user prompts are historical context only unless the latest prompt asks about them.\n\
+        "[historical user prompt transcript entry]\n\
+         This is a prior user prompt replayed from the ordered conversation transcript. It is historical context only, not the active task unless the current user prompt explicitly asks about it.\n\
+         {content}"
+    )
+}
+
+/// Returns the provider-visible wrapper for the active user prompt.
+fn openai_current_user_prompt_entry_text(content: &str) -> String {
+    format!(
+        "[current user prompt]\n\
+         This is the latest user prompt and the active task for the current turn. Earlier transcript entries are historical context only unless this prompt asks about them.\n\
          {content}"
     )
 }
 
 /// Renders Mezzanine tool/action evidence through an OpenAI-supported message
-/// role while keeping the provider-visible wrapper stable across current and
-/// persisted replay.
+/// role with explicit current-turn or historical provenance.
 fn openai_tool_result_input_text(message: &ModelMessage) -> String {
-    format!(
-        "[executed result]\n\
-         This is executed Mezzanine action output, not a new user request.\n\
-         {}",
-        message.content
-    )
+    match message.source {
+        ContextSourceKind::ActionResult => format!(
+            "[current-turn executed result]\n\
+             This executed Mezzanine action output was produced in the current turn by the immediately preceding action batch. Use it as fresh evidence for the active task, not prior transcript history.\n\
+             {}",
+            message.content
+        ),
+        ContextSourceKind::TranscriptTool => format!(
+            "[historical executed result transcript entry]\n\
+             This is prior-turn Mezzanine action output replayed from the ordered conversation transcript. It is historical context only, not a new current-turn action result.\n\
+             {}",
+            message.content
+        ),
+        _ => format!(
+            "[executed result]\n\
+             This is executed Mezzanine action output, not a new user request.\n\
+             {}",
+            message.content
+        ),
+    }
 }
 
 /// Returns whether a rendered input message belongs in the reusable prefix.
