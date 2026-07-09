@@ -976,6 +976,9 @@ mod tests {
             fs::read_to_string(user_root.join("skills/add-issues/SKILL.md")).unwrap();
         assert!(add_issues_text.contains("mez_managed_version:"));
         assert!(add_issues_text.contains("name: add-issues"));
+        assert!(add_issues_text.contains("future agent to continue"));
+        assert!(add_issues_text.contains("current-turn evidence or source"));
+        assert!(add_issues_text.contains("Do not create an issue from a vague memory"));
         let project_text =
             fs::read_to_string(project_root.join(".mezzanine/skills/add-doc/SKILL.md")).unwrap();
         assert!(project_text.contains("Project skill must remain untouched."));

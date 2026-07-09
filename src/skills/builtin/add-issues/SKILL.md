@@ -3,7 +3,7 @@ name: add-issues
 description: Use when recent findings should be turned into mez issue tracker entries.
 ---
 
-Review the recent findings in the current task context. Group related findings into the smallest useful set of issues.
+Review all recent findings and relevant evidence available in the current task context before drafting issues. Group related findings into the smallest useful set of issues.
 
 Query the mez issue tracker for obvious duplicates before adding new issues.
 
@@ -11,7 +11,7 @@ Use the local issue-tracker MAAP actions directly when they are available in the
 
 If the current action surface does not include issue actions, request the `issues` capability before proceeding. Do not guess at shell or MCP substitutes for local mez issue-tracker work.
 
-Create concise issue titles. In each issue body, capture the observed problem, impacted area, evidence, and the smallest useful next step.
+Create concise issue titles. In each issue body, capture enough context for a future agent to continue without rereading the original transcript: the observed symptom or desired follow-up, impacted area, current-turn evidence or source, reproduction steps or trigger when known, and the smallest useful next step. Do not create an issue from a vague memory of a finding; if the current context does not contain concrete evidence, first inspect or ask for the missing evidence instead of filing a low-context issue.
 
 When adding an issue, set `kind` to `defect` for bugs or `task` for planned follow-up work. Provide a single-line `title`, use `body` for the supporting details, and set `depends_on` to the issue ids that are hard prerequisites. Use an empty dependency list when there are no prerequisites.
 

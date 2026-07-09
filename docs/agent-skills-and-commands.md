@@ -182,8 +182,10 @@ The repository currently ships built-in skills including:
 - `add-doc`: guidance for saving durable documentation or reference content to
   memory as readable Markdown using the `documentation` memory kind.
 - `add-issues`: guidance for turning recent concrete findings into local Mez
-  issue tracker entries, including dependency relationships when findings have
-  hard prerequisites. New prerequisite issues should be created first; dependent
+  issue tracker entries, including enough observed symptom, impacted area,
+  evidence/source, reproduction or trigger, and next-step context for future
+  handoff. It also covers dependency relationships when findings have hard
+  prerequisites. New prerequisite issues should be created first; dependent
   issues should be added in a later action batch with the real returned
   prerequisite issue id in `depends_on`.
 - `add-research`: guidance for saving durable research findings to memory as
