@@ -35,6 +35,7 @@ use super::{
 use crate::error::MezErrorKind;
 use crate::layout::PaneTitleSource;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
+use crate::runtime::record_browser::RuntimeRecordBrowser;
 use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth, TerminalStyleSpan};
 use secrecy::ExposeSecret;
 
@@ -856,6 +857,25 @@ pub(super) struct RuntimeDisplayOverlay {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) dismiss_on_any_input: bool,
+    /// Retained interactive record-browser state for `/show-issues` and
+    /// `/show-memories` overlays.
+    ///
+    /// Plain command-output overlays leave this empty. Record-browser overlays
+    /// keep the backend-agnostic browser model alongside the rendered Markdown
+    /// page so later pager key handling can apply typed browser actions and
+    /// rerender without reparsing terminal text.
+    pub(super) record_browser: Option<RuntimeRecordBrowserOverlayState>,
+}
+
+/// Retained state for one interactive record-browser display overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RuntimeRecordBrowserOverlayState {
+    /// Pane whose agent shell opened the browser.
+    pub(super) pane_id: String,
+    /// Slash command backing the browser, such as `show-issues`.
+    pub(super) command: String,
+    /// Backend-agnostic browser state rendered into the overlay.
+    pub(super) browser: RuntimeRecordBrowser,
 }
 
 /// Render-cell range for the last submitted command-output pager search match.
@@ -2249,6 +2269,15 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    /// Record-browser states waiting for the display-output presentation path
+    /// to attach them to the primary overlay.
+    ///
+    /// Agent-shell command execution returns JSON before the TUI presentation
+    /// code decides whether to open a modal overlay. This pending map bridges
+    /// that serialization boundary without changing the public command response
+    /// format: record-browser commands register their typed state here, and the
+    /// display path consumes it when rendering the matching pane/command.
+    pub(super) pending_record_browser_overlays: BTreeMap<(String, String), RuntimeRecordBrowser>,
     /// Stores the transient primary error status overlay value.
     ///
     /// Recoverable foreground errors use this one-line notice instead of the

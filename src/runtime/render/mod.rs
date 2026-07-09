@@ -964,6 +964,7 @@ mod tests {
                 search_match: None,
                 search_status: None,
                 mouse_selection: None,
+                record_browser: None,
             },
             selection,
         );
@@ -1010,6 +1011,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -1068,6 +1070,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -1127,6 +1130,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -1176,6 +1180,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -1268,6 +1273,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
         let selection = &overlay.selections[0];
         let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
@@ -1383,6 +1389,7 @@ mod tests {
             }),
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
 
         let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
@@ -1445,6 +1452,7 @@ mod tests {
             }),
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
 
         let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 12, &ui_theme);
@@ -1543,6 +1551,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
         let rendered_start =
             runtime_display_overlay_rendered_selection_start(&overlay, &overlay.selections[0]);
@@ -1601,6 +1610,7 @@ mod tests {
             search_match: None,
             search_status: None,
             mouse_selection: None,
+            record_browser: None,
         };
 
         assert!(super::apply_display_overlay_scroll_delta(

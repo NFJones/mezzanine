@@ -4243,6 +4243,62 @@ fn runtime_primary_display_overlay_renders_and_clears_via_terminal_step() {
     assert!(service.primary_display_overlay.is_none());
 }
 
+/// Verifies agent-shell record browsers keep their typed browser state after
+/// the Markdown display response opens the primary overlay.
+///
+/// `/show-issues` and `/show-memories` cross a JSON display-response boundary
+/// before the terminal UI decides whether to open a modal pager. Retaining the
+/// browser beside the rendered overlay is the prerequisite for later key-driven
+/// filtering, detail navigation, and save prompts to act on structured browser
+/// state instead of reparsing displayed Markdown.
+#[test]
+fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
+        "Issues",
+        vec![crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: Some("/show-issues issue-1".to_string()),
+            title: "First issue".to_string(),
+            metadata: vec![("kind".to_string(), "task".to_string())],
+            markdown: "Body".to_string(),
+        }],
+    )
+    .unwrap();
+    service.pending_record_browser_overlays.insert(
+        (pane_id.clone(), "show-issues".to_string()),
+        browser,
+    );
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: "# Issues\n\n- [`issue-1`](mez-agent:%2Fshow-issues%20issue-1)".to_string(),
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    let overlay = service
+        .primary_display_overlay
+        .as_ref()
+        .expect("record-browser display should open an overlay");
+    let record_browser = overlay
+        .record_browser
+        .as_ref()
+        .expect("overlay should retain record-browser state");
+    assert_eq!(record_browser.pane_id, pane_id);
+    assert_eq!(record_browser.command, "show-issues");
+    assert_eq!(record_browser.browser.render_page().title, "Issues");
+    assert!(service.pending_record_browser_overlays.is_empty());
+}
+
 /// Verifies keyboard movement inside a primary command-output pager refreshes
 /// through the retained-frame diff path.
 ///

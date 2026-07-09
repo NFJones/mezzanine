@@ -5,6 +5,7 @@
 //! navigation semantics reusable across overlay surfaces.
 
 use super::*;
+use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
 
 /// Display-overlay navigation action decoded from terminal input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -749,6 +750,15 @@ impl RuntimeSessionService {
                 self.set_agent_prompt_display_lines(pane_id, display_lines)?;
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
+                let record_browser = content.command.as_ref().and_then(|command| {
+                    self.pending_record_browser_overlays
+                        .remove(&(pane_id.to_string(), command.clone()))
+                        .map(|browser| RuntimeRecordBrowserOverlayState {
+                            pane_id: pane_id.to_string(),
+                            command: command.clone(),
+                            browser,
+                        })
+                });
                 if runtime_command_display_should_open_overlay(&content) {
                     self.show_primary_display_overlay_inner(
                         content.lines,
@@ -756,6 +766,11 @@ impl RuntimeSessionService {
                         content.selections,
                         false,
                     )?;
+                    if let (Some(overlay), Some(record_browser)) =
+                        (self.primary_display_overlay.as_mut(), record_browser)
+                    {
+                        overlay.record_browser = Some(record_browser);
+                    }
                 } else {
                     self.set_agent_prompt_display_lines(pane_id, content.lines)?;
                 }
@@ -767,5 +782,17 @@ impl RuntimeSessionService {
             }
         }
         Ok(())
+    }
+
+    /// Presents one encoded agent-shell display response through the same
+    /// renderer path used by live terminal input.
+    #[cfg(test)]
+    pub(in crate::runtime) fn set_agent_prompt_response_display_output_for_tests(
+        &mut self,
+        pane_id: &str,
+        response: &str,
+    ) -> Result<()> {
+        let display_output = runtime_agent_shell_display_output(response, &self.ui_theme)?;
+        self.set_agent_prompt_display_output(pane_id, display_output)
     }
 }

@@ -691,6 +691,7 @@ fn list_themes_rendered_overlay_lines_align_headers_with_selectable_rows() {
         search_match: None,
         search_status: None,
         mouse_selection: None,
+        record_browser: None,
     };
 
     let rendered = runtime_display_overlay_render_lines(&overlay);
@@ -2410,6 +2411,7 @@ impl RuntimeSessionService {
                 selections,
                 active_selection_index,
                 dismiss_on_any_input,
+                record_browser: None,
             })
         };
         Ok(())
