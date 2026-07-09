@@ -1,36 +1,22 @@
 //! Reusable pager state for record-oriented agent-shell browsers.
 //!
-//! The record browser keeps list/detail navigation, filter prompts, save
+//! The record browser keeps detail navigation, filter prompts, save
 //! prompts, and raw-Markdown export data independent from issue and memory
 //! backends. Command adapters provide records and later consume typed outcomes,
-//! while the runtime pager can render the returned page lines and selections
-//! without knowing whether the source is an issue, a memory, or another durable
-//! record type.
+//! while the runtime pager can render the returned Markdown without knowing
+//! whether the source is an issue, a memory, or another durable record type.
 
 #![allow(dead_code)]
 
 use crate::error::{MezError, Result};
-
-/// One selectable row in a rendered record-browser page.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeRecordBrowserSelection {
-    /// Zero-based line index in the rendered page.
-    pub line_index: usize,
-    /// Stable record id activated by this selection.
-    pub record_id: String,
-    /// Human-readable label shown for the selection.
-    pub label: String,
-}
 
 /// Rendered pager content produced from browser state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeRecordBrowserPage {
     /// Human-readable browser title.
     pub title: String,
-    /// Lines to show in the pager.
-    pub lines: Vec<String>,
-    /// Selectable record rows in `lines`.
-    pub selections: Vec<RuntimeRecordBrowserSelection>,
+    /// Markdown to show in the pager, including transient prompt and error chrome.
+    pub markdown: String,
     /// Raw Markdown to save when the save prompt is accepted.
     pub raw_markdown: String,
 }
@@ -84,12 +70,6 @@ pub(crate) enum RuntimeRecordBrowserPrompt {
 /// User intent decoded by the pager and applied to browser state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeRecordBrowserAction {
-    /// Move to the previous record row.
-    Previous,
-    /// Move to the next record row.
-    Next,
-    /// Open the active record detail view.
-    OpenFocused,
     /// Return from detail or prompt state to the preserved list view.
     BackToList,
     /// Begin editing one filter field.
@@ -107,8 +87,6 @@ pub(crate) enum RuntimeRecordBrowserAction {
 pub(crate) enum RuntimeRecordBrowserOutcome {
     /// Browser state changed without requiring an external side effect.
     Updated,
-    /// A record detail was opened.
-    OpenedRecord(String),
     /// A filter value was accepted and the caller should refresh records.
     FilterSubmitted {
         /// Filter field that changed.
@@ -190,15 +168,20 @@ impl RuntimeRecordBrowser {
         self.scroll_offset = scroll_offset;
     }
 
+    /// Shows the first record as a detail page when command parsing has
+    /// already resolved a concrete record id.
+    pub(crate) fn show_first_record_detail(&mut self) {
+        if !self.records.is_empty() {
+            self.detail_index = Some(0);
+        }
+    }
+
     /// Applies one typed pager action to this browser state.
     pub(crate) fn apply_action(
         &mut self,
         action: RuntimeRecordBrowserAction,
     ) -> Result<RuntimeRecordBrowserOutcome> {
         match action {
-            RuntimeRecordBrowserAction::Previous => self.move_selection(-1),
-            RuntimeRecordBrowserAction::Next => self.move_selection(1),
-            RuntimeRecordBrowserAction::OpenFocused => self.open_focused(),
             RuntimeRecordBrowserAction::BackToList => {
                 let changed = self.detail_index.take().is_some() || self.prompt.take().is_some();
                 Ok(if changed {
@@ -242,37 +225,6 @@ impl RuntimeRecordBrowser {
         self.render_list_page()
     }
 
-    fn move_selection(&mut self, delta: isize) -> Result<RuntimeRecordBrowserOutcome> {
-        if self.records.is_empty() || self.detail_index.is_some() || self.prompt.is_some() {
-            return Ok(RuntimeRecordBrowserOutcome::Ignored);
-        }
-        let previous = self.active_index;
-        if delta.is_negative() {
-            self.active_index = self.active_index.saturating_sub(delta.unsigned_abs());
-        } else {
-            self.active_index = self
-                .active_index
-                .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX))
-                .min(self.records.len().saturating_sub(1));
-        }
-        Ok(if self.active_index == previous {
-            RuntimeRecordBrowserOutcome::Ignored
-        } else {
-            RuntimeRecordBrowserOutcome::Updated
-        })
-    }
-
-    fn open_focused(&mut self) -> Result<RuntimeRecordBrowserOutcome> {
-        if self.records.is_empty() || self.prompt.is_some() {
-            return Ok(RuntimeRecordBrowserOutcome::Ignored);
-        }
-        let index = self.active_index.min(self.records.len().saturating_sub(1));
-        self.detail_index = Some(index);
-        Ok(RuntimeRecordBrowserOutcome::OpenedRecord(
-            self.records[index].id.clone(),
-        ))
-    }
-
     fn submit_prompt(&mut self) -> Result<RuntimeRecordBrowserOutcome> {
         let Some(prompt) = self.prompt.take() else {
             return Ok(RuntimeRecordBrowserOutcome::Ignored);
@@ -300,52 +252,36 @@ impl RuntimeRecordBrowser {
     }
 
     fn render_list_page(&self) -> RuntimeRecordBrowserPage {
-        let mut lines = vec![format!("# {}", self.title)];
+        let raw_markdown = list_markdown(&self.title, &self.records);
+        let mut markdown = String::new();
         if let Some(error) = &self.error {
-            lines.push(format!("Error: {error}"));
+            markdown.push_str(&format!("Error: {error}\n\n"));
         }
         if let Some(prompt) = &self.prompt {
-            lines.push(prompt_line(prompt));
+            markdown.push_str(&format!("{}\n\n", prompt_line(prompt)));
         }
-        if self.records.is_empty() {
-            lines.push("No records found.".to_string());
-        }
-        let mut selections = Vec::new();
-        for (index, record) in self.records.iter().enumerate() {
-            let line_index = lines.len();
-            let _is_active = index == self.active_index;
-            lines.push(list_record_label(record));
-            selections.push(RuntimeRecordBrowserSelection {
-                line_index,
-                record_id: record.id.clone(),
-                label: list_record_label(record),
-            });
-        }
+        markdown.push_str(&raw_markdown);
         RuntimeRecordBrowserPage {
             title: self.title.clone(),
-            raw_markdown: list_markdown(&self.title, &self.records),
-            lines,
-            selections,
+            markdown,
+            raw_markdown,
         }
     }
 
     fn render_detail_page(&self, detail_index: usize) -> RuntimeRecordBrowserPage {
         let record = &self.records[detail_index.min(self.records.len().saturating_sub(1))];
         let raw_markdown = detail_markdown(record);
-        let mut lines = raw_markdown
-            .lines()
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
+        let mut markdown = String::new();
         if let Some(error) = &self.error {
-            lines.insert(0, format!("Error: {error}"));
+            markdown.push_str(&format!("Error: {error}\n\n"));
         }
         if let Some(prompt) = &self.prompt {
-            lines.insert(0, prompt_line(prompt));
+            markdown.push_str(&format!("{}\n\n", prompt_line(prompt)));
         }
+        markdown.push_str(&raw_markdown);
         RuntimeRecordBrowserPage {
             title: record.title.clone(),
-            lines,
-            selections: Vec::new(),
+            markdown,
             raw_markdown,
         }
     }
@@ -482,15 +418,15 @@ mod tests {
     fn browser_record(id: &str, title: &str) -> RuntimeRecordBrowserRecord {
         RuntimeRecordBrowserRecord {
             id: id.to_string(),
-            open_command: None,
+            open_command: Some(format!("/show-issues {id}")),
             title: title.to_string(),
             metadata: vec![("project".to_string(), "/repo".to_string())],
             markdown: format!("Body for {title}"),
         }
     }
 
-    /// Verifies the reusable browser can open a selected detail view and return
-    /// to the preserved list selection and scroll position.
+    /// Verifies the reusable browser can render command-resolved detail state
+    /// and return to the list while preserving the retained scroll position.
     #[test]
     fn record_browser_returns_from_detail_with_list_state_preserved() {
         let mut browser = RuntimeRecordBrowser::new(
@@ -503,19 +439,8 @@ mod tests {
         .unwrap();
         browser.set_scroll_offset(4);
 
-        assert_eq!(
-            browser
-                .apply_action(RuntimeRecordBrowserAction::Next)
-                .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
-        );
-        assert_eq!(
-            browser
-                .apply_action(RuntimeRecordBrowserAction::OpenFocused)
-                .unwrap(),
-            RuntimeRecordBrowserOutcome::OpenedRecord("issue-2".to_string())
-        );
-        assert!(browser.render_page().raw_markdown.contains("# Second"));
+        browser.show_first_record_detail();
+        assert!(browser.render_page().raw_markdown.contains("# First"));
 
         assert_eq!(
             browser
@@ -523,22 +448,20 @@ mod tests {
                 .unwrap(),
             RuntimeRecordBrowserOutcome::Updated
         );
-        assert_eq!(browser.active_index(), 1);
         assert_eq!(browser.scroll_offset(), 4);
         let list_page = browser.render_page();
-        assert_eq!(list_page.selections.len(), 2);
         assert!(
             list_page
-                .lines
-                .iter()
-                .any(|line| line == "issue-2 — Second · project: /repo")
+                .markdown
+                .contains("[`issue-1 — First · project: /repo`]")
         );
         assert!(
             list_page
-                .lines
-                .iter()
-                .all(|line| { !line.starts_with("> issue-") && !line.starts_with("  issue-") })
+                .markdown
+                .contains("[`issue-2 — Second · project: /repo`]")
         );
+        assert!(!list_page.markdown.contains("> issue-"));
+        assert!(!list_page.markdown.contains("  issue-"));
     }
 
     /// Verifies filter and save prompts produce typed outcomes while empty and
@@ -548,18 +471,8 @@ mod tests {
         let mut browser = RuntimeRecordBrowser::new("Memories", Vec::new()).unwrap();
         browser.set_error(Some("database unavailable".to_string()));
         let empty_page = browser.render_page();
-        assert!(
-            empty_page
-                .lines
-                .iter()
-                .any(|line| line == "No records found.")
-        );
-        assert!(
-            empty_page
-                .lines
-                .iter()
-                .any(|line| line == "Error: database unavailable")
-        );
+        assert!(empty_page.markdown.contains("No records found."));
+        assert!(empty_page.markdown.contains("Error: database unavailable"));
 
         assert_eq!(
             browser
@@ -602,9 +515,7 @@ mod tests {
             }],
         )
         .unwrap();
-        browser
-            .apply_action(RuntimeRecordBrowserAction::OpenFocused)
-            .unwrap();
+        browser.show_first_record_detail();
         browser
             .apply_action(RuntimeRecordBrowserAction::StartSave)
             .unwrap();

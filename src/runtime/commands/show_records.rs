@@ -79,9 +79,7 @@ impl RuntimeSessionService {
             records.into_iter().map(issue_browser_record).collect(),
         )?;
         if args.detail_id.is_some() {
-            let _ = browser.apply_action(
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::OpenFocused,
-            )?;
+            browser.show_first_record_detail();
         }
         let page = browser.render_page();
         if let Some(path) = args.save_path {
@@ -164,9 +162,7 @@ impl RuntimeSessionService {
             records.into_iter().map(memory_browser_record).collect(),
         )?;
         if args.detail_id.is_some() {
-            let _ = browser.apply_action(
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::OpenFocused,
-            )?;
+            browser.show_first_record_detail();
         }
         let page = browser.render_page();
         if let Some(path) = args.save_path {

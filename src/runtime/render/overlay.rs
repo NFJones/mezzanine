@@ -1861,20 +1861,14 @@ fn render_record_browser_overlay(overlay: &mut RuntimeDisplayOverlay) -> bool {
         return false;
     };
     let page = record_browser.browser.render_page();
-    let command = record_browser.command.clone();
-    overlay.lines = page.lines;
-    overlay.line_style_spans = vec![Vec::new(); overlay.lines.len()];
-    overlay.selections = page
-        .selections
-        .into_iter()
-        .map(|selection| RuntimeDisplayOverlaySelection {
-            line_index: selection.line_index,
-            start_column: 0,
-            width: UnicodeWidthStr::width(selection.label.as_str()),
-            command: format!("/{command} {}", selection.record_id),
-            kind: RuntimeDisplayOverlaySelectionKind::Primary,
-        })
-        .collect();
+    let content = runtime_agent_shell_markdown_overlay_content(
+        Some(record_browser.command.clone()),
+        &page.markdown,
+        &crate::terminal::default_ui_theme(),
+    );
+    overlay.lines = content.lines;
+    overlay.line_style_spans = content.line_style_spans;
+    overlay.selections = content.selections;
     overlay.active_selection_index = (!overlay.selections.is_empty()).then_some(0);
     overlay.search_input = None;
     overlay.search_match = None;
@@ -1955,36 +1949,24 @@ impl RuntimeSessionService {
                 ),
             ),
             b"s" => Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::StartSave),
-            _ => match runtime_selector_input_action(input) {
-                RuntimeSelectorInputAction::Exit => {
-                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList)
-                }
-                RuntimeSelectorInputAction::Select => {
-                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::OpenFocused)
-                }
-                RuntimeSelectorInputAction::Previous => {
-                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::Previous)
-                }
-                RuntimeSelectorInputAction::Next => {
-                    Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::Next)
-                }
-                RuntimeSelectorInputAction::First
-                | RuntimeSelectorInputAction::Last
-                | RuntimeSelectorInputAction::Ignore => None,
-            },
+            _ if matches!(
+                runtime_selector_input_action(input),
+                RuntimeSelectorInputAction::Exit
+            ) =>
+            {
+                Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList)
+            }
+            _ => None,
         };
         let Some(action) = action else {
             return Ok(None);
         };
-        let close_on_ignored = input == b"\x1b" || input == b"\x03";
         let outcome = record_browser.browser.apply_action(action)?;
         if matches!(
             outcome,
             crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored
-        ) && close_on_ignored
-        {
-            self.primary_display_overlay = None;
-            return Ok(Some(true));
+        ) {
+            return Ok(None);
         }
         Ok(Some(render_record_browser_overlay(overlay)))
     }
