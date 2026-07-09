@@ -314,11 +314,11 @@ impl RuntimeRecordBrowser {
         for (index, record) in self.records.iter().enumerate() {
             let marker = if index == self.active_index { ">" } else { " " };
             let line_index = lines.len();
-            lines.push(format!("{marker} {} — {}", record.id, record.title));
+            lines.push(format!("{marker} {}", list_record_label(record)));
             selections.push(RuntimeRecordBrowserSelection {
                 line_index,
                 record_id: record.id.clone(),
-                label: record.title.clone(),
+                label: list_record_label(record),
             });
         }
         RuntimeRecordBrowserPage {
@@ -389,7 +389,7 @@ fn list_markdown(title: &str, records: &[RuntimeRecordBrowserRecord]) -> String 
         lines.push("No records found.".to_string());
     } else {
         for record in records {
-            let label = format!("{} — {}", record.id, record.title);
+            let label = list_record_label(record);
             if let Some(command) = record.open_command.as_deref() {
                 lines.push(format!(
                     "- [`{}`](mez-agent:{})",
@@ -406,6 +406,8 @@ fn list_markdown(title: &str, records: &[RuntimeRecordBrowserRecord]) -> String 
 
 fn detail_markdown(record: &RuntimeRecordBrowserRecord) -> String {
     let mut lines = vec![format!("# {}", record.title), String::new()];
+    lines.push(record.title.clone());
+    lines.push(String::new());
     if !record.metadata.is_empty() {
         lines.push("| Field | Value |".to_string());
         lines.push("| --- | --- |".to_string());
@@ -420,6 +422,32 @@ fn detail_markdown(record: &RuntimeRecordBrowserRecord) -> String {
     }
     lines.push(record.markdown.clone());
     lines.join("\n")
+}
+
+fn list_record_label(record: &RuntimeRecordBrowserRecord) -> String {
+    let mut label = format!("{} — {}", record.id, record.title);
+    let metadata = list_metadata_summary(&record.metadata);
+    if !metadata.is_empty() {
+        label.push_str(" · ");
+        label.push_str(&metadata);
+    }
+    label
+}
+
+fn list_metadata_summary(metadata: &[(String, String)]) -> String {
+    metadata
+        .iter()
+        .filter(|(key, _)| list_metadata_key_is_prominent(key))
+        .map(|(key, value)| format!("{key}: {value}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn list_metadata_key_is_prominent(key: &str) -> bool {
+    matches!(
+        key,
+        "kind" | "state" | "project" | "scope" | "priority" | "expires_at_unix_seconds"
+    )
 }
 
 fn escape_markdown_table(value: &str) -> String {
@@ -503,7 +531,7 @@ mod tests {
             list_page
                 .lines
                 .iter()
-                .any(|line| line == "> issue-2 — Second")
+                .any(|line| line == "> issue-2 — Second · project: /repo")
         );
     }
 
