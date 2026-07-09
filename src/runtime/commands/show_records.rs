@@ -6,7 +6,10 @@
 //! the browser state itself backend-agnostic.
 
 use super::*;
-use crate::runtime::record_browser::{RuntimeRecordBrowser, RuntimeRecordBrowserRecord};
+use crate::runtime::record_browser::{
+    RuntimeRecordBrowser, RuntimeRecordBrowserFilterField, RuntimeRecordBrowserRecord,
+};
+use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 
 const DEFAULT_SHOW_RECORD_LIMIT: usize = 100;
 
@@ -41,6 +44,17 @@ impl RuntimeSessionService {
         let store = crate::issues::IssueStore::from_database_path(
             issues::runtime_issue_database_path(self, &config_root),
         );
+        let issue_state = args.state.or(Some(crate::issues::IssueState::Open));
+        let source = args
+            .detail_id
+            .is_none()
+            .then(|| RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob: project_glob.clone(),
+                kind: args.kind,
+                state: issue_state,
+                text: args.text.clone(),
+                limit: args.limit,
+            });
         let records = if let Some(id) = args.detail_id.as_ref() {
             store
                 .get_issue(current_project, id.clone())?
@@ -48,10 +62,10 @@ impl RuntimeSessionService {
                 .collect::<Vec<_>>()
         } else {
             let query = crate::issues::IssueBrowserQuery::new(
-                project_glob,
+                project_glob.clone(),
                 args.kind,
-                args.state.or(Some(crate::issues::IssueState::Open)),
-                args.text,
+                issue_state,
+                args.text.clone(),
                 Some(args.limit),
             )?;
             store.query_issue_browser(&query)?
@@ -73,8 +87,12 @@ impl RuntimeSessionService {
         if let Some(path) = args.save_path {
             return self.save_record_browser_page(pane_id, "show-issues", path, page.raw_markdown);
         }
-        self.pending_record_browser_overlays
-            .insert((pane_id.to_string(), "show-issues".to_string()), browser);
+        let key = (pane_id.to_string(), "show-issues".to_string());
+        if let Some(source) = source {
+            self.pending_record_browser_overlay_sources
+                .insert(key.clone(), source);
+        }
+        self.pending_record_browser_overlays.insert(key, browser);
         Ok(AgentShellCommandOutcome::Display {
             command: "show-issues".to_string(),
             body: page.raw_markdown,
@@ -110,15 +128,26 @@ impl RuntimeSessionService {
                     .unwrap_or_else(|| self.runtime_remember_scope_for_pane(pane_id)),
             )
         };
+        let memory_state = Some(args.state.unwrap_or(crate::memory::MemoryState::Active));
+        let source =
+            args.detail_id
+                .is_none()
+                .then(|| RuntimeRecordBrowserOverlaySource::Memories {
+                    scope: scope.clone(),
+                    kind: args.kind,
+                    state: memory_state,
+                    text: args.text.clone(),
+                    limit: args.limit,
+                });
         let records = if let Some(id) = args.detail_id.as_ref() {
             vec![store.inspect(id)?]
         } else {
             store
                 .search(&crate::memory::MemorySearchRequest {
-                    query: args.text,
-                    scope,
+                    query: args.text.clone(),
+                    scope: scope.clone(),
                     kind: args.kind,
-                    state: Some(args.state.unwrap_or(crate::memory::MemoryState::Active)),
+                    state: memory_state,
                     source: None,
                     limit: args.limit,
                 })?
@@ -148,8 +177,12 @@ impl RuntimeSessionService {
                 page.raw_markdown,
             );
         }
-        self.pending_record_browser_overlays
-            .insert((pane_id.to_string(), "show-memories".to_string()), browser);
+        let key = (pane_id.to_string(), "show-memories".to_string());
+        if let Some(source) = source {
+            self.pending_record_browser_overlay_sources
+                .insert(key.clone(), source);
+        }
+        self.pending_record_browser_overlays.insert(key, browser);
         Ok(AgentShellCommandOutcome::Display {
             command: "show-memories".to_string(),
             body: page.raw_markdown,
@@ -175,6 +208,161 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
+    }
+
+    /// Refreshes a retained record-browser overlay from its backend query context.
+    pub(in crate::runtime) fn refresh_record_browser_overlay_source(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> Result<RuntimeRecordBrowser> {
+        match source {
+            RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob,
+                kind,
+                state,
+                text,
+                limit,
+            } => {
+                let Some(config_root) = self.config_root.clone() else {
+                    return Err(MezError::config(
+                        "show-issues requires a configured config root",
+                    ));
+                };
+                let store = crate::issues::IssueStore::from_database_path(
+                    issues::runtime_issue_database_path(self, &config_root),
+                );
+                let query = crate::issues::IssueBrowserQuery::new(
+                    project_glob.clone(),
+                    *kind,
+                    *state,
+                    text.clone(),
+                    Some(*limit),
+                )?;
+                RuntimeRecordBrowser::new(
+                    "Issues",
+                    store
+                        .query_issue_browser(&query)?
+                        .into_iter()
+                        .map(issue_browser_record)
+                        .collect(),
+                )
+            }
+            RuntimeRecordBrowserOverlaySource::Memories {
+                scope,
+                kind,
+                state,
+                text,
+                limit,
+            } => {
+                let Some(config_root) = self.config_root.clone() else {
+                    return Err(MezError::invalid_state(
+                        "show-memories requires a configured Mezzanine config root",
+                    ));
+                };
+                let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+                RuntimeRecordBrowser::new(
+                    "Memories",
+                    store
+                        .search(&crate::memory::MemorySearchRequest {
+                            query: text.clone(),
+                            scope: scope.clone(),
+                            kind: *kind,
+                            state: *state,
+                            source: None,
+                            limit: *limit,
+                        })?
+                        .into_iter()
+                        .map(|result| memory_browser_record(result.record))
+                        .collect(),
+                )
+            }
+        }
+    }
+
+    /// Returns a retained browser source updated for one submitted modal filter.
+    pub(in crate::runtime) fn record_browser_source_with_filter(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+        field: RuntimeRecordBrowserFilterField,
+        value: &str,
+    ) -> Result<RuntimeRecordBrowserOverlaySource> {
+        let value = value.trim();
+        match source {
+            RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob,
+                kind,
+                state,
+                text,
+                limit,
+            } => Ok(RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob: if field == RuntimeRecordBrowserFilterField::ProjectGlob {
+                    (!value.is_empty()).then(|| value.to_string())
+                } else {
+                    project_glob.clone()
+                },
+                kind: if field == RuntimeRecordBrowserFilterField::Kind {
+                    (!value.is_empty())
+                        .then(|| crate::issues::IssueKind::parse(value))
+                        .transpose()?
+                } else {
+                    *kind
+                },
+                state: *state,
+                text: if field == RuntimeRecordBrowserFilterField::Text {
+                    (!value.is_empty()).then(|| value.to_string())
+                } else {
+                    text.clone()
+                },
+                limit: *limit,
+            }),
+            RuntimeRecordBrowserOverlaySource::Memories {
+                scope,
+                kind,
+                state,
+                text,
+                limit,
+            } => Ok(RuntimeRecordBrowserOverlaySource::Memories {
+                scope: if field == RuntimeRecordBrowserFilterField::ProjectGlob {
+                    if value.is_empty() {
+                        None
+                    } else if value == "global" {
+                        Some(crate::memory::MemoryScope::Global)
+                    } else {
+                        Some(crate::memory::MemoryScope::Project {
+                            root: value.to_string(),
+                        })
+                    }
+                } else {
+                    scope.clone()
+                },
+                kind: if field == RuntimeRecordBrowserFilterField::Kind {
+                    (!value.is_empty())
+                        .then(|| parse_memory_kind_for_show(value))
+                        .transpose()?
+                } else {
+                    *kind
+                },
+                state: *state,
+                text: if field == RuntimeRecordBrowserFilterField::Text {
+                    (!value.is_empty()).then(|| value.to_string())
+                } else {
+                    text.clone()
+                },
+                limit: *limit,
+            }),
+        }
+    }
+
+    /// Writes retained record-browser Markdown using pane-relative path rules.
+    pub(in crate::runtime) fn save_record_browser_overlay_markdown(
+        &self,
+        pane_id: &str,
+        path: &str,
+        markdown: String,
+    ) -> Result<PathBuf> {
+        let destination = record_browser_save_destination(self, pane_id, path);
+        fs::write(&destination, markdown)?;
+        Ok(destination)
     }
 }
 

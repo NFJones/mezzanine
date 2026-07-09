@@ -1856,16 +1856,7 @@ fn record_browser_prompt_text(
     }
 }
 
-fn apply_record_browser_overlay_outcome(
-    overlay: &mut RuntimeDisplayOverlay,
-    outcome: crate::runtime::record_browser::RuntimeRecordBrowserOutcome,
-) -> bool {
-    if matches!(
-        outcome,
-        crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored
-    ) {
-        return false;
-    }
+fn render_record_browser_overlay(overlay: &mut RuntimeDisplayOverlay) -> bool {
     let Some(record_browser) = overlay.record_browser.as_ref() else {
         return false;
     };
@@ -1887,16 +1878,6 @@ fn apply_record_browser_overlay_outcome(
     overlay.active_selection_index = (!overlay.selections.is_empty()).then_some(0);
     overlay.search_input = None;
     overlay.search_match = None;
-    overlay.search_status = match outcome {
-        crate::runtime::record_browser::RuntimeRecordBrowserOutcome::FilterSubmitted {
-            field,
-            value,
-        } => Some(format!("filter {:?}: {value}", field)),
-        crate::runtime::record_browser::RuntimeRecordBrowserOutcome::SaveSubmitted {
-            path, ..
-        } => Some(format!("save requested: {path}")),
-        _ => None,
-    };
     true
 }
 
@@ -1940,15 +1921,23 @@ impl RuntimeSessionService {
     /// Applies one input chunk to a retained record-browser overlay, when one
     /// is active.
     fn apply_primary_record_browser_overlay_input(&mut self, input: &[u8]) -> Result<Option<bool>> {
+        let Some(overlay) = self.primary_display_overlay.as_ref() else {
+            return Ok(Some(false));
+        };
+        let Some(record_browser) = overlay.record_browser.as_ref() else {
+            return Ok(None);
+        };
+        if record_browser.browser.prompt().is_some() {
+            return self
+                .apply_primary_record_browser_prompt_input(input)
+                .map(Some);
+        }
         let Some(overlay) = self.primary_display_overlay.as_mut() else {
             return Ok(Some(false));
         };
         let Some(record_browser) = overlay.record_browser.as_mut() else {
             return Ok(None);
         };
-        if record_browser.browser.prompt().is_some() {
-            return Self::apply_primary_record_browser_prompt_input(overlay, input).map(Some);
-        }
         let action = match input {
             b"k" => Some(
                 crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
@@ -1997,17 +1986,18 @@ impl RuntimeSessionService {
             self.primary_display_overlay = None;
             return Ok(Some(true));
         }
-        Ok(Some(apply_record_browser_overlay_outcome(overlay, outcome)))
+        Ok(Some(render_record_browser_overlay(overlay)))
     }
 
     /// Applies editing keys while a retained record-browser modal prompt is open.
-    fn apply_primary_record_browser_prompt_input(
-        overlay: &mut RuntimeDisplayOverlay,
-        input: &[u8],
-    ) -> Result<bool> {
-        let Some(record_browser) = overlay.record_browser.as_mut() else {
-            return Ok(false);
-        };
+    fn apply_primary_record_browser_prompt_input(&mut self, input: &[u8]) -> Result<bool> {
+        let prompt_text = self
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt())
+            .map(record_browser_prompt_text)
+            .unwrap_or_default();
         let action = match runtime_display_overlay_input_action(input) {
             RuntimeDisplayOverlayInputAction::Exit => {
                 crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
@@ -2016,11 +2006,7 @@ impl RuntimeSessionService {
                 crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
             }
             RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
-                let mut text = record_browser
-                    .browser
-                    .prompt()
-                    .map(record_browser_prompt_text)
-                    .unwrap_or_default();
+                let mut text = prompt_text;
                 text.pop();
                 crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
             }
@@ -2028,11 +2014,7 @@ impl RuntimeSessionService {
                 let Ok(input) = std::str::from_utf8(input) else {
                     return Ok(false);
                 };
-                let mut text = record_browser
-                    .browser
-                    .prompt()
-                    .map(record_browser_prompt_text)
-                    .unwrap_or_default();
+                let mut text = prompt_text;
                 text.push_str(input);
                 crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
             }
@@ -2044,8 +2026,67 @@ impl RuntimeSessionService {
             | RuntimeDisplayOverlayInputAction::ScrollBy(_)
             | RuntimeDisplayOverlayInputAction::Ignore => return Ok(false),
         };
-        let outcome = record_browser.browser.apply_action(action)?;
-        Ok(apply_record_browser_overlay_outcome(overlay, outcome))
+        let outcome = {
+            let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                return Ok(false);
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(false);
+            };
+            record_browser.browser.apply_action(action)?
+        };
+        match outcome {
+            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored => Ok(false),
+            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::FilterSubmitted {
+                field,
+                value,
+            } => {
+                let source = self
+                    .primary_display_overlay
+                    .as_ref()
+                    .and_then(|overlay| overlay.record_browser.as_ref())
+                    .and_then(|record_browser| record_browser.source.clone());
+                if let Some(source) = source {
+                    let source = self.record_browser_source_with_filter(&source, field, &value)?;
+                    let browser = self.refresh_record_browser_overlay_source(&source)?;
+                    let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                        return Ok(false);
+                    };
+                    let Some(record_browser) = overlay.record_browser.as_mut() else {
+                        return Ok(false);
+                    };
+                    record_browser.source = Some(source);
+                    record_browser.browser = browser;
+                }
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                Ok(render_record_browser_overlay(overlay))
+            }
+            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::SaveSubmitted {
+                path,
+                markdown,
+            } => {
+                let pane_id = self
+                    .primary_display_overlay
+                    .as_ref()
+                    .and_then(|overlay| overlay.record_browser.as_ref())
+                    .map(|record_browser| record_browser.pane_id.clone());
+                if let Some(pane_id) = pane_id {
+                    self.save_record_browser_overlay_markdown(&pane_id, &path, markdown)?;
+                }
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                Ok(render_record_browser_overlay(overlay))
+            }
+            _ => {
+                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                Ok(render_record_browser_overlay(overlay))
+            }
+        }
     }
 
     /// Runs the apply primary display overlay input operation for this subsystem.

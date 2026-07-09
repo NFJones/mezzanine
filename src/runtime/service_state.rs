@@ -874,8 +874,42 @@ pub(super) struct RuntimeRecordBrowserOverlayState {
     pub(super) pane_id: String,
     /// Slash command backing the browser, such as `show-issues`.
     pub(super) command: String,
+    /// Backend-specific query context used to refresh the browser after
+    /// modal filter submissions.
+    pub(super) source: Option<RuntimeRecordBrowserOverlaySource>,
     /// Backend-agnostic browser state rendered into the overlay.
     pub(super) browser: RuntimeRecordBrowser,
+}
+
+/// Query context retained for one backend-specific record-browser overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RuntimeRecordBrowserOverlaySource {
+    /// Issue browser filters and bounded result limit.
+    Issues {
+        /// Optional project glob filter; `None` means all projects.
+        project_glob: Option<String>,
+        /// Optional defect/task kind filter.
+        kind: Option<crate::issues::IssueKind>,
+        /// Optional lifecycle state filter.
+        state: Option<crate::issues::IssueState>,
+        /// Optional title/body text filter.
+        text: Option<String>,
+        /// Maximum number of displayed records.
+        limit: usize,
+    },
+    /// Memory browser filters and bounded result limit.
+    Memories {
+        /// Optional exact memory scope; `None` means all scopes.
+        scope: Option<crate::memory::MemoryScope>,
+        /// Optional memory kind filter.
+        kind: Option<crate::memory::MemoryKind>,
+        /// Optional memory state filter.
+        state: Option<crate::memory::MemoryState>,
+        /// Optional full-text query.
+        text: Option<String>,
+        /// Maximum number of displayed records.
+        limit: usize,
+    },
 }
 
 /// Render-cell range for the last submitted command-output pager search match.
@@ -2278,6 +2312,9 @@ pub struct RuntimeSessionService {
     /// format: record-browser commands register their typed state here, and the
     /// display path consumes it when rendering the matching pane/command.
     pub(super) pending_record_browser_overlays: BTreeMap<(String, String), RuntimeRecordBrowser>,
+    /// Query context waiting to be attached to pending record-browser overlays.
+    pub(super) pending_record_browser_overlay_sources:
+        BTreeMap<(String, String), RuntimeRecordBrowserOverlaySource>,
     /// Stores the transient primary error status overlay value.
     ///
     /// Recoverable foreground errors use this one-line notice instead of the

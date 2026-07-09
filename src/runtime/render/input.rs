@@ -751,11 +751,14 @@ impl RuntimeSessionService {
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
                 let record_browser = content.command.as_ref().and_then(|command| {
+                    let key = (pane_id.to_string(), command.clone());
+                    let source = self.pending_record_browser_overlay_sources.remove(&key);
                     self.pending_record_browser_overlays
-                        .remove(&(pane_id.to_string(), command.clone()))
+                        .remove(&key)
                         .map(|browser| RuntimeRecordBrowserOverlayState {
                             pane_id: pane_id.to_string(),
                             command: command.clone(),
+                            source,
                             browser,
                         })
                 });
