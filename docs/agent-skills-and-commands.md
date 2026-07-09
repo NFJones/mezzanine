@@ -119,6 +119,8 @@ Common slash commands:
 | `/issue` | Add, show, update, query, or delete local project issues for the active pane repository, including mutable progress notes. |
 | `/show-issues` | Browse open project issues, apply filters, open record details, and save the Markdown view to a file. |
 | `/show-memories` | Browse project-scoped persistent memories, apply filters, open record details, and save the Markdown view to a file. |
+
+`/show-issues` and `/show-memories` use the shared command-output pager. `/` keeps the normal in-page text search, while record-browser keys provide database-backed actions: `k` opens the kind filter, `p` opens the project/scope filter, `x` opens the full-text filter, `s` opens the save prompt, `Enter` opens the focused record, and `Esc` closes prompts, returns from detail to list, or exits the list view.
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
 | `/loop` | Re-run a prompt until an iteration completes without `apply_patch` actions or the loop limit is reached; pass `--fork` to use fresh parent-conversation forks, `--new` to use fresh empty conversations, or `--limit <int>` to override the loop limit for that command. |
 | `/new` | Start a fresh pane conversation. |

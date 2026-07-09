@@ -258,6 +258,12 @@ Command output shown in the pager supports `/` text search. Submit a query to
 jump to the next match; submit `/` with an empty query to repeat the last search,
 wrapping to the top when no later match exists.
 
+The `/show-issues` and `/show-memories` record browsers keep that `/` in-page
+search behavior and add browser-specific keys: `k` opens a kind filter prompt,
+`p` opens a project/scope filter prompt, `x` opens a database-backed text filter
+prompt, `s` opens a save-to-file prompt, `Enter` opens the focused record, and
+`Esc` closes a prompt, returns from detail to the list, or exits the list view.
+
 ### Use the agent shell
 
 Press `Ctrl+A a` in a pane and type a request. The agent works from the focused

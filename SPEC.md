@@ -5179,6 +5179,12 @@ The baseline command capabilities are:
   state, full-text, and limit filters, render selectable Markdown rows that
   open memory details, and allow saving the rendered raw Markdown view to a
   user-supplied file path, overwriting the destination.
+  The shared record browser MUST preserve the generic `/` in-page pager search
+  and MUST support browser-specific keys: `k` for kind filters, `p` for
+  project/scope filters, `x` for backing-database full-text filters, `s` for
+  save-to-file prompts, `Enter` for opening the focused record, and `Esc` for
+  closing prompts, returning from detail views to lists, or exiting the
+  top-level list.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the
