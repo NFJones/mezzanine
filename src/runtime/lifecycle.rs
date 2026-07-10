@@ -76,6 +76,7 @@ impl RuntimeSessionService {
         self.session
             .resize_authoritative_terminal(&client_id, terminal_size)?;
         self.sync_tracked_pty_sizes()?;
+        self.resume_detached_config_change_actions()?;
         self.last_attach_at_unix_seconds = Some(now_unix_seconds);
         self.append_lifecycle_event(
             EventKind::ClientAttached,

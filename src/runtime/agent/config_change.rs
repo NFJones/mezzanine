@@ -595,10 +595,9 @@ impl RuntimeSessionService {
         let Some(batch) = execution.response.action_batch.clone() else {
             return Ok(0);
         };
-        let controller =
-            self.session.primary_client_id().cloned().ok_or_else(|| {
-                MezError::invalid_state("config_change requires an attached primary")
-            })?;
+        let Some(controller) = self.session.primary_client_id().cloned() else {
+            return Ok(0);
+        };
         let pending_config_actions = execution
             .action_results
             .iter()
@@ -702,5 +701,36 @@ impl RuntimeSessionService {
                 .insert(turn.turn_id.clone());
         }
         Ok(executed)
+    }
+
+    /// Retries retained configuration changes once a primary client reconnects.
+    ///
+    /// A configuration mutation is executed through the primary-owned runtime
+    /// control path. While detached, the action therefore remains running in
+    /// its retained execution instead of failing the agent turn. Reattachment
+    /// supplies the primary identity required to finish that work.
+    pub(in crate::runtime) fn resume_detached_config_change_actions(&mut self) -> Result<()> {
+        let turns = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .filter(|turn| turn.state == AgentTurnState::Running)
+            .cloned()
+            .collect::<Vec<_>>();
+        for turn in turns {
+            let Some(mut execution) = self.agent_turn_executions.get(&turn.turn_id).cloned() else {
+                continue;
+            };
+            if !execution.action_results.iter().any(|result| {
+                result.status == ActionStatus::Running && result.action_type == "config_change"
+            }) {
+                continue;
+            }
+            if self.execute_running_config_change_actions_for_turn(&turn, &mut execution)? > 0 {
+                self.agent_turn_executions
+                    .insert(turn.turn_id.clone(), execution);
+            }
+        }
+        Ok(())
     }
 }
