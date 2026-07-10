@@ -177,10 +177,10 @@ pub use readiness::{
 };
 pub use semantic::{
     ApplyPatchTransactionPhase, LocalActionKind, LocalActionPlan, action_is_local_shell_backed,
-    apply_patch_error_plan, apply_patch_natively, apply_patch_read_plan_for_paths,
-    apply_patch_touched_paths, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
-    local_action_plan, local_action_summary, try_convert_unified_diff_to_mez_patch,
+    apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
+    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
+    apply_patch_write_plan_from_read_outputs, local_action_plan, local_action_summary,
+    try_convert_unified_diff_to_mez_patch,
 };
 pub use session::{
     AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnState,

@@ -25,53 +25,6 @@ pub(super) struct ApplyPatchSnapshot {
     state: ApplyPatchSnapshotState,
 }
 
-impl ApplyPatchSnapshot {
-    /// Builds a snapshot for an existing regular file.
-    pub(super) fn regular(path: String, resolved_path: String, bytes: Vec<u8>) -> Self {
-        Self {
-            path,
-            resolved_path,
-            state: ApplyPatchSnapshotState::Regular(bytes),
-        }
-    }
-
-    /// Builds a snapshot for a path that is absent.
-    pub(super) fn missing(path: String, resolved_path: String) -> Self {
-        Self {
-            path,
-            resolved_path,
-            state: ApplyPatchSnapshotState::Missing,
-        }
-    }
-
-    /// Builds a snapshot for a path that exists but is not a regular file.
-    pub(super) fn non_regular(path: String, resolved_path: String) -> Self {
-        Self {
-            path,
-            resolved_path,
-            state: ApplyPatchSnapshotState::NonRegular,
-        }
-    }
-
-    /// Builds a snapshot for a path that resolves outside the working directory.
-    pub(super) fn outside_cwd(path: String, resolved_path: String) -> Self {
-        Self {
-            path,
-            resolved_path,
-            state: ApplyPatchSnapshotState::OutsideCwd,
-        }
-    }
-
-    /// Builds a snapshot for a path that could not be resolved.
-    pub(super) fn error(path: String, resolved_path: String) -> Self {
-        Self {
-            path,
-            resolved_path,
-            state: ApplyPatchSnapshotState::Error,
-        }
-    }
-}
-
 /// File-system state for one apply-patch snapshot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ApplyPatchSnapshotState {
