@@ -28,11 +28,6 @@ reference documentation.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
-- [agent-execution-flow.md](agent-execution-flow.md): contributor-oriented
-  overview of the agent prompt, provider turn, MAAP action, runtime execution,
-  feedback, and persistence flow.
-- [maap-actions-reference.md](maap-actions-reference.md): the currently defined
-  MAAP action objects, fields, capabilities, and runtime boundaries.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.
 
