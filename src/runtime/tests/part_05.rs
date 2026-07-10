@@ -12,7 +12,7 @@ async fn runtime_agent_shell_model_list_uses_code_defaults_when_config_models_em
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = []\ndefault_model = \"gpt-5.5\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = []\ndefault_model = \"gpt-5.6-sol\"\n"
                 .to_string(),
         }])
         .unwrap();
@@ -30,12 +30,12 @@ async fn runtime_agent_shell_model_list_uses_code_defaults_when_config_models_em
         .unwrap();
 
     for model in [
-        "★ gpt-5.5",
+        "★ gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
-        "gpt-5.2",
     ] {
         assert!(model_list.contains(model), "{model_list}");
     }
@@ -4830,7 +4830,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(resumed.contains("conversation_id=saved"), "{resumed}");
-    let saved_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-5.5");
+    let saved_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-5.6-sol");
     let saved_token_usage = crate::agent::ModelTokenUsage {
         input_tokens: 321,
         output_tokens: 45,

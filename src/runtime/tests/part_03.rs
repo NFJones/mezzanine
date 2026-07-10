@@ -5239,7 +5239,7 @@ fn runtime_agent_shell_prompt_starts_live_turn_lifecycle() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].turn_id, "turn-1");
     assert_eq!(pending[0].model_profile.provider, "openai");
-    assert_eq!(pending[0].model_profile.model, "gpt-5.5");
+    assert_eq!(pending[0].model_profile.model, "gpt-5.6-sol");
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

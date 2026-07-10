@@ -112,11 +112,11 @@ fn runtime_applies_permission_and_mcp_state_from_config_layers() {
         .resolve_profile("default")
         .unwrap();
     assert_eq!(profile.provider, "openai");
-    assert_eq!(profile.model, "gpt-5.5");
+    assert_eq!(profile.model, "gpt-5.6-sol");
     assert!(
         service
             .provider_registry()
-            .resolve_profile("gpt-5.2")
+            .resolve_profile("gpt-5.6-terra")
             .is_ok(),
         "built-in OpenAI model profiles should be available when no provider list is configured"
     );

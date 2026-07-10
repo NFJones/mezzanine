@@ -194,14 +194,14 @@ auth_profile = "default"
 base_url = ""
 # OpenAI model IDs supported by the default coding-agent harness profile.
 models = [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
-    "gpt-5.3-codex",
-    "gpt-5.3-codex-spark",
-    "gpt-5.2",
 ]
-default_model = "gpt-5.5"
+default_model = "gpt-5.6-sol"
 
 [providers.openai.options]
 # Optional documented OpenAI routing headers for multi-organization/project API keys.
@@ -353,7 +353,7 @@ fallback_profiles = []
 
 [model_profiles.default]
 provider = "openai"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 reasoning_profile = "medium"
 latency_preference = "default"
 multimodal_required = false
@@ -375,7 +375,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-router]
 provider = "openai"
-model = "gpt-5.4-mini"
+model = "gpt-5.6-luna"
 reasoning_profile = "low"
 latency_preference = "fast"
 multimodal_required = false
@@ -389,7 +389,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-small]
 provider = "openai"
-model = "gpt-5.3-codex"
+model = "gpt-5.6-luna"
 reasoning_profile = "medium"
 latency_preference = "fast"
 multimodal_required = false
@@ -403,7 +403,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-medium]
 provider = "openai"
-model = "gpt-5.4"
+model = "gpt-5.6-terra"
 reasoning_profile = "medium"
 latency_preference = "default"
 multimodal_required = false
@@ -417,7 +417,7 @@ fallback_profiles = []
 
 [model_profiles.auto-size-large]
 provider = "openai"
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false

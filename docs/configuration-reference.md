@@ -459,7 +459,7 @@ description.
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
-| `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.5"` | Default model for the provider. |
+| `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.6-sol"` | Default model for the provider. |
 | `providers.<name>.options` | table | `{}` | Provider-specific non-secret options. |
 | `providers.anthropic.options.anthropic_version` | string | omitted | Optional Anthropic Messages API version header; defaults to `2023-06-01`. |
 | `providers.anthropic.options.default_max_tokens` | integer | omitted | Fallback Anthropic `max_tokens` budget when the selected model profile omits `max_output_tokens`; `max_tokens` is accepted as an alias. |
@@ -469,7 +469,7 @@ description.
 Default `providers.openai.models`:
 
 ```toml
-["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"]
+["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
 ```
 
 Default `providers.anthropic.models`:
@@ -585,7 +585,7 @@ Default model profiles:
 | Profile | Field | Default declaration |
 | --- | --- | --- |
 | `default` | `provider` | `"openai"` |
-| `default` | `model` | `"gpt-5.5"` |
+| `default` | `model` | `"gpt-5.6-sol"` |
 | `default` | `reasoning_profile` | `"medium"` |
 | `default` | `latency_preference` | `"default"` |
 | `default` | `multimodal_required` | `false` |
@@ -598,7 +598,7 @@ Default model profiles:
 | `default` | `fallback_profiles` | `[]` |
 | `default.provider_options` | `reasoning_effort` | `"medium"` |
 | `auto-size-router` | `provider` | `"openai"` |
-| `auto-size-router` | `model` | `"gpt-5.4-mini"` |
+| `auto-size-router` | `model` | `"gpt-5.6-luna"` |
 | `auto-size-router` | `reasoning_profile` | `"low"` |
 | `auto-size-router` | `latency_preference` | `"fast"` |
 | `auto-size-router` | `multimodal_required` | `false` |
@@ -611,7 +611,7 @@ Default model profiles:
 | `auto-size-router` | `fallback_profiles` | `[]` |
 | `auto-size-router.provider_options` | `reasoning_effort` | `"low"` |
 | `auto-size-small` | `provider` | `"openai"` |
-| `auto-size-small` | `model` | `"gpt-5.3-codex"` |
+| `auto-size-small` | `model` | `"gpt-5.6-luna"` |
 | `auto-size-small` | `reasoning_profile` | `"medium"` |
 | `auto-size-small` | `latency_preference` | `"fast"` |
 | `auto-size-small` | `multimodal_required` | `false` |
@@ -624,7 +624,7 @@ Default model profiles:
 | `auto-size-small` | `fallback_profiles` | `[]` |
 | `auto-size-small.provider_options` | `reasoning_effort` | `"medium"` |
 | `auto-size-medium` | `provider` | `"openai"` |
-| `auto-size-medium` | `model` | `"gpt-5.4"` |
+| `auto-size-medium` | `model` | `"gpt-5.6-terra"` |
 | `auto-size-medium` | `reasoning_profile` | `"medium"` |
 | `auto-size-medium` | `latency_preference` | `"default"` |
 | `auto-size-medium` | `multimodal_required` | `false` |
@@ -637,7 +637,7 @@ Default model profiles:
 | `auto-size-medium` | `fallback_profiles` | `[]` |
 | `auto-size-medium.provider_options` | `reasoning_effort` | `"medium"` |
 | `auto-size-large` | `provider` | `"openai"` |
-| `auto-size-large` | `model` | `"gpt-5.5"` |
+| `auto-size-large` | `model` | `"gpt-5.6-sol"` |
 | `auto-size-large` | `reasoning_profile` | `"high"` |
 | `auto-size-large` | `latency_preference` | `"default"` |
 | `auto-size-large` | `multimodal_required` | `false` |
