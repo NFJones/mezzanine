@@ -7,7 +7,8 @@
 
 use super::*;
 use crate::runtime::record_browser::{
-    RuntimeRecordBrowser, RuntimeRecordBrowserFilterField, RuntimeRecordBrowserRecord,
+    RuntimeRecordBrowser, RuntimeRecordBrowserFilterChoice, RuntimeRecordBrowserFilterField,
+    RuntimeRecordBrowserRecord,
 };
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 
@@ -77,6 +78,7 @@ impl RuntimeSessionService {
                 "Issues"
             },
             records.into_iter().map(issue_browser_record).collect(),
+            issue_kind_filter_choices(),
         )?;
         if args.detail_id.is_some() {
             browser.show_first_record_detail();
@@ -160,6 +162,7 @@ impl RuntimeSessionService {
                 "Memories"
             },
             records.into_iter().map(memory_browser_record).collect(),
+            memory_kind_filter_choices(),
         )?;
         if args.detail_id.is_some() {
             browser.show_first_record_detail();
@@ -241,6 +244,7 @@ impl RuntimeSessionService {
                         .into_iter()
                         .map(issue_browser_record)
                         .collect(),
+                    issue_kind_filter_choices(),
                 )
             }
             RuntimeRecordBrowserOverlaySource::Memories {
@@ -270,6 +274,7 @@ impl RuntimeSessionService {
                         .into_iter()
                         .map(|result| memory_browser_record(result.record))
                         .collect(),
+                    memory_kind_filter_choices(),
                 )
             }
         }
@@ -635,6 +640,64 @@ fn memory_record_title(record: &crate::memory::MemoryRecord) -> String {
         .find(|line| !line.trim().is_empty())
         .map(|line| line.chars().take(80).collect())
         .unwrap_or_else(|| record.id.clone())
+}
+
+fn issue_kind_filter_choices() -> Vec<RuntimeRecordBrowserFilterChoice> {
+    vec![
+        RuntimeRecordBrowserFilterChoice {
+            label: "all kinds".to_string(),
+            value: String::new(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: crate::issues::IssueKind::Defect.as_str().to_string(),
+            value: crate::issues::IssueKind::Defect.as_str().to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: crate::issues::IssueKind::Task.as_str().to_string(),
+            value: crate::issues::IssueKind::Task.as_str().to_string(),
+        },
+    ]
+}
+
+fn memory_kind_filter_choices() -> Vec<RuntimeRecordBrowserFilterChoice> {
+    vec![
+        RuntimeRecordBrowserFilterChoice {
+            label: "all kinds".to_string(),
+            value: String::new(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Preference).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Preference).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Fact).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Fact).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Procedure).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Procedure).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Documentation).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Documentation).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Research).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Research).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Episode).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Episode).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Warning).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Warning).to_string(),
+        },
+        RuntimeRecordBrowserFilterChoice {
+            label: memory_kind_name_for_show(crate::memory::MemoryKind::Scratch).to_string(),
+            value: memory_kind_name_for_show(crate::memory::MemoryKind::Scratch).to_string(),
+        },
+    ]
 }
 
 fn parse_memory_kind_for_show(value: &str) -> Result<crate::memory::MemoryKind> {

@@ -4267,6 +4267,7 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
             metadata: vec![("kind".to_string(), "task".to_string())],
             markdown: "Body".to_string(),
         }],
+        Vec::new(),
     )
     .unwrap();
     service.pending_record_browser_overlays.insert(
@@ -4439,6 +4440,7 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
                 markdown: "Second body".to_string(),
             },
         ],
+        Vec::new(),
     )
     .unwrap();
     let mut child_browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
@@ -4450,6 +4452,7 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
             metadata: vec![("kind".to_string(), "task".to_string())],
             markdown: "First body".to_string(),
         }],
+        Vec::new(),
     )
     .unwrap();
     child_browser.show_first_record_detail();

@@ -1856,6 +1856,9 @@ fn record_browser_prompt_text(
         | crate::runtime::record_browser::RuntimeRecordBrowserPrompt::Save { input } => {
             input.clone()
         }
+        crate::runtime::record_browser::RuntimeRecordBrowserPrompt::KindSelector { .. } => {
+            String::new()
+        }
     }
 }
 
@@ -1867,6 +1870,7 @@ fn render_record_browser_overlay(
         return false;
     };
     let page = record_browser.browser.render_page();
+    let prompt_selection = record_browser.browser.prompt_selection();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some(record_browser.command.clone()),
         &page.markdown,
@@ -1874,8 +1878,35 @@ fn render_record_browser_overlay(
     );
     overlay.lines = content.lines;
     overlay.line_style_spans = content.line_style_spans;
-    overlay.selections = content.selections;
-    overlay.active_selection_index = (!overlay.selections.is_empty()).then_some(0);
+    overlay.selections = if let Some(prompt_selection) = prompt_selection {
+        overlay
+            .lines
+            .iter()
+            .enumerate()
+            .skip(prompt_selection.start_line)
+            .take(prompt_selection.option_count)
+            .map(|(line_index, line)| RuntimeDisplayOverlaySelection {
+                line_index,
+                start_column: 0,
+                width: UnicodeWidthStr::width(line.as_str()),
+                command: String::new(),
+                kind: RuntimeDisplayOverlaySelectionKind::Primary,
+            })
+            .collect()
+    } else {
+        content.selections
+    };
+    overlay.active_selection_index = if overlay.selections.is_empty() {
+        None
+    } else {
+        prompt_selection
+            .map(|selection| {
+                selection
+                    .active_index
+                    .min(overlay.selections.len().saturating_sub(1))
+            })
+            .or(Some(0))
+    };
     overlay.search_input = None;
     overlay.search_match = None;
     true
@@ -2038,6 +2069,12 @@ impl RuntimeSessionService {
 
     /// Applies editing keys while a retained record-browser modal prompt is open.
     fn apply_primary_record_browser_prompt_input(&mut self, input: &[u8]) -> Result<bool> {
+        let prompt_has_selector = self
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt_selection())
+            .is_some();
         let prompt_text = self
             .primary_display_overlay
             .as_ref()
@@ -2045,33 +2082,61 @@ impl RuntimeSessionService {
             .and_then(|record_browser| record_browser.browser.prompt())
             .map(record_browser_prompt_text)
             .unwrap_or_default();
-        let action = match runtime_display_overlay_input_action(input) {
-            RuntimeDisplayOverlayInputAction::Exit => {
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
+        let action = if prompt_has_selector {
+            match runtime_selector_input_action(input) {
+                RuntimeSelectorInputAction::Exit => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
+                }
+                RuntimeSelectorInputAction::Select => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
+                }
+                RuntimeSelectorInputAction::Previous => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::MovePromptSelection(
+                        -1,
+                    )
+                }
+                RuntimeSelectorInputAction::Next => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::MovePromptSelection(
+                        1,
+                    )
+                }
+                RuntimeSelectorInputAction::First => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SelectPromptFirst
+                }
+                RuntimeSelectorInputAction::Last => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SelectPromptLast
+                }
+                RuntimeSelectorInputAction::Ignore => return Ok(false),
             }
-            RuntimeDisplayOverlayInputAction::SelectActive => {
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
+        } else {
+            match runtime_display_overlay_input_action(input) {
+                RuntimeDisplayOverlayInputAction::Exit => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
+                }
+                RuntimeDisplayOverlayInputAction::SelectActive => {
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
+                }
+                RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
+                    let mut text = prompt_text;
+                    text.pop();
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
+                }
+                RuntimeDisplayOverlayInputAction::EditSearchText => {
+                    let Ok(input) = std::str::from_utf8(input) else {
+                        return Ok(false);
+                    };
+                    let mut text = prompt_text;
+                    text.push_str(input);
+                    crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
+                }
+                RuntimeDisplayOverlayInputAction::StartSearch
+                | RuntimeDisplayOverlayInputAction::SelectPrevious
+                | RuntimeDisplayOverlayInputAction::SelectNext
+                | RuntimeDisplayOverlayInputAction::SelectFirst
+                | RuntimeDisplayOverlayInputAction::SelectLast
+                | RuntimeDisplayOverlayInputAction::ScrollBy(_)
+                | RuntimeDisplayOverlayInputAction::Ignore => return Ok(false),
             }
-            RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
-                let mut text = prompt_text;
-                text.pop();
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
-            }
-            RuntimeDisplayOverlayInputAction::EditSearchText => {
-                let Ok(input) = std::str::from_utf8(input) else {
-                    return Ok(false);
-                };
-                let mut text = prompt_text;
-                text.push_str(input);
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
-            }
-            RuntimeDisplayOverlayInputAction::StartSearch
-            | RuntimeDisplayOverlayInputAction::SelectPrevious
-            | RuntimeDisplayOverlayInputAction::SelectNext
-            | RuntimeDisplayOverlayInputAction::SelectFirst
-            | RuntimeDisplayOverlayInputAction::SelectLast
-            | RuntimeDisplayOverlayInputAction::ScrollBy(_)
-            | RuntimeDisplayOverlayInputAction::Ignore => return Ok(false),
         };
         let outcome = {
             let Some(overlay) = self.primary_display_overlay.as_mut() else {
