@@ -3717,32 +3717,31 @@ pub(super) fn agent_thinking_display_lines_for_width(text: &str, columns: usize)
         .collect()
 }
 
-/// Builds width-bounded status-style macro-step lines from scripted prompts.
-pub(super) fn agent_macro_step_display_lines_for_width(text: &str, columns: usize) -> Vec<String> {
-    let prefix = "step: ";
-    let prefix_width = UnicodeWidthStr::width(prefix);
+/// Builds one width-bounded macro lifecycle line for the parent transcript.
+pub(super) fn agent_macro_lifecycle_display_lines_for_width(
+    macro_name: &str,
+    step_index: Option<usize>,
+    total_steps: usize,
+    status: &str,
+    columns: usize,
+) -> Vec<String> {
     let content_width = bounded_agent_terminal_presentation_columns(columns)
         .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
         .max(1);
-    let segment_width = content_width.saturating_sub(prefix_width).max(1);
-    let continuation = " ".repeat(prefix_width);
-    text.trim_end_matches(['\r', '\n'])
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .flat_map(|line| {
-            wrap_agent_terminal_text(&sanitized_agent_terminal_line(line), segment_width)
-                .into_iter()
-                .enumerate()
-                .map(|(index, segment)| {
-                    if index == 0 {
-                        format!("{prefix}{segment}")
-                    } else {
-                        format!("{continuation}{segment}")
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
+    let macro_name = macro_name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let status = status.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = match step_index {
+        Some(step_index) => format!(
+            "macro {macro_name} ({}/{}): {status}",
+            step_index.saturating_add(1),
+            total_steps.max(1)
+        ),
+        None => format!("macro {macro_name}: {status}"),
+    };
+    wrap_agent_terminal_text(&sanitized_agent_terminal_line(&text), content_width)
+        .into_iter()
+        .next()
+        .into_iter()
         .collect()
 }
 
@@ -4361,21 +4360,49 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Appends one macro step as shadow-style status text in the parent pane.
-    ///
-    /// Macro orchestration should show the scripted step immediately before the
-    /// matching `user>` prompt so the parent transcript exposes runtime-owned
-    /// sequencing without changing the prompt text itself.
-    pub(in crate::runtime) fn append_agent_macro_step_to_terminal_buffer(
+    /// Appends one structured macro lifecycle transition in the parent pane.
+    pub(in crate::runtime) fn append_agent_macro_status_to_terminal_buffer(
         &mut self,
         pane_id: &str,
-        text: &str,
+        macro_name: &str,
+        step_index: Option<usize>,
+        total_steps: usize,
+        status: &str,
     ) -> Result<()> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
         self.append_agent_terminal_lines_to_buffer(
             pane_id,
-            &agent_macro_step_display_lines_for_width(text, columns),
+            &agent_macro_lifecycle_display_lines_for_width(
+                macro_name,
+                step_index,
+                total_steps,
+                status,
+                columns,
+            ),
             AgentTerminalPresentationStyle::Status,
+        )
+    }
+
+    /// Appends one failed macro lifecycle transition in the parent pane.
+    pub(in crate::runtime) fn append_agent_macro_error_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        macro_name: &str,
+        step_index: usize,
+        total_steps: usize,
+        status: &str,
+    ) -> Result<()> {
+        let columns = self.agent_terminal_presentation_columns(pane_id)?;
+        self.append_agent_terminal_lines_to_buffer(
+            pane_id,
+            &agent_macro_lifecycle_display_lines_for_width(
+                macro_name,
+                Some(step_index),
+                total_steps,
+                status,
+                columns,
+            ),
+            AgentTerminalPresentationStyle::Error,
         )
     }
 

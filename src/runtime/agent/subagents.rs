@@ -825,6 +825,7 @@ impl RuntimeSessionService {
             });
         }
         let mut failed_macro_parent_turn = None;
+        let mut macro_result_status = None;
         if let Some(parent_run_id) = self.macro_run_by_child_turn.remove(&turn.turn_id)
             && parent_run_id == dependency.parent_turn_id
             && let Some(run) = self
@@ -844,11 +845,22 @@ impl RuntimeSessionService {
             run.phase = MacroRunPhase::WaitingForJudge {
                 step_index: step.index,
             };
+            macro_result_status =
+                Some((run.macro_name.clone(), step.index, run.steps.len(), success));
             if !success {
                 failed_macro_parent_turn = Some(parent_run_id);
             }
         }
         self.joined_subagent_dependencies.remove(&turn.turn_id);
+        if let Some((macro_name, step_index, total_steps, true)) = macro_result_status.as_ref() {
+            self.append_agent_macro_status_to_terminal_buffer(
+                &parent_turn.pane_id,
+                macro_name,
+                Some(*step_index),
+                *total_steps,
+                "result received; evaluating",
+            )?;
+        }
         self.append_agent_trace_turn_event(
             &parent_turn.pane_id,
             &parent_turn.turn_id,
@@ -868,9 +880,15 @@ impl RuntimeSessionService {
                 AgentTurnState::Failed,
                 "macro_step_failed",
             )?;
-            self.append_agent_error_text_to_terminal_buffer(
+            let (macro_name, step_index, total_steps, _) = macro_result_status
+                .as_ref()
+                .ok_or_else(|| MezError::invalid_state("failed macro step lost lifecycle state"))?;
+            self.append_agent_macro_error_to_terminal_buffer(
                 &parent_turn.pane_id,
-                &format!("agent: macro step failed: {summary}"),
+                macro_name,
+                *step_index,
+                *total_steps,
+                &format!("worker failed: {summary}"),
             )?;
             self.start_ready_agent_turns()?;
             return Ok(());

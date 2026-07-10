@@ -739,6 +739,8 @@ pub(super) struct MacroJudgeDecision {
 pub(super) struct MacroRunStep {
     /// Zero-based index copied from the loaded macro definition.
     pub index: usize,
+    /// Number of times this step has been submitted to the persistent worker.
+    pub attempts: usize,
     /// Scripted prompt copied at run start so in-flight runs are stable.
     pub scripted_prompt: String,
     /// Prompt text submitted to the child, including invocation context.

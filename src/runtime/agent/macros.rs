@@ -116,6 +116,7 @@ impl RuntimeSessionService {
             .enumerate()
             .map(|(index, step)| MacroRunStep {
                 index,
+                attempts: 0,
                 scripted_prompt: step.prompt.clone(),
                 submitted_prompt: None,
                 child_turn_id: None,
@@ -220,6 +221,16 @@ impl RuntimeSessionService {
             &started,
             &child_agent_id,
         );
+        self.append_agent_macro_status_to_terminal_buffer(
+            pane_id,
+            &definition.summary.name,
+            None,
+            definition.steps.len(),
+            &format!(
+                "started; {} steps; worker {child_agent_id}",
+                definition.steps.len()
+            ),
+        )?;
         self.queue_runtime_owned_first_macro_step(
             pane_id,
             &started,
@@ -277,18 +288,12 @@ impl RuntimeSessionService {
                 payload,
             },
         };
-        let submitted_prompt = match &action.payload {
-            AgentActionPayload::SendMessage { payload, .. } => payload.clone(),
-            _ => unreachable!("synthetic macro action is always send_message"),
-        };
         let result = self
             .queue_runtime_macro_step_prompt(
                 &parent_turn,
                 &action,
-                &format!("agent:{child_agent_id}"),
-                "text/plain; charset=utf-8",
-                submitted_prompt.as_str(),
                 0,
+                &format!("dispatched to {child_agent_id}; waiting for worker"),
             )?
             .ok_or_else(|| MezError::invalid_state("runtime-owned macro step was not accepted"))?;
         let batch = MaapBatch {
@@ -349,11 +354,19 @@ impl RuntimeSessionService {
         &mut self,
         parent_turn: &AgentTurnRecord,
         action: &AgentAction,
-        recipient: &str,
-        content_type: &str,
-        payload: &str,
         step_index: usize,
+        dispatch_status: &str,
     ) -> Result<Option<ActionResult>> {
+        let AgentActionPayload::SendMessage {
+            recipient,
+            content_type,
+            payload,
+        } = &action.payload
+        else {
+            return Err(MezError::invalid_args(
+                "runtime macro step action must send a message",
+            ));
+        };
         let already_recorded_step_action =
             self.joined_subagent_dependencies
                 .values()
@@ -364,9 +377,9 @@ impl RuntimeSessionService {
         let result = self.queue_macro_managed_message_step(
             parent_turn,
             action,
-            recipient,
-            content_type,
-            payload,
+            recipient.as_str(),
+            content_type.as_str(),
+            payload.as_str(),
         )?;
         if result.is_some() {
             let child_turn_id = self
@@ -378,7 +391,20 @@ impl RuntimeSessionService {
                 })
                 .map(|dependency| dependency.child_turn_id.clone());
             if child_turn_id.is_some() && !already_recorded_step_action {
-                self.append_agent_macro_step_to_terminal_buffer(&parent_turn.pane_id, payload)?;
+                let (macro_name, total_steps) = self
+                    .macro_runs_by_parent_turn
+                    .get(parent_turn.turn_id.as_str())
+                    .map(|run| (run.macro_name.clone(), run.steps.len()))
+                    .ok_or_else(|| {
+                        MezError::invalid_state("macro run disappeared before step display")
+                    })?;
+                self.append_agent_macro_status_to_terminal_buffer(
+                    &parent_turn.pane_id,
+                    &macro_name,
+                    Some(step_index),
+                    total_steps,
+                    dispatch_status,
+                )?;
                 self.append_agent_user_prompt_to_terminal_buffer(&parent_turn.pane_id, payload)?;
             }
             if let Some(run) = self
@@ -387,6 +413,7 @@ impl RuntimeSessionService {
             {
                 run.current_step = step_index;
                 if let Some(step) = run.steps.get_mut(step_index) {
+                    step.attempts = step.attempts.saturating_add(1);
                     step.submitted_prompt = Some(payload.to_string());
                     step.child_turn_id = child_turn_id.clone();
                     step.task_result = None;
@@ -597,7 +624,7 @@ impl RuntimeSessionService {
         }
         match decision.outcome {
             MacroJudgeOutcome::Continue | MacroJudgeOutcome::ContinueWithAdaptedPrompt => {
-                let (child_agent_id, prompt) = {
+                let (child_agent_id, prompt, dispatch_status) = {
                     let run = self
                         .macro_runs_by_parent_turn
                         .get(turn.turn_id.as_str())
@@ -615,7 +642,20 @@ impl RuntimeSessionService {
                         .adapted_prompt
                         .clone()
                         .unwrap_or_else(|| next_step.scripted_prompt.clone());
-                    (run.child_agent_id.clone(), prompt)
+                    let dispatch_status = if decision.outcome
+                        == MacroJudgeOutcome::ContinueWithAdaptedPrompt
+                    {
+                        format!(
+                            "judge adapted next prompt: {}; dispatched to {}; waiting for worker",
+                            decision.rationale, run.child_agent_id
+                        )
+                    } else {
+                        format!(
+                            "judge continued; dispatched to {}; waiting for worker",
+                            run.child_agent_id
+                        )
+                    };
+                    (run.child_agent_id.clone(), prompt, dispatch_status)
                 };
                 let action = AgentAction {
                     id: format!("macro-step-{}", next_step_index.saturating_add(1)),
@@ -630,10 +670,8 @@ impl RuntimeSessionService {
                     .queue_runtime_macro_step_prompt(
                         turn,
                         &action,
-                        &format!("agent:{child_agent_id}"),
-                        "text/plain; charset=utf-8",
-                        prompt.as_str(),
                         next_step_index,
+                        &dispatch_status,
                     )?
                     .ok_or_else(|| {
                         MezError::invalid_state("macro judge next step was not accepted")
@@ -656,7 +694,7 @@ impl RuntimeSessionService {
                 )?;
             }
             MacroJudgeOutcome::RetryCurrentStep => {
-                let (child_agent_id, prompt, retry_action_id) = {
+                let (child_agent_id, prompt, retry_action_id, dispatch_status) = {
                     let run = self
                         .macro_runs_by_parent_turn
                         .get(turn.turn_id.as_str())
@@ -682,7 +720,18 @@ impl RuntimeSessionService {
                             .clone()
                             .unwrap_or_else(|| "current".to_string())
                     );
-                    (run.child_agent_id.clone(), prompt, retry_action_id)
+                    let dispatch_status = format!(
+                        "judge requested retry attempt {}: {}; dispatched to {}; waiting for worker",
+                        current_step.attempts.saturating_add(1),
+                        decision.rationale,
+                        run.child_agent_id
+                    );
+                    (
+                        run.child_agent_id.clone(),
+                        prompt,
+                        retry_action_id,
+                        dispatch_status,
+                    )
                 };
                 let action = AgentAction {
                     id: retry_action_id,
@@ -694,14 +743,7 @@ impl RuntimeSessionService {
                     },
                 };
                 let result = self
-                    .queue_runtime_macro_step_prompt(
-                        turn,
-                        &action,
-                        &format!("agent:{child_agent_id}"),
-                        "text/plain; charset=utf-8",
-                        prompt.as_str(),
-                        step_index,
-                    )?
+                    .queue_runtime_macro_step_prompt(turn, &action, step_index, &dispatch_status)?
                     .ok_or_else(|| {
                         MezError::invalid_state("macro judge retry step was not accepted")
                     })?;
@@ -726,11 +768,18 @@ impl RuntimeSessionService {
                 let message = decision
                     .user_message
                     .as_deref()
-                    .unwrap_or("macro judge stopped the macro");
-                let child_agent_id = self
+                    .unwrap_or(decision.rationale.as_str());
+                let (child_agent_id, macro_name, total_steps) = self
                     .macro_runs_by_parent_turn
                     .get(turn.turn_id.as_str())
-                    .map(|run| run.child_agent_id.clone());
+                    .map(|run| {
+                        (
+                            Some(run.child_agent_id.clone()),
+                            run.macro_name.clone(),
+                            run.steps.len(),
+                        )
+                    })
+                    .unwrap_or_else(|| (None, "unknown".to_string(), step_index.saturating_add(1)));
                 self.macro_runs_by_parent_turn.remove(&turn.turn_id);
                 if let Some(child_agent_id) = child_agent_id.as_deref() {
                     let reason = "macro judge rejected subagent output";
@@ -770,9 +819,12 @@ impl RuntimeSessionService {
                         self.subagent_scopes.unregister(child_agent_id);
                     }
                 }
-                self.append_agent_error_text_to_terminal_buffer(
+                self.append_agent_macro_error_to_terminal_buffer(
                     &turn.pane_id,
-                    &format!("agent: macro failed: {message}"),
+                    &macro_name,
+                    step_index,
+                    total_steps,
+                    &format!("stopped: {message}"),
                 )?;
                 self.complete_running_agent_turn_and_start_ready(
                     turn,
@@ -781,10 +833,17 @@ impl RuntimeSessionService {
                 )?;
             }
             MacroJudgeOutcome::FinishSuccess => {
-                let child_agent_id = self
+                let (child_agent_id, macro_name, total_steps) = self
                     .macro_runs_by_parent_turn
                     .get(turn.turn_id.as_str())
-                    .map(|run| run.child_agent_id.clone());
+                    .map(|run| {
+                        (
+                            Some(run.child_agent_id.clone()),
+                            run.macro_name.clone(),
+                            run.steps.len(),
+                        )
+                    })
+                    .unwrap_or_else(|| (None, "unknown".to_string(), step_index.saturating_add(1)));
                 self.macro_runs_by_parent_turn.remove(&turn.turn_id);
                 if let Some(child_agent_id) = child_agent_id.as_deref() {
                     let reason = "macro completed successfully";
@@ -824,9 +883,12 @@ impl RuntimeSessionService {
                         self.subagent_scopes.unregister(child_agent_id);
                     }
                 }
-                self.append_agent_status_text_to_terminal_buffer(
+                self.append_agent_macro_status_to_terminal_buffer(
                     &turn.pane_id,
-                    "agent: macro completed successfully",
+                    &macro_name,
+                    Some(step_index),
+                    total_steps,
+                    "completed",
                 )?;
                 self.complete_running_agent_turn_and_start_ready(
                     turn,

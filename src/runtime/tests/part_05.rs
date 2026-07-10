@@ -3022,12 +3022,16 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         "{pane_text}"
     );
     let step_index = pane_text
-        .find("step: /loop inspect release notes for the requested version.")
-        .expect("parent transcript should include the first macro step line");
+        .find("macro release-check (1/2): dispatched to agent-%")
+        .expect("parent transcript should include the first macro dispatch status");
     let prompt_index = pane_text
         .find("user> /loop inspect release notes for the requested version.")
         .expect("parent transcript should include the first macro prompt line");
     assert!(step_index < prompt_index, "{pane_text}");
+    assert!(
+        pane_text.contains("macro release-check: started; 2 steps; worker agent-%"),
+        "{pane_text}"
+    );
     let macro_children = service
         .macro_managed_subagent_agents
         .keys()
@@ -3335,12 +3339,16 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .join("\n");
     assert!(pane_text.contains("user> Summarize release blockers."), "{pane_text}");
     let step_index = pane_text
-        .find("step: Summarize release blockers.")
-        .expect("parent transcript should include the continued macro step line");
+        .find("macro release-check (2/2): judge continued; dispatched to agent-%")
+        .expect("parent transcript should include the continued macro dispatch status");
     let prompt_index = pane_text
         .find("user> Summarize release blockers.")
         .expect("parent transcript should include the continued macro prompt line");
     assert!(step_index < prompt_index, "{pane_text}");
+    assert!(
+        pane_text.contains("macro release-check (1/2): result received; evaluating"),
+        "{pane_text}"
+    );
 
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -3450,6 +3458,10 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         pane_text.contains("user> Inspect release notes directly and list blockers."),
         "{pane_text}"
     );
+    assert!(
+        pane_text.contains("macro release-check (1/2): judge requested retry attempt 2:"),
+        "{pane_text}"
+    );
 
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -3556,6 +3568,15 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
             .iter()
             .flat_map(|window| window.panes())
             .all(|pane| pane.id.as_str() != child_pane_id)
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("macro release-check (1/2): stopped: the subagent did not perform the requested inspection"),
+        "{pane_text}"
     );
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -3669,7 +3690,7 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("agent: macro completed successfully"),
+        pane_text.contains("macro release-check (1/1): completed"),
         "{pane_text}"
     );
 
