@@ -4810,6 +4810,50 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
 /// result context so it can continue locally or wait for existing children
 /// instead of having the turn fail immediately.
 #[test]
+fn runtime_spawn_agent_action_succeeds_while_primary_is_detached() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "delegate while detached")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .detach_primary(&primary, Size::new(80, 24).unwrap())
+        .unwrap();
+
+    let action = runtime_spawn_agent_action("spawn-detached", "inspect detached state");
+    let result = service
+        .execute_spawn_action_for_turn(&turn, &action)
+        .unwrap();
+
+    assert_eq!(result.status, ActionStatus::Running);
+    assert!(service.session().primary_client_id().is_none());
+    assert_eq!(service.joined_subagent_dependencies.len(), 1);
+    assert!(service.session().windows().len() > 1);
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies subagent spawn-limit denials are recoverable model feedback.
+///
+/// Capacity exhaustion is a transient scheduling condition, not a malformed
+/// delegation request. The parent model should receive the denial as action
+/// result context so it can continue locally or wait for existing children
+/// instead of having the turn fail immediately.
+#[test]
 fn runtime_spawn_limit_denial_queues_model_recovery() {
     let mut service = test_runtime_service();
     let primary = service

@@ -190,10 +190,6 @@ impl RuntimeSessionService {
                 "subagent execution requires a spawn_agent action",
             ));
         };
-        let controller =
-            self.session.primary_client_id().cloned().ok_or_else(|| {
-                MezError::invalid_state("spawn_agent requires an attached primary")
-            })?;
         let normalized_cooperation_mode = runtime_cooperation_mode(cooperation_mode)?;
         let normalized_role =
             self.maap_spawn_role_for_action(role, normalized_cooperation_mode, write_scopes);
@@ -221,7 +217,7 @@ impl RuntimeSessionService {
         .to_string();
         let spawn = runtime_subagent_spawn_request(&params, false)?;
         let placement_mode = runtime_subagent_placement_mode(&params)?;
-        let spawn_json = self.spawn_runtime_subagent(&controller, spawn, placement_mode)?;
+        let spawn_json = self.spawn_runtime_subagent_session_owned(spawn, placement_mode)?;
         if self.subagent_wait_policy == SubagentWaitPolicy::Join {
             let (child_agent_id, child_display_name, child_turn_id) =
                 runtime_spawn_json_agent_and_turn(&spawn_json)?;

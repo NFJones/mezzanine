@@ -141,16 +141,61 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
+        self.create_unfocused_window_in_group_with_pane_process_internal(
+            Some(primary_client_id),
+            group_id,
+            name,
+            layout_policy,
+            start_directory,
+        )
+    }
+
+    /// Creates an unfocused window and pane process for session-owned orchestration.
+    pub(in crate::runtime) fn create_unfocused_window_in_group_with_pane_process_session_owned(
+        &mut self,
+        group_id: &crate::ids::WindowGroupId,
+        name: impl Into<String>,
+        layout_policy: crate::layout::LayoutPolicy,
+        start_directory: Option<&Path>,
+    ) -> Result<PaneProcessStart> {
+        self.require_live()?;
+        self.create_unfocused_window_in_group_with_pane_process_internal(
+            None,
+            group_id,
+            name,
+            layout_policy,
+            start_directory,
+        )
+    }
+
+    /// Implements authenticated and session-owned unfocused window creation.
+    fn create_unfocused_window_in_group_with_pane_process_internal(
+        &mut self,
+        primary_client_id: Option<&crate::ids::ClientId>,
+        group_id: &crate::ids::WindowGroupId,
+        name: impl Into<String>,
+        layout_policy: crate::layout::LayoutPolicy,
+        start_directory: Option<&Path>,
+    ) -> Result<PaneProcessStart> {
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
         let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
-        let window_id =
+        let window_id = if let Some(primary_client_id) = primary_client_id {
             self.session
-                .new_window_in_group(primary_client_id, group_id, name, false)?;
+                .new_window_in_group(primary_client_id, group_id, name, false)?
+        } else {
+            self.session
+                .new_window_in_group_session_owned(group_id, name, false)?
+        };
         self.window_created_at_unix_seconds
             .insert(window_id.to_string(), current_unix_seconds());
-        self.session
-            .set_window_layout_policy(primary_client_id, &window_id, layout_policy)?;
+        if let Some(primary_client_id) = primary_client_id {
+            self.session
+                .set_window_layout_policy(primary_client_id, &window_id, layout_policy)?;
+        } else {
+            self.session
+                .set_window_layout_policy_session_owned(&window_id, layout_policy)?;
+        }
         let window = self
             .session
             .windows()
@@ -364,15 +409,60 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        validate_runtime_start_directory(start_directory)?;
-        let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
-        let pane_id = self.session.split_pane_in_window_select(
-            primary_client_id,
+        self.split_pane_in_window_with_process_internal(
+            Some(primary_client_id),
             window_id,
             direction,
             select_new,
-        )?;
+            explicit_command,
+            start_directory,
+        )
+    }
+
+    /// Splits a background window and starts its pane process for session-owned orchestration.
+    pub(in crate::runtime) fn split_pane_in_window_with_process_session_owned(
+        &mut self,
+        window_id: &WindowId,
+        direction: SplitDirection,
+        select_new: bool,
+        explicit_command: Option<&str>,
+        start_directory: Option<&Path>,
+    ) -> Result<PaneProcessStart> {
+        self.require_live()?;
+        self.split_pane_in_window_with_process_internal(
+            None,
+            window_id,
+            direction,
+            select_new,
+            explicit_command,
+            start_directory,
+        )
+    }
+
+    /// Implements authenticated and session-owned background pane creation.
+    fn split_pane_in_window_with_process_internal(
+        &mut self,
+        primary_client_id: Option<&crate::ids::ClientId>,
+        window_id: &WindowId,
+        direction: SplitDirection,
+        select_new: bool,
+        explicit_command: Option<&str>,
+        start_directory: Option<&Path>,
+    ) -> Result<PaneProcessStart> {
+        validate_runtime_start_directory(start_directory)?;
+        let previous_session = self.session.clone();
+        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
+        let pane_id = if let Some(primary_client_id) = primary_client_id {
+            self.session.split_pane_in_window_select(
+                primary_client_id,
+                window_id,
+                direction,
+                select_new,
+            )?
+        } else {
+            self.session
+                .split_pane_in_window_select_session_owned(window_id, direction, select_new)?
+        };
         if let Err(error) = self.sync_tracked_pty_sizes() {
             self.session = previous_session;
             self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;

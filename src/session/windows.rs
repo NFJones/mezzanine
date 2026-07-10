@@ -80,6 +80,19 @@ impl Session {
         select: bool,
     ) -> Result<WindowId> {
         self.require_primary(primary_client_id)?;
+        self.new_window_in_group_session_owned(group_id, name, select)
+    }
+
+    /// Creates a window in an existing group for session-owned orchestration.
+    ///
+    /// This bypasses client authorization only; callers must already be trusted
+    /// runtime paths acting on behalf of the live session.
+    pub(crate) fn new_window_in_group_session_owned(
+        &mut self,
+        group_id: &WindowGroupId,
+        name: impl Into<String>,
+        select: bool,
+    ) -> Result<WindowId> {
         let group_index = self
             .window_groups
             .iter()
@@ -183,6 +196,15 @@ impl Session {
         name: impl Into<String>,
     ) -> Result<bool> {
         self.require_primary(primary_client_id)?;
+        self.rename_window_generated_session_owned(target, name)
+    }
+
+    /// Renames a generated window for session-owned orchestration.
+    pub(crate) fn rename_window_generated_session_owned(
+        &mut self,
+        target: &str,
+        name: impl Into<String>,
+    ) -> Result<bool> {
         let index = self.window_index_or_active(Some(target))?;
         if self.windows[index].has_explicit_name() {
             return Ok(false);
@@ -199,6 +221,11 @@ impl Session {
         target: &str,
     ) -> Result<()> {
         self.require_primary(primary_client_id)?;
+        self.mark_window_name_generated_session_owned(target)
+    }
+
+    /// Marks a window name as generated for session-owned orchestration.
+    pub(crate) fn mark_window_name_generated_session_owned(&mut self, target: &str) -> Result<()> {
         let index = self.window_index_or_active(Some(target))?;
         self.windows[index].mark_name_generated();
         self.record_event();
@@ -486,6 +513,16 @@ impl Session {
         select_new: bool,
     ) -> Result<PaneId> {
         self.require_primary(primary_client_id)?;
+        self.split_pane_in_window_select_session_owned(window_id, direction, select_new)
+    }
+
+    /// Splits a pane in a target window for session-owned orchestration.
+    pub(crate) fn split_pane_in_window_select_session_owned(
+        &mut self,
+        window_id: &WindowId,
+        direction: SplitDirection,
+        select_new: bool,
+    ) -> Result<PaneId> {
         let window = self
             .windows
             .iter_mut()
@@ -717,6 +754,15 @@ impl Session {
         policy: LayoutPolicy,
     ) -> Result<LayoutPolicy> {
         self.require_primary(primary_client_id)?;
+        self.set_window_layout_policy_session_owned(window_id, policy)
+    }
+
+    /// Applies a window layout policy for session-owned orchestration.
+    pub(crate) fn set_window_layout_policy_session_owned(
+        &mut self,
+        window_id: &WindowId,
+        policy: LayoutPolicy,
+    ) -> Result<LayoutPolicy> {
         let window = self
             .windows
             .iter_mut()
@@ -1148,6 +1194,15 @@ impl Session {
         force: bool,
     ) -> Result<Option<Pane>> {
         self.require_primary(primary_client_id)?;
+        self.kill_pane_session_owned(target, force)
+    }
+
+    /// Removes a pane for session-owned orchestration.
+    pub(crate) fn kill_pane_session_owned(
+        &mut self,
+        target: Option<&str>,
+        force: bool,
+    ) -> Result<Option<Pane>> {
         let (window_index, pane_index) = match target {
             Some(target) => self.pane_location(Some(target))?,
             None => {

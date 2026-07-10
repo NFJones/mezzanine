@@ -306,6 +306,25 @@ impl RuntimeSessionService {
     pub(in crate::runtime) fn spawn_runtime_subagent(
         &mut self,
         controller: &crate::ids::ClientId,
+        spawn: SubagentSpawnRequest,
+        placement: RuntimeSubagentPlacement,
+    ) -> Result<String> {
+        self.spawn_runtime_subagent_internal(Some(controller), spawn, placement)
+    }
+
+    /// Creates a child subagent for already-authorized session-owned orchestration.
+    pub(in crate::runtime) fn spawn_runtime_subagent_session_owned(
+        &mut self,
+        spawn: SubagentSpawnRequest,
+        placement: RuntimeSubagentPlacement,
+    ) -> Result<String> {
+        self.spawn_runtime_subagent_internal(None, spawn, placement)
+    }
+
+    /// Implements client-authenticated and session-owned subagent creation.
+    fn spawn_runtime_subagent_internal(
+        &mut self,
+        controller: Option<&crate::ids::ClientId>,
         mut spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
@@ -582,7 +601,7 @@ impl RuntimeSessionService {
     /// which point a new bucket window is created in the same group.
     fn spawn_subagent_pane_in_parent_group(
         &mut self,
-        controller: &crate::ids::ClientId,
+        controller: Option<&crate::ids::ClientId>,
         spawn: &SubagentSpawnRequest,
         requested_window_name: Option<&str>,
         start_directory: Option<&Path>,
@@ -590,10 +609,21 @@ impl RuntimeSessionService {
         self.prune_subagent_window_ids();
         let group_id = self.subagent_parent_group_id(&spawn.parent_agent_id)?;
         if let Some((window_id, layout)) = self.available_subagent_window_in_group(&group_id) {
+            if let Some(controller) = controller {
+                self.session
+                    .set_window_layout_policy(controller, &window_id, layout.policy)?;
+                return self.split_pane_in_window_with_process(
+                    controller,
+                    &window_id,
+                    layout.split_direction,
+                    true,
+                    None,
+                    start_directory,
+                );
+            }
             self.session
-                .set_window_layout_policy(controller, &window_id, layout.policy)?;
-            return self.split_pane_in_window_with_process(
-                controller,
+                .set_window_layout_policy_session_owned(&window_id, layout.policy)?;
+            return self.split_pane_in_window_with_process_session_owned(
                 &window_id,
                 layout.split_direction,
                 true,
@@ -612,16 +642,30 @@ impl RuntimeSessionService {
             .filter(|name| !name.trim().is_empty() && *name != "agent")
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| self.next_subagent_window_name(&group_id));
-        let started = self.create_unfocused_window_in_group_with_pane_process(
-            controller,
-            &group_id,
-            name,
-            layout.policy,
-            start_directory,
-        )?;
+        let started = if let Some(controller) = controller {
+            self.create_unfocused_window_in_group_with_pane_process(
+                controller,
+                &group_id,
+                name,
+                layout.policy,
+                start_directory,
+            )?
+        } else {
+            self.create_unfocused_window_in_group_with_pane_process_session_owned(
+                &group_id,
+                name,
+                layout.policy,
+                start_directory,
+            )?
+        };
         if generated_window_name {
-            self.session
-                .mark_window_name_generated(controller, &started.window_id)?;
+            if let Some(controller) = controller {
+                self.session
+                    .mark_window_name_generated(controller, &started.window_id)?;
+            } else {
+                self.session
+                    .mark_window_name_generated_session_owned(&started.window_id)?;
+            }
         }
         self.subagent_window_ids
             .insert(started.window_id.to_string());
@@ -631,7 +675,7 @@ impl RuntimeSessionService {
     /// Applies human-readable display titles to the spawned pane and bucket.
     fn apply_subagent_display_titles(
         &mut self,
-        controller: &crate::ids::ClientId,
+        controller: Option<&crate::ids::ClientId>,
         window_id: &str,
         pane_id: &str,
         display_name: &str,
@@ -639,7 +683,7 @@ impl RuntimeSessionService {
         self.session
             .set_pane_title_explicit(pane_id, display_name)?;
         self.subagent_window_ids.insert(window_id.to_string());
-        self.refresh_subagent_window_names(controller)
+        self.refresh_subagent_window_names_internal(controller)
     }
 
     /// Refreshes generated names for all live subagent bucket windows.
@@ -647,14 +691,27 @@ impl RuntimeSessionService {
         &mut self,
         controller: &crate::ids::ClientId,
     ) -> Result<()> {
+        self.refresh_subagent_window_names_internal(Some(controller))
+    }
+
+    /// Refreshes generated subagent window names for session-owned orchestration.
+    fn refresh_subagent_window_names_internal(
+        &mut self,
+        controller: Option<&crate::ids::ClientId>,
+    ) -> Result<()> {
         self.prune_subagent_window_ids();
         let window_ids = self.subagent_window_ids.iter().cloned().collect::<Vec<_>>();
         for window_id in window_ids {
             let Some(name) = self.subagent_bucket_window_display_name(&window_id) else {
                 continue;
             };
-            self.session
-                .rename_window_generated(controller, window_id.as_str(), name)?;
+            if let Some(controller) = controller {
+                self.session
+                    .rename_window_generated(controller, window_id.as_str(), name)?;
+            } else {
+                self.session
+                    .rename_window_generated_session_owned(window_id.as_str(), name)?;
+            }
         }
         Ok(())
     }
@@ -808,7 +865,7 @@ impl RuntimeSessionService {
     /// before a subagent spawn setup step failed.
     fn cleanup_failed_subagent_spawn(
         &mut self,
-        controller: &crate::ids::ClientId,
+        controller: Option<&crate::ids::ClientId>,
         pane_id: &str,
         child_agent_id: &str,
         turn_id: Option<&str>,
@@ -826,10 +883,17 @@ impl RuntimeSessionService {
         self.model_profile_overrides
             .agent_profiles
             .remove(child_agent_id);
-        let _ = self.dispatch_runtime_pane_close(
-            controller,
-            &format!(r#"{{"pane_id":"{}","force":true}}"#, json_escape(pane_id)),
-        );
+        if let Some(controller) = controller {
+            let _ = self.dispatch_runtime_pane_close(
+                controller,
+                &format!(r#"{{"pane_id":"{}","force":true}}"#, json_escape(pane_id)),
+            );
+        } else if let Ok(Some(pane)) = self.session.kill_pane_session_owned(Some(pane_id), true) {
+            let removed_pane_id = pane.id.to_string();
+            let _ = self.stop_active_pane_pipe(&removed_pane_id);
+            let _ = self.terminate_runtime_pane_process(&removed_pane_id, true);
+            self.cleanup_removed_pane_runtime_state(&removed_pane_id);
+        }
     }
 
     /// Queues the first MMP task-status update for a newly spawned subagent.
