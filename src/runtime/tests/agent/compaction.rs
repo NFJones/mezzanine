@@ -1,0 +1,1350 @@
+//! Runtime tests for agent compaction behavior.
+
+use super::*;
+
+/// Verifies the runtime applies raw-retention config for compaction recovery.
+///
+/// Provider context-limit recovery and manual compaction both use the
+/// raw-retention percentage to decide how much exact recent context remains
+/// after compaction.
+#[test]
+fn runtime_config_reload_applies_compaction_raw_retention() {
+    let mut service = test_runtime_service();
+
+    assert_eq!(service.agent_compaction_raw_retention_percent, 10);
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ncompaction_raw_retention_percent = 25\n".to_string(),
+        }])
+        .unwrap();
+
+    assert_eq!(service.agent_compaction_raw_retention_percent, 25);
+}
+
+/// Verifies large bracketed-paste agent prompt input is displayed compactly in
+/// the pane transcript while the agent turn receives the exact pasted payload.
+#[test]
+fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    let payload = "z".repeat(1229);
+    let mut input = Vec::new();
+    input.extend_from_slice(b"prefix ");
+    input.extend_from_slice(b"\x1b[200~");
+    input.extend_from_slice(payload.as_bytes());
+    input.extend_from_slice(b"\x1b[201~ suffix\r");
+    let step = AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+
+    let report = service
+        .apply_attached_terminal_step_plan(&primary, &step)
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    assert_eq!(
+        prompt_state.prompt.buffer.history(),
+        &[format!("prefix {payload} suffix")]
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("user> prefix [Pasted 1.2 KiB] suffix"),
+        "{pane_text}"
+    );
+    assert!(!pane_text.contains(&payload), "{pane_text}");
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(
+        context
+            .blocks
+            .iter()
+            .any(|block| block.content.contains(&format!("prefix {payload} suffix")))
+    );
+}
+
+/// Verifies compact pasted placeholders are used for bracketed paste payloads
+/// that exceed the visible agent prompt height even when the byte size is small.
+///
+/// Agent prompt rendering only shows up to six input rows. A seven-line
+/// bracketed paste must collapse to the same inline placeholder form as a
+/// large byte paste so surrounding prompt text remains editable and readable.
+#[test]
+fn runtime_agent_prompt_displays_over_height_paste_as_compact_block() {
+    let mut service = test_runtime_service_with_size(Size::new(50, 8).unwrap());
+    let primary = service
+        .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(50, 8).unwrap(), 10).unwrap(),
+    );
+
+    let payload = (1..=7)
+        .map(|index| format!("tiny-line-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut input = Vec::new();
+    input.extend_from_slice(b"prefix ");
+    input.extend_from_slice(b"\x1b[200~");
+    input.extend_from_slice(payload.as_bytes());
+    input.extend_from_slice(b"\x1b[201~ suffix\r");
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("user> prefix [Pasted "), "{pane_text}");
+    assert!(pane_text.contains(" suffix"), "{pane_text}");
+    assert!(!pane_text.contains("tiny-line-7"), "{pane_text}");
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(
+        context
+            .blocks
+            .iter()
+            .any(|block| block.content.contains(&format!("prefix {payload} suffix")))
+    );
+}
+
+/// Verifies `/list-modified-files` renders compact modified-file rows.
+///
+/// Agent mutation previews already show `edited path (+N -M)` style summaries;
+/// the slash command should expose the tracked aggregate in the same compact
+/// form instead of a verbose nested object list.
+#[test]
+fn runtime_agent_shell_list_modified_files_reports_compact_rows() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_modified_files
+        .entry("%1".to_string())
+        .or_default()
+        .insert(
+            "src/lib.rs".to_string(),
+            RuntimeAgentModifiedFileSummary {
+                path: "src/lib.rs".to_string(),
+                added: 12,
+                removed: 3,
+            },
+        );
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/list-modified-files")
+        .unwrap();
+
+    assert!(response.contains("## modified files"), "{response}");
+    assert!(response.contains("edited `src/lib.rs`"), "{response}");
+    assert!(
+        response.contains(r#"<span class=\"mez-diff-addition\">+12</span>"#),
+        "{response}"
+    );
+    assert!(
+        response.contains(r#"<span class=\"mez-diff-deletion\">-3</span>"#),
+        "{response}"
+    );
+    assert!(!response.contains("Added:"), "{response}");
+    assert!(!response.contains("Removed:"), "{response}");
+    assert!(!response.contains("`summary`"), "{response}");
+}
+
+/// Verifies prompt submission does not run fallback context accounting before
+/// appending prompt-derived state.
+///
+/// Provider responses and provider context-limit errors are the source of truth
+/// for context-size handling, so prompt submission must start the turn even when
+/// a local estimate would have crossed the model window.
+#[test]
+fn runtime_agent_prompt_does_not_preflight_compact_before_context_append() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "compact-preflight-context-window".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "openai"
+default_model_profile = "compact-preflight-test"
+[providers.openai]
+kind = "openai"
+models = ["gpt-compact-preflight-test"]
+default_model = "gpt-compact-preflight-test"
+[model_profiles.compact-preflight-test]
+provider = "openai"
+model = "gpt-compact-preflight-test"
+context_window_tokens = 1024
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-preflight"));
+    transcript_store
+        .append(&crate::transcript::TranscriptEntry {
+            conversation_id: "as-preflight".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: crate::transcript::TranscriptRole::Assistant,
+            turn_id: "turn-previous".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: format!("large prior context {}", "context-pressure ".repeat(900)),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
+    screen.feed(b"ready\n");
+    service.pane_screens.insert("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "as-preflight", 1)
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "continue with the next item")
+        .unwrap();
+
+    assert!(response.contains(r#""state":"running""#), "{response}");
+    assert!(
+        !response.contains(r#""kind":"requires_runtime""#),
+        "{response}"
+    );
+    assert_eq!(service.agent_turn_ledger.turns().len(), 1);
+    assert_eq!(
+        transcript_store.prompt_history("as-preflight").unwrap(),
+        vec!["continue with the next item".to_string()]
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("continue with the next item"),
+        "{pane_text}"
+    );
+}
+
+/// Verifies provider context-limit API errors trigger active-turn compaction
+/// and retry before the turn is failed.
+///
+/// The proactive threshold path can miss provider-specific tokenization or
+/// hidden request overhead. When the provider rejects the request anyway, the
+/// runtime must compact the stored active-turn context before retrying so the
+/// same oversized payload is not sent again.
+#[test]
+fn runtime_provider_context_limit_error_compacts_context_and_retries() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-context-limit-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-context-limit-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-context-limit-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-recovery","input":"continue with the large observation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks
+        .push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic provider-rejected action result".to_string(),
+            content: format!("provider-context-limit- {}", "cp ".repeat(10_000)),
+        });
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let provider = RuntimeContextLimitThenSuccessProvider {
+        requests: RefCell::new(Vec::new()),
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            service
+                .provider_registry()
+                .resolve_profile("provider-context-limit-test")
+                .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    let first_request_text = requests[0]
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        first_request_text.contains("provider-context-limit-"),
+        "{first_request_text}"
+    );
+    let second_request_text = requests[1]
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        second_request_text.contains("[context compacted]"),
+        "{second_request_text}"
+    );
+    assert!(
+        second_request_text.contains("provider-context-limit-"),
+        "{second_request_text}"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        "{pane_text}"
+    );
+}
+
+/// Verifies a second provider context-limit recovery attempt uses a smaller
+/// explicit compaction budget and still shrinks stored active-turn context.
+///
+/// Once one local compaction pass has already happened, a second provider
+/// rejection should not stop at the original profile budget. Recovery must use
+/// a smaller retry budget for the already-compacted context and record that
+/// narrower target in user-visible diagnostics.
+#[test]
+fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-context-limit-multi-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-context-limit-multi-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-context-limit-multi-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-multi-recovery","input":"continue with the very large observation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let profile_budget_words = service
+        .provider_registry()
+        .resolve_profile("provider-context-limit-multi-test")
+        .unwrap()
+        .context_window_budget_words();
+    let second_recovery_budget_words = profile_budget_words
+        .saturating_mul(3)
+        .saturating_div(4)
+        .max(1);
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks = vec![
+        ContextBlock {
+            source: ContextSourceKind::Memory,
+            label: "synthetic post-first-pass summary".to_string(),
+            content: format!("[context compacted]\n{}", "summary ".repeat(8_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained tail action result one".to_string(),
+            content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained tail action result two".to_string(),
+            content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained tail action result three".to_string(),
+            content: format!(
+                "provider-context-limit-tail-three- {}",
+                "tail ".repeat(5_000)
+            ),
+        },
+    ];
+    let before_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error = MezError::invalid_state(
+        "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
+    )
+    .with_provider_failure_json(
+        r#"{"status_code":400,"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+    );
+
+    let recovered = service
+        .recover_agent_provider_context_limit_failure(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+            2,
+        )
+        .unwrap();
+
+    assert!(recovered);
+    let after_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(after_context, before_context);
+    assert!(
+        after_context.contains("[context compacted]"),
+        "{after_context}"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    assert_eq!(
+        pane_text
+            .matches("provider rejected context as too large; compacted active turn context")
+            .count(),
+        1,
+        "{pane_text}"
+    );
+    assert!(
+        !pane_text.contains("no compactable active turn context remains"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped.contains(&format!("profile_budget_words={profile_budget_words}")),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped.contains(&format!(
+            "recovery_budget_words={second_recovery_budget_words}"
+        )),
+        "{pane_text}"
+    );
+}
+
+/// Verifies repeated provider context-limit recovery can still shrink a stored
+/// action-result-only prefix after an earlier retry already narrowed context.
+///
+/// Later retries may encounter a compacted active-turn context where the next
+/// compactable prefix contains only older action results. Recovery must still
+/// summarize older exact action-result blocks instead of bailing out with a
+/// false "no compactable active turn context remains" message.
+#[test]
+fn runtime_provider_context_limit_error_recompacts_action_result_prefix() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-context-limit-action-result-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-context-limit-action-result-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-context-limit-action-result-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-action-result-recovery","input":"continue with the very large observation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks = vec![
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result one".to_string(),
+            content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result two".to_string(),
+            content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
+        },
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result three".to_string(),
+            content: format!(
+                "provider-context-limit-tail-three- {}",
+                "tail ".repeat(5_000)
+            ),
+        },
+    ];
+    let error = MezError::invalid_state(
+        "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
+    )
+    .with_provider_failure_json(
+        r#"{"status_code":400,"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+    );
+
+    let recovered = service
+        .recover_agent_provider_context_limit_failure(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+            2,
+        )
+        .unwrap();
+
+    assert!(recovered);
+    let after_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        after_context.contains("[context compacted]"),
+        "{after_context}"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        "{pane_text}"
+    );
+    assert!(
+        !pane_text.contains("no compactable active turn context remains"),
+        "{pane_text}"
+    );
+}
+
+/// Verifies provider output-limit incomplete responses first trigger compact
+/// retry guidance, then max-output escalation, without compacting active-turn
+/// context.
+///
+/// Output exhaustion means the provider accepted the input but cut generation
+/// off, so the recovery path should first ask for a smaller complete response
+/// before escalating the output budget or discarding context.
+#[test]
+fn runtime_provider_output_limit_error_guides_then_escalates_without_compaction() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "provider-output-limit-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-output-limit-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-output-limit-test]
+provider = "runtime-batch"
+model = "test"
+max_output_tokens = 4096
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-output-limit-recovery","method":"agent/shell/command","params":{"idempotency_key":"agent-output-limit-recovery","input":"continue with the current implementation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks
+        .push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic retained action result".to_string(),
+            content: "output-limit-retained-context".to_string(),
+        });
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let provider = RuntimeOutputLimitThenSuccessProvider {
+        requests: RefCell::new(Vec::new()),
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            service
+                .provider_registry()
+                .resolve_profile("provider-output-limit-test")
+                .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests.borrow();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].max_output_tokens, Some(4096));
+    assert_eq!(requests[1].max_output_tokens, Some(4096));
+    assert_eq!(requests[2].max_output_tokens, Some(16_384));
+    let second_request_text = requests[1]
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        second_request_text.contains("output-limit-retained-context"),
+        "{second_request_text}"
+    );
+    assert!(
+        second_request_text.contains("[ephemeral provider output-limit retry]"),
+        "{second_request_text}"
+    );
+    assert!(
+        second_request_text.contains("much shorter complete response"),
+        "{second_request_text}"
+    );
+    let third_request_text = requests[2]
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        third_request_text.contains("one complete compact MAAP batch"),
+        "{third_request_text}"
+    );
+    assert!(
+        !second_request_text.contains("[context compacted]"),
+        "{second_request_text}"
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let pane_text_unwrapped = pane_text.replace("\n", "");
+    assert!(
+        pane_text_unwrapped
+            .contains("provider response hit output limit; retrying with shorter-response"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped
+            .contains("provider response hit output limit again; retrying compactly"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text_unwrapped.contains("max_output_tokens=16384"),
+        "{pane_text}"
+    );
+}
+
+/// Verifies automatic output-limit compaction refreshes a running turn and
+/// queues provider continuation.
+///
+/// The first recovery stage for `response.incomplete/max_output_tokens` keeps
+/// the active-turn context intact and asks for a compact MAAP retry. If that
+/// bounded retry budget is exhausted, the runtime queues model-backed
+/// conversation compaction while the turn remains running. Completion must
+/// replace raw transcript replay with compact memory, retain the recent raw
+/// tail, preserve the running turn, and queue provider work for the same task.
+#[test]
+fn runtime_output_limit_auto_compaction_completion_requeues_running_turn() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "output-limit-auto-compaction".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "provider-output-limit-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.provider-output-limit-test]
+provider = "runtime-batch"
+model = "test"
+max_output_tokens = 4096
+context_window_tokens = 128000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_root = std::env::temp_dir().join(format!(
+        "mez-runtime-output-limit-auto-compact-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&transcript_root).unwrap();
+    let transcript_store = AgentTranscriptStore::new(transcript_root);
+    for sequence in 1..=4 {
+        transcript_store
+            .append(&crate::transcript::TranscriptEntry {
+                conversation_id: "output-limit-auto".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: crate::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("durable prior output-limit entry {sequence}"),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "output-limit-auto", 4)
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-output-limit-auto-compact","method":"agent/shell/command","params":{"idempotency_key":"agent-output-limit-auto-compact","input":"continue with the current implementation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks
+        .push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic same-turn result".to_string(),
+            content: "same-turn result must survive compaction refresh".to_string(),
+        });
+    let error =
+        MezError::invalid_state("OpenAI stream returned an incomplete response: max_output_tokens")
+            .with_provider_failure_json(r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#);
+
+    let queued = service
+        .queue_agent_output_limit_recovery_compaction(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+        )
+        .unwrap();
+
+    assert!(queued);
+    assert!(
+        service
+            .pending_agent_compaction_tasks
+            .get("%1")
+            .and_then(|task| task.resume_turn_id.as_deref())
+            == Some("turn-1")
+    );
+    assert!(!service.pending_agent_provider_tasks.contains("turn-1"));
+
+    complete_runtime_test_compaction(&mut service, "%1", "summary after output-limit exhaustion");
+
+    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .and_then(|session| session.running_turn_id.as_deref()),
+        Some("turn-1")
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_entries,
+        3
+    );
+    let stored_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        stored_context.contains("summary after output-limit exhaustion"),
+        "{stored_context}"
+    );
+    assert!(
+        stored_context.contains("Conversation compaction occurred before this turn"),
+        "{stored_context}"
+    );
+    assert!(
+        stored_context.contains("durable prior output-limit entry 4"),
+        "{stored_context}"
+    );
+    assert!(
+        !stored_context.contains("durable prior output-limit entry 1"),
+        "{stored_context}"
+    );
+    assert!(
+        stored_context.contains("same-turn result must survive compaction refresh"),
+        "{stored_context}"
+    );
+}
+
+/// Verifies routing context-limit recovery budgets against the smallest
+/// possible main-provider target before a router decision has been stored.
+///
+/// A turn may start with a large default profile while the router is still able
+/// to choose a smaller target profile for the first normal request. Provider
+/// context-limit recovery must therefore compact against the minimum target
+/// window until the synthesized per-turn profile exists.
+#[test]
+fn runtime_routing_context_limit_recovery_uses_minimum_target_window() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "routing-context-limit-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+routing = true
+
+[agents.auto_sizing]
+router_model_profile = "router"
+small_model_profile = "small"
+medium_model_profile = "medium"
+large_model_profile = "large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+fallback_policy = "use-default-profile"
+
+[providers.runtime-batch]
+kind = "openai"
+models = ["gpt-router", "gpt-default", "gpt-small", "gpt-medium", "gpt-large"]
+default_model = "gpt-default"
+
+[model_profiles.default]
+provider = "runtime-batch"
+model = "gpt-default"
+reasoning_profile = "medium"
+context_window_tokens = 100000
+
+[model_profiles.router]
+provider = "runtime-batch"
+model = "gpt-router"
+reasoning_profile = "low"
+context_window_tokens = 2000
+
+[model_profiles.small]
+provider = "runtime-batch"
+model = "gpt-small"
+reasoning_profile = "medium"
+context_window_tokens = 40000
+
+[model_profiles.medium]
+provider = "runtime-batch"
+model = "gpt-medium"
+reasoning_profile = "medium"
+context_window_tokens = 100000
+
+[model_profiles.large]
+provider = "runtime-batch"
+model = "gpt-large"
+reasoning_profile = "high"
+context_window_tokens = 100000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-auto-context-limit","method":"agent/shell/command","params":{"idempotency_key":"agent-auto-context-limit","input":"continue with the current findings"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let default_profile = service
+        .provider_registry()
+        .resolve_profile("default")
+        .unwrap();
+    service
+        .agent_turn_model_profiles
+        .insert("turn-1".to_string(), default_profile);
+    service
+        .agent_turn_contexts
+        .get_mut("turn-1")
+        .unwrap()
+        .blocks
+        .push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "synthetic routing action result".to_string(),
+            content: format!(
+                "routing-context-pressure- {}",
+                "context-pressure ".repeat(50_000)
+            ),
+        });
+    let error = MezError::invalid_state(
+        "OpenAI Responses API returned status 400: context length exceeded",
+    )
+    .with_provider_failure_json(
+        r#"{"status_code":400,"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+    );
+
+    let recovered = service
+        .recover_agent_provider_context_limit_failure(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            &error,
+            1,
+        )
+        .unwrap();
+
+    assert!(recovered);
+    let stored_context = service
+        .agent_turn_contexts
+        .get("turn-1")
+        .unwrap()
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(stored_context.contains("[context compacted]"));
+    let stored_blocks = &service.agent_turn_contexts.get("turn-1").unwrap().blocks;
+    assert!(stored_blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.label == "synthetic routing action result"
+            && block.content.contains("routing-context-pressure-")
+    }));
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        "{pane_text}"
+    );
+}
+
+/// Verifies overlapping compaction attempts are rejected before they can start
+/// another model request for the same pane.
+#[test]
+fn runtime_agent_shell_compact_rejects_overlapping_pane_compaction() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.agent_compacting_panes.insert("%1".to_string(), 1);
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compact-overlap","method":"agent/shell/command","params":{"idempotency_key":"compact-overlap","input":"/compact"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains("already compacting"), "{response}");
+}
+
+/// Verifies compaction keeps only a bounded raw transcript tail when the active
+/// conversation is larger than the exact-reference window.
+///
+/// The compact memory can summarize older entries, but the next turn needs the
+/// recent tail verbatim for prompts like "implement the first item". Older raw
+/// messages should not remain in transcript replay after compaction.
+#[test]
+fn runtime_agent_shell_compact_retains_bounded_recent_transcript_tail() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "compact-tail-context-window".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "openai"
+default_model_profile = "compact-tail-test"
+[providers.openai]
+kind = "openai"
+models = ["gpt-compact-tail-test"]
+default_model = "gpt-compact-tail-test"
+[model_profiles.compact-tail-test]
+provider = "openai"
+model = "gpt-compact-tail-test"
+context_window_tokens = 5000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-tail"));
+    for sequence in 1..=12 {
+        let (role, content) = match sequence {
+            1 => (
+                crate::transcript::TranscriptRole::User,
+                format!(
+                    "old raw marker should be summary only {}",
+                    "old-word ".repeat(28)
+                ),
+            ),
+            8 => (
+                crate::transcript::TranscriptRole::Assistant,
+                format!(
+                    "Recent targets:\n1. Preserve raw tail after compaction.\n2. Keep memory summary. {}",
+                    "recent-word ".repeat(28)
+                ),
+            ),
+            _ if sequence % 2 == 0 => (
+                crate::transcript::TranscriptRole::User,
+                format!("filler user turn {sequence} {}", "tail-user ".repeat(28)),
+            ),
+            _ => (
+                crate::transcript::TranscriptRole::Assistant,
+                format!(
+                    "filler assistant turn {sequence} {}",
+                    "tail-assistant ".repeat(28)
+                ),
+            ),
+        };
+        transcript_store
+            .append(&crate::transcript::TranscriptEntry {
+                conversation_id: "as-tail".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.pane_screens.insert(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap(),
+    );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "as-tail", 12)
+        .unwrap();
+
+    let compact = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compact-tail","method":"agent/shell/command","params":{"idempotency_key":"compact-tail","input":"/compact"}}"#,
+        &primary,
+    );
+
+    assert!(compact.contains("state=queued"), "{compact}");
+    assert!(compact.contains("summarized_entries=5"), "{compact}");
+    complete_runtime_test_compaction(&mut service, "%1", "old raw marker should be summary only");
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_entries,
+        7
+    );
+
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compact-tail-prompt","method":"agent/shell/command","params":{"idempotency_key":"compact-tail-prompt","input":"Implement the first item"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let compaction_notice = context
+        .blocks
+        .iter()
+        .find(|block| block.label == "conversation compaction notice")
+        .expect("compaction notice should be model-visible after /compact");
+    assert!(
+        compaction_notice
+            .content
+            .contains("Older durable transcript entries were summarized"),
+        "{compaction_notice:?}"
+    );
+    let transcript_context = context
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.source,
+                ContextSourceKind::Transcript
+                    | ContextSourceKind::TranscriptUser
+                    | ContextSourceKind::TranscriptAssistant
+                    | ContextSourceKind::TranscriptTool
+            )
+        })
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        transcript_context.contains("1. Preserve raw tail after compaction."),
+        "{transcript_context}"
+    );
+    assert!(
+        !transcript_context.contains("old raw marker should be summary only"),
+        "{transcript_context}"
+    );
+}
+
+/// Verifies explicit `/compact` is forced even when the entire transcript fits
+/// inside the normal retained-tail budget.
+///
+/// The user command is a direct request to compact now, so it must summarize at
+/// least one active durable entry instead of returning a budget-based no-op.
+#[test]
+fn runtime_agent_shell_compact_forces_summary_when_under_context_budget() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "compact-forced-context-window".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "openai"
+default_model_profile = "compact-forced-test"
+[providers.openai]
+kind = "openai"
+models = ["gpt-compact-forced-test"]
+default_model = "gpt-compact-forced-test"
+[model_profiles.compact-forced-test]
+provider = "openai"
+model = "gpt-compact-forced-test"
+context_window_tokens = 128000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-forced"));
+    for sequence in 1..=3 {
+        transcript_store
+            .append(&crate::transcript::TranscriptEntry {
+                conversation_id: "as-forced".to_string(),
+                sequence,
+                created_at_unix_seconds: sequence,
+                role: crate::transcript::TranscriptRole::Assistant,
+                turn_id: format!("turn-{sequence}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!("forced compact marker {sequence}"),
+            })
+            .unwrap();
+    }
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "as-forced", 3)
+        .unwrap();
+
+    let compact = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compact-forced","method":"agent/shell/command","params":{"idempotency_key":"compact-forced","input":"/compact"}}"#,
+        &primary,
+    );
+
+    assert!(compact.contains(r#""kind":"mutated""#), "{compact}");
+    assert!(compact.contains("state=queued"), "{compact}");
+    assert!(compact.contains("summarized_entries=1"), "{compact}");
+    assert!(
+        !compact.contains("within-retained-context-tail"),
+        "{compact}"
+    );
+    complete_runtime_test_compaction(&mut service, "%1", "forced compact marker 1");
+    let compacted = service
+        .memory_records()
+        .into_iter()
+        .find(|record| record.id == "compact-as-forced")
+        .expect("compacted memory record");
+    assert!(
+        compacted.content.contains("forced compact marker 1"),
+        "{}",
+        compacted.content
+    );
+}

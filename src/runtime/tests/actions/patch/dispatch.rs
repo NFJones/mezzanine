@@ -1,0 +1,517 @@
+//! Runtime tests for actions patch dispatch behavior.
+
+use super::*;
+
+/// Verifies a pending shell action is recovered instead of failed when
+/// `interactive-blocked` is stale and the pane shell is foreground again.
+///
+/// The dispatch path used to turn stale interactive-blocked readiness into a
+/// hard `pane_not_ready` action failure. That was incorrect when host process
+/// metadata already proved the user's shell had returned.
+#[test]
+fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "inspect the working directory".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let execution_after_dispatch = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+
+    assert!(execution_after_dispatch.is_some());
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Probing
+    );
+    assert!(
+        service
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies successful readiness-probe completion resumes the original shell
+/// action after stale `interactive-blocked` recovery.
+///
+/// The stale recovery path must not stop at `Probing`. Once a successful probe
+/// end marker arrives, the pending shell action should dispatch, settle, and
+/// stop reporting as a still-running placeholder.
+#[test]
+fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_blocked_probe() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "confirm the pending shell action resumes".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Print a recovery marker.".to_string(),
+            command: "printf 'STALE_INTERACTIVE_BLOCKED_RECOVERED\\n'".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let execution_after_dispatch = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+
+    assert!(execution_after_dispatch.is_some());
+    let probe_marker = service
+        .running_shell_transactions
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+                .then(|| marker.clone())
+        })
+        .unwrap();
+
+    let observed_start = service
+        .observe_agent_shell_transaction_start(
+            "%1",
+            &probe_marker,
+            &turn.turn_id,
+            &turn.agent_id,
+            "%1",
+        )
+        .unwrap();
+
+    assert!(observed_start > 0);
+    let observed = service
+        .observe_agent_shell_transaction_end(
+            "%1",
+            &probe_marker,
+            &turn.turn_id,
+            &turn.agent_id,
+            "%1",
+            0,
+        )
+        .unwrap();
+
+    assert!(observed > 0);
+    assert!(matches!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Ready | PaneReadinessState::Busy
+    ));
+
+    for _ in 0..300 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.running_shell_transactions.is_empty() {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+
+    assert!(service.running_shell_transactions.is_empty());
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("STALE_INTERACTIVE_BLOCKED_RECOVERED"),
+        "{pane_text}"
+    );
+    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    assert_ne!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies stale `interactive-blocked` dispatch recovery compares foreground
+/// process groups with the shell process group, not only with the shell pid.
+///
+/// Some PTY backends and shell setups report a shell process-group leader that
+/// differs from the spawned primary pid. The readiness proof should still treat
+/// that process group as the foreground shell boundary so stale readiness does
+/// not become a hard `pane_not_ready` failure after the user returns to the
+/// prompt.
+#[test]
+fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_group() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let foreground_group = service
+        .pane_processes()
+        .foreground_process_group_id("%1")
+        .unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_process_group_leader_for_test("%1", i32::try_from(foreground_group).ok());
+    service
+        .pane_processes_mut()
+        .set_primary_pid_for_test("%1", primary_pid.saturating_add(1));
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "inspect the working directory".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let execution_after_dispatch = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+
+    assert!(execution_after_dispatch.is_some());
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Probing
+    );
+    assert!(
+        service
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+#[test]
+fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foreground_group() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = crate::agent::AgentAction {
+        id: "shell-1".to_string(),
+        rationale: "inspect the working directory".to_string(),
+        payload: crate::agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions.insert(
+        turn.turn_id.clone(),
+        crate::agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: crate::agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(crate::agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![crate::agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+
+    let execution_after_dispatch = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+
+    assert!(execution_after_dispatch.is_some());
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Probing
+    );
+    assert!(
+        service
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
+/// Verifies runtime shell dispatch honors per-action shell timeouts.
+///
+/// The MAAP parser and semantic lowering preserve `timeout_ms`; the runtime
+/// must carry that bound into the live shell transaction instead of replacing it
+/// with the enclosing turn's full timeout budget.
+#[test]
+fn runtime_shell_command_dispatch_uses_action_timeout() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_async_owner(&pane_id)
+        .unwrap();
+    mark_test_pane_ready(&mut service, &pane_id);
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-timeout","input":"run bounded grep"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.pending_agent_provider_tasks.remove("turn-1");
+    let provider = RuntimeBatchProvider {
+        response: crate::agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "shell action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(crate::agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![crate::agent::AgentAction {
+                    id: "shell-timeout".to_string(),
+                    rationale: "run a bounded command".to_string(),
+                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                        summary: "Run bounded grep".to_string(),
+                        command: "grep -n needle file.txt".to_string(),
+                        interactive: false,
+                        stateful: false,
+                        timeout_ms: Some(1500),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let transaction = service
+        .running_shell_transactions
+        .values()
+        .find(|transaction| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { ref action_id }
+                    if action_id == "shell-timeout"
+            )
+        })
+        .unwrap();
+
+    assert_eq!(transaction.timeout_ms, Some(1500));
+    let _ = process.terminate(Duration::from_millis(10));
+}
