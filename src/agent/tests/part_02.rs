@@ -3,6 +3,31 @@
 /// The action set is the model's main affordance surface, so this test protects
 /// the prompt text that tells the model when to speak, inspect, mutate, fetch
 /// web content, coordinate with agents, or stop.
+/// Verifies prompt markdown assets are embedded and assembled through explicit lookups.
+///
+/// Prompt text is provider-visible behavioral contract material. This regression
+/// keeps the include_dir asset boundary covered so missing markdown files or
+/// provider-fragment drift fail close during tests instead of changing prompts
+/// at runtime.
+#[test]
+fn embedded_prompt_fragments_are_loaded_from_markdown_assets() {
+    let prompt = build_agent_system_prompt(
+        &AgentPromptProfile::default_for("agent-1", "%1").with_provider("anthropic"),
+    )
+    .unwrap();
+
+    let action_fragment = super::prompt::system_prompt_fragment("actions.md").unwrap();
+    let provider_fragment = super::prompt::provider_prompt_fragment("anthropic.md").unwrap();
+
+    assert!(prompt.contains(action_fragment));
+    assert!(prompt.contains("15. Anthropic Provider"));
+    assert!(prompt.contains(provider_fragment));
+    assert_eq!(
+        super::prompt::provider_prompt_fragment("claude_code.md").unwrap(),
+        include_str!("../prompt/providers/claude_code.md").trim_end_matches('\n')
+    );
+}
+
 #[test]
 fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     let prompt =
