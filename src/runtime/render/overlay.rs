@@ -1449,6 +1449,9 @@ pub(super) fn runtime_display_overlay_footer(overlay: &RuntimeDisplayOverlay) ->
         format!("/{input}")
     } else if let Some(status) = overlay.search_status.as_deref() {
         status.to_string()
+    } else if overlay.record_browser.is_some() {
+        "esc: back | /: search | enter: open | k/p/x: filter | s: save | arrows pgup/pgdn"
+            .to_string()
     } else if overlay.selections.is_empty() {
         "esc: return | /: search | up/down pgup/pgdn home/end".to_string()
     } else {
@@ -1979,6 +1982,13 @@ impl RuntimeSessionService {
                 ),
             ),
             b"s" => Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::StartSave),
+            _ if matches!(
+                runtime_selector_input_action(input),
+                RuntimeSelectorInputAction::Select
+            ) =>
+            {
+                Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::OpenActive)
+            }
             _ if matches!(
                 runtime_selector_input_action(input),
                 RuntimeSelectorInputAction::Exit

@@ -72,6 +72,8 @@ pub(crate) enum RuntimeRecordBrowserPrompt {
 pub(crate) enum RuntimeRecordBrowserAction {
     /// Return from detail or prompt state to the preserved list view.
     BackToList,
+    /// Open the active list record as an in-browser detail view.
+    OpenActive,
     /// Begin editing one filter field.
     StartFilter(RuntimeRecordBrowserFilterField),
     /// Begin editing a save destination path.
@@ -182,6 +184,14 @@ impl RuntimeRecordBrowser {
         action: RuntimeRecordBrowserAction,
     ) -> Result<RuntimeRecordBrowserOutcome> {
         match action {
+            RuntimeRecordBrowserAction::OpenActive => {
+                if self.records.is_empty() {
+                    return Ok(RuntimeRecordBrowserOutcome::Ignored);
+                }
+                self.detail_index =
+                    Some(self.active_index.min(self.records.len().saturating_sub(1)));
+                Ok(RuntimeRecordBrowserOutcome::Updated)
+            }
             RuntimeRecordBrowserAction::BackToList => {
                 let changed = self.detail_index.take().is_some() || self.prompt.take().is_some();
                 Ok(if changed {
