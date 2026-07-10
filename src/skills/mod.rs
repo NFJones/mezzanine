@@ -14,6 +14,7 @@ use crate::config::{
 };
 use crate::terminal::UI_COLOR_SLOT_NAMES;
 use crate::{MezError, MezErrorKind, Result};
+use include_dir::{Dir, include_dir};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -42,23 +43,19 @@ pub const BUILTIN_MEZ_REFERENCE_SKILL_NAME: &str = "mez-reference";
 /// Virtual path prefix used for built-in skills that do not live on disk.
 pub const BUILTIN_SKILL_PATH_PREFIX: &str = "<builtin>";
 
+/// Embedded built-in skill directory shipped with the crate.
+static BUILTIN_SKILLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/skills/builtin");
+
 const BUILTIN_CREATE_SKILL_DESCRIPTION: &str = "Create or modify concise Mezzanine skills in user or project scope. Use when the user asks to add, update, refactor, or repair a skill, SKILL.md, or skill resources.";
-const BUILTIN_CREATE_SKILL_TEXT: &str = include_str!("builtin/create-skill/SKILL.md");
 const BUILTIN_CREATE_MACRO_DESCRIPTION: &str = "Create or modify Mezzanine agent macros in user or project scope. Use when the user asks to add, update, refactor, or repair a macro, MACRO.md, or macro workflow.";
-const BUILTIN_CREATE_MACRO_TEXT: &str = include_str!("builtin/create-macro/SKILL.md");
 const BUILTIN_ADD_DOC_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable documentation or reference content into memory.";
-const BUILTIN_ADD_DOC_SKILL_TEXT: &str = include_str!("builtin/add-doc/SKILL.md");
 const BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION: &str =
     "Use when recent findings should be turned into Mezzanine project issue tracker entries.";
-const BUILTIN_ADD_ISSUES_SKILL_TEXT: &str = include_str!("builtin/add-issues/SKILL.md");
 const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
-const BUILTIN_ADD_RESEARCH_SKILL_TEXT: &str = include_str!("builtin/add-research/SKILL.md");
 const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, fix open issues, keep progress notes current, and mark verified fixes resolved.";
-const BUILTIN_FIX_ISSUES_SKILL_TEXT: &str = include_str!("builtin/fix-issues/SKILL.md");
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
-const BUILTIN_MEZ_REFERENCE_SKILL_TEXT: &str = include_str!("builtin/mez-reference/SKILL.md");
 
 /// Source scope for one effective skill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -585,19 +582,31 @@ fn builtin_skill_path(name: &str) -> PathBuf {
 /// - `name`: Built-in skill name.
 fn builtin_skill_text(name: &str) -> Option<String> {
     match name {
-        BUILTIN_CREATE_SKILL_NAME => Some(BUILTIN_CREATE_SKILL_TEXT.to_string()),
-        BUILTIN_CREATE_MACRO_NAME => Some(BUILTIN_CREATE_MACRO_TEXT.to_string()),
-        BUILTIN_ADD_DOC_SKILL_NAME => Some(BUILTIN_ADD_DOC_SKILL_TEXT.to_string()),
-        BUILTIN_ADD_ISSUES_SKILL_NAME => Some(BUILTIN_ADD_ISSUES_SKILL_TEXT.to_string()),
-        BUILTIN_ADD_RESEARCH_SKILL_NAME => Some(BUILTIN_ADD_RESEARCH_SKILL_TEXT.to_string()),
-        BUILTIN_FIX_ISSUES_SKILL_NAME => Some(BUILTIN_FIX_ISSUES_SKILL_TEXT.to_string()),
-        BUILTIN_MEZ_REFERENCE_SKILL_NAME => Some(format_builtin_mez_reference_skill()),
+        BUILTIN_CREATE_SKILL_NAME
+        | BUILTIN_CREATE_MACRO_NAME
+        | BUILTIN_ADD_DOC_SKILL_NAME
+        | BUILTIN_ADD_ISSUES_SKILL_NAME
+        | BUILTIN_ADD_RESEARCH_SKILL_NAME
+        | BUILTIN_FIX_ISSUES_SKILL_NAME => {
+            embedded_builtin_skill_text(name).map(ToString::to_string)
+        }
+        BUILTIN_MEZ_REFERENCE_SKILL_NAME => {
+            embedded_builtin_skill_text(name).map(format_builtin_mez_reference_skill)
+        }
         _ => None,
     }
 }
 
+/// Returns one embedded built-in skill's `SKILL.md` contents.
+fn embedded_builtin_skill_text(name: &str) -> Option<&'static str> {
+    let path = Path::new(name).join(SKILL_FILE_NAME);
+    BUILTIN_SKILLS
+        .get_file(path)
+        .and_then(|file| file.contents_utf8())
+}
+
 /// Formats the built-in reference skill with the live command and config schema.
-fn format_builtin_mez_reference_skill() -> String {
+fn format_builtin_mez_reference_skill(template: &str) -> String {
     let theme_slots = UI_COLOR_SLOT_NAMES
         .iter()
         .map(|slot| format!("- `theme.colors.{slot}`"))
@@ -627,7 +636,7 @@ fn format_builtin_mez_reference_skill() -> String {
         .join("\n");
     format!(
         "{}\n\n## Terminal command index\n\n{}\n\n## Agent shell slash command index\n\n{}\n\n## Live config_change reference\n\nAllowed operations: `{}`.\n\nValue shape: {}\n\nSupported setting paths:\n{}\n\nTheme color slots:\n{}\n\nAnnotated setting paths:\n\n{}",
-        BUILTIN_MEZ_REFERENCE_SKILL_TEXT.trim_end(),
+        template.trim_end(),
         terminal_commands,
         agent_commands,
         CONFIG_CHANGE_OPERATION_NAMES.join("`, `"),
