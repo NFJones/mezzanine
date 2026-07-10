@@ -7,6 +7,7 @@
 //! steps, and never executes macro content.
 
 use crate::{MezError, MezErrorKind, Result};
+use include_dir::{Dir, include_dir};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,10 +23,17 @@ pub const MACRO_STEPS_HEADING: &str = "## Steps";
 pub const MAX_MACRO_FILE_BYTES: u64 = 256 * 1024;
 /// Maximum accepted prompt steps in one macro definition.
 pub const MAX_MACRO_STEPS: usize = 128;
+/// Virtual path prefix used for built-in macros embedded in the binary.
+pub const BUILTIN_MACRO_PATH_PREFIX: &str = "<builtin>";
+
+/// Embedded built-in macro directory shipped with the crate.
+static BUILTIN_MACROS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/macros/builtin");
 
 /// Source scope for one effective macro.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacroSource {
+    /// Macro shipped with Mezzanine.
+    Builtin,
     /// Macro from the primary user configuration directory.
     User,
     /// Macro from a trusted project configuration directory.
@@ -36,6 +44,7 @@ impl MacroSource {
     /// Returns the stable model-facing scope name for this source.
     pub fn as_str(self) -> &'static str {
         match self {
+            MacroSource::Builtin => "builtin",
             MacroSource::User => "user",
             MacroSource::Project => "project",
         }
@@ -199,6 +208,7 @@ pub fn discover_macro_catalog(
 ) -> MacroCatalog {
     let mut macros = BTreeMap::<String, MacroSummary>::new();
     let mut diagnostics = Vec::new();
+    discover_builtin_macros(&mut macros, &mut diagnostics);
     if let Some(root) = user_config_root {
         discover_macros_under_root(
             &root.join(MACROS_DIRECTORY_NAME),
@@ -226,17 +236,32 @@ pub fn discover_macro_catalog(
 /// # Parameters
 /// - `summary`: Macro metadata returned by `discover_macro_catalog`.
 pub fn load_macro_definition(summary: &MacroSummary) -> Result<MacroDefinition> {
-    let text = read_macro_text(&summary.path).map_err(|error| {
-        MezError::new(
-            MezErrorKind::Io,
-            format!(
-                "failed to read macro {} from {}: {}",
-                summary.name,
-                summary.path.display(),
-                error
-            ),
-        )
-    })?;
+    let text = match summary.source {
+        MacroSource::Builtin => read_builtin_macro_text(&summary.name).map_err(|error| {
+            MezError::new(
+                MezErrorKind::Io,
+                format!(
+                    "failed to read built-in macro {} from {}: {}",
+                    summary.name,
+                    summary.path.display(),
+                    error
+                ),
+            )
+        })?,
+        MacroSource::User | MacroSource::Project => {
+            read_macro_text(&summary.path).map_err(|error| {
+                MezError::new(
+                    MezErrorKind::Io,
+                    format!(
+                        "failed to read macro {} from {}: {}",
+                        summary.name,
+                        summary.path.display(),
+                        error
+                    ),
+                )
+            })?
+        }
+    };
     let (_front_matter, body) = split_macro_front_matter(&text).map_err(|error| {
         MezError::invalid_args(format!(
             "failed to parse macro {} from {}: {}",
@@ -340,6 +365,26 @@ fn discover_macros_under_root(
     }
 }
 
+/// Discovers macros embedded below `src/macros/builtin`.
+fn discover_builtin_macros(
+    macros: &mut BTreeMap<String, MacroSummary>,
+    diagnostics: &mut Vec<MacroDiagnostic>,
+) {
+    let mut directories = BUILTIN_MACROS.dirs().collect::<Vec<_>>();
+    directories.sort_by(|left, right| left.path().cmp(right.path()));
+    for directory in directories {
+        match read_builtin_macro_summary(directory) {
+            Ok(summary) => insert_macro_summary(macros, diagnostics, summary),
+            Err(message) => diagnostics.push(MacroDiagnostic {
+                path: PathBuf::from(BUILTIN_MACRO_PATH_PREFIX)
+                    .join(directory.path())
+                    .join(MACRO_FILE_NAME),
+                message,
+            }),
+        }
+    }
+}
+
 /// Inserts one discovered macro while reporting name collisions and enforcing
 /// source precedence.
 fn insert_macro_summary(
@@ -378,9 +423,77 @@ fn insert_macro_summary(
 /// Returns deterministic macro-source precedence from lowest to highest.
 fn macro_source_precedence(source: MacroSource) -> u8 {
     match source {
+        MacroSource::Builtin => 0,
         MacroSource::User => 1,
         MacroSource::Project => 2,
     }
+}
+
+/// Reads and validates one embedded built-in macro directory.
+fn read_builtin_macro_summary(directory: &Dir<'_>) -> std::result::Result<MacroSummary, String> {
+    let directory_name = directory
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "macro directory name is not valid UTF-8".to_string())?;
+    if !is_valid_macro_name(directory_name) {
+        return Err(format!(
+            "macro directory name {directory_name:?} is invalid"
+        ));
+    }
+    let text = read_builtin_macro_text(directory_name)?;
+    let (front_matter, body) = split_macro_front_matter(&text)?;
+    let front_matter: MacroFrontMatter = serde_norway::from_str(front_matter)
+        .map_err(|error| format!("failed to parse MACRO.md front matter: {error}"))?;
+    if !is_valid_macro_name(&front_matter.name) {
+        return Err(format!("macro name {:?} is invalid", front_matter.name));
+    }
+    if front_matter.name != directory_name {
+        return Err(format!(
+            "macro name {:?} does not match directory {:?}",
+            front_matter.name, directory_name
+        ));
+    }
+    if front_matter.description.trim().is_empty() {
+        return Err("macro description must not be empty".to_string());
+    }
+    let steps = parse_macro_steps(body)?;
+    let name = front_matter.name;
+    Ok(MacroSummary {
+        path: builtin_macro_path(&name),
+        name,
+        description: front_matter.description.trim().to_string(),
+        source: MacroSource::Builtin,
+        step_count: steps.len(),
+    })
+}
+
+/// Returns the virtual path used for an embedded built-in macro.
+fn builtin_macro_path(name: &str) -> PathBuf {
+    PathBuf::from(BUILTIN_MACRO_PATH_PREFIX)
+        .join(name)
+        .join(MACRO_FILE_NAME)
+}
+
+/// Returns one embedded built-in macro's `MACRO.md` contents.
+fn read_builtin_macro_text(name: &str) -> std::result::Result<String, String> {
+    if !is_valid_macro_name(name) {
+        return Err(format!("macro name {name:?} is invalid"));
+    }
+    let path = Path::new(name).join(MACRO_FILE_NAME);
+    let file = BUILTIN_MACROS
+        .get_file(path)
+        .ok_or_else(|| "failed to inspect MACRO.md: embedded file is missing".to_string())?;
+    if file.contents().len() as u64 > MAX_MACRO_FILE_BYTES {
+        return Err(format!(
+            "MACRO.md is {} bytes, which exceeds the {} byte limit",
+            file.contents().len(),
+            MAX_MACRO_FILE_BYTES
+        ));
+    }
+    file.contents_utf8()
+        .map(ToString::to_string)
+        .ok_or_else(|| "failed to read MACRO.md: embedded file is not valid UTF-8".to_string())
 }
 
 /// Reads and validates one candidate macro directory.
@@ -641,8 +754,8 @@ pub fn is_valid_macro_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MacroSource, discover_macro_catalog, is_valid_macro_name, load_macro_definition,
-        parse_macro_prompt_invocation, parse_macro_steps,
+        BUILTIN_MACROS, MacroSource, discover_macro_catalog, is_valid_macro_name,
+        load_macro_definition, parse_macro_prompt_invocation, parse_macro_steps,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -688,6 +801,19 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    /// Verifies the built-in macro asset directory is embedded even while it
+    /// carries only documentation. This locks the `include_dir` root without
+    /// changing the effective catalog until a real built-in macro is added.
+    #[test]
+    fn macro_catalog_embeds_empty_builtin_macro_directory_without_catalog_entries() {
+        assert!(BUILTIN_MACROS.get_file("README.md").is_some());
+
+        let catalog = discover_macro_catalog(None, None);
+
+        assert!(catalog.macros.is_empty());
+        assert!(catalog.diagnostics.is_empty());
     }
 
     /// Verifies user and project macro roots share the same layout while
