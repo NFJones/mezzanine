@@ -19,6 +19,16 @@ subsystem modules rather than expanding `src/main.rs`.
   permissions, and the agent harness.
 - `src/<subsystem>/*.rs`: focused components that implement decomposed
   subsystem behavior behind the subsystem `mod.rs` facade.
+- `src/<subsystem>/tests/`: purpose-named test modules grouped by production
+  behavior or domain and connected with true Rust `mod` declarations. Do not
+  flatten test files with `include!` or use numbered chunk names such as
+  `part_01.rs`.
+- Shared test fixture modules should contain only helpers used by at least two
+  test owners and should use the narrowest practical visibility. Keep
+  one-consumer setup beside its owning tests, preserve test function names
+  during structural moves, and generally keep leaf test modules around
+  300–1,500 lines. Split files over roughly 2,000 lines at a meaningful
+  behavioral boundary instead of adding sequence suffixes.
 - `docs/examples/config.toml`: minimal example configuration aligned with the
   generated defaults.
 - `target/`: generated Cargo build output; do not edit or commit files from it.
