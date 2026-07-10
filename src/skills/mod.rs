@@ -976,8 +976,10 @@ mod tests {
             fs::read_to_string(user_root.join("skills/add-issues/SKILL.md")).unwrap();
         assert!(add_issues_text.contains("mez_managed_version:"));
         assert!(add_issues_text.contains("name: add-issues"));
-        assert!(add_issues_text.contains("future agent to continue"));
+        assert!(add_issues_text.contains("future agent to complete the work"));
         assert!(add_issues_text.contains("current-turn evidence or source"));
+        assert!(add_issues_text.contains("a full implementation plan"));
+        assert!(add_issues_text.contains("relevant constraints and validation expectations"));
         assert!(add_issues_text.contains("Do not create an issue from a vague memory"));
         let project_text =
             fs::read_to_string(project_root.join(".mezzanine/skills/add-doc/SKILL.md")).unwrap();
@@ -1126,6 +1128,21 @@ mod tests {
         let add_issues_document =
             load_skill_document(catalog.get(BUILTIN_ADD_ISSUES_SKILL_NAME).unwrap()).unwrap();
         assert!(add_issues_document.text.contains("name: add-issues"));
+        assert!(
+            add_issues_document
+                .text
+                .contains("future agent to complete the work")
+        );
+        assert!(
+            add_issues_document
+                .text
+                .contains("a full implementation plan")
+        );
+        assert!(
+            add_issues_document
+                .text
+                .contains("relevant constraints and validation expectations")
+        );
         assert!(
             add_issues_document
                 .text
