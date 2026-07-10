@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Verifies macro step messages are queued as ordinary child agent-shell turns.
+/// Verifies macro step slash commands are dispatched through the child agent shell.
 ///
 /// This protects slash-command compatibility for macro steps: a step containing
 /// `/loop` must not be delivered as a passive MMP message because that would
@@ -71,28 +71,19 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .receive_for(&AgentId::opaque(child_agent_id.clone()).unwrap(), u64::MAX)
             .is_empty()
     );
-    let child_turn = service
-        .agent_turn_ledger
-        .turns()
+    let child_pane_id = child_agent_id
+        .strip_prefix("agent-")
+        .expect("macro child agent should identify its pane");
+    let child_turn_id = service
+        .agent_loop_turns
         .iter()
-        .find(|turn| {
-            turn.agent_id == child_agent_id
-                && turn.cooperation_mode.as_deref() == Some("macro-step")
-        })
-        .cloned()
-        .expect("runtime-owned first macro step should queue a child shell turn");
-    assert_eq!(
-        child_turn.parent_turn_id.as_deref(),
-        Some(parent_turn.turn_id.as_str())
-    );
-    assert_eq!(
-        child_turn.trigger,
-        crate::agent::AgentTurnTrigger::LocalMessage
-    );
+        .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
+        .map(|(turn_id, _)| turn_id.clone())
+        .expect("runtime-owned /loop macro step should queue loop work");
     assert!(
         service
             .joined_subagent_dependencies
-            .contains_key(&child_turn.turn_id)
+            .contains_key(&child_turn_id)
     );
     let macro_run = service
         .macro_runs_by_parent_turn
@@ -101,12 +92,10 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
     assert_eq!(macro_run.current_step, 0);
     assert_eq!(
         macro_run.steps[0].child_turn_id.as_deref(),
-        Some(child_turn.turn_id.as_str())
+        Some(child_turn_id.as_str())
     );
     assert_eq!(
-        service
-            .macro_run_by_child_turn
-            .get(child_turn.turn_id.as_str()),
+        service.macro_run_by_child_turn.get(child_turn_id.as_str()),
         Some(&parent_turn.turn_id)
     );
     assert!(
@@ -126,14 +115,11 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         child_pane_text.contains("user> /loop inspect release notes for the requested version."),
         "{child_pane_text}"
     );
-    let child_context = service
-        .agent_turn_contexts
-        .get(&child_turn.turn_id)
-        .unwrap();
+    let child_context = service.agent_turn_contexts.get(&child_turn_id).unwrap();
     assert!(child_context.blocks.iter().any(|block| {
         block
             .content
-            .contains("/loop inspect release notes for the requested version.")
+            .contains("inspect release notes for the requested version.")
     }));
     assert!(child_context.blocks.iter().any(|block| {
         block
@@ -145,20 +131,18 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .agent_turn_ledger
             .turns()
             .iter()
-            .find(|turn| turn.turn_id == child_turn.turn_id)
+            .find(|turn| turn.turn_id == child_turn_id)
             .map(|turn| turn.state),
         Some(AgentTurnState::Running)
     );
-    let macro_step_turns = service
-        .agent_turn_ledger
-        .turns()
-        .iter()
-        .filter(|turn| {
-            turn.agent_id == child_agent_id
-                && turn.cooperation_mode.as_deref() == Some("macro-step")
-        })
-        .count();
-    assert_eq!(macro_step_turns, 1);
+    assert_eq!(
+        service
+            .agent_loop_turns
+            .values()
+            .filter(|loop_turn| loop_turn.pane_id == child_pane_id)
+            .count(),
+        1
+    );
     assert_eq!(service.joined_subagent_dependencies.len(), 1);
     service.pane_processes_mut().terminate_all().unwrap();
 }

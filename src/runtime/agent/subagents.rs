@@ -13,11 +13,21 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) {
+        let active_loop_agent = self
+            .agent_loop_turns
+            .get(turn_id)
+            .map(|loop_turn| format!("agent-{}", loop_turn.pane_id));
         self.joined_subagent_dependencies
             .retain(|child_turn_id, dependency| {
-                child_turn_id != turn_id
+                active_loop_agent.as_ref().is_some_and(|agent_id| {
+                    dependency.child_turn_id == turn_id
+                        && dependency.child_agent_id == *agent_id
+                        && self
+                            .agent_loops_by_pane
+                            .contains_key(agent_id.strip_prefix("agent-").unwrap_or_default())
+                }) || (child_turn_id != turn_id
                     && dependency.parent_turn_id != turn_id
-                    && dependency.child_turn_id != turn_id
+                    && dependency.child_turn_id != turn_id)
             });
     }
 
@@ -27,13 +37,24 @@ impl RuntimeSessionService {
         &self,
         dependency: &JoinedSubagentDependency,
     ) -> bool {
-        self.agent_turn_ledger.turns().iter().any(|turn| {
+        let turn_is_live = self.agent_turn_ledger.turns().iter().any(|turn| {
             turn.turn_id == dependency.child_turn_id
                 && matches!(
                     turn.state,
                     AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
                 )
-        })
+        });
+        let loop_is_live = dependency
+            .child_agent_id
+            .strip_prefix("agent-")
+            .is_some_and(|pane_id| {
+                self.agent_loops_by_pane.contains_key(pane_id)
+                    || self
+                        .agent_loop_turns
+                        .values()
+                        .any(|turn| turn.pane_id == pane_id)
+            });
+        turn_is_live || loop_is_live
     }
 
     /// Reports whether a running parent execution is waiting on a live joined
@@ -354,6 +375,9 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<()> {
+        if self.agent_loop_execution_will_continue(turn, execution) {
+            return Ok(());
+        }
         let success = execution.terminal_state == AgentTurnState::Completed;
         let summary = if success {
             "subagent task completed"
@@ -725,6 +749,12 @@ impl RuntimeSessionService {
             .joined_subagent_dependencies
             .get(&turn.turn_id)
             .cloned()
+            .or_else(|| {
+                self.joined_subagent_dependencies
+                    .values()
+                    .find(|dependency| dependency.child_agent_id == turn.agent_id)
+                    .cloned()
+            })
         else {
             return Ok(());
         };
@@ -822,15 +852,16 @@ impl RuntimeSessionService {
         }
         let mut failed_macro_parent_turn = None;
         let mut macro_result_status = None;
-        if let Some(parent_run_id) = self.macro_run_by_child_turn.remove(&turn.turn_id)
+        if let Some(parent_run_id) = self
+            .macro_run_by_child_turn
+            .remove(&dependency.child_turn_id)
             && parent_run_id == dependency.parent_turn_id
             && let Some(run) = self
                 .macro_runs_by_parent_turn
                 .get_mut(parent_run_id.as_str())
-            && let Some(step) = run
-                .steps
-                .iter_mut()
-                .find(|step| step.child_turn_id.as_deref() == Some(turn.turn_id.as_str()))
+            && let Some(step) = run.steps.iter_mut().find(|step| {
+                step.child_turn_id.as_deref() == Some(dependency.child_turn_id.as_str())
+            })
         {
             step.task_result = Some(crate::runtime::service_state::MacroStepTaskResult {
                 success,
@@ -847,7 +878,8 @@ impl RuntimeSessionService {
                 failed_macro_parent_turn = Some(parent_run_id);
             }
         }
-        self.joined_subagent_dependencies.remove(&turn.turn_id);
+        self.joined_subagent_dependencies
+            .remove(&dependency.child_turn_id);
         if let Some((macro_name, step_index, total_steps, true)) = macro_result_status.as_ref() {
             self.append_agent_macro_status_to_terminal_buffer(
                 &parent_turn.pane_id,

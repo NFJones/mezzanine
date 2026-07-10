@@ -1022,6 +1022,26 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Reports whether a completed loop work turn will schedule another iteration.
+    pub(in crate::runtime) fn agent_loop_execution_will_continue(
+        &self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> bool {
+        let Some(loop_turn) = self.agent_loop_turns.get(&turn.turn_id) else {
+            return false;
+        };
+        if execution.terminal_state != AgentTurnState::Completed {
+            return false;
+        }
+        let Some(state) = self.agent_loops_by_pane.get(&loop_turn.pane_id) else {
+            return false;
+        };
+        let emitted_apply_patch =
+            state.emitted_apply_patch || !runtime_execution_is_patch_free(execution);
+        emitted_apply_patch && state.iteration < state.max_iterations
+    }
+
     /// Runs the apply agent provider execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

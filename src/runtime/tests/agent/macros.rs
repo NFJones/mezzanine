@@ -129,6 +129,28 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
     assert_eq!(macro_children.len(), 1, "{macro_children:?}");
     let child_agent_id = &macro_children[0];
     assert!(child_agent_id.starts_with("agent-%"), "{child_agent_id}");
+    let child_pane_id = child_agent_id
+        .strip_prefix("agent-")
+        .expect("macro child agent should identify its pane");
+    let loop_state = service
+        .agent_loops_by_pane
+        .get(child_pane_id)
+        .expect("macro /loop step should start a loop controller in the child pane");
+    assert_eq!(
+        loop_state.original_prompt,
+        "inspect release notes for the requested version.\n\nUser additional context for this macro invocation:\nfor v1.2"
+    );
+    let loop_turn_id = service
+        .agent_loop_turns
+        .iter()
+        .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
+        .map(|(turn_id, _)| turn_id)
+        .expect("macro /loop step should start its first loop-owned work turn");
+    let dependency = service
+        .joined_subagent_dependencies
+        .get(loop_turn_id)
+        .expect("macro step should join the logical loop result");
+    assert_eq!(dependency.child_agent_id, *child_agent_id);
     let parent_turn = service
         .agent_turn_ledger
         .turns()

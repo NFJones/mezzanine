@@ -14,10 +14,13 @@ use crate::agent::{
 };
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
-use crate::runtime::RuntimeAgentPromptTurnStart;
 use crate::runtime::service_state::{
     MacroJudgeDecision, MacroJudgeOutcome, MacroManagedSubagent, MacroRunPhase, MacroRunState,
     MacroRunStep,
+};
+use crate::runtime::{
+    AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
+    execute_agent_shell_command_with_context,
 };
 use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 
@@ -1051,6 +1054,64 @@ impl RuntimeSessionService {
                 "macro_step_ordering",
                 "a macro step is already in flight for this subagent; wait for it to complete before sending the next step",
             )?));
+        }
+        let parsed_command = execute_agent_shell_command_with_context(
+            &mut self.agent_shell_store,
+            child_pane_id,
+            payload,
+            AgentShellRuntimeContext {
+                mcp_registry: Some(&self.mcp_registry),
+                permission_policy: Some(&self.permission_policy),
+            },
+        );
+        if matches!(
+            parsed_command.as_ref(),
+            Ok(Some(AgentShellCommandOutcome::RequiresRuntime { command, .. })) if command == "loop"
+        ) {
+            let loop_outcome = match self.execute_agent_shell_loop_command(child_pane_id, payload) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    return Ok(Some(ActionResult::failed(
+                        parent_turn,
+                        action,
+                        ActionStatus::Failed,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?));
+                }
+            };
+            let child_turn_id = self
+                .agent_loop_turns
+                .iter()
+                .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
+                .map(|(turn_id, _)| turn_id.clone())
+                .ok_or_else(|| MezError::invalid_state("macro loop did not create a work turn"))?;
+            self.subagent_task_routes
+                .insert(child_turn_id.clone(), parent_turn.agent_id.clone());
+            self.joined_subagent_dependencies.insert(
+                child_turn_id.clone(),
+                JoinedSubagentDependency {
+                    parent_turn_id: parent_turn.turn_id.clone(),
+                    parent_action_id: action.id.clone(),
+                    child_turn_id: child_turn_id.clone(),
+                    child_agent_id: child_agent_id.to_string(),
+                    child_display_name: Some(child_display_name.clone()),
+                },
+            );
+            return Ok(Some(ActionResult::running(
+                parent_turn,
+                action,
+                vec![format!(
+                    "macro loop step delivered to {child_agent_id}; waiting for loop result"
+                )],
+                Some(format!(
+                    r#"{{"recipient":"{}","delivery_status":"accepted","join_policy":"macro_step","join_state":"waiting","child_agent_id":"{}","child_turn_id":"{}","command":"loop","outcome":"{}","error":null}}"#,
+                    json_escape(recipient),
+                    json_escape(&child_agent_id),
+                    json_escape(&child_turn_id),
+                    json_escape(&format!("{loop_outcome:?}"))
+                )),
+            )));
         }
         let context = self.agent_context_for_pane_prompt(child_pane_id, payload, 100)?;
         let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
