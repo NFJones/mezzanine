@@ -68,6 +68,7 @@ impl SnapshotManifest {
             .open(&path)
             .await?;
         file.write_all(self.encode().as_bytes()).await?;
+        file.flush().await?;
         set_private_file_permissions_async(&path).await?;
         Ok(path)
     }
