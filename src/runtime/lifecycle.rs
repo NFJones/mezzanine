@@ -186,6 +186,8 @@ impl RuntimeSessionService {
         } else {
             Vec::new()
         };
+        let mut side_effects = side_effects;
+        side_effects.extend(self.drain_registry_persistence_transition().side_effects);
         Ok(RuntimeTransition {
             applied,
             side_effects,
