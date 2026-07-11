@@ -1462,46 +1462,15 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn deferred_service_side_effects_from_service(&mut self) -> Vec<RuntimeSideEffect> {
-        self.deferred_pane_io_side_effects_from_service()
-            .into_iter()
-            .chain(
-                self.service
-                    .drain_audit_persistence_transition()
-                    .side_effects,
-            )
-            .chain(
-                self.service
-                    .drain_transcript_persistence_transition()
-                    .side_effects,
-            )
-            .chain(
-                self.service
-                    .drain_config_persistence_transition()
-                    .side_effects,
-            )
-            .chain(
-                self.service
-                    .drain_pane_pipe_persistence_transition()
-                    .side_effects,
-            )
-            .chain(self.service.drain_program_hook_transition().side_effects)
-            .chain(
-                self.service
-                    .drain_registry_persistence_transition()
-                    .side_effects,
-            )
-            .collect()
+        self.service
+            .drain_deferred_effects_transition()
+            .side_effects
     }
 
     /// Runs the deferred pane io side effects from service operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn deferred_pane_io_side_effects_from_service(&mut self) -> Vec<RuntimeSideEffect> {
-        self.service.drain_pane_io_transition().side_effects
-    }
-
     /// Runs the queue provider poll timer if needed operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

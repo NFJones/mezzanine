@@ -2510,6 +2510,21 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Drains all queued external work through one transport-neutral transition.
+    pub(crate) fn drain_deferred_effects_transition(&mut self) -> RuntimeTransition {
+        let mut side_effects = self.drain_pane_io_transition().side_effects;
+        side_effects.extend(self.drain_audit_persistence_transition().side_effects);
+        side_effects.extend(self.drain_transcript_persistence_transition().side_effects);
+        side_effects.extend(self.drain_config_persistence_transition().side_effects);
+        side_effects.extend(self.drain_pane_pipe_persistence_transition().side_effects);
+        side_effects.extend(self.drain_program_hook_transition().side_effects);
+        side_effects.extend(self.drain_registry_persistence_transition().side_effects);
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
+    }
+
     /// Enables or disables deferred user/project config writes for async actors.
     pub(crate) fn set_defer_config_file_writes(&mut self, defer: bool) {
         self.defer_config_file_writes = defer;
