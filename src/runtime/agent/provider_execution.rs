@@ -43,6 +43,22 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Applies provider completion through the transport-neutral transition contract.
+    pub(crate) async fn apply_agent_provider_completed_transition(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        execution: AgentTurnExecution,
+    ) -> Result<crate::async_runtime::RuntimeTransition> {
+        let applied = self
+            .apply_agent_provider_completed_event(agent_id, turn_id, execution)
+            .await?;
+        Ok(self.runtime_transition_with_render(
+            applied,
+            Some(crate::async_runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
     /// Runs the execute agent turn with provider operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

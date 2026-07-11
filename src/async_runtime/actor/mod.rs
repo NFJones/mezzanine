@@ -1877,23 +1877,17 @@ impl AsyncRuntimeSessionActor {
                     .remove(turn_id.as_str());
                 self.provider_output_limit_compaction_turns
                     .remove(turn_id.as_str());
-                let applied = self
+                let mut transition = self
                     .service
-                    .apply_agent_provider_completed_event(&agent_id, &turn_id, *execution)
+                    .apply_agent_provider_completed_transition(&agent_id, &turn_id, *execution)
                     .await?;
-                let mut side_effects = if applied {
-                    self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                } else {
-                    Vec::new()
-                };
-                if applied {
-                    side_effects.extend(self.pending_provider_dispatch_side_effects()?);
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
                 }
-                side_effects.extend(claim_cancellations);
-                Ok(RuntimeTransition {
-                    applied,
-                    side_effects,
-                })
+                transition.side_effects.extend(claim_cancellations);
+                Ok(transition)
             }
         }
     }
