@@ -17,20 +17,20 @@ use super::{
     BlockedApprovalQueue, ConfigLayer, ControlIdempotencyCache, CopyMode,
     DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
     DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    DeferredProjectConfigWrite, DeferredProjectInstructionWrite, DiscoveredInstructionFile,
-    EnvironmentSignature, EventLog, FocusedShellHookQueue, HookDefinition, HookEvent,
-    HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord,
-    McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
-    McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
-    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeStatusPillCache,
-    RuntimeStatusPillDefinition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
-    SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
-    SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
-    TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
-    execute_streamable_http_exchange, mcp_tools_call_operation,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProjectConfigWrite,
+    DeferredProjectInstructionWrite, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
+    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
+    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
+    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
+    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
+    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
+    PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result,
+    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
+    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
+    SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
+    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
+    ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId, execute_streamable_http_exchange,
+    mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::layout::PaneTitleSource;
@@ -2594,11 +2594,11 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) hook_definitions: Vec<HookDefinition>,
-    /// Stores the deferred program hooks value for this data structure.
+    /// Stores program-hook side effects awaiting adapter execution.
     ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_program_hooks: Vec<DeferredProgramHook>,
+    /// Runtime transitions queue the canonical effect directly so the async
+    /// actor does not need a hook-specific compatibility record.
+    pub(super) queued_program_hook_effects: Vec<RuntimeSideEffect>,
     /// Stores the focused shell hooks value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

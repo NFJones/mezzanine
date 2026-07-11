@@ -449,7 +449,7 @@ impl RuntimeSessionService {
             project_trust_database_path: None,
             announced_project_trust_roots: BTreeSet::new(),
             hook_definitions: Vec::new(),
-            deferred_program_hooks: Vec::new(),
+            queued_program_hook_effects: Vec::new(),
             focused_shell_hooks: FocusedShellHookQueue::default(),
             next_focused_shell_hook_marker: 1,
             focused_shell_hook_transactions: BTreeMap::new(),

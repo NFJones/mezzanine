@@ -5,11 +5,11 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuditActor, AuditRecord, ClientId, DeferredProgramHook, EventKind, FocusedShellExecutor,
-    FocusedShellHookDispatch, FocusedShellHookDispatchStatus, HookDefinition, HookEvent,
-    HookExecutionPlan, HookExecutionResult, Result, RuntimeFocusedShellHookRun,
-    RuntimeFocusedShellPaneExecutor, RuntimeSessionService, json_escape, plan_event,
-    runtime_hook_execution_status_name, runtime_hook_target_pane_id,
+    AuditActor, AuditRecord, ClientId, EventKind, FocusedShellExecutor, FocusedShellHookDispatch,
+    FocusedShellHookDispatchStatus, HookDefinition, HookEvent, HookExecutionPlan,
+    HookExecutionResult, Result, RuntimeFocusedShellHookRun, RuntimeFocusedShellPaneExecutor,
+    RuntimeSessionService, json_escape, plan_event, runtime_hook_execution_status_name,
+    runtime_hook_target_pane_id,
 };
 use crate::runtime::{AsyncHookEvent, RuntimeSideEffect, RuntimeTransition};
 
@@ -50,28 +50,11 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Enables or disables deferral of non-blocking program hooks.
-    ///
-    /// The synchronous compatibility runtime leaves this disabled so hooks run
-    /// inline. The async actor enables it and drains queued hooks into a
-    /// Drains program hook executions queued for an async hook worker.
-    pub(crate) fn drain_deferred_program_hooks(&mut self) -> Vec<DeferredProgramHook> {
-        std::mem::take(&mut self.deferred_program_hooks)
-    }
-
     /// Drains queued program hooks through the runtime transition contract.
     pub(crate) fn drain_program_hook_transition(&mut self) -> RuntimeTransition {
-        let side_effects = self
-            .drain_deferred_program_hooks()
-            .into_iter()
-            .map(|hook| RuntimeSideEffect::RunProgramHook {
-                plan: Box::new(hook.plan),
-                triggering_event_completed: hook.triggering_event_completed,
-            })
-            .collect();
         RuntimeTransition {
             applied: false,
-            side_effects,
+            side_effects: std::mem::take(&mut self.queued_program_hook_effects),
         }
     }
 
@@ -143,10 +126,11 @@ impl RuntimeSessionService {
         plan: HookExecutionPlan,
         triggering_event_completed: bool,
     ) {
-        self.deferred_program_hooks.push(DeferredProgramHook {
-            plan,
-            triggering_event_completed,
-        });
+        self.queued_program_hook_effects
+            .push(RuntimeSideEffect::RunProgramHook {
+                plan: Box::new(plan),
+                triggering_event_completed,
+            });
     }
 
     /// Runs the push focused shell hook result operation for this subsystem.

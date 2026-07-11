@@ -309,8 +309,8 @@ pub use agent_state::{
 pub use deferred::{
     AttachedClientStepApplication, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
     DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProjectConfigWrite,
+    DeferredProjectInstructionWrite,
 };
 pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use super::{AgentTranscriptStore, ConfigScope, HookExecutionPlan, Size, TranscriptEntry};
+use super::{AgentTranscriptStore, ConfigScope, Size, TranscriptEntry};
 
 /// Pane input write deferred for an async pane process owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,15 +111,6 @@ pub struct DeferredConfigFileWrite {
     pub scope: ConfigScope,
     /// Complete validated config text to replace at the destination.
     pub text: String,
-}
-
-/// Program hook execution deferred for an async hook worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredProgramHook {
-    /// Fully planned program hook invocation.
-    pub plan: HookExecutionPlan,
-    /// Whether this hook was triggered by a completed lifecycle event.
-    pub triggering_event_completed: bool,
 }
 
 /// Effects applied while processing one attached terminal client step.
