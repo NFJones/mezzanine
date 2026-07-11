@@ -1834,27 +1834,16 @@ impl AsyncRuntimeSessionActor {
                     .remove(turn_id.as_str());
                 self.provider_output_limit_compaction_turns
                     .remove(turn_id.as_str());
-                self.service
-                    .apply_agent_provider_failed_event(
-                        &agent_id,
-                        &turn_id,
-                        &kind,
-                        &message,
-                        provider_failure_json.as_deref(),
-                        provider_raw_text.as_deref(),
-                    )
-                    .map(|applied| RuntimeTransition {
-                        applied,
-                        side_effects: {
-                            let mut side_effects = if applied {
-                                self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                            } else {
-                                Vec::new()
-                            };
-                            side_effects.extend(claim_cancellations);
-                            side_effects
-                        },
-                    })
+                let mut transition = self.service.apply_agent_provider_failed_transition(
+                    &agent_id,
+                    &turn_id,
+                    &kind,
+                    &message,
+                    provider_failure_json.as_deref(),
+                    provider_raw_text.as_deref(),
+                )?;
+                transition.side_effects.extend(claim_cancellations);
+                Ok(transition)
             }
             AgentProviderEvent::OutputProgress {
                 agent_id: _,

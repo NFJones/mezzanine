@@ -733,6 +733,30 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Applies a terminal provider failure through the transport-neutral transition contract.
+    pub(crate) fn apply_agent_provider_failed_transition(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        kind: &str,
+        message: &str,
+        provider_failure_json: Option<&str>,
+        provider_raw_text: Option<&str>,
+    ) -> Result<crate::async_runtime::RuntimeTransition> {
+        let applied = self.apply_agent_provider_failed_event(
+            agent_id,
+            turn_id,
+            kind,
+            message,
+            provider_failure_json,
+            provider_raw_text,
+        )?;
+        Ok(self.runtime_transition_with_render(
+            applied,
+            Some(crate::async_runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
     /// Runs the pending agent provider tasks operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
