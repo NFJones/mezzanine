@@ -1126,18 +1126,15 @@ impl AsyncRuntimeSessionActor {
             | RuntimeTimerKind::ReadinessProbe
             | RuntimeTimerKind::Bootstrap
             | RuntimeTimerKind::FocusedShellHook => {
-                let expired = self
+                let mut transition = self
                     .service
-                    .apply_shell_transaction_timer_event(timer.now_ms)?;
-                let side_effects = if expired > 0 {
-                    self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                } else {
-                    self.shell_transaction_timer_side_effects()
-                };
-                Ok(RuntimeTransition {
-                    applied: expired > 0,
-                    side_effects,
-                })
+                    .apply_shell_transaction_timer_transition(timer.now_ms)?;
+                if !transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.shell_transaction_timer_side_effects());
+                }
+                Ok(transition)
             }
             RuntimeTimerKind::ResizeDebounce => {
                 if self.scheduled_resize_debounce_timers.remove(&timer.key) {

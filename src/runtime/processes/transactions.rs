@@ -318,6 +318,18 @@ impl RuntimeSessionService {
         Ok(expired.saturating_add(focused))
     }
 
+    /// Applies shell-transaction expiry through the transport-neutral transition contract.
+    pub(crate) fn apply_shell_transaction_timer_transition(
+        &mut self,
+        now_unix_ms: u64,
+    ) -> Result<RuntimeTransition> {
+        let expired = self.apply_shell_transaction_timer_event(now_unix_ms)?;
+        Ok(self.runtime_transition_with_render(
+            expired > 0,
+            Some(RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
     /// Returns timer-visible snapshots for live shell transactions with
     /// configured timeouts.
     pub fn running_shell_transaction_timers(&self) -> Vec<RuntimeShellTransactionTimerRef> {
