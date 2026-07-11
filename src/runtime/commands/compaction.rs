@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
+use crate::async_runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 
 impl RuntimeSessionService {
     /// Executes `/compact` by queuing model-backed conversation compaction.
@@ -406,6 +407,27 @@ impl RuntimeSessionService {
         self.claimed_agent_compaction_tasks
             .insert(pane_id.to_string(), task.clone());
         Ok(Some(RuntimeAgentCompactionDispatch { task, provider }))
+    }
+
+    /// Applies one model-backed compaction result through the transport-neutral transition contract.
+    pub(crate) fn apply_agent_compaction_transition(
+        &mut self,
+        event: AgentCompactionEvent,
+    ) -> Result<RuntimeTransition> {
+        let applied = match event {
+            AgentCompactionEvent::Completed { pane_id, response } => {
+                self.apply_agent_compaction_completed_event(&pane_id, *response)?
+            }
+            AgentCompactionEvent::Failed {
+                pane_id, message, ..
+            } => self.apply_agent_compaction_failed_event(&pane_id, &message)?,
+        };
+        Ok(
+            self.runtime_transition_with_render(
+                applied,
+                Some(RenderInvalidationReason::FullRedraw),
+            ),
+        )
     }
 
     /// Applies a completed model-backed compaction response.

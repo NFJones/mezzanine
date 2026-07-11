@@ -8,6 +8,7 @@
 use super::compaction;
 use super::*;
 use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
+use crate::async_runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
 use crate::memory::{MemoryKind, MemoryState};
 use std::process::Command;
 
@@ -572,6 +573,27 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
+    }
+
+    /// Applies one model-backed memory result through the transport-neutral transition contract.
+    pub(crate) fn apply_agent_remember_transition(
+        &mut self,
+        event: AgentRememberEvent,
+    ) -> Result<RuntimeTransition> {
+        let applied = match event {
+            AgentRememberEvent::Completed { pane_id, response } => {
+                self.apply_agent_remember_completed_event(&pane_id, *response)?
+            }
+            AgentRememberEvent::Failed {
+                pane_id, message, ..
+            } => self.apply_agent_remember_failed_event(&pane_id, &message)?,
+        };
+        Ok(
+            self.runtime_transition_with_render(
+                applied,
+                Some(RenderInvalidationReason::FullRedraw),
+            ),
+        )
     }
 
     /// Applies one completed `/remember` model response through actor-owned state.

@@ -301,7 +301,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds a transition with one render invalidation for every attached client.
-    fn runtime_transition_with_render(
+    pub(crate) fn runtime_transition_with_render(
         &self,
         applied: bool,
         render_reason: Option<RenderInvalidationReason>,

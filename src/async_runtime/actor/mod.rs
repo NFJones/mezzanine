@@ -6,10 +6,9 @@
 mod side_effects;
 
 use super::{
-    AgentCompactionEvent, AgentId, AgentProviderEvent, AgentRememberEvent, Arc,
-    AsyncControlInputResult, AsyncHookEvent, AsyncMessageFanout, AsyncMessageInputResult,
-    AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncRuntimeActorConfig,
-    AsyncRuntimeActorExit, AsyncRuntimeRequest, AsyncRuntimeSessionActor,
+    AgentId, AgentProviderEvent, Arc, AsyncControlInputResult, AsyncHookEvent, AsyncMessageFanout,
+    AsyncMessageInputResult, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
+    AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest, AsyncRuntimeSessionActor,
     AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, AttachedTerminalOutputModes, ClientEvent,
     ClientId, ClientState, ClientStatusLine, ClientViewRole, ControlConnectionState,
@@ -1088,10 +1087,18 @@ impl AsyncRuntimeSessionActor {
                     .await
             }
             RuntimeEvent::AgentCompaction(compaction_event) => {
-                self.apply_runtime_agent_compaction_event(compaction_event)
+                let mut transition = self
+                    .service
+                    .apply_agent_compaction_transition(compaction_event)?;
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
+                Ok(transition)
             }
             RuntimeEvent::AgentRemember(remember_event) => {
-                self.apply_runtime_agent_remember_event(remember_event)
+                self.service.apply_agent_remember_transition(remember_event)
             }
             RuntimeEvent::Hook(hook_event) => self.apply_runtime_hook_event(hook_event),
             RuntimeEvent::Persistence(persistence_event) => {
@@ -1898,60 +1905,6 @@ impl AsyncRuntimeSessionActor {
                 })
             }
         }
-    }
-
-    /// Applies completion or failure from a queued model-backed compaction task.
-    fn apply_runtime_agent_compaction_event(
-        &mut self,
-        compaction_event: AgentCompactionEvent,
-    ) -> Result<RuntimeTransition> {
-        let applied = match compaction_event {
-            AgentCompactionEvent::Completed { pane_id, response } => self
-                .service
-                .apply_agent_compaction_completed_event(&pane_id, *response)?,
-            AgentCompactionEvent::Failed {
-                pane_id, message, ..
-            } => self
-                .service
-                .apply_agent_compaction_failed_event(&pane_id, &message)?,
-        };
-        let mut side_effects = if applied {
-            self.render_side_effects(RenderInvalidationReason::FullRedraw)
-        } else {
-            Vec::new()
-        };
-        if applied {
-            side_effects.extend(self.pending_provider_dispatch_side_effects()?);
-        }
-        Ok(RuntimeTransition {
-            applied,
-            side_effects,
-        })
-    }
-
-    /// Applies completion or failure from a queued model-backed memory task.
-    fn apply_runtime_agent_remember_event(
-        &mut self,
-        remember_event: AgentRememberEvent,
-    ) -> Result<RuntimeTransition> {
-        let applied = match remember_event {
-            AgentRememberEvent::Completed { pane_id, response } => self
-                .service
-                .apply_agent_remember_completed_event(&pane_id, *response)?,
-            AgentRememberEvent::Failed {
-                pane_id, message, ..
-            } => self
-                .service
-                .apply_agent_remember_failed_event(&pane_id, &message)?,
-        };
-        Ok(RuntimeTransition {
-            applied,
-            side_effects: if applied {
-                self.render_side_effects(RenderInvalidationReason::FullRedraw)
-            } else {
-                Vec::new()
-            },
-        })
     }
 
     /// Runs the provider failure should retry operation for this subsystem.
