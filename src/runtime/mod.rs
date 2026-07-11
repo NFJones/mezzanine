@@ -120,8 +120,6 @@ use crate::message::{
     TaskResultPayload, TaskState, TaskStatusPayload, decode_mmp_frame, delivery_batch_json,
     encode_mmp_body, handle_mmp_frame, validate_mmp_payload_metadata,
 };
-#[cfg(test)]
-use crate::message::{MessageFanoutSink, flush_message_fanout_for};
 use crate::permissions::{
     ApprovalDecision, ApprovalGrant, ApprovalPolicy, ApprovalScope, ArgumentPolicy,
     BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, CommandRule,
@@ -345,13 +343,6 @@ use service_state::{
     RuntimeAgentPromptInput, RuntimeAgentTurnSteering, RuntimeCommandBinding,
     RuntimeSubagentLineage,
 };
-#[cfg(test)]
-pub use sockets::{
-    accept_one_control_connection, accept_one_message_connection,
-    flush_runtime_event_wakeups_to_stream, serve_control_connection, serve_control_listener,
-    serve_message_connection, serve_message_listener, serve_runtime_control_connection,
-    serve_runtime_control_connection_with_state, serve_runtime_control_listener,
-};
 pub use sockets::{
     apply_registry_update, apply_registry_update_async, authorize_unix_peer,
     authorize_unix_peer_raw_fd, authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket,
@@ -359,6 +350,11 @@ pub use sockets::{
     ensure_private_socket_directory, pane_environment, pane_environment_with_term,
     prune_stale_socket_files_in_directory, remove_stale_socket_file_if_unserved,
     socket_path_for_name,
+};
+#[cfg(test)]
+pub use sockets::{
+    serve_control_connection, serve_runtime_control_connection,
+    serve_runtime_control_connection_with_state,
 };
 use status_pills::{
     RuntimeStatusPillCache, RuntimeStatusPillDefinition,
