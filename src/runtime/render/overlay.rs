@@ -2670,6 +2670,13 @@ impl RuntimeSessionService {
     /// primary render pass. An empty line set clears any active overlay. This
     /// fails when the runtime is no longer live.
     pub fn show_primary_display_overlay(&mut self, lines: Vec<String>) -> Result<()> {
+        let wrap_columns = usize::from(self.session.authoritative_size.columns)
+            .min(self.terminal_agent_wrap_column_cap)
+            .max(1);
+        let lines = lines
+            .into_iter()
+            .flat_map(|line| wrap_agent_terminal_text(&line, wrap_columns))
+            .collect::<Vec<_>>();
         let line_style_spans = vec![Vec::new(); lines.len()];
         self.show_primary_display_overlay_inner(lines, line_style_spans, Vec::new(), false)
     }
