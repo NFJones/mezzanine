@@ -1042,8 +1042,8 @@ impl RuntimeSessionService {
             return Ok(());
         };
         if self.external_effects_use_adapter() {
-            self.deferred_agent_prompt_history_writes
-                .push(DeferredAgentPromptHistoryWrite {
+            self.queued_transcript_effects
+                .push(RuntimeSideEffect::PersistPromptHistory {
                     path: store.prompt_history_file(),
                     store,
                     conversation_id: session.session_id.clone(),

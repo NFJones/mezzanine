@@ -18,11 +18,10 @@ use super::{
     DEFAULT_AGENT_ROUTING, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
     DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
     DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY,
-    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredProjectConfigWrite,
-    DeferredProjectInstructionWrite, EventKind, EventLog, FocusedShellHookQueue, HostClipboard,
-    KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan,
-    MemoryRecord, MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
+    DeferredConfigFileWrite, DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
+    EventKind, EventLog, FocusedShellHookQueue, HostClipboard, KeyBindings,
+    MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan, MemoryRecord,
+    MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
     PaneProcessManager, PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf,
     PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, RenderInvalidationReason,
     Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
@@ -280,9 +279,7 @@ impl RuntimeSessionService {
             deferred_pane_terminations: BTreeMap::new(),
             deferred_pane_pipe_writes: Vec::new(),
             queued_audit_effects: Vec::new(),
-            deferred_agent_transcript_writes: Vec::new(),
-            deferred_agent_prompt_history_writes: Vec::new(),
-            deferred_command_prompt_history_writes: Vec::new(),
+            queued_transcript_effects: Vec::new(),
             deferred_config_file_writes: Vec::new(),
             deferred_project_config_writes: Vec::new(),
             deferred_project_instruction_writes: Vec::new(),
@@ -2536,60 +2533,11 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Drains agent transcript writes queued for the async persistence worker.
-    pub(crate) fn drain_deferred_agent_transcript_writes(
-        &mut self,
-    ) -> Vec<DeferredAgentTranscriptWrite> {
-        std::mem::take(&mut self.deferred_agent_transcript_writes)
-    }
-
-    /// Drains shared prompt-history writes queued for async persistence.
-    pub(crate) fn drain_deferred_agent_prompt_history_writes(
-        &mut self,
-    ) -> Vec<DeferredAgentPromptHistoryWrite> {
-        std::mem::take(&mut self.deferred_agent_prompt_history_writes)
-    }
-
-    /// Drains command prompt history writes queued for async persistence.
-    pub(crate) fn drain_deferred_command_prompt_history_writes(
-        &mut self,
-    ) -> Vec<DeferredCommandPromptHistoryWrite> {
-        std::mem::take(&mut self.deferred_command_prompt_history_writes)
-    }
-
     /// Drains transcript and prompt-history persistence through one runtime transition.
     pub(crate) fn drain_transcript_persistence_transition(&mut self) -> RuntimeTransition {
-        let mut side_effects = self
-            .drain_deferred_agent_transcript_writes()
-            .into_iter()
-            .map(|write| RuntimeSideEffect::PersistTranscriptEntries {
-                store: write.store,
-                path: write.path,
-                entries: write.entries,
-            })
-            .collect::<Vec<_>>();
-        side_effects.extend(
-            self.drain_deferred_agent_prompt_history_writes()
-                .into_iter()
-                .map(|write| RuntimeSideEffect::PersistPromptHistory {
-                    store: write.store,
-                    path: write.path,
-                    conversation_id: write.conversation_id,
-                    prompt: write.prompt,
-                }),
-        );
-        side_effects.extend(
-            self.drain_deferred_command_prompt_history_writes()
-                .into_iter()
-                .map(|write| RuntimeSideEffect::PersistCommandPromptHistory {
-                    store: write.store,
-                    path: write.path,
-                    command: write.command,
-                }),
-        );
         RuntimeTransition {
             applied: false,
-            side_effects,
+            side_effects: std::mem::take(&mut self.queued_transcript_effects),
         }
     }
 

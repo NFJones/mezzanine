@@ -14,22 +14,21 @@ use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentScheduler, AgentShellStore,
     AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger,
     AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
-    ControlIdempotencyCache, CopyMode, DeferredAgentPromptHistoryWrite,
-    DeferredAgentTranscriptWrite, DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite,
-    DeferredPaneInput, DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination,
-    DeferredProjectConfigWrite, DeferredProjectInstructionWrite, DiscoveredInstructionFile,
-    EnvironmentSignature, EventLog, FocusedShellHookQueue, HookDefinition, HookEvent,
-    HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord,
-    McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
-    McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
-    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect, RuntimeStatusPillCache,
-    RuntimeStatusPillDefinition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
-    SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
-    SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
-    TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
-    execute_streamable_http_exchange, mcp_tools_call_operation,
+    ControlIdempotencyCache, CopyMode, DeferredConfigFileWrite, DeferredPaneInput,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProjectConfigWrite,
+    DeferredProjectInstructionWrite, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
+    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
+    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
+    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
+    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
+    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
+    PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result,
+    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
+    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
+    SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
+    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
+    ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId, execute_streamable_http_exchange,
+    mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::layout::PaneTitleSource;
@@ -1810,21 +1809,11 @@ pub struct RuntimeSessionService {
     /// The runtime retains canonical effects rather than audit-specific
     /// compatibility records after the audit writer encodes each record.
     pub(super) queued_audit_effects: Vec<RuntimeSideEffect>,
-    /// Stores the deferred agent transcript writes value for this data structure.
+    /// Stores transcript and prompt-history effects awaiting adapter execution.
     ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_agent_transcript_writes: Vec<DeferredAgentTranscriptWrite>,
-    /// Stores the deferred agent prompt history writes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_agent_prompt_history_writes: Vec<DeferredAgentPromptHistoryWrite>,
-    /// Stores the deferred command prompt history writes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_command_prompt_history_writes: Vec<DeferredCommandPromptHistoryWrite>,
+    /// Producers retain canonical persistence effects rather than
+    /// transcript-specific compatibility records.
+    pub(super) queued_transcript_effects: Vec<RuntimeSideEffect>,
     /// Stores the deferred config file writes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use super::{AgentTranscriptStore, ConfigScope, Size, TranscriptEntry};
+use super::{ConfigScope, Size};
 
 /// Pane input write deferred for an async pane process owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,41 +47,6 @@ pub struct DeferredPanePipeWrite {
     pub path: PathBuf,
     /// Output bytes to append.
     pub bytes: Vec<u8>,
-}
-
-/// Agent transcript entries deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredAgentTranscriptWrite {
-    /// Filesystem-backed transcript store that owns encoding and permissions.
-    pub store: AgentTranscriptStore,
-    /// Transcript file path used for persistence diagnostics.
-    pub path: PathBuf,
-    /// Entries to append in sequence order.
-    pub entries: Vec<TranscriptEntry>,
-}
-
-/// Agent prompt-history append deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredAgentPromptHistoryWrite {
-    /// Filesystem-backed transcript store that owns the shared history file.
-    pub store: AgentTranscriptStore,
-    /// Destination prompt-history file used for persistence diagnostics.
-    pub path: PathBuf,
-    /// Conversation identity used for validation and future scoping.
-    pub conversation_id: String,
-    /// Prompt text to append to the bounded shared history.
-    pub prompt: String,
-}
-
-/// Primary command prompt history append deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredCommandPromptHistoryWrite {
-    /// Filesystem-backed transcript store that owns the command history file.
-    pub store: AgentTranscriptStore,
-    /// Destination command prompt history file used for persistence diagnostics.
-    pub path: PathBuf,
-    /// Command text to append to the bounded shared history.
-    pub command: String,
 }
 
 /// Project instruction scaffold write deferred for async persistence.

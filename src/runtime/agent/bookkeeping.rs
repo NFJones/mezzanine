@@ -57,8 +57,8 @@ impl RuntimeSessionService {
                 self.deferred_transcript_next_sequences
                     .insert(conversation_id.clone(), next_sequence);
             }
-            self.deferred_agent_transcript_writes
-                .push(DeferredAgentTranscriptWrite {
+            self.queued_transcript_effects
+                .push(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&conversation_id)?,
                     store,
                     entries: entries.clone(),

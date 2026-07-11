@@ -248,8 +248,8 @@ impl RuntimeSessionService {
             return Ok(());
         };
         if self.external_effects_use_adapter() {
-            self.deferred_command_prompt_history_writes
-                .push(DeferredCommandPromptHistoryWrite {
+            self.queued_transcript_effects
+                .push(RuntimeSideEffect::PersistCommandPromptHistory {
                     path: store.command_prompt_history_file(),
                     store,
                     command: command.to_string(),

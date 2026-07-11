@@ -307,8 +307,7 @@ pub use agent_state::{
     RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
 };
 pub use deferred::{
-    AttachedClientStepApplication, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
+    AttachedClientStepApplication, DeferredConfigFileWrite, DeferredPaneInput,
     DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProjectConfigWrite,
     DeferredProjectInstructionWrite,
 };
