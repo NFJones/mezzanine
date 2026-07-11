@@ -73,6 +73,19 @@ impl RuntimeSessionService {
         Ok((output, offset))
     }
 
+    /// Handles actor-owned control input and emits its registry persistence
+    /// through the runtime transition contract.
+    pub(crate) fn handle_control_input_for_connection_transition(
+        &mut self,
+        input: &[u8],
+        max_content_length: usize,
+        connection: &mut ControlConnectionState,
+    ) -> Result<(Vec<u8>, usize, RuntimeTransition)> {
+        let (output, consumed) =
+            self.handle_control_input_for_connection(input, max_content_length, connection)?;
+        Ok((output, consumed, self.registry_persistence_transition()))
+    }
+
     /// Runs the handle control input for connection with snapshots operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -337,16 +337,14 @@ impl AsyncRuntimeSessionActor {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self
                     .service
-                    .handle_control_input_for_connection(
+                    .handle_control_input_for_connection_transition(
                         &input,
                         max_content_length,
                         &mut connection,
                     )
-                    .and_then(|(output, consumed)| {
+                    .and_then(|(output, consumed, transition)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_runtime_side_effects(
-                            self.service.registry_persistence_transition().side_effects,
-                        )?;
+                        self.queue_runtime_side_effects(transition.side_effects)?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
