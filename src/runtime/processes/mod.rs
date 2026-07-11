@@ -41,6 +41,9 @@ use crate::agent::{
     apply_patch_transaction_phase, bootstrap_script_for_classification, parse_bootstrap_env_output,
     readiness_probe_command_for_classification,
 };
+use crate::async_runtime::{
+    PaneEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+};
 use crate::process::PaneProcess;
 use crate::terminal::{TerminalStyledLine, parse_mez_shell_transaction_osc};
 
@@ -210,6 +213,70 @@ impl RuntimeSessionService {
         };
         self.append_pane_start_event(&update)?;
         Ok(true)
+    }
+
+    /// Applies one non-output pane event through the transport-neutral transition contract.
+    ///
+    /// Pane output remains actor-owned temporarily because it also updates ingress metrics and
+    /// pane-pipe health timers. Completion events can already return their ordered render effects
+    /// without depending on Tokio or transport state.
+    pub(crate) fn apply_pane_completion_transition(
+        &mut self,
+        event: PaneEvent,
+    ) -> Result<RuntimeTransition> {
+        let (applied, render_reason) = match event {
+            PaneEvent::WriteFailed { pane_id, error } => (
+                self.apply_pane_write_failure_event(pane_id, error)?,
+                Some(RenderInvalidationReason::FullRedraw),
+            ),
+            PaneEvent::Resized { pane_id, size } => (
+                self.apply_pane_resize_completion_event(pane_id, size)?,
+                Some(RenderInvalidationReason::Layout),
+            ),
+            PaneEvent::ForegroundProcess {
+                pane_id,
+                process_name,
+                process_group_id,
+                current_working_directory,
+            } => (
+                self.apply_pane_foreground_process_event(
+                    pane_id,
+                    process_name,
+                    process_group_id,
+                    current_working_directory,
+                )?,
+                Some(RenderInvalidationReason::PaneOutput),
+            ),
+            PaneEvent::InputWritten { pane_id, bytes } => {
+                (self.apply_pane_input_written_event(pane_id, bytes)?, None)
+            }
+            PaneEvent::Output { .. } => {
+                return Err(MezError::invalid_state(
+                    "pane output must use the output transition path",
+                ));
+            }
+        };
+        let side_effects = if applied {
+            render_reason
+                .into_iter()
+                .flat_map(|reason| {
+                    self.session
+                        .clients()
+                        .iter()
+                        .filter(|client| client.state == crate::session::ClientState::Attached)
+                        .map(move |client| RuntimeSideEffect::RenderClient {
+                            client_id: client.id.clone(),
+                            reason,
+                        })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(RuntimeTransition {
+            applied,
+            side_effects,
+        })
     }
 
     /// Applies one pane input write failure delivered by an async pane driver.

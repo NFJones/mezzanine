@@ -1095,56 +1095,9 @@ impl AsyncRuntimeSessionActor {
                     side_effects,
                 })
             }
-            RuntimeEvent::Pane(PaneEvent::WriteFailed { pane_id, error }) => self
-                .service
-                .apply_pane_write_failure_event(pane_id, error)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                    } else {
-                        Vec::new()
-                    },
-                }),
-            RuntimeEvent::Pane(PaneEvent::Resized { pane_id, size }) => self
-                .service
-                .apply_pane_resize_completion_event(pane_id, size)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::Layout)
-                    } else {
-                        Vec::new()
-                    },
-                }),
-            RuntimeEvent::Pane(PaneEvent::ForegroundProcess {
-                pane_id,
-                process_name,
-                process_group_id,
-                current_working_directory,
-            }) => self
-                .service
-                .apply_pane_foreground_process_event(
-                    pane_id,
-                    process_name,
-                    process_group_id,
-                    current_working_directory,
-                )
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::PaneOutput)
-                    } else {
-                        Vec::new()
-                    },
-                }),
-            RuntimeEvent::Pane(PaneEvent::InputWritten { pane_id, bytes }) => self
-                .service
-                .apply_pane_input_written_event(pane_id, bytes)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: Vec::new(),
-                }),
+            RuntimeEvent::Pane(pane_event) => {
+                self.service.apply_pane_completion_transition(pane_event)
+            }
             RuntimeEvent::Client(client_event) => self.apply_runtime_client_event(client_event),
             RuntimeEvent::AgentProvider(provider_event) => {
                 self.apply_runtime_agent_provider_event(provider_event)
