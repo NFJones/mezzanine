@@ -111,6 +111,37 @@ fn runtime_primary_display_overlay_renders_and_clears_via_terminal_step() {
     assert!(service.primary_display_overlay.is_none());
 }
 
+/// Verifies ordinary input that has no pager binding remains captured by the
+/// modal overlay instead of falling through to the active pane.
+#[test]
+fn runtime_primary_display_overlay_consumes_unbound_pane_input() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 6).unwrap(), 120)
+        .unwrap();
+    service
+        .show_primary_display_overlay(vec!["modal display line".to_string()])
+        .unwrap();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 0);
+    assert!(!report.view_refresh_required);
+    assert!(service.primary_display_overlay.is_some());
+}
+
 /// Verifies plain pager output wraps at the terminal width instead of being
 /// truncated by the modal renderer. The pager stores each physical row so its
 /// scroll range includes content that would otherwise render off-screen.

@@ -322,14 +322,21 @@ impl RuntimeSessionService {
             }
             let primary_display_overlay_requires_full_redraw =
                 self.primary_display_overlay_action_requires_full_redraw(action);
-            if self.primary_display_overlay.is_some()
-                && self.apply_primary_display_overlay_terminal_action(primary_client_id, action)?
-            {
-                report.view_refresh_required = true;
-                if primary_display_overlay_requires_full_redraw {
-                    report.full_redraw_required = true;
+            if self.primary_display_overlay.is_some() {
+                if self.apply_primary_display_overlay_terminal_action(primary_client_id, action)? {
+                    report.view_refresh_required = true;
+                    if primary_display_overlay_requires_full_redraw {
+                        report.full_redraw_required = true;
+                    }
+                    continue;
                 }
-                continue;
+                if matches!(
+                    action,
+                    TerminalClientLoopAction::ForwardToPane(_)
+                        | TerminalClientLoopAction::ForwardMouseToPane { .. }
+                ) {
+                    continue;
+                }
             }
             if self.pane_agent_status_selector.is_some()
                 && self
