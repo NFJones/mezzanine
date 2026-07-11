@@ -49,21 +49,6 @@ const DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS: u64 = AGENT_STATUS_ANIMATION_
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_SHELL_RECOVERY_INTERVAL_MS: u64 = 250;
-/// Defines the DEFAULT PROVIDER RETRY MAX ATTEMPTS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const DEFAULT_PROVIDER_RETRY_MAX_ATTEMPTS: u32 = 5;
-/// Defines the DEFAULT PROVIDER RETRY INITIAL DELAY MS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const DEFAULT_PROVIDER_RETRY_INITIAL_DELAY_MS: u64 = 1_000;
-/// Defines the DEFAULT PROVIDER RETRY MAX DELAY MS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS: u64 = 30_000;
 /// Grace added to provider worker claim leases beyond the provider timeout.
 ///
 /// The async runtime watchdog must never expire a legitimate provider request
@@ -1751,9 +1736,13 @@ impl AsyncRuntimeSessionActor {
         message: &str,
         provider_failure_json: Option<&str>,
     ) -> bool {
-        let attempts = self.service.agent_provider_retry_attempt(turn_id);
-        attempts < DEFAULT_PROVIDER_RETRY_MAX_ATTEMPTS
-            && provider_failure_is_retryable(kind, message, provider_failure_json)
+        let retry_class = provider_error_retry_class_from_parts(
+            provider_event_error_kind(kind),
+            message,
+            provider_failure_json,
+        );
+        self.service
+            .agent_provider_failure_should_retry(turn_id, retry_class)
     }
 
     /// Runs the schedule provider retry after failure operation for this subsystem.
@@ -1774,7 +1763,7 @@ impl AsyncRuntimeSessionActor {
             .service
             .agent_provider_retry_attempt(turn_id.as_str())
             .saturating_add(1);
-        let delay_ms = provider_retry_delay_ms(attempt);
+        let delay_ms = RuntimeSessionService::agent_provider_retry_delay_ms(attempt);
         let error = provider_event_error_from_parts(
             &kind,
             &message,
@@ -1845,7 +1834,7 @@ impl AsyncRuntimeSessionActor {
             &turn_id,
             &error,
             attempt,
-            DEFAULT_PROVIDER_RETRY_MAX_ATTEMPTS,
+            RuntimeSessionService::agent_provider_retry_max_attempts(),
             delay_ms,
         )?;
         if !applied {
@@ -3240,40 +3229,10 @@ fn status_refresh_interval_ms_for_config(config: &TerminalClientLoopConfig) -> u
     }
 }
 
-/// Runs the provider retry delay ms operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_retry_delay_ms(attempt: u32) -> u64 {
-    let exponent = attempt.saturating_sub(1).min(10);
-    DEFAULT_PROVIDER_RETRY_INITIAL_DELAY_MS
-        .saturating_mul(2u64.saturating_pow(exponent))
-        .min(DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS)
-}
-
 /// Runs the provider failure is retryable operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_failure_is_retryable(
-    kind: &str,
-    message: &str,
-    provider_failure_json: Option<&str>,
-) -> bool {
-    matches!(
-        provider_error_retry_class_from_parts(
-            provider_event_error_kind(kind),
-            message,
-            provider_failure_json,
-        ),
-        ProviderErrorRetryClass::ContextLimit
-            | ProviderErrorRetryClass::OutputLimit
-            | ProviderErrorRetryClass::RetryableTransport
-    )
-}
-
 /// Runs the provider poll schedule timer key operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
