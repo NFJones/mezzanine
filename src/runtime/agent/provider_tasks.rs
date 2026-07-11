@@ -11,6 +11,7 @@ use crate::agent::{
     ClaudeCodeProvider, ProviderErrorRetryClass,
     anthropic_provider_from_auth_store_with_provider_options,
 };
+use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
 
 /// Maximum provider retries allowed for one turn.
 const PROVIDER_RETRY_MAX_ATTEMPTS: u32 = 5;
@@ -69,6 +70,61 @@ impl RuntimeSessionService {
     /// Returns provider turns whose progress is represented by retry policy state.
     pub(crate) fn agent_provider_retry_turn_ids(&self) -> impl Iterator<Item = &String> {
         self.agent_provider_retry_attempts.keys()
+    }
+
+    /// Applies runtime-owned provider retry recovery and emits the delayed retry effect.
+    ///
+    /// Returns `None` when the failure is not retryable or the retry budget is
+    /// exhausted so the caller can continue with terminal failure handling.
+    pub(crate) fn schedule_agent_provider_retry_transition(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        retry_class: ProviderErrorRetryClass,
+        error: &MezError,
+    ) -> Result<Option<RuntimeTransition>> {
+        if !self.agent_provider_failure_should_retry(turn_id, retry_class) {
+            return Ok(None);
+        }
+        let attempt = self.agent_provider_retry_attempt(turn_id).saturating_add(1);
+        let delay_ms = Self::agent_provider_retry_delay_ms(attempt);
+        let recovered = match retry_class {
+            ProviderErrorRetryClass::ContextLimit => self
+                .recover_agent_provider_context_limit_failure(agent_id, turn_id, error, attempt)?,
+            ProviderErrorRetryClass::OutputLimit => {
+                self.recover_agent_provider_output_limit_failure(agent_id, turn_id, error, attempt)?
+            }
+            ProviderErrorRetryClass::RetryableTransport => true,
+            _ => return Ok(None),
+        };
+        if !recovered {
+            self.clear_agent_provider_retry_attempt(turn_id);
+            return Ok(None);
+        }
+        let applied = self.record_agent_provider_retry_event(
+            agent_id,
+            turn_id,
+            error,
+            attempt,
+            Self::agent_provider_retry_max_attempts(),
+            delay_ms,
+        )?;
+        if !applied {
+            self.clear_agent_provider_retry_attempt(turn_id);
+            return Ok(Some(RuntimeTransition::default()));
+        }
+        self.set_agent_provider_retry_attempt(turn_id.to_string(), attempt);
+        Ok(Some(RuntimeTransition {
+            applied: true,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::ProviderRetry,
+                    turn_id,
+                    u64::from(attempt),
+                ),
+                delay_ms,
+            }],
+        }))
     }
 
     /// Builds a runtime provider dispatch from one configured provider API.

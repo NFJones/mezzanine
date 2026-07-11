@@ -1596,57 +1596,56 @@ impl AsyncRuntimeSessionActor {
             } => {
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
-                if self.provider_failure_should_retry(
-                    &turn_id,
-                    &kind,
-                    &message,
-                    provider_failure_json.as_deref(),
-                ) {
-                    let mut application = self.schedule_provider_retry_after_failure(
-                        agent_id,
-                        turn_id,
-                        kind,
-                        message,
-                        provider_failure_json,
-                        provider_raw_text,
-                    )?;
-                    application.side_effects.extend(claim_cancellations);
-                    return Ok(application);
-                }
                 let retry_class = provider_error_retry_class_from_parts(
                     provider_event_error_kind(&kind),
                     &message,
                     provider_failure_json.as_deref(),
                 );
+                let error = provider_event_error_from_parts(
+                    &kind,
+                    &message,
+                    provider_failure_json.as_deref(),
+                    provider_raw_text.as_deref(),
+                );
+                if let Some(mut application) =
+                    self.service.schedule_agent_provider_retry_transition(
+                        &agent_id,
+                        &turn_id,
+                        retry_class,
+                        &error,
+                    )?
+                {
+                    if application.applied {
+                        application
+                            .side_effects
+                            .extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
+                    } else {
+                        self.timers.provider_retry.remove(turn_id.as_str());
+                    }
+                    application.side_effects.extend(claim_cancellations);
+                    return Ok(application);
+                }
                 if matches!(retry_class, ProviderErrorRetryClass::OutputLimit)
                     && !self
                         .provider_output_limit_compaction_turns
                         .contains(turn_id.as_str())
-                {
-                    let error = provider_event_error_from_parts(
-                        &kind,
-                        &message,
-                        provider_failure_json.as_deref(),
-                        provider_raw_text.as_deref(),
-                    );
-                    if self
+                    && self
                         .service
                         .queue_agent_output_limit_recovery_compaction(&agent_id, &turn_id, &error)?
-                    {
-                        self.service
-                            .clear_agent_provider_retry_attempt(turn_id.as_str());
-                        self.timers.provider_retry.remove(turn_id.as_str());
-                        self.provider_output_limit_compaction_turns
-                            .insert(turn_id.clone());
-                        let mut side_effects =
-                            self.render_side_effects(RenderInvalidationReason::FullRedraw);
-                        side_effects.extend(self.pending_provider_dispatch_side_effects()?);
-                        side_effects.extend(claim_cancellations);
-                        return Ok(RuntimeTransition {
-                            applied: true,
-                            side_effects,
-                        });
-                    }
+                {
+                    self.service
+                        .clear_agent_provider_retry_attempt(turn_id.as_str());
+                    self.timers.provider_retry.remove(turn_id.as_str());
+                    self.provider_output_limit_compaction_turns
+                        .insert(turn_id.clone());
+                    let mut side_effects =
+                        self.render_side_effects(RenderInvalidationReason::FullRedraw);
+                    side_effects.extend(self.pending_provider_dispatch_side_effects()?);
+                    side_effects.extend(claim_cancellations);
+                    return Ok(RuntimeTransition {
+                        applied: true,
+                        side_effects,
+                    });
                 }
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
@@ -1698,140 +1697,6 @@ impl AsyncRuntimeSessionActor {
                 Ok(transition)
             }
         }
-    }
-
-    /// Runs the provider failure should retry operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn provider_failure_should_retry(
-        &self,
-        turn_id: &str,
-        kind: &str,
-        message: &str,
-        provider_failure_json: Option<&str>,
-    ) -> bool {
-        let retry_class = provider_error_retry_class_from_parts(
-            provider_event_error_kind(kind),
-            message,
-            provider_failure_json,
-        );
-        self.service
-            .agent_provider_failure_should_retry(turn_id, retry_class)
-    }
-
-    /// Runs the schedule provider retry after failure operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn schedule_provider_retry_after_failure(
-        &mut self,
-        agent_id: AgentId,
-        turn_id: String,
-        kind: String,
-        message: String,
-        provider_failure_json: Option<String>,
-        provider_raw_text: Option<String>,
-    ) -> Result<RuntimeTransition> {
-        let attempt = self
-            .service
-            .agent_provider_retry_attempt(turn_id.as_str())
-            .saturating_add(1);
-        let delay_ms = RuntimeSessionService::agent_provider_retry_delay_ms(attempt);
-        let error = provider_event_error_from_parts(
-            &kind,
-            &message,
-            provider_failure_json.as_deref(),
-            provider_raw_text.as_deref(),
-        );
-        let retry_class = provider_error_retry_class_from_parts(
-            provider_event_error_kind(&kind),
-            &message,
-            provider_failure_json.as_deref(),
-        );
-        if matches!(retry_class, ProviderErrorRetryClass::ContextLimit) {
-            let recovered = self.service.recover_agent_provider_context_limit_failure(
-                &agent_id, &turn_id, &error, attempt,
-            )?;
-            if !recovered {
-                self.service
-                    .clear_agent_provider_retry_attempt(turn_id.as_str());
-                self.timers.provider_retry.remove(turn_id.as_str());
-                let applied = self.service.apply_agent_provider_failed_event(
-                    &agent_id,
-                    &turn_id,
-                    &kind,
-                    &message,
-                    provider_failure_json.as_deref(),
-                    provider_raw_text.as_deref(),
-                )?;
-                return Ok(RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                    } else {
-                        Vec::new()
-                    },
-                });
-            }
-        }
-        if matches!(retry_class, ProviderErrorRetryClass::OutputLimit) {
-            let recovered = self.service.recover_agent_provider_output_limit_failure(
-                &agent_id, &turn_id, &error, attempt,
-            )?;
-            if !recovered {
-                self.service
-                    .clear_agent_provider_retry_attempt(turn_id.as_str());
-                self.timers.provider_retry.remove(turn_id.as_str());
-                let applied = self.service.apply_agent_provider_failed_event(
-                    &agent_id,
-                    &turn_id,
-                    &kind,
-                    &message,
-                    provider_failure_json.as_deref(),
-                    provider_raw_text.as_deref(),
-                )?;
-                return Ok(RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                    } else {
-                        Vec::new()
-                    },
-                });
-            }
-        }
-        let applied = self.service.record_agent_provider_retry_event(
-            &agent_id,
-            &turn_id,
-            &error,
-            attempt,
-            RuntimeSessionService::agent_provider_retry_max_attempts(),
-            delay_ms,
-        )?;
-        if !applied {
-            self.service
-                .clear_agent_provider_retry_attempt(turn_id.as_str());
-            return Ok(RuntimeTransition::default());
-        }
-        self.service
-            .set_agent_provider_retry_attempt(turn_id.clone(), attempt);
-        Ok(RuntimeTransition {
-            applied: true,
-            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
-                key: RuntimeTimerKey::new(
-                    RuntimeTimerKind::ProviderRetry,
-                    turn_id,
-                    u64::from(attempt),
-                ),
-                delay_ms,
-            }]
-            .into_iter()
-            .chain(self.render_side_effects(RenderInvalidationReason::FullRedraw))
-            .collect(),
-        })
     }
 
     /// Runs the apply runtime shutdown event operation for this subsystem.
