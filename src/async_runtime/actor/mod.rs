@@ -29,10 +29,9 @@ use crate::agent::{
     provider_event_error_from_parts, provider_event_error_kind,
 };
 use crate::control::{decode_control_frame, encode_control_body};
-use crate::runtime::{
-    DeferredConfigFileWrite, DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
-    PaneResizeUpdate,
-};
+use crate::runtime::PaneResizeUpdate;
+#[cfg(test)]
+use crate::runtime::{DeferredConfigFileWrite, coalesce_deferred_config_file_writes};
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use side_effects::*;
@@ -1481,15 +1480,11 @@ impl AsyncRuntimeSessionActor {
                     .drain_transcript_persistence_transition()
                     .side_effects,
             )
-            .chain(deferred_config_file_writes_to_side_effects(
-                self.service.drain_deferred_config_file_writes(),
-            ))
-            .chain(deferred_project_config_writes_to_side_effects(
-                self.service.drain_deferred_project_config_writes(),
-            ))
-            .chain(deferred_project_instruction_writes_to_side_effects(
-                self.service.drain_deferred_project_instruction_writes(),
-            ))
+            .chain(
+                self.service
+                    .drain_config_persistence_transition()
+                    .side_effects,
+            )
             .chain(deferred_pane_pipe_writes_to_side_effects(
                 self.service.drain_deferred_pane_pipe_writes(),
             ))

@@ -279,6 +279,8 @@ mod render;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod service;
+#[cfg(test)]
+pub(crate) use service::coalesce_deferred_config_file_writes;
 /// Exposes the types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

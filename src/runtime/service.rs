@@ -70,6 +70,24 @@ use super::{
 
 // RuntimeSessionService construction, accessors, and live config application.
 
+/// Keeps only the final replacement text for each deferred config file target.
+pub(crate) fn coalesce_deferred_config_file_writes(
+    writes: Vec<DeferredConfigFileWrite>,
+) -> Vec<DeferredConfigFileWrite> {
+    let mut coalesced = Vec::<DeferredConfigFileWrite>::new();
+    for write in writes {
+        if let Some(existing) = coalesced
+            .iter_mut()
+            .find(|existing| existing.scope == write.scope && existing.path == write.path)
+        {
+            *existing = write;
+        } else {
+            coalesced.push(write);
+        }
+    }
+    coalesced
+}
+
 /// Returns persisted per-model token accounting with legacy aggregate fallback.
 fn runtime_agent_token_usage_by_model_from_metadata(
     metadata: &AgentSessionMetadata,
@@ -2437,6 +2455,53 @@ impl RuntimeSessionService {
                     store: write.store,
                     path: write.path,
                     command: write.command,
+                }),
+        );
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
+    }
+
+    /// Drains configuration persistence through one transport-neutral runtime transition.
+    pub(crate) fn drain_config_persistence_transition(&mut self) -> RuntimeTransition {
+        let coalesced =
+            coalesce_deferred_config_file_writes(self.drain_deferred_config_file_writes());
+        let mut side_effects = coalesced
+            .into_iter()
+            .map(|write| {
+                let target = match write.scope {
+                    ConfigScope::Primary | ConfigScope::LiveOverride => {
+                        crate::runtime::PersistenceTarget::Config
+                    }
+                    ConfigScope::ProjectOverlay => crate::runtime::PersistenceTarget::ProjectConfig,
+                };
+                RuntimeSideEffect::Persist {
+                    target,
+                    path: write.path,
+                    bytes: write.text.into_bytes(),
+                    mode: crate::runtime::PersistenceWriteMode::Replace,
+                }
+            })
+            .collect::<Vec<_>>();
+        side_effects.extend(
+            self.drain_deferred_project_config_writes()
+                .into_iter()
+                .map(|write| RuntimeSideEffect::Persist {
+                    target: crate::runtime::PersistenceTarget::ProjectConfig,
+                    path: write.path,
+                    bytes: write.text.into_bytes(),
+                    mode: crate::runtime::PersistenceWriteMode::Replace,
+                }),
+        );
+        side_effects.extend(
+            self.drain_deferred_project_instruction_writes()
+                .into_iter()
+                .map(|write| RuntimeSideEffect::Persist {
+                    target: crate::runtime::PersistenceTarget::ProjectInstruction,
+                    path: write.path,
+                    bytes: write.bytes,
+                    mode: crate::runtime::PersistenceWriteMode::CreateNew,
                 }),
         );
         RuntimeTransition {
