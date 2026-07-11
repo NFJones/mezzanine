@@ -1069,12 +1069,11 @@ impl AsyncRuntimeSessionActor {
                 Ok(transition)
             }
             RuntimeTimerKind::ResizeDebounce => {
-                if self.timers.resize_debounce.remove(&timer.key) {
-                    Ok(self.apply_render_timer_event(RenderInvalidationReason::Resize))
-                } else {
+                let active = self.timers.resize_debounce.remove(&timer.key);
+                if !active {
                     self.record_ignored_timer_event();
-                    Ok(RuntimeTransition::default())
                 }
+                Ok(self.service.apply_resize_debounce_timer_transition(active))
             }
             RuntimeTimerKind::CursorBlink => {
                 if self.timers.cursor_blink.get(timer.key.owner_id.as_str()) != Some(&timer.key) {

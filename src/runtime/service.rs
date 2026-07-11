@@ -24,8 +24,8 @@ use super::{
     KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan,
     MemoryRecord, MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
     PaneProcessManager, PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf,
-    PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, Result,
-    RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
+    PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, RenderInvalidationReason,
+    Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
     RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
     RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
@@ -495,6 +495,30 @@ impl RuntimeSessionService {
     /// Returns whether transitions must queue external work for an adapter.
     pub(super) const fn external_effects_use_adapter(&self) -> bool {
         self.external_effect_mode.uses_adapter()
+    }
+
+    /// Applies a resize-debounce timer after the adapter validates its key.
+    ///
+    /// Timer-key tracking remains adapter state, while the runtime core owns
+    /// the resulting render transition for every attached terminal client.
+    pub(crate) fn apply_resize_debounce_timer_transition(&self, active: bool) -> RuntimeTransition {
+        if !active {
+            return RuntimeTransition::default();
+        }
+        let side_effects = self
+            .session
+            .clients()
+            .iter()
+            .filter(|client| client.state == super::ClientState::Attached)
+            .map(|client| RuntimeSideEffect::RenderClient {
+                client_id: client.id.clone(),
+                reason: RenderInvalidationReason::Resize,
+            })
+            .collect::<Vec<_>>();
+        RuntimeTransition {
+            applied: !side_effects.is_empty(),
+            side_effects,
+        }
     }
 
     /// Reconciles the cursor-blink timer for one attached terminal client.
