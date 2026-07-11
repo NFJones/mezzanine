@@ -28,22 +28,9 @@ use crate::control::{decode_control_frame, encode_control_body};
 use crate::runtime::PaneResizeUpdate;
 #[cfg(test)]
 use crate::runtime::{DeferredConfigFileWrite, coalesce_deferred_config_file_writes};
-use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 // Serialized runtime actor and handle implementation.
 
-/// Defines the DEFAULT STATUS REFRESH INTERVAL MS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const DEFAULT_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
-/// Defines the DEFAULT AGENT ANIMATION REFRESH INTERVAL MS const used by this
-/// subsystem.
-///
-/// Active agent status indicators advance their scan phase at this cadence.
-/// Keeping the timer in sync with the renderer prevents status-only frames from
-/// appearing frozen when no pane output or keyboard input is arriving.
-const DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS: u64 = AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 /// Defines the DEFAULT SHELL RECOVERY INTERVAL MS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -1867,11 +1854,22 @@ impl AsyncRuntimeSessionActor {
     fn ensure_client_render_timers(&mut self, client_id: &ClientId) -> Result<usize> {
         let generation_base_ms = async_runtime_current_unix_millis();
         let mut side_effects = self
-            .cursor_blink_timer_side_effects_for_client(client_id.as_str(), generation_base_ms)?;
-        side_effects.extend(self.status_refresh_timer_side_effects_for_client(
-            client_id.as_str(),
-            generation_base_ms,
-        )?);
+            .service
+            .client_cursor_blink_timer_transition(
+                client_id.as_str(),
+                self.timers.cursor_blink.get(client_id.as_str()).cloned(),
+                generation_base_ms,
+            )?
+            .side_effects;
+        side_effects.extend(
+            self.service
+                .client_status_refresh_timer_transition(
+                    client_id.as_str(),
+                    self.timers.status_refresh.get(client_id.as_str()).cloned(),
+                    generation_base_ms,
+                )?
+                .side_effects,
+        );
         let queued = side_effects.len();
         self.queue_runtime_side_effects(side_effects)?;
         Ok(queued)
@@ -1952,34 +1950,14 @@ impl AsyncRuntimeSessionActor {
         client_id: &str,
         generation_base_ms: u64,
     ) -> Result<Vec<RuntimeSideEffect>> {
-        let config = self
+        Ok(self
             .service
-            .terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        let client_attached =
-            self.service.session().clients().iter().any(|client| {
-                client.id.as_str() == client_id && client.state == ClientState::Attached
-            });
-        if !client_attached || !config.cursor_blink || config.cursor_blink_interval_ms == 0 {
-            return Ok(self
-                .timers
-                .cursor_blink
-                .remove(client_id)
-                .map(|key| RuntimeSideEffect::CancelTimer { key })
-                .into_iter()
-                .collect());
-        }
-        if self.timers.cursor_blink.contains_key(client_id) {
-            return Ok(Vec::new());
-        }
-        let delay_ms = (config.cursor_blink_interval_ms / 2).max(1);
-        Ok(vec![RuntimeSideEffect::ScheduleTimer {
-            key: RuntimeTimerKey::new(
-                RuntimeTimerKind::CursorBlink,
+            .client_cursor_blink_timer_transition(
                 client_id,
-                generation_base_ms.saturating_add(delay_ms),
-            ),
-            delay_ms,
-        }])
+                self.timers.cursor_blink.get(client_id).cloned(),
+                generation_base_ms,
+            )?
+            .side_effects)
     }
 
     /// Runs the status refresh timer side effects for client operation for this subsystem.
@@ -1992,46 +1970,14 @@ impl AsyncRuntimeSessionActor {
         client_id: &str,
         generation_base_ms: u64,
     ) -> Result<Vec<RuntimeSideEffect>> {
-        let config = self
+        Ok(self
             .service
-            .terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        let client_attached =
-            self.service.session().clients().iter().any(|client| {
-                client.id.as_str() == client_id && client.state == ClientState::Attached
-            });
-        if !client_attached || !status_refresh_required_by_config(&config) {
-            return Ok(self
-                .timers
-                .status_refresh
-                .remove(client_id)
-                .map(|key| RuntimeSideEffect::CancelTimer { key })
-                .into_iter()
-                .collect());
-        }
-        let delay_ms = status_refresh_interval_ms_for_config(&config);
-        let next_key = RuntimeTimerKey::new(
-            RuntimeTimerKind::StatusRefresh,
-            client_id,
-            generation_base_ms.saturating_add(delay_ms),
-        );
-        if let Some(existing_key) = self.timers.status_refresh.get(client_id) {
-            if existing_key.generation <= next_key.generation {
-                return Ok(Vec::new());
-            }
-            return Ok(vec![
-                RuntimeSideEffect::CancelTimer {
-                    key: existing_key.clone(),
-                },
-                RuntimeSideEffect::ScheduleTimer {
-                    key: next_key,
-                    delay_ms,
-                },
-            ]);
-        }
-        Ok(vec![RuntimeSideEffect::ScheduleTimer {
-            key: next_key,
-            delay_ms,
-        }])
+            .client_status_refresh_timer_transition(
+                client_id,
+                self.timers.status_refresh.get(client_id).cloned(),
+                generation_base_ms,
+            )?
+            .side_effects)
     }
 
     /// Runs the pane pipe health timer side effects for pane operation for this subsystem.
@@ -2947,35 +2893,6 @@ fn runtime_timer_kind_is_shell_transaction(kind: RuntimeTimerKind) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn status_refresh_required_by_config(config: &TerminalClientLoopConfig) -> bool {
-    let window_status_requires_refresh = config.window_frames_enabled
-        && config
-            .frame_context
-            .window_status
-            .as_ref()
-            .is_some_and(|status| !status.template.trim().is_empty());
-    let agent_status_requires_refresh = config.frame_context.panes.values().any(|pane| {
-        let active = matches!(
-            pane.agent_status.as_deref(),
-            Some("queued" | "running" | "thinking" | "executing" | "waiting" | "compacting")
-        );
-        let visible_surface = config.pane_frames_enabled
-            || pane.agent_prompt.is_some()
-            || pane.mode.as_deref() == Some("agent");
-        active && visible_surface
-    });
-    window_status_requires_refresh || agent_status_requires_refresh
-}
-
-/// Returns the refresh interval required by one resolved terminal config.
-fn status_refresh_interval_ms_for_config(config: &TerminalClientLoopConfig) -> u64 {
-    if config.frame_context.animation_tick_ms > 0 {
-        DEFAULT_AGENT_ANIMATION_REFRESH_INTERVAL_MS
-    } else {
-        DEFAULT_STATUS_REFRESH_INTERVAL_MS
-    }
-}
-
 /// Runs the provider failure is retryable operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

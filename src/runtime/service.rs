@@ -5,6 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::service_state::RuntimeExternalEffectMode;
+use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
     AgentLogLevel, AgentScheduler, AgentSessionMetadata, AgentShellStore, AgentShellVisibility,
@@ -28,8 +29,9 @@ use super::{
     RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
     RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
-    RuntimeTransition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
-    SessionRegistry, SnapshotRepository, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
+    RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ScopeRegistry, Session,
+    SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
+    TerminalClientLoopConfig, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
     agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
     discover_existing_overlays, discover_project_root,
@@ -71,6 +73,39 @@ use super::{
 };
 
 // RuntimeSessionService construction, accessors, and live config application.
+
+/// Default interval for status-only terminal refreshes.
+const DEFAULT_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
+
+/// Returns whether the resolved terminal configuration needs periodic status refreshes.
+fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) -> bool {
+    let window_status_requires_refresh = config.window_frames_enabled
+        && config
+            .frame_context
+            .window_status
+            .as_ref()
+            .is_some_and(|status| !status.template.trim().is_empty());
+    let agent_status_requires_refresh = config.frame_context.panes.values().any(|pane| {
+        let active = matches!(
+            pane.agent_status.as_deref(),
+            Some("queued" | "running" | "thinking" | "executing" | "waiting" | "compacting")
+        );
+        let visible_surface = config.pane_frames_enabled
+            || pane.agent_prompt.is_some()
+            || pane.mode.as_deref() == Some("agent");
+        active && visible_surface
+    });
+    window_status_requires_refresh || agent_status_requires_refresh
+}
+
+/// Returns the periodic status-refresh interval for one terminal configuration.
+fn runtime_status_refresh_interval_ms_for_config(config: &TerminalClientLoopConfig) -> u64 {
+    if config.frame_context.animation_tick_ms > 0 {
+        AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS
+    } else {
+        DEFAULT_STATUS_REFRESH_INTERVAL_MS
+    }
+}
 
 /// Keeps only the final replacement text for each deferred config file target.
 pub(crate) fn coalesce_deferred_config_file_writes(
@@ -460,6 +495,96 @@ impl RuntimeSessionService {
     /// Returns whether transitions must queue external work for an adapter.
     pub(super) const fn external_effects_use_adapter(&self) -> bool {
         self.external_effect_mode.uses_adapter()
+    }
+
+    /// Reconciles the cursor-blink timer for one attached terminal client.
+    ///
+    /// The runtime core owns eligibility and timer generation while the caller
+    /// supplies the adapter's currently scheduled key. This keeps Tokio timer
+    /// tracking out of domain policy without creating a second timer owner.
+    pub(crate) fn client_cursor_blink_timer_transition(
+        &self,
+        client_id: &str,
+        active_key: Option<RuntimeTimerKey>,
+        generation_base_ms: u64,
+    ) -> Result<RuntimeTransition> {
+        let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
+        let client_attached = self.session.clients().iter().any(|client| {
+            client.id.as_str() == client_id && client.state == super::ClientState::Attached
+        });
+        if !client_attached || !config.cursor_blink || config.cursor_blink_interval_ms == 0 {
+            return Ok(RuntimeTransition {
+                applied: false,
+                side_effects: active_key
+                    .map(|key| RuntimeSideEffect::CancelTimer { key })
+                    .into_iter()
+                    .collect(),
+            });
+        }
+        if active_key.is_some() {
+            return Ok(RuntimeTransition::default());
+        }
+        let delay_ms = (config.cursor_blink_interval_ms / 2).max(1);
+        Ok(RuntimeTransition {
+            applied: false,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::CursorBlink,
+                    client_id,
+                    generation_base_ms.saturating_add(delay_ms),
+                ),
+                delay_ms,
+            }],
+        })
+    }
+
+    /// Reconciles the status-refresh timer for one attached terminal client.
+    ///
+    /// This transition retains the actor's timer key as adapter state while
+    /// centralizing the client/configuration policy in the runtime core.
+    pub(crate) fn client_status_refresh_timer_transition(
+        &self,
+        client_id: &str,
+        active_key: Option<RuntimeTimerKey>,
+        generation_base_ms: u64,
+    ) -> Result<RuntimeTransition> {
+        let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
+        let client_attached = self.session.clients().iter().any(|client| {
+            client.id.as_str() == client_id && client.state == super::ClientState::Attached
+        });
+        if !client_attached || !runtime_status_refresh_required_by_config(&config) {
+            return Ok(RuntimeTransition {
+                applied: false,
+                side_effects: active_key
+                    .map(|key| RuntimeSideEffect::CancelTimer { key })
+                    .into_iter()
+                    .collect(),
+            });
+        }
+        let delay_ms = runtime_status_refresh_interval_ms_for_config(&config);
+        let next_key = RuntimeTimerKey::new(
+            RuntimeTimerKind::StatusRefresh,
+            client_id,
+            generation_base_ms.saturating_add(delay_ms),
+        );
+        let side_effects = match active_key {
+            Some(existing_key) if existing_key.generation <= next_key.generation => Vec::new(),
+            Some(existing_key) => vec![
+                RuntimeSideEffect::CancelTimer { key: existing_key },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: next_key,
+                    delay_ms,
+                },
+            ],
+            None => vec![RuntimeSideEffect::ScheduleTimer {
+                key: next_key,
+                delay_ms,
+            }],
+        };
+        Ok(RuntimeTransition {
+            applied: false,
+            side_effects,
+        })
     }
 
     /// Persists the current registry update plan when this service owns a
