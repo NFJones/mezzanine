@@ -34,15 +34,13 @@ use crate::message::{
 };
 use crate::process::{PaneExitStatus, PaneProcess};
 use crate::runtime::{
-    AttachedClientStepApplication, DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredPaneInput, DeferredPanePipeWrite,
-    DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionTimerKind, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    authorize_unix_peer_raw_fd, current_effective_uid,
+    AttachedClientStepApplication, DeferredPaneInput, DeferredPanePipeWrite, DeferredPaneResize,
+    DeferredPaneTermination, DeferredProgramHook, RuntimeAgentCompactionDispatch,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuntimeAgentRememberDispatch, RuntimeEventConnectionTable, RuntimeEventWakeup,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionTimerKind,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, authorize_unix_peer_raw_fd, current_effective_uid,
 };
 use crate::session::ClientState;
 use crate::terminal::{

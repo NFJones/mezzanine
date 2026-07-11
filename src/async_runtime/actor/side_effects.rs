@@ -67,62 +67,6 @@ pub(super) fn deferred_pane_terminations_to_side_effects(
         .collect()
 }
 
-/// Runs the deferred agent transcript writes to side effects operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_agent_transcript_writes_to_side_effects(
-    deferred_transcript_writes: Vec<DeferredAgentTranscriptWrite>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_transcript_writes
-        .into_iter()
-        .map(|write| RuntimeSideEffect::PersistTranscriptEntries {
-            store: write.store,
-            path: write.path,
-            entries: write.entries,
-        })
-        .collect()
-}
-
-/// Runs the deferred agent prompt history writes to side effects operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_agent_prompt_history_writes_to_side_effects(
-    deferred_prompt_history_writes: Vec<DeferredAgentPromptHistoryWrite>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_prompt_history_writes
-        .into_iter()
-        .map(|write| RuntimeSideEffect::PersistPromptHistory {
-            store: write.store,
-            path: write.path,
-            conversation_id: write.conversation_id,
-            prompt: write.prompt,
-        })
-        .collect()
-}
-
-/// Runs the deferred command prompt history writes to side effects operation
-/// for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_command_prompt_history_writes_to_side_effects(
-    deferred_prompt_history_writes: Vec<DeferredCommandPromptHistoryWrite>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_prompt_history_writes
-        .into_iter()
-        .map(|write| RuntimeSideEffect::PersistCommandPromptHistory {
-            store: write.store,
-            path: write.path,
-            command: write.command,
-        })
-        .collect()
-}
-
 /// Runs the deferred config file writes to side effects operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

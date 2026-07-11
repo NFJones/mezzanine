@@ -11,12 +11,10 @@ use super::{
     AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest, AsyncRuntimeSessionActor,
     AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
     AttachedTerminalOutputModes, ClientEvent, ClientId, ClientState, ClientStatusLine,
-    ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
-    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredPaneInput, DeferredPanePipeWrite,
-    DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook, DeliveryCursor, FanoutBatch,
-    MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent, PersistenceTarget,
-    PersistenceWriteMode, RenderInvalidationReason, RenderedClientView, Result,
+    ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeferredPaneInput,
+    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
+    DeliveryCursor, FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent,
+    PersistenceTarget, PersistenceWriteMode, RenderInvalidationReason, RenderedClientView, Result,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch,
     RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
     RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionTimerKind,
@@ -1478,15 +1476,11 @@ impl AsyncRuntimeSessionActor {
                     .drain_audit_persistence_transition()
                     .side_effects,
             )
-            .chain(deferred_agent_transcript_writes_to_side_effects(
-                self.service.drain_deferred_agent_transcript_writes(),
-            ))
-            .chain(deferred_agent_prompt_history_writes_to_side_effects(
-                self.service.drain_deferred_agent_prompt_history_writes(),
-            ))
-            .chain(deferred_command_prompt_history_writes_to_side_effects(
-                self.service.drain_deferred_command_prompt_history_writes(),
-            ))
+            .chain(
+                self.service
+                    .drain_transcript_persistence_transition()
+                    .side_effects,
+            )
             .chain(deferred_config_file_writes_to_side_effects(
                 self.service.drain_deferred_config_file_writes(),
             ))

@@ -2409,6 +2409,42 @@ impl RuntimeSessionService {
         std::mem::take(&mut self.deferred_command_prompt_history_writes)
     }
 
+    /// Drains transcript and prompt-history persistence through one runtime transition.
+    pub(crate) fn drain_transcript_persistence_transition(&mut self) -> RuntimeTransition {
+        let mut side_effects = self
+            .drain_deferred_agent_transcript_writes()
+            .into_iter()
+            .map(|write| RuntimeSideEffect::PersistTranscriptEntries {
+                store: write.store,
+                path: write.path,
+                entries: write.entries,
+            })
+            .collect::<Vec<_>>();
+        side_effects.extend(
+            self.drain_deferred_agent_prompt_history_writes()
+                .into_iter()
+                .map(|write| RuntimeSideEffect::PersistPromptHistory {
+                    store: write.store,
+                    path: write.path,
+                    conversation_id: write.conversation_id,
+                    prompt: write.prompt,
+                }),
+        );
+        side_effects.extend(
+            self.drain_deferred_command_prompt_history_writes()
+                .into_iter()
+                .map(|write| RuntimeSideEffect::PersistCommandPromptHistory {
+                    store: write.store,
+                    path: write.path,
+                    command: write.command,
+                }),
+        );
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
+    }
+
     /// Enables or disables deferred user/project config writes for async actors.
     pub(crate) fn set_defer_config_file_writes(&mut self, defer: bool) {
         self.defer_config_file_writes = defer;
