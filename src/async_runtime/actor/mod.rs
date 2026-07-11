@@ -1963,26 +1963,15 @@ impl AsyncRuntimeSessionActor {
         &self,
         actor_progress_turn_ids: &std::collections::BTreeSet<String>,
     ) -> Vec<RuntimeSideEffect> {
-        if !self
-            .service
-            .idle_cleanup_timer_needed_with_actor_progress(actor_progress_turn_ids)
-            || self.timers.idle_cleanup.is_some()
-        {
-            return Vec::new();
-        }
-        let delay_ms = if self.service.hidden_shell_render_retention_timer_needed() {
-            async_runtime_duration_millis(DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL)
-        } else {
-            DEFAULT_SHELL_RECOVERY_INTERVAL_MS
-        };
-        vec![RuntimeSideEffect::ScheduleTimer {
-            key: RuntimeTimerKey::new(
-                RuntimeTimerKind::IdleCleanup,
-                "session",
+        self.service
+            .idle_cleanup_timer_transition_with_actor_progress(
+                actor_progress_turn_ids,
+                self.timers.idle_cleanup.is_some(),
                 async_runtime_current_unix_millis(),
-            ),
-            delay_ms,
-        }]
+                async_runtime_duration_millis(DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL),
+                DEFAULT_SHELL_RECOVERY_INTERVAL_MS,
+            )
+            .side_effects
     }
 
     /// Runs the cursor blink timer side effects for client operation for this subsystem.

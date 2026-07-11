@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::runtime::service_state::ProgramOwnedPaneTitle;
+use crate::runtime::{RuntimeTimerKey, RuntimeTimerKind};
 
 /// Carries Pane Output Render Mode state for this subsystem.
 ///
@@ -1212,6 +1213,34 @@ impl RuntimeSessionService {
             || self.unreachable_running_agent_turn_timer_needed_with_actor_progress(
                 actor_progress_turn_ids,
             )
+    }
+
+    /// Builds the desired idle-cleanup timer transition for an external timer adapter.
+    pub(crate) fn idle_cleanup_timer_transition_with_actor_progress(
+        &self,
+        actor_progress_turn_ids: &BTreeSet<String>,
+        timer_active: bool,
+        generation: u64,
+        retention_delay_ms: u64,
+        recovery_delay_ms: u64,
+    ) -> RuntimeTransition {
+        if timer_active
+            || !self.idle_cleanup_timer_needed_with_actor_progress(actor_progress_turn_ids)
+        {
+            return RuntimeTransition::default();
+        }
+        let delay_ms = if self.hidden_shell_render_retention_timer_needed() {
+            retention_delay_ms
+        } else {
+            recovery_delay_ms
+        };
+        RuntimeTransition {
+            applied: false,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(RuntimeTimerKind::IdleCleanup, "session", generation),
+                delay_ms,
+            }],
+        }
     }
 
     /// Reports whether hidden shell-render suppression still needs to age out.
